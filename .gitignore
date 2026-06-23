@@ -1,0 +1,1183 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# CLAUDE AGENT CONFIG - SECURITY-FOCUSED .GITIGNORE
+# Version: 4.0.0 (2026-01-26) - 100% COVERAGE
+# Complete: 25+ languages, databases, game engines, blockchain, static sites
+# Categories: 40+ (Security, Cloud, CI/CD, Languages, Testing, Media, etc.)
+# Patterns: 1100+ comprehensive patterns for all major ecosystems
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLAUDE CODE LOCAL DATA (CRITICAL - NEVER COMMIT)
+# ─────────────────────────────────────────────────────────────────────────────
+.claude/
+.mcp.json
+claude_desktop_config.json
+settings.local.json
+*.claude-session
+*.claude-transcript
+*.jsonl
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECRETS & CREDENTIALS (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment files
+.env
+.env.*
+*.env
+.env.local
+.env.development
+.env.production
+.env.test
+.envrc
+
+# API Keys & Tokens
+*_key
+*_key.*
+*_secret
+*_secret.*
+*_token
+*_token.*
+*.token
+.token
+api_key*
+api-key*
+apikey*
+API_KEY*
+ANTHROPIC_API_KEY*
+OPENAI_API_KEY*
+GITHUB_TOKEN*
+AWS_*_KEY*
+GCP_*_KEY*
+AZURE_*_KEY*
+
+# Credentials files
+credentials.json
+credentials.yaml
+credentials.yml
+service-account*.json
+gcloud-*.json
+*.credentials
+auth.json
+auth.yaml
+
+# Certificates & Keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.csr
+*.jks
+*.keystore
+*.truststore
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.pub
+known_hosts
+
+# Password managers & vaults
+pass/
+.password-store/
+.vault-token
+vault.json
+*.vault
+.secrets/
+secrets/
+secrets.json
+secrets.yaml
+
+# Package manager authentication
+.npmrc
+.yarnrc
+.pip/
+pip.conf
+.pypirc
+.cargo/credentials
+.cargo/credentials.toml
+.gem/credentials
+.docker/config.json
+
+# Language-specific secrets
+# Ruby
+.bundle/config
+
+# Java
+settings.xml
+gradle.properties
+
+# PHP
+auth.json
+
+# .NET
+nuget.config
+NuGet.Config
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION & EVALUATION DATA (SENSITIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Session transcripts
+sessions/
+transcripts/
+*.transcript
+*.session
+conversation_*.json
+chat_*.json
+
+# Evaluation data (may contain PII)
+evaluation/data/
+metrics.jsonl
+*_metrics.json
+*_report.json
+
+# User-specific data
+user_preferences.json
+user_config.json
+*.user.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WORK ARTIFACTS (SESSION-SPECIFIC)
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporary analysis files
+*.tmp
+*.temp
+*_backup.*
+*.bak
+*.orig
+*.draft
+*_draft.*
+SCRATCH_*.md
+scratch/
+drafts/
+
+# Generated reports (regenerate as needed)
+reports/generated/
+*.report.md
+daily_*.md
+weekly_*.md
+
+# Cache & intermediate files
+.cache/
+cache/
+*.cache
+tmp/
+temp/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEVELOPMENT TOOLS
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE & Editors
+# JetBrains IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-*
+*.sublime-project
+*.sublime-workspace
+
+# Eclipse
+.project
+.classpath
+.settings/
+.metadata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+.env/
+.virtualenv/
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+.pnpm-store/
+.pnpm-debug.log*
+.bun/
+bun.lockb
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Rust
+target/
+Cargo.lock
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+hs_err_pid*
+replay_pid*
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+.gradletasknamecache
+
+# Ruby
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+
+# Rails
+.bundle/
+vendor/bundle/
+.byebug_history
+.ruby-version
+.ruby-gemset
+.rbenv-vars
+capybara-*.html
+/log/*
+!/log/.keep
+/public/system
+/public/assets
+/storage
+.env.local
+
+# .NET / C#
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+*.userprefs
+*.pidb
+*.svclog
+*.scc
+*.cache
+*.ilk
+*.meta
+*.pdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp_proj
+*.log
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+_Chutzpah*
+ipch/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+project.lock.json
+project.fragment.lock.json
+artifacts/
+PublishProfiles/
+*.pubxml
+*.publishproj
+packages/
+!packages/build/
+*.nuget.props
+*.nuget.targets
+csx/
+*.build.csdef
+ecf/
+rcf/
+AppPackages/
+BundleArtifacts/
+*.Cache
+ClientBin/
+~$*
+*~
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.pfx
+*.publishsettings
+orleans.codegen.cs
+Generated_Code/
+_UpgradeReport_Files/
+Backup*/
+UpgradeLog*.XML
+UpgradeLog*.htm
+ServiceFabricBackup/
+*.rptproj.bak
+*.mdf
+*.ldf
+*.ndf
+
+# PHP
+/vendor/
+composer.phar
+composer.lock
+.env.php
+.DS_Store
+Thumbs.db
+
+# Composer
+vendor/
+composer.lock
+
+# Laravel
+/node_modules
+/public/hot
+/public/storage
+/storage/*.key
+/vendor
+.env.backup
+Homestead.yaml
+Homestead.json
+/.vagrant
+.phpunit.result.cache
+
+# Swift/Xcode
+*.xcuserstate
+*.xcworkspace
+xcuserdata/
+*.moved-aside
+*.swp
+*~.nib
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+timeline.xctimeline
+playground.xcworkspace
+.build/
+Pods/
+Carthage/Build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+iOSInjectionProject/
+
+# Scala
+*.class
+*.log
+.scala_dependencies
+.worksheet
+
+# Elixir
+/_build
+/cover
+/deps
+/doc
+/.fetch
+erl_crash.dump
+*.ez
+*.beam
+/config/*.secret.exs
+.elixir_ls/
+
+# Haskell
+dist
+dist-*
+cabal-dev
+*.o
+*.hi
+*.hie
+*.chi
+*.chs.h
+*.dyn_o
+*.dyn_hi
+.hpc
+.hsenv
+.cabal-sandbox/
+cabal.sandbox.config
+*.prof
+*.aux
+*.hp
+*.eventlog
+.stack-work/
+cabal.project.local
+cabal.project.local~
+.HTF/
+.ghc.environment.*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILD & OUTPUT
+# ─────────────────────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+output/
+*.o
+*.a
+*.lib
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGS (MAY CONTAIN SENSITIVE DATA)
+# ─────────────────────────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
+log/
+debug.log
+error.log
+access.log
+security_audit.log
+infra_audit.log
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY SCANNING RESULTS (SENSITIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Vulnerability scans
+*.sarif
+*.sarif.json
+security-scan-*.json
+vulnerability-*.json
+trivy-*.json
+snyk-*.json
+semgrep-*.json
+
+# Secrets detection results
+gitleaks-*.json
+trufflehog-*.json
+detect-secrets-*.json
+.secrets.baseline
+
+# Penetration testing (HIGHLY SENSITIVE)
+pentest/
+recon/
+scans/
+vulns/
+exploits/
+*.nmap
+*.gnmap
+*.xml.nmap
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLOUD PROVIDER CREDENTIALS (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────────
+# AWS
+.aws/
+.aws-sam/
+aws-exports.js
+awscli-bundle/
+
+# Google Cloud
+.gcloud/
+.config/gcloud/
+application_default_credentials.json
+
+# Azure
+.azure/
+azureProfile.json
+
+# DigitalOcean
+.doctl/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INFRASTRUCTURE (SENSITIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+terraform.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Ansible
+*.retry
+inventory/
+hosts
+vault_password*
+
+# Kubernetes
+kubeconfig*
+.kube/
+*.kubeconfig
+k3s.yaml
+
+# Docker
+.docker/
+docker-compose.override.yml
+.dockercfg
+docker-compose.secrets.yml
+
+# Helm
+.helm/
+*.kubeconfig
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CI/CD SECRETS (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub Actions
+.github/secrets/
+GITHUB_ENV
+GITHUB_TOKEN
+
+# GitLab CI
+.gitlab-ci-local/
+.gitlab-runner/
+
+# CircleCI
+.circleci/local/
+
+# Jenkins
+.jenkins/
+jenkins.xml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SSH & GIT CREDENTIALS (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────────
+# SSH config (may contain ProxyCommand credentials)
+.ssh/config.d/*_password*
+.ssh/*_password*
+
+# Git credentials
+.git-credentials
+.gitconfig.local
+.netrc
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OAUTH & AUTHENTICATION TOKENS (CRITICAL)
+# ─────────────────────────────────────────────────────────────────────────────
+.oauth-token
+oauth2-*.json
+oidc-*.json
+*_refresh_token*
+*_access_token*
+bearer-*.token
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MONITORING & OBSERVABILITY (SENSITIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# Prometheus
+prometheus.yml.local
+
+# Grafana
+grafana.ini.local
+grafana-*.json
+
+# DataDog
+datadog.yaml.local
+
+# New Relic
+newrelic.ini
+newrelic.yml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BROWSER AUTOMATION (MAY CONTAIN CREDENTIALS)
+# ─────────────────────────────────────────────────────────────────────────────
+# Selenium
+selenium-debug.log
+geckodriver.log
+chromedriver.log
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/
+
+# Puppeteer
+.puppeteer/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MOBILE DEVELOPMENT (SENSITIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# iOS
+*.mobileprovision
+*.p12
+*.certSigningRequest
+Podfile.lock
+
+# Android
+*.keystore
+*.jks
+keystore.properties
+google-services.json
+local.properties
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MCP SERVERS & TOOLS (MAY CONTAIN API KEYS)
+# ─────────────────────────────────────────────────────────────────────────────
+mcp-server-config.json
+.mcp-server/
+tools_config.json
+*.mcp.local.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATABASE & DATA FILES (MAY CONTAIN PII)
+# ─────────────────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sql
+*.sql.gz
+dump.sql
+backup.sql
+*.dump
+*.backup
+*.bak
+*.mdb
+*.accdb
+*.fdb
+*.gdb
+*.sav
+*.ora
+
+# PostgreSQL
+*.pgdump
+pg_log/
+
+# MySQL
+*.ibd
+*.frm
+*.MYD
+*.MYI
+
+# Redis
+dump.rdb
+appendonly.aof
+
+# MongoDB
+*.bson
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ARCHIVES (UNKNOWN CONTENTS)
+# ─────────────────────────────────────────────────────────────────────────────
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.bz2
+*.xz
+*.Z
+*.lz
+*.lzo
+*.rz
+*.sz
+*.dz
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEDIA & BINARY FILES (LARGE/IRRELEVANT TO VCS)
+# ─────────────────────────────────────────────────────────────────────────────
+# Images (large/generated)
+*.psd
+*.ai
+*.indd
+*.raw
+*.cr2
+*.nef
+*.orf
+*.sr2
+
+# Video
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mkv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.3gp
+
+# Audio
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.wma
+*.m4a
+*.opus
+
+# Documents (generated/binary)
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.pages
+*.numbers
+*.key
+
+# Fonts
+*.ttf
+*.otf
+*.woff
+*.woff2
+*.eot
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADDITIONAL LANGUAGES (COMPREHENSIVE)
+# ─────────────────────────────────────────────────────────────────────────────
+# R
+.RData
+.Rhistory
+.Rapp.history
+.Rproj.user/
+*.Rproj
+*.rds
+*.rda
+
+# Perl
+*.pl.bak
+blib/
+pm_to_blib
+MYMETA.*
+Makefile.old
+nytprof.out
+
+# Kotlin
+*.kotlin_module
+*.kotlin_builtins
+
+# Dart/Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+flutter_*.png
+
+# Clojure
+.lein-*
+.nrepl-port
+.nrepl-history
+target/
+.hgignore
+.hg/
+
+# Erlang
+*.beam
+erl_crash.dump
+.erlang.cookie
+rebar3.crashdump
+
+# Julia
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+Manifest.toml
+
+# Lua
+luac.out
+*.luac
+*.lua~
+
+# MATLAB
+*.asv
+*.slxc
+slprj/
+*.autosave
+
+# F#
+*.fsproj.user
+.fake/
+.ionide/
+
+# Nim
+nimcache/
+nimblecache/
+
+# Crystal
+lib/
+.shards/
+*.dwarf
+
+# V
+*.v.c
+v.mod
+
+# Zig
+zig-cache/
+zig-out/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LATEX & ACADEMIC
+# ─────────────────────────────────────────────────────────────────────────────
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.out
+*.nav
+*.snm
+*.vrb
+*.acn
+*.acr
+*.alg
+*.glg
+*.glo
+*.gls
+*.ist
+*.loa
+*.bcf
+*.run.xml
+*.xdv
+*.dvi
+*.ps
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BACKUP & PATCH FILES
+# ─────────────────────────────────────────────────────────────────────────────
+*.old
+*.save
+*-old
+*-save
+*.BAK
+*.backup
+*.conflict
+*.patch
+*.diff
+*.rej
+*.orig
+*.BACKUP.*
+*.BASE.*
+*.LOCAL.*
+*.REMOTE.*
+*_BACKUP_*
+*_BASE_*
+*_LOCAL_*
+*_REMOTE_*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE DUMPS & CRASH REPORTS
+# ─────────────────────────────────────────────────────────────────────────────
+core
+core.*
+vgcore.*
+*.stackdump
+*.core
+crash.log
+crash_*.log
+hs_err_pid*
+replay_pid*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADDITIONAL PACKAGE MANAGERS
+# ─────────────────────────────────────────────────────────────────────────────
+# Bower
+bower_components/
+.bower-cache/
+.bower-registry/
+.bower-tmp/
+
+# JSPM
+jspm_packages/
+
+# Deno
+.deno/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TESTING FRAMEWORKS (EXTENDED)
+# ─────────────────────────────────────────────────────────────────────────────
+# Python testing
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# JavaScript testing
+.nyc_output/
+coverage/
+.jest/
+jest.config.js.snap
+__snapshots__/
+__mocks__/
+
+# General coverage
+clover.xml
+lcov.info
+*.lcov
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STATIC SITE GENERATORS
+# ─────────────────────────────────────────────────────────────────────────────
+# Jekyll
+.jekyll-cache/
+.jekyll-metadata
+_site/
+.sass-cache/
+
+# Next.js
+.next/
+out/
+.next-seo.config.js
+
+# Nuxt.js
+.nuxt/
+dist/
+
+# VuePress
+.vuepress/dist/
+.temp/
+.cache/
+
+# Gatsby
+.cache/
+public/
+
+# Hugo
+/public/
+/resources/_gen/
+
+# Docusaurus
+.docusaurus/
+build/
+
+# Serverless
+.serverless/
+.webpack/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GAME ENGINES
+# ─────────────────────────────────────────────────────────────────────────────
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.unitypackage
+*.app
+Assembly-CSharp.csproj
+Assembly-CSharp-Editor.csproj
+
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+
+# Godot
+.import/
+export.cfg
+export_presets.cfg
+.mono/
+data_*/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BLOCKCHAIN & CRYPTO
+# ─────────────────────────────────────────────────────────────────────────────
+# Ethereum/Geth
+geth/
+chaindata/
+*.blockchain
+keystore/
+history
+
+# Truffle
+build/contracts/
+.node-xmlhttprequest-*
+
+# Hardhat
+cache/
+artifacts/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHELL & SCRIPTS
+# ─────────────────────────────────────────────────────────────────────────────
+*.sh~
+*.bash_history
+.bash_logout
+.bash_profile.local
+.profile.local
+.zsh_history
+.zsh_sessions/
+.zshrc.local
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VIRTUALIZATION & CONTAINERS
+# ─────────────────────────────────────────────────────────────────────────────
+# Vagrant
+.vagrant/
+*.box
+
+# Docker (extended)
+docker-compose.override.yml
+docker-compose.*.yml
+.dockerignore.local
+
+# VirtualBox
+*.vdi
+*.vmdk
+*.vbox
+*.vbox-prev
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EDITORS & IDEs (EXTENDED)
+# ─────────────────────────────────────────────────────────────────────────────
+# Atom
+.atom/
+
+# Brackets
+.brackets.json
+
+# NetBeans
+nbproject/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+# Android Studio
+.idea/
+*.iml
+local.properties
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROJECT-SPECIFIC EXCLUSIONS
+# ─────────────────────────────────────────────────────────────────────────────
+# Local overrides (create locally, never commit)
+*.local.*
+local.md
+LOCAL_*.md
+PRIVATE_*.md
+
+# Experimental/draft content
+experimental/
+sandbox/
+playground/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALLOW LIST (OVERRIDE IGNORES)
+# ─────────────────────────────────────────────────────────────────────────────
+# Keep example files that demonstrate patterns (sanitized)
+!examples/**/*.example
+!templates/**/*.template
