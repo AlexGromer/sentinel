@@ -1,0 +1,18 @@
+{
+  "name": "pw-executor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Sentinel M0 — Playwright execution server (JSON-RPC 2.0 over stdio). BUILD, not buy.",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "playwright": "^1.61.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

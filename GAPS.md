@@ -11,7 +11,7 @@ Categories: ARCH (architecture), VERIFY (needs fact-check), RISK, AGENT (missing
 
 | ID | Priority | Gap | Status |
 |----|----------|-----|--------|
-| GAP-DECISION-001 | P1 | **BUILD-ONLY interpretation.** Assumed: OSS libraries (Playwright, LangGraph, Anthropic SDK) = allowed ("writing"); turnkey servers/SaaS = not allowed. If even OSS libs are disallowed (pure from-scratch incl. raw CDP), scope explodes. **Needs user confirmation.** | OPEN |
+| GAP-DECISION-001 | P1 | **BUILD-ONLY interpretation.** OSS libraries (Playwright, LangGraph, Anthropic SDK, MCP SDK) = allowed ("writing"); turnkey servers/SaaS products = not allowed. | **RESOLVED 2026-06-23** (confirmed by user). GAP-ARCH-002 unblocked → closed. |
 | GAP-ARCH-001 | P1 | **`pw-executor` is now critical-path.** Building + maintaining our own TS Playwright execution server is the largest single component and the highest ongoing-maintenance risk (tracks Playwright lib API churn). Mitigation: thin tool layer over Playwright's stable `Locator`/`accessibility` API; contract tests asserting tool names+schemas; pin Playwright version. | OPEN |
 | GAP-ARCH-002 | P2 | If GAP-DECISION-001 resolves to "no OSS either", re-evaluate the entire stack (LangGraph → bespoke loop, Playwright → raw CDP). Would invalidate ADR-002/004/005. | BLOCKED on GAP-DECISION-001 |
 

@@ -1175,6 +1175,9 @@ experimental/
 sandbox/
 playground/
 
+# Sentinel run artifacts (traces, snapshots) — regenerated per run
+runs/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALLOW LIST (OVERRIDE IGNORES)
 # ─────────────────────────────────────────────────────────────────────────────

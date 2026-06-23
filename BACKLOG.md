@@ -2,17 +2,16 @@
 
 ## Active
 
-- [ ] [W0] M0 Hello Browser: agentctl (Go) spawns Python brain via subprocess+env (no gRPC yet); single perceive node; BUILD minimal pw-executor (TS: navigate + accessibility_snapshot + trace start/stop); print a11y tree + drop trace.zip. Proves the wire, not intelligence. (P1) @general-purpose — 2026-06-22
 - [ ] [W1] M1 Autonomous Walk: all 9 LangGraph nodes (heal stubbed); SqliteSaver checkpointer in a SEPARATE DB file; Opus 4.8 plan node (T=0); coverage-based convergence (coverage_target + nav_frontier, not an LLM flag); emit plan.json + plan_hash + llm-transcript.jsonl + trace. (P1) @ml-engineer — 2026-06-22
 - [ ] [W2] M2 Self-Repairing Walker: heal node (cache lookup + L1-L6 rotation + Sonnet a11y re-grounding + verify-before-accept probe + confidence gate + post-heal verification + append-only healing_audit + dom_subtree_hash amortization); introduce gRPC + proto v1 (PersistenceService) + Go store-gateway (SQLite WAL: runs, healed_locators, healing_audit). (P1) @ml-engineer — 2026-06-22
 - [ ] [W3] M3 CI-Ready Replay: replay/ci mode (skip plan node, LLM-free happy path); plan_hash HARD-ABORT (exit 3); dual a11y+screenshot golden baselines; AUT-SHA-gated flake quarantine; structured exit codes 0/1/2/3; orchestrator as proper gRPC server (RunControl, supervision, per-step deadline); per-job SQLite; GitHub Actions (explore conditional + replay matrix). (P1) @ci-cd-engineer — 2026-06-22
 - [ ] [W4] M4 Production-Observable v1.0: report-service (JSON+HTML, Prometheus /metrics); OTel spans across all 3 layers (prompt_HASH not content) to Tempo; .spec.ts export generated from RunState (no codegen dependency); agentctl calibrate + healing_confidence_histogram; Go-side hard budget ceiling reconciliation. (P2) @observability-engineer — 2026-06-22
 - [ ] [W5] M5 Visual Heal PoC + K3s/ArgoCD: set-of-marks visual heal built into pw-executor, BUILT ONLY IF PoC measures >70% accuracy on 20 real broken-selector scenarios; Postgres + AsyncPostgresSaver IF concurrency trigger hit; Helm chart + ArgoCD Application for home-lab GitOps; per-namespace dev/staging/prod config. (P2) @k8s-engineer — 2026-06-22
-- [ ] GAP-DECISION-001 (BLOCKER): confirm BUILD-ONLY interpretation with user — are OSS libraries (Playwright lib, LangGraph, Anthropic SDK) allowed as "writing", or is even OSS off-limits (pure from-scratch incl. raw CDP)? Resolution gates the entire stack (ADR-002/004/005). (P1) @system-architect — 2026-06-22
 
 ## Completed Archive
 
-_No completed tasks._
+- [x] [W0] M0 Hello Browser: agentctl (Go) spawns Python brain via subprocess+env (no gRPC yet); single perceive node; BUILD minimal pw-executor (TS: navigate + accessibility_snapshot + trace start/stop); print a11y tree + drop trace.zip. Proves the wire, not intelligence. (P1) @general-purpose — 2026-06-22 ✓ 2026-06-22
+- [x] GAP-DECISION-001 (BLOCKER): confirm BUILD-ONLY interpretation with user — are OSS libraries (Playwright lib, LangGraph, Anthropic SDK) allowed as "writing", or is even OSS off-limits (pure from-scratch incl. raw CDP)? Resolution gates the entire stack (ADR-002/004/005). (P1) @system-architect — 2026-06-22 ✓ 2026-06-22
 
 ## Deferred
 
