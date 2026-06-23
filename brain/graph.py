@@ -1,19 +1,20 @@
-"""Sentinel brain — the LangGraph StateGraph (M1: autonomous walk).
+"""Sentinel brain — the LangGraph StateGraph (explore loop).
 
-Nodes (9): perceive, ground, plan, act, verify, heal (STUB @ M1), checkpoint, report (+ START/END).
+Nodes (9): perceive, ground, plan, act, verify, heal (STUB), checkpoint, report (+ START/END).
 The graph autonomously explores a site, converges on a measurable coverage target (ADR-010),
 and freezes plan.json / plan_hash. See ../docs/M1_CONTRACT.md and ../docs/STATE_MACHINE.md.
 
-M1 coverage model: the "clickable" interactive set is buttons; links drive navigation via the
-frontier. Coverage = exercised buttons / seen buttons. Exploration is complete when coverage
->= target AND the navigation frontier is empty; `max_steps` is a safety backstop.
+M2 change: each interactive element captures an ordered L1–L6 `alternatives` list (testid /
+role+name / text), and the frozen click step records `locator` (primary) + `alternatives` so the
+replay path (brain/replay.py) can self-heal a broken locator. The explore graph's `heal` node
+stays a stub; real healing happens in replay (HealingEngine).
 
-Nodes are closures over the injected `ex` (pw-executor client), the selected `planner`, and
-`tx_write` (transcript sink) — keeping them dependency-injected and testable.
+Coverage model: the "clickable" set is buttons; links drive navigation via the frontier.
+Coverage = exercised buttons / seen buttons. Nodes are closures over the injected `ex`
+(pw-executor client), `planner`, and `tx_write` (transcript sink).
 """
 import json
 import os
-import re
 import sys
 
 from langgraph.graph import StateGraph, START, END
@@ -25,18 +26,35 @@ def log(*a: object) -> None:
     print("[brain]", *a, file=sys.stderr, flush=True)
 
 
-_BUTTON_RE = re.compile(r'^\s*-\s+button\s+"([^"]*)"')
+def _buttons_from_interactives(elements: list, path: str) -> list:
+    """Build button descriptors (semantic_id + primary locator + L1–L6 alternatives) from
+    pw-executor `browser.interactives`.
 
-
-def _parse_buttons(aria: str, path: str) -> list:
-    """Extract button {role,name,semantic_id} from a Playwright ariaSnapshot (YAML-ish string)."""
+    semantic_id anchors on testid (stable across DOM drift) when present, else the accessible
+    name — so the same logical element keeps its id even if its name changes. The primary
+    locator is role+name (the human-natural, drift-fragile locator); the stabler testid/text are
+    kept as healing alternatives, ordered by strategy prior (testid 0.95 > role_name 0.90 > text).
+    """
     out = []
-    for line in (aria or "").splitlines():
-        m = _BUTTON_RE.match(line)
-        if m:
-            name = m.group(1)
-            out.append({"role": "button", "name": name,
-                        "semantic_id": semantic_id(path, "button", name)})
+    for e in elements:
+        if e.get("tag") != "button" and e.get("role") != "button":
+            continue
+        name = (e.get("name") or "").strip()
+        testid = e.get("testid")
+        text = (e.get("text") or "").strip()
+        anchor = testid or name or text
+        if not anchor:
+            continue
+        alts = []
+        if testid:
+            alts.append({"strategy": "testid", "locator": {"testid": testid}, "prior": 0.95})
+        if name:
+            alts.append({"strategy": "role_name", "locator": {"role": "button", "name": name}, "prior": 0.90})
+        if text and text != name:
+            alts.append({"strategy": "text_role", "locator": {"text": text}, "prior": 0.80})
+        primary = {"role": "button", "name": name} if name else (alts[0]["locator"] if alts else None)
+        out.append({"semantic_id": semantic_id(path, "button", anchor), "name": name,
+                    "testid": testid, "locator": primary, "alternatives": alts})
     return out
 
 
@@ -53,10 +71,11 @@ def build_graph(ex, planner, tx_write):
                                "nodeCount": snap.get("nodeCount", 0)}}
 
     def ground(state: RunState) -> dict:
-        """Parse interactive buttons, grow the same-origin nav frontier, recompute coverage."""
+        """Catalogue buttons (with healing alternatives), grow the frontier, recompute coverage."""
         pm = dict(state.get("page_model") or {})
         path = normalize_url(pm.get("url", ""))
-        buttons = _parse_buttons(pm.get("aria", ""), path)
+        buttons = _buttons_from_interactives(
+            ex.call("browser.interactives").get("elements", []), path)
         seen = list(dict.fromkeys(list(state.get("interactive_seen", []))
                                   + [b["semantic_id"] for b in buttons]))
         links = ex.call("browser.links").get("links", [])
@@ -86,11 +105,12 @@ def build_graph(ex, planner, tx_write):
             if b["semantic_id"] not in exercised:
                 candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
                                    "role": "button", "name": b["name"], "target": None,
-                                   "intent": f"click button '{b['name']}'"})
+                                   "intent": f"click button '{b['name']}'",
+                                   "locator": b["locator"], "alternatives": b["alternatives"]})
         for nu in state.get("nav_frontier", []):
             candidates.append({"kind": "navigate", "semantic_id": semantic_id(nu, "navigate", ""),
-                               "role": None, "name": None, "target": nu,
-                               "intent": f"navigate to {nu}"})
+                               "role": None, "name": None, "target": nu, "alternatives": None,
+                               "locator": None, "intent": f"navigate to {nu}"})
         step = state.get("current_step", 0)
         frontier_empty = len(state.get("nav_frontier", [])) == 0
         cov_ok = state.get("coverage_achieved", 0.0) >= state.get("coverage_target", 0.85)
@@ -111,7 +131,8 @@ def build_graph(ex, planner, tx_write):
         sid = step + 1
         planned = {"step_id": sid, "intent": a["intent"], "semantic_id": a["semantic_id"],
                    "action_type": a["kind"], "target": a.get("target"),
-                   "locator": ({"role": a["role"], "name": a["name"]} if a["kind"] == "click" else None),
+                   "locator": (a.get("locator") if a["kind"] == "click" else None),
+                   "alternatives": (a.get("alternatives") if a["kind"] == "click" else None),
                    "is_milestone": False}
         tok = decision.get("tokens") or {}
         tx_write({"step": sid, "planner": planner.name, "model": planner.model,
@@ -142,12 +163,12 @@ def build_graph(ex, planner, tx_write):
                 "current_step": p["step_id"], "_last_ok": True}
 
     def verify(state: RunState) -> dict:
-        """M1: trust act's result. Real assertion/classification + heal trigger arrive at M2."""
+        """Explore-mode verify: trust act's result. Replay-mode healing lives in brain/replay.py."""
         return {"_verify_ok": bool(state.get("_last_ok", True))}
 
     def heal(state: RunState) -> dict:
-        """STUB (M2): re-grounding + confidence model not implemented yet."""
-        log("heal node: deferred to M2 (stub)")
+        """STUB in the explore graph (explore discovers, it does not heal). See brain/replay.py."""
+        log("heal node: explore-mode stub (real healing is in replay)")
         return {}
 
     def checkpoint(state: RunState) -> dict:

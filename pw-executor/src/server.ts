@@ -5,7 +5,7 @@
  * CRITICAL: stdout carries ONLY JSON-RPC responses. All logs MUST go to stderr.
  * We BUILD this server ourselves (ADR-001, build-only constraint).
  */
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import * as readline from 'node:readline';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
@@ -21,6 +21,37 @@ interface RpcResponse {
   id: number | string;
   result?: unknown;
   error?: { code: number; message: string };
+}
+
+/**
+ * A locator is a dict with EXACTLY ONE of these shapes (M2 locator model).
+ * Resolution order mirrors the L1–L6 rotation priors in M2_CONTRACT.md.
+ */
+interface LocatorSpec {
+  testid?: string;
+  role?: string;
+  name?: string;
+  label?: string;
+  text?: string;
+  css?: string;
+  xpath?: string;
+}
+
+/**
+ * Shared locator builder used by BOTH browser.click and browser.probe so the
+ * resolution semantics stay identical across action and verify-before-accept.
+ */
+function buildLocator(page: Page, locator: LocatorSpec): Locator {
+  if (locator.testid !== undefined) return page.getByTestId(locator.testid);
+  if (locator.role !== undefined)
+    return page.getByRole(locator.role as Parameters<Page['getByRole']>[0], { name: locator.name });
+  if (locator.label !== undefined) return page.getByLabel(locator.label);
+  if (locator.text !== undefined) return page.getByText(locator.text);
+  if (locator.css !== undefined) return page.locator(locator.css);
+  if (locator.xpath !== undefined) return page.locator('xpath=' + locator.xpath);
+  throw new Error(
+    'buildLocator: locator must provide one of {testid}, {role,name}, {label}, {text}, {css}, {xpath}',
+  );
 }
 
 let browser: Browser | null = null;
@@ -50,6 +81,8 @@ async function handle(req: RpcRequest): Promise<unknown> {
           'browser.currentUrl',
           'browser.links',
           'browser.click',
+          'browser.probe',
+          'browser.interactives',
           'browser.traceStop',
         ],
       };
@@ -85,23 +118,30 @@ async function handle(req: RpcRequest): Promise<unknown> {
     }
     case 'browser.click': {
       await ensureBrowser();
-      const locator = (req.params?.locator ?? {}) as {
-        role?: string;
-        name?: string;
-        css?: string;
-      };
-      let loc;
-      if (locator.css) {
-        loc = page!.locator(locator.css).first();
-      } else if (locator.role) {
-        loc = page!
-          .getByRole(locator.role as Parameters<Page['getByRole']>[0], { name: locator.name })
-          .first();
-      } else {
-        throw new Error('click: locator must provide either css or role');
-      }
+      const locator = (req.params?.locator ?? {}) as LocatorSpec;
+      const loc = buildLocator(page!, locator).first();
       await loc.click({ timeout: 5000 });
       return { clicked: true, url: page!.url() };
+    }
+    case 'browser.probe': {
+      await ensureBrowser();
+      const locator = (req.params?.locator ?? {}) as LocatorSpec;
+      return { count: await buildLocator(page!, locator).count() };
+    }
+    case 'browser.interactives': {
+      await ensureBrowser();
+      const elements = await page!.$$eval(
+        'button, a[href], input, select, textarea, [role=button]',
+        (els) =>
+          els.map((e) => ({
+            role: e.getAttribute('role') || e.tagName.toLowerCase(),
+            name: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 200),
+            testid: e.getAttribute('data-testid'),
+            text: (e.textContent || '').trim().slice(0, 200),
+            tag: e.tagName.toLowerCase(),
+          })),
+      );
+      return { elements };
     }
     case 'browser.traceStop': {
       const path = req.params?.path as string | undefined;

@@ -35,7 +35,15 @@ func main() {
 	planner := fs.String("planner", "heuristic", "planner: heuristic|llm")
 	coverageTarget := fs.String("coverage-target", "0.85", "coverage target in [0,1]")
 	maxSteps := fs.String("max-steps", "40", "max exploration steps (safety backstop)")
+	replay := fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2)")
+	planFile := fs.String("plan", "", "path to plan.json (required with --replay)")
+	healLLM := fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
 	_ = fs.Parse(os.Args[2:])
+
+	if *replay && *planFile == "" {
+		fmt.Fprintln(os.Stderr, "error: --plan <plan.json> is required with --replay")
+		os.Exit(2)
+	}
 
 	if *target == "" {
 		fmt.Fprintln(os.Stderr, "error: --target is required")
@@ -68,7 +76,16 @@ func main() {
 		brainPython = v
 	}
 
-	fmt.Printf("[agentctl] run_id=%s mode=%s planner=%s target=%s\n", runID, *mode, *planner, *target)
+	runMode := *mode
+	if *replay {
+		runMode = "replay"
+	}
+	healLLMEnv := "0"
+	if *healLLM {
+		healLLMEnv = "1"
+	}
+
+	fmt.Printf("[agentctl] run_id=%s mode=%s planner=%s target=%s\n", runID, runMode, *planner, *target)
 	fmt.Printf("[agentctl] artifacts=%s\n", *artifactDir)
 
 	cmd := exec.Command(brainPython, "-m", "brain")
@@ -76,12 +93,14 @@ func main() {
 	cmd.Env = append(os.Environ(),
 		"TARGET_URL="+*target,
 		"RUN_ID="+runID,
-		"RUN_MODE="+*mode,
+		"RUN_MODE="+runMode,
 		"ARTIFACT_DIR="+*artifactDir,
 		"PW_EXECUTOR_CMD="+pwExec,
 		"PLANNER="+*planner,
 		"COVERAGE_TARGET="+*coverageTarget,
 		"MAX_STEPS="+*maxSteps,
+		"PLAN_FILE="+*planFile,
+		"HEAL_LLM="+healLLMEnv,
 		"PYTHONPATH="+repo,
 	)
 	cmd.Stdout = os.Stdout

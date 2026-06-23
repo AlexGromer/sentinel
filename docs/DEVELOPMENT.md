@@ -45,8 +45,12 @@ uv pip install langgraph langgraph-checkpoint-sqlite anthropic
 # M1 — autonomous walk over a multi-page fixture → plan.json
 ./bin/agentctl run --target "file://$PWD/testdata/site/index.html" --planner heuristic
 #   flags: --planner heuristic|llm   --coverage-target 0.85   --max-steps 40
+
+# M2 — replay a frozen plan against a drifted DOM, self-healing broken locators
+./bin/agentctl run --replay --plan runs/<id>/plan.json --target "file://$PWD/testdata/site-v2/index.html"
+#   flags: --heal-llm   (Sonnet fallback when L1-L6 miss; needs ANTHROPIC_API_KEY)
 ```
-Artifacts land in `runs/<run_id>/` (`plan.json`, `llm-transcript.jsonl`, `snapshot.aria.yaml`, `trace.zip`, `checkpoint.db`) — `runs/` is git-ignored.
+Artifacts land in `runs/<run_id>/` (`plan.json`, `llm-transcript.jsonl`, `trace.zip`, `checkpoint.db`; replay adds `heal-report.json`) — `runs/` git-ignored. Healed locators + audit persist in `state/locators.db` (interim local store, M2 → store-gateway at M2b; git-ignored).
 
 > **Permission note (this environment):** running freshly-built binaries and outbound network are gated.
 > Build steps (`npm`, `go build`, `uv pip`) run fine; execute `agentctl` yourself (e.g. via the `!` prefix)
@@ -87,6 +91,11 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 2. Add the node function and register it in `brain/graph.py` `build_graph()` (`add_node`), then wire edges (`add_edge` / `add_conditional_edges`).
 3. Mind cycles: raise the `recursion_limit` in the `invoke` config if you add supersteps per loop.
 4. Update `STATE_MACHINE.md` and the milestone contract.
+
+### Add a heal strategy (Python)
+1. Add the strategy key + its prior to `PRIORS` in `brain/healing.py`.
+2. Emit a matching `alternatives` entry at explore time in `brain/graph.py` `_buttons_from_interactives`, and ensure `pw-executor` `buildLocator` can build+probe that locator kind.
+3. `HealingEngine.heal` rotates alternatives in recorded order; verify-before-accept re-probes every candidate live. Document in `docs/SELF_HEALING.md` + `docs/M2_CONTRACT.md`.
 
 ### Start a new milestone
 Write `docs/M<N>_CONTRACT.md` first (scope, contracts, acceptance gate Given/When/Then), add an ADR to `ARCHITECTURE.md` if it’s an architectural decision, add tasks to `BACKLOG.md`, *then* implement.

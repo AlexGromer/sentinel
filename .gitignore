@@ -1178,6 +1178,9 @@ playground/
 # Sentinel run artifacts (traces, snapshots) — regenerated per run
 runs/
 
+# Sentinel interim local store (M2; moves to Go store-gateway at M2b)
+state/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALLOW LIST (OVERRIDE IGNORES)
 # ─────────────────────────────────────────────────────────────────────────────
