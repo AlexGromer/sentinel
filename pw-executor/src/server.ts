@@ -44,7 +44,14 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return {
         name: 'pw-executor',
         version: '0.0.0-m0',
-        capabilities: ['browser.navigate', 'browser.snapshot', 'browser.traceStop'],
+        capabilities: [
+          'browser.navigate',
+          'browser.snapshot',
+          'browser.currentUrl',
+          'browser.links',
+          'browser.click',
+          'browser.traceStop',
+        ],
       };
     case 'browser.navigate': {
       await ensureBrowser();
@@ -61,6 +68,40 @@ async function handle(req: RpcRequest): Promise<unknown> {
         .split('\n')
         .filter((l) => l.trim().startsWith('-')).length;
       return { ariaSnapshot, nodeCount };
+    }
+    case 'browser.currentUrl': {
+      await ensureBrowser();
+      return { url: page!.url(), title: await page!.title() };
+    }
+    case 'browser.links': {
+      await ensureBrowser();
+      const links = await page!.$$eval('a[href]', (els) =>
+        els.map((a) => ({
+          href: (a as HTMLAnchorElement).href,
+          text: (a.textContent || '').trim(),
+        })),
+      );
+      return { links };
+    }
+    case 'browser.click': {
+      await ensureBrowser();
+      const locator = (req.params?.locator ?? {}) as {
+        role?: string;
+        name?: string;
+        css?: string;
+      };
+      let loc;
+      if (locator.css) {
+        loc = page!.locator(locator.css).first();
+      } else if (locator.role) {
+        loc = page!
+          .getByRole(locator.role as Parameters<Page['getByRole']>[0], { name: locator.name })
+          .first();
+      } else {
+        throw new Error('click: locator must provide either css or role');
+      }
+      await loc.click({ timeout: 5000 });
+      return { clicked: true, url: page!.url() };
     }
     case 'browser.traceStop': {
       const path = req.params?.path as string | undefined;

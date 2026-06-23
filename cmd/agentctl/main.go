@@ -30,7 +30,11 @@ func main() {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	target := fs.String("target", "", "target URL to explore (required)")
 	artifactDir := fs.String("artifact-dir", "", "artifact output dir (default ./runs/<run_id>)")
-	mode := fs.String("mode", "explore", "run mode (M0: explore only)")
+	mode := fs.String("mode", "explore", "run mode")
+	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
+	planner := fs.String("planner", "heuristic", "planner: heuristic|llm")
+	coverageTarget := fs.String("coverage-target", "0.85", "coverage target in [0,1]")
+	maxSteps := fs.String("max-steps", "40", "max exploration steps (safety backstop)")
 	_ = fs.Parse(os.Args[2:])
 
 	if *target == "" {
@@ -54,10 +58,20 @@ func main() {
 
 	pwExec := "node " + filepath.Join(repo, "pw-executor", "dist", "server.js")
 
-	fmt.Printf("[agentctl] run_id=%s mode=%s target=%s\n", runID, *mode, *target)
+	// Run the brain with the project venv python (deps: langgraph, ...); fall back to python3.
+	// Override with BRAIN_PYTHON.
+	brainPython := filepath.Join(repo, ".venv", "bin", "python")
+	if _, statErr := os.Stat(brainPython); statErr != nil {
+		brainPython = "python3"
+	}
+	if v := os.Getenv("BRAIN_PYTHON"); v != "" {
+		brainPython = v
+	}
+
+	fmt.Printf("[agentctl] run_id=%s mode=%s planner=%s target=%s\n", runID, *mode, *planner, *target)
 	fmt.Printf("[agentctl] artifacts=%s\n", *artifactDir)
 
-	cmd := exec.Command("python3", "-m", "brain")
+	cmd := exec.Command(brainPython, "-m", "brain")
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
 		"TARGET_URL="+*target,
@@ -65,6 +79,9 @@ func main() {
 		"RUN_MODE="+*mode,
 		"ARTIFACT_DIR="+*artifactDir,
 		"PW_EXECUTOR_CMD="+pwExec,
+		"PLANNER="+*planner,
+		"COVERAGE_TARGET="+*coverageTarget,
+		"MAX_STEPS="+*maxSteps,
 		"PYTHONPATH="+repo,
 	)
 	cmd.Stdout = os.Stdout
