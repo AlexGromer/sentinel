@@ -99,6 +99,7 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | ADR-010 | 2026-06-23 | Exploration terminates on a MEASURABLE coverage target (fraction of discovered interactive elements exercised + empty nav frontier); budget = backstop | Accepted | Closes the cross-cutting hand-wave: an LLM "done" flag bounds, it does not converge. **Rejected:** LLM `exploration_complete` flag alone; fixed-depth-only cap |
 | ADR-011 | 2026-06-23 | Pluggable planner: `HeuristicPlanner` (default, offline, deterministic, zero-cost) + `LLMPlanner` (Opus 4.8, optional via `--planner llm`, falls back to heuristic) | Accepted | Makes the M1 explore-gate verifiable offline / in CI without network or LLM spend, and doubles as the budget-exhaustion graceful-degradation path (consistent with §8). LLM stays the primary "smart" explorer when a key is present. **Rejected:** Opus-only plan node (untestable offline, costs tokens per smoke run, blocks CI) |
 | ADR-012 | 2026-06-23 | M2 delivered heal-engine-first: deterministic L1–L6 rotation + verify-before-accept + confidence gate + minimal replay, with an **interim brain-local SQLite store**; Go store-gateway+gRPC+proto (M2b) and MCP-SDK transport deferred | Accepted | Self-healing is M2's value and is testable offline; gRPC/store-gateway is infra best introduced separately. Heal needs a stale-locator trigger → minimal replay pulled forward (without the M3 trust layer). Interim local store is a **documented temporary deviation** from ADR-007 (single-writer), restored at M2b. **Rejected:** full M2 bundle at once (high integration risk, untestable in the gated/offline env) |
+| ADR-013 | 2026-06-23 | Heal and golden-diff **coexist**: a healed step still executes AND its page is still golden-diffed, so a drift that heals via testid also raises an a11y golden regression (exit 2). Golden baselines are **page-keyed by URL basename** (cross-base comparison). M3 gRPC orchestrator stays in M2b | Accepted | Healing = test robustness (keep running); golden-diff = change detection (flag the change). They answer different questions and must both fire. Page-basename keying lets a plan explored on site/ be diffed against site-v2/. **Rejected:** treating a heal as suppressing the regression signal (would hide real app changes) |
 
 > ADR template for new decisions:
 > ```
@@ -140,6 +141,8 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | 2026-06-23 | M1 started: LangGraph StateGraph + pluggable planner (heuristic default + Opus optional) | ADR-011 | @AlexGromer |
 | 2026-06-23 | M1 delivered: LangGraph 9-node explore, deterministic plan.json (8 steps, coverage 1.0); docs-first dev guide added | ADR-011 | @AlexGromer |
 | 2026-06-23 | M2 heal-core delivered: deterministic L1–L6 self-heal + verify-before-accept + minimal replay (healed=2/0 on drifted fixture); gRPC/store-gateway split to M2b | ADR-012 | @AlexGromer |
+| 2026-06-23 | M3 started: replay trust layer — plan_hash hard-abort, exit codes 0/1/2/3, dual golden baselines, AUT-SHA flake quarantine, GitHub Actions | ADR-006, ADR-013 | @AlexGromer |
+| 2026-06-23 | M3 delivered: trust layer live-green (CLEAN 0 / DRIFT heal+a11y-regression 2 / tampered 3); first-landing golden symmetry + visual-advisory (GAP-RISK-009); offline test suite + CI workflow | ADR-006, ADR-013 | @AlexGromer |
 
 ---
 

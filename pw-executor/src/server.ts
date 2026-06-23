@@ -7,6 +7,7 @@
  */
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import * as readline from 'node:readline';
+import * as crypto from 'node:crypto';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -83,6 +84,7 @@ async function handle(req: RpcRequest): Promise<unknown> {
           'browser.click',
           'browser.probe',
           'browser.interactives',
+          'browser.screenshotHash',
           'browser.traceStop',
         ],
       };
@@ -142,6 +144,13 @@ async function handle(req: RpcRequest): Promise<unknown> {
           })),
       );
       return { elements };
+    }
+    case 'browser.screenshotHash': {
+      // M3 golden visual baseline: hash the screenshot bytes IN-PROCESS (no raw
+      // image bytes over stdio — keeps the JSON-RPC channel small and text-only).
+      await ensureBrowser();
+      const buf = await page!.screenshot();
+      return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
     case 'browser.traceStop': {
       const path = req.params?.path as string | undefined;

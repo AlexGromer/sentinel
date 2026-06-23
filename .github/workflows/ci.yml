@@ -1,0 +1,230 @@
+# Sentinel CI — M3 "CI-Ready Replay / Trust Layer" (see docs/M3_CONTRACT.md §GitHub Actions).
+#
+# Pipeline shape:
+#   build  -> compiles all three components (Go agentctl, TS pw-executor, Python brain
+#             deps) and publishes a reusable build artifact.
+#   replay -> matrix over the two fixtures; explores `testdata/site` to produce a plan,
+#             freezes goldens from it, then replays against each matrix target with --ci
+#             and ASSERTS the structured exit code (site -> 0, site-v2 -> 2 per the contract).
+#   explore-> manual (workflow_dispatch) only; produces a downloadable plan.json artifact.
+#
+# NOTE: this workflow is documented, not runtime-tested locally (M3_CONTRACT §GitHub Actions).
+name: ci
+
+on:
+  push:
+  pull_request:
+  # Manual trigger drives the `explore` job (gated below on event_name).
+  workflow_dispatch:
+
+# One in-flight run per ref; newer pushes cancel stale CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # build: compile everything once, publish bin/ + pw-executor/dist/ as artifact.
+  # ---------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26 (control-plane / agentctl)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Set up Node 24 (pw-executor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install uv (Python env/dep manager for the brain)
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build pw-executor (TypeScript -> dist/server.js)
+        run: |
+          cd pw-executor
+          npm ci
+          npm run build
+
+      # Browsers land in the machine-global Playwright cache (~/.cache/ms-playwright),
+      # so the server resolves them at runtime regardless of cwd.
+      - name: Install Playwright browser (chromium-headless-shell)
+        run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
+
+      - name: Build agentctl (Go)
+        run: go build -o bin/agentctl ./cmd/agentctl
+
+      - name: Provision brain venv (LangGraph + checkpointer + Anthropic SDK)
+        run: |
+          uv venv
+          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+
+      # Ship only compiled outputs; node_modules / browsers / .venv are reinstalled
+      # by downstream jobs (cheaper than dragging them through artifact storage).
+      - name: Upload build artifact (bin/ + pw-executor/dist/)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-build
+          path: |
+            bin/
+            pw-executor/dist/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # replay: per-fixture deterministic replay with golden-diff, asserting exit code.
+  # Plans live in git-ignored runs/, so we explore fresh here, freeze goldens, replay.
+  # Per-job SQLite (M3_CONTRACT §GitHub Actions) — each matrix leg is isolated.
+  # ---------------------------------------------------------------------------
+  replay:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # run both legs even if one fails, for full signal
+      matrix:
+        target: [site, site-v2]   # site -> expect exit 0, site-v2 -> expect exit 2
+    steps:
+      - uses: actions/checkout@v4   # provides testdata/, brain/, lockfiles
+
+      - name: Set up Node 24 (runtime for pw-executor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install uv (brain runtime deps)
+        uses: astral-sh/setup-uv@v5
+
+      # Restores bin/agentctl and pw-executor/dist/ at the repo root.
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sentinel-build
+
+      - name: Make agentctl executable
+        run: chmod +x bin/agentctl
+
+      # dist/ comes from the artifact; npm ci only restores the runtime node_modules
+      # (the pw-executor imports `playwright` at runtime). No rebuild needed.
+      - name: Restore pw-executor runtime deps
+        run: cd pw-executor && npm ci
+
+      - name: Install Playwright browser (chromium-headless-shell)
+        run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
+
+      - name: Provision brain venv
+        run: |
+          uv venv
+          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+
+      # Explore -> baseline -> replay. The heuristic planner is deterministic and
+      # needs no ANTHROPIC_API_KEY; replay runs without --heal-llm for the same reason.
+      - name: Explore + freeze goldens + replay (assert exit code)
+        env:
+          AUT_SHA: ${{ github.sha }}   # AUT-SHA-gated flake quarantine input
+        run: |
+          set -e   # any precondition (explore / baseline) failing aborts the job
+
+          # 1) Explore the ORIGINAL site to produce a frozen plan at a known path.
+          ./bin/agentctl run \
+            --target "file://$PWD/testdata/site/index.html" \
+            --artifact-dir "runs/ci" \
+            --planner heuristic
+
+          PLAN="runs/ci/plan.json"
+          test -s "$PLAN"   # plan must exist and be non-empty
+
+          # 2) Freeze dual goldens (a11y-hash + screenshot-hash) from the original site.
+          #    This is the ONLY golden mutation path; the replay below never writes goldens.
+          ./bin/agentctl baseline update \
+            --plan "$PLAN" \
+            --target "file://$PWD/testdata/site/index.html"
+
+          # 3) Replay against this matrix leg's target with --ci (forbids --force-replay).
+          #    Capture the exit code WITHOUT aborting under set -e.
+          set +e
+          ./bin/agentctl run --replay \
+            --plan "$PLAN" \
+            --target "file://$PWD/testdata/${{ matrix.target }}/index.html" \
+            --aut-version "$AUT_SHA" \
+            --ci
+          code=$?
+          set -e
+
+          # 4) Assert the structured exit code per docs/M3_CONTRACT.md.
+          case "${{ matrix.target }}" in
+            site)    expected=0 ;;   # unchanged DOM: no heal, no golden regression
+            site-v2) expected=2 ;;   # drifted DOM: heals + golden-diff regression
+            *)       echo "::error::unknown matrix target ${{ matrix.target }}"; exit 1 ;;
+          esac
+
+          if [ "$code" -ne "$expected" ]; then
+            echo "::error::replay against '${{ matrix.target }}' exited $code, expected $expected"
+            exit 1
+          fi
+          echo "OK: replay against '${{ matrix.target }}' exited $code (expected $expected)"
+
+      # Heal/golden-diff report is useful for debugging a failed assertion.
+      - name: Upload replay report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heal-report-${{ matrix.target }}
+          path: runs/ci/heal-report.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # explore: MANUAL only (workflow_dispatch). Produces a fresh plan.json for download
+  # (e.g. to seed a baseline update locally). Not part of push/PR gating.
+  # ---------------------------------------------------------------------------
+  explore:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24 (runtime for pw-executor)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install uv (brain runtime deps)
+        uses: astral-sh/setup-uv@v5
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sentinel-build
+
+      - name: Make agentctl executable
+        run: chmod +x bin/agentctl
+
+      - name: Restore pw-executor runtime deps
+        run: cd pw-executor && npm ci
+
+      - name: Install Playwright browser (chromium-headless-shell)
+        run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
+
+      - name: Provision brain venv
+        run: |
+          uv venv
+          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+
+      - name: Explore testdata/site -> plan.json
+        run: |
+          set -e
+          ./bin/agentctl run \
+            --target "file://$PWD/testdata/site/index.html" \
+            --artifact-dir "runs/explore" \
+            --planner heuristic
+          test -s runs/explore/plan.json
+
+      - name: Upload plan.json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: runs/explore/plan.json
+          if-no-files-found: error
