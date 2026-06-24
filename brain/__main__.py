@@ -12,7 +12,7 @@ import traceback
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from .executor import Executor, log
+from .executor import log, make_executor
 from .graph import build_graph
 from .planner import HeuristicPlanner, LLMPlanner
 from .state import normalize_url, semantic_id
@@ -203,8 +203,8 @@ def main() -> int:
         log("FATAL: TARGET_URL not set")
         return 2
 
-    log(f"run_id={run_id} mode={run_mode}")
-    ex = Executor(pw_cmd)
+    log(f"run_id={run_id} mode={run_mode} transport={os.environ.get('MCP_TRANSPORT', 'jsonrpc')}")
+    ex = make_executor(pw_cmd)
     rc = 1
     try:
         if run_mode in ("replay", "baseline"):

@@ -150,6 +150,7 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | 2026-06-24 | M4 core delivered: .spec.ts export + HTML/JSON/Prometheus report + calibrate (offline-verified, 8 tests); OTel/Prometheus-HTTP/Go-report-service → M4b | ADR-014 | @AlexGromer |
 | 2026-06-24 | M2b started: spec for Go store-gateway+gRPC+proto (M2b-1) and MCP-SDK transport (M2b-2); split, store.py interface preserved | ADR-015, ADR-016 | @AlexGromer |
 | 2026-06-24 | M2b-1 delivered: Go store-gateway + gRPC + proto, live-verified (gate 0/2/3 over gRPC); store.py drop-in LocalStore/GrpcStore; socket→/opt + GOTMPDIR fixes; prod path no sqlite handle | ADR-015 | @AlexGromer |
+| 2026-06-24 | M2b-2 delivered: pw-executor dual transport (JSON-RPC default + MCP SDK opt-in), brain McpExecutor behind Executor.call; offline-verified, JSON-RPC unchanged (closes GAP-VERIFY-002) | ADR-016 | @AlexGromer |
 
 ---
 

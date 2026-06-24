@@ -1,13 +1,19 @@
 /**
- * Sentinel M0 — pw-executor: minimal Playwright execution server.
- * Transport: newline-delimited JSON-RPC 2.0 over stdio (MCP-aligned; SDK migration @ M1).
+ * Sentinel pw-executor — our own Playwright execution server (ADR-001, build-only).
  *
- * CRITICAL: stdout carries ONLY JSON-RPC responses. All logs MUST go to stderr.
- * We BUILD this server ourselves (ADR-001, build-only constraint).
+ * DUAL TRANSPORT (M2b-2, ADR-016):
+ *  - default: newline-delimited JSON-RPC 2.0 over stdio (M0; proven).
+ *  - MCP_TRANSPORT=mcp: the same tools served via the MCP SDK (StdioServerTransport).
+ * Both call the SAME `dispatch(method, params)` — identical behavior either way.
+ *
+ * CRITICAL: stdout carries ONLY protocol frames. All logs MUST go to stderr.
  */
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import * as readline from 'node:readline';
 import * as crypto from 'node:crypto';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -24,10 +30,7 @@ interface RpcResponse {
   error?: { code: number; message: string };
 }
 
-/**
- * A locator is a dict with EXACTLY ONE of these shapes (M2 locator model).
- * Resolution order mirrors the L1–L6 rotation priors in M2_CONTRACT.md.
- */
+/** A locator is a dict with EXACTLY ONE of these shapes (M2 locator model). */
 interface LocatorSpec {
   testid?: string;
   role?: string;
@@ -38,10 +41,7 @@ interface LocatorSpec {
   xpath?: string;
 }
 
-/**
- * Shared locator builder used by BOTH browser.click and browser.probe so the
- * resolution semantics stay identical across action and verify-before-accept.
- */
+/** Shared locator builder used by BOTH browser.click and browser.probe. */
 function buildLocator(page: Page, locator: LocatorSpec): Locator {
   if (locator.testid !== undefined) return page.getByTestId(locator.testid);
   if (locator.role !== undefined)
@@ -69,67 +69,44 @@ async function ensureBrowser(): Promise<void> {
   log('browser launched, tracing started');
 }
 
-async function handle(req: RpcRequest): Promise<unknown> {
-  switch (req.method) {
+/** Transport-agnostic tool dispatch. `method` is the dotted name (e.g. "browser.navigate"). */
+async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+  switch (method) {
     case 'initialize':
       await ensureBrowser();
-      return {
-        name: 'pw-executor',
-        version: '0.0.0-m0',
-        capabilities: [
-          'browser.navigate',
-          'browser.snapshot',
-          'browser.currentUrl',
-          'browser.links',
-          'browser.click',
-          'browser.probe',
-          'browser.interactives',
-          'browser.screenshotHash',
-          'browser.traceStop',
-        ],
-      };
+      return { name: 'pw-executor', version: '0.0.0', capabilities: TOOL_METHODS };
     case 'browser.navigate': {
       await ensureBrowser();
-      const url = req.params?.url as string | undefined;
+      const url = params?.url as string | undefined;
       if (!url) throw new Error('navigate: missing params.url');
       const resp = await page!.goto(url, { waitUntil: 'domcontentloaded' });
       return { url: page!.url(), title: await page!.title(), status: resp?.status() ?? null };
     }
     case 'browser.snapshot': {
       await ensureBrowser();
-      // ariaSnapshot() is Playwright's current accessibility-tree representation (YAML-ish string).
       const ariaSnapshot = await page!.locator('body').ariaSnapshot();
-      const nodeCount = ariaSnapshot
-        .split('\n')
-        .filter((l) => l.trim().startsWith('-')).length;
+      const nodeCount = ariaSnapshot.split('\n').filter((l) => l.trim().startsWith('-')).length;
       return { ariaSnapshot, nodeCount };
     }
-    case 'browser.currentUrl': {
+    case 'browser.currentUrl':
       await ensureBrowser();
       return { url: page!.url(), title: await page!.title() };
-    }
     case 'browser.links': {
       await ensureBrowser();
       const links = await page!.$$eval('a[href]', (els) =>
-        els.map((a) => ({
-          href: (a as HTMLAnchorElement).href,
-          text: (a.textContent || '').trim(),
-        })),
+        els.map((a) => ({ href: (a as HTMLAnchorElement).href, text: (a.textContent || '').trim() })),
       );
       return { links };
     }
     case 'browser.click': {
       await ensureBrowser();
-      const locator = (req.params?.locator ?? {}) as LocatorSpec;
-      const loc = buildLocator(page!, locator).first();
+      const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
       await loc.click({ timeout: 5000 });
       return { clicked: true, url: page!.url() };
     }
-    case 'browser.probe': {
+    case 'browser.probe':
       await ensureBrowser();
-      const locator = (req.params?.locator ?? {}) as LocatorSpec;
-      return { count: await buildLocator(page!, locator).count() };
-    }
+      return { count: await buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).count() };
     case 'browser.interactives': {
       await ensureBrowser();
       const elements = await page!.$$eval(
@@ -146,14 +123,12 @@ async function handle(req: RpcRequest): Promise<unknown> {
       return { elements };
     }
     case 'browser.screenshotHash': {
-      // M3 golden visual baseline: hash the screenshot bytes IN-PROCESS (no raw
-      // image bytes over stdio — keeps the JSON-RPC channel small and text-only).
       await ensureBrowser();
       const buf = await page!.screenshot();
       return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
     case 'browser.traceStop': {
-      const path = req.params?.path as string | undefined;
+      const path = params?.path as string | undefined;
       if (!path) throw new Error('traceStop: missing params.path');
       if (context && !tracingStopped) {
         await context.tracing.stop({ path });
@@ -164,11 +139,25 @@ async function handle(req: RpcRequest): Promise<unknown> {
     case 'shutdown':
       return { ok: true };
     default:
-      throw new Error(`unknown method: ${req.method}`);
+      throw new Error(`unknown method: ${method}`);
   }
 }
 
-async function main(): Promise<void> {
+/** Tool names exposed over MCP (browser.* only; initialize/shutdown are lifecycle, not tools). */
+const TOOL_METHODS = [
+  'browser.navigate',
+  'browser.snapshot',
+  'browser.currentUrl',
+  'browser.links',
+  'browser.click',
+  'browser.probe',
+  'browser.interactives',
+  'browser.screenshotHash',
+  'browser.traceStop',
+];
+
+// --- Transport 1: newline JSON-RPC 2.0 (default) ----------------------------
+async function mainJsonRpc(): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin });
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -182,7 +171,7 @@ async function main(): Promise<void> {
     }
     const res: RpcResponse = { jsonrpc: '2.0', id: req.id };
     try {
-      res.result = await handle(req);
+      res.result = await dispatch(req.method, req.params ?? {});
     } catch (e) {
       res.error = { code: -32000, message: e instanceof Error ? e.message : String(e) };
     }
@@ -199,7 +188,47 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((e) => {
-  log('fatal', e);
-  process.exit(1);
-});
+// --- Transport 2: MCP SDK (opt-in) ------------------------------------------
+async function mainMcp(): Promise<void> {
+  const server = new McpServer({ name: 'pw-executor', version: '0.0.0' });
+  const locatorShape = { locator: z.record(z.string(), z.any()) };
+  const schemas: Record<string, Record<string, z.ZodTypeAny>> = {
+    'browser.navigate': { url: z.string() },
+    'browser.snapshot': {},
+    'browser.currentUrl': {},
+    'browser.links': {},
+    'browser.click': locatorShape,
+    'browser.probe': locatorShape,
+    'browser.interactives': {},
+    'browser.screenshotHash': {},
+    'browser.traceStop': { path: z.string() },
+  };
+  for (const method of TOOL_METHODS) {
+    const toolName = method.replace('browser.', 'browser_'); // MCP tool names avoid dots
+    server.registerTool(
+      toolName,
+      { inputSchema: schemas[method] },
+      async (args: Record<string, unknown>) => {
+        const result = await dispatch(method, args ?? {});
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
+      },
+    );
+  }
+  process.on('SIGTERM', () => {
+    void browser?.close().finally(() => process.exit(0));
+  });
+  await server.connect(new StdioServerTransport());
+  log('MCP server connected (stdio)');
+}
+
+if (process.env.MCP_TRANSPORT === 'mcp') {
+  mainMcp().catch((e) => {
+    log('mcp fatal', e);
+    process.exit(1);
+  });
+} else {
+  mainJsonRpc().catch((e) => {
+    log('fatal', e);
+    process.exit(1);
+  });
+}
