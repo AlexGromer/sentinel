@@ -1,9 +1,7 @@
-"""Sentinel brain entrypoint — dispatches explore / replay / baseline / clear-quarantine.
+"""Sentinel brain entrypoint — dispatches all modes.
 
-Config via env (set by agentctl): TARGET_URL, RUN_ID, ARTIFACT_DIR, PW_EXECUTOR_CMD,
-RUN_MODE (explore|replay|baseline|clear-quarantine), PLANNER, COVERAGE_TARGET, MAX_STEPS,
-PLAN_FILE, HEAL_LLM, AUT_VERSION, CI, FORCE_REPLAY. See docs/M1–M3_CONTRACT.md.
-
+RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate.
+Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
 import json
@@ -88,7 +86,7 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         log(f"PLAN INTEGRITY: cannot parse plan ({e}) -> exit 3")
         return 3
     if not target:
-        target = plan.get("target_url", "")  # baseline default
+        target = plan.get("target_url", "")
     if ci and force:
         log("FATAL: --force-replay is not allowed under --ci")
         return 3
@@ -128,28 +126,73 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         store.close()
 
 
-def _run_clear_quarantine() -> int:
-    """`agentctl locators clear-quarantine` — clears the step-failure / quarantine table."""
+def _run_export_spec(out, plan_file, spec_out) -> int:
+    """M4: emit a Playwright .spec.ts from a frozen plan (no browser)."""
+    from .exporter import export_spec
+    if not plan_file or not pathlib.Path(plan_file).exists():
+        log(f"FATAL: --plan not found: {plan_file}")
+        return 2
+    plan = json.loads(pathlib.Path(plan_file).read_text())
+    dest = spec_out or str(out / "exported.spec.ts")
+    pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(dest).write_text(export_spec(plan))
+    print(f"exported Playwright spec -> {dest}")
+    return 0
+
+
+def _run_report(run_dir) -> int:
+    """M4: generate report.html + report.json + metrics.prom from a run's heal-report.json."""
+    from .report import generate
+    if not (pathlib.Path(run_dir) / "heal-report.json").exists():
+        log(f"FATAL: heal-report.json not found in {run_dir}")
+        return 2
+    generate(run_dir)
+    print(f"report -> {run_dir}/report.html, report.json, metrics.prom")
+    return 0
+
+
+def _run_calibrate() -> int:
+    """M4: summarize healing_audit (outcome counts + confidence histogram)."""
     from .store import Store
-    store = Store(_STORE_PATH)
+    from .calibrate import calibrate
+    st = Store(_STORE_PATH)
     try:
-        n = store.clear_quarantine()
-        print(f"cleared {n} step-failure record(s)")
+        c = calibrate(st)
+        pathlib.Path("state").mkdir(parents=True, exist_ok=True)
+        pathlib.Path("state/calibration.json").write_text(json.dumps(c, indent=2))
+        print(json.dumps(c, indent=2))
         return 0
     finally:
-        store.close()
+        st.close()
+
+
+def _run_clear_quarantine() -> int:
+    from .store import Store
+    st = Store(_STORE_PATH)
+    try:
+        print(f"cleared {st.clear_quarantine()} step-failure record(s)")
+        return 0
+    finally:
+        st.close()
 
 
 def main() -> int:
     run_mode = os.environ.get("RUN_MODE", "explore")
     run_id = os.environ.get("RUN_ID", "local")
-    artifact_dir = os.environ.get("ARTIFACT_DIR", f"./runs/{run_id}")
-    out = pathlib.Path(artifact_dir)
+    out = pathlib.Path(os.environ.get("ARTIFACT_DIR", f"./runs/{run_id}"))
     out.mkdir(parents=True, exist_ok=True)
 
+    # --- no-browser modes (M3/M4) --------------------------------------------
     if run_mode == "clear-quarantine":
         return _run_clear_quarantine()
+    if run_mode == "export-spec":
+        return _run_export_spec(out, os.environ.get("PLAN_FILE", ""), os.environ.get("SPEC_OUT", ""))
+    if run_mode == "report":
+        return _run_report(os.environ.get("REPORT_DIR", str(out)))
+    if run_mode == "calibrate":
+        return _run_calibrate()
 
+    # --- browser modes -------------------------------------------------------
     target = os.environ.get("TARGET_URL")
     pw_cmd = os.environ.get("PW_EXECUTOR_CMD")
     if not pw_cmd:

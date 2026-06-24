@@ -165,6 +165,52 @@ func cmdLocators(repo string, args []string) int {
 	})
 }
 
+// cmdExportSpec: agentctl export-spec --plan <p> [-o <file>]  (M4)
+func cmdExportSpec(repo string, args []string) int {
+	fs := flag.NewFlagSet("export-spec", flag.ExitOnError)
+	planFile := fs.String("plan", "", "path to plan.json (required)")
+	out := fs.String("o", "", "output .spec.ts path (default <run>/exported.spec.ts)")
+	_ = fs.Parse(args)
+	if *planFile == "" {
+		fmt.Fprintln(os.Stderr, "error: --plan is required")
+		return 2
+	}
+	runID := newRunID()
+	dir := mkArtifactDir(repo, runID, "")
+	return spawnBrain(repo, runID, []string{
+		"RUN_MODE=export-spec",
+		"ARTIFACT_DIR=" + dir,
+		"PLAN_FILE=" + *planFile,
+		"SPEC_OUT=" + *out,
+	})
+}
+
+// cmdReport: agentctl report --run <dir>  (M4) — HTML+JSON report + Prometheus metrics
+func cmdReport(repo string, args []string) int {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	runDir := fs.String("run", "", "run directory containing heal-report.json (required)")
+	_ = fs.Parse(args)
+	if *runDir == "" {
+		fmt.Fprintln(os.Stderr, "error: --run <dir> is required")
+		return 2
+	}
+	return spawnBrain(repo, newRunID(), []string{
+		"RUN_MODE=report",
+		"ARTIFACT_DIR=" + *runDir,
+		"REPORT_DIR=" + *runDir,
+	})
+}
+
+// cmdCalibrate: agentctl calibrate  (M4) — heal precision/histogram from healing_audit
+func cmdCalibrate(repo string, args []string) int {
+	runID := newRunID()
+	dir := mkArtifactDir(repo, runID, "")
+	return spawnBrain(repo, runID, []string{
+		"RUN_MODE=calibrate",
+		"ARTIFACT_DIR=" + dir,
+	})
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -183,6 +229,12 @@ func main() {
 		code = cmdBaseline(repo, os.Args[2:])
 	case "locators":
 		code = cmdLocators(repo, os.Args[2:])
+	case "export-spec":
+		code = cmdExportSpec(repo, os.Args[2:])
+	case "report":
+		code = cmdReport(repo, os.Args[2:])
+	case "calibrate":
+		code = cmdCalibrate(repo, os.Args[2:])
 	default:
 		usage()
 		code = 2
