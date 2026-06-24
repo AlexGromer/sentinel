@@ -1,0 +1,12 @@
+.git
+.venv
+runs
+state
+bin
+pw-executor/node_modules
+pw-executor/dist
+.claude
+deploy
+docs
+memory
+**/__pycache__

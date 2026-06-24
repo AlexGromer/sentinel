@@ -1,0 +1,7 @@
+# staging namespace overrides
+schedule: "0 */2 * * *"
+target: "http://app.staging.svc.cluster.local/"
+persistence:
+  enabled: true
+  storageClass: ceph-block
+  size: 2Gi

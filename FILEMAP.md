@@ -40,6 +40,21 @@
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
+| docs/M5_CONTRACT.md | Documentation | — |
+| Dockerfile | Container definition | — |
+| .dockerignore | Project file | — |
+| deploy/sentinel/Chart.yaml | Configuration | — |
+| deploy/sentinel/values.yaml | Configuration | — |
+| deploy/sentinel/values-dev.yaml | Configuration | — |
+| deploy/sentinel/values-staging.yaml | Configuration | — |
+| deploy/sentinel/values-prod.yaml | Configuration | — |
+| deploy/sentinel/templates/_helpers.tpl | Project file | — |
+| deploy/sentinel/templates/cronjob.yaml | Configuration | — |
+| deploy/sentinel/templates/configmap.yaml | Configuration | — |
+| deploy/sentinel/templates/serviceaccount.yaml | Configuration | — |
+| deploy/sentinel/templates/pvc.yaml | Configuration | — |
+| deploy/sentinel/.helmignore | Project file | — |
+| deploy/argocd/sentinel-app.yaml | Configuration | — |
 ## Directory Structure
 ```
 agent_development/

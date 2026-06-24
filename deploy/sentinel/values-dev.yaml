@@ -1,0 +1,8 @@
+# dev namespace overrides
+schedule: "*/15 * * * *"
+target: "http://app.dev.svc.cluster.local/"
+persistence:
+  enabled: false
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: 500m, memory: 1Gi }

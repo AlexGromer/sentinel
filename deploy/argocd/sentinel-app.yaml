@@ -1,0 +1,27 @@
+# ArgoCD Application for Sentinel (home-lab GitOps, ADR-017). Apply to the argocd namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sentinel
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/AlexGromer/sentinel.git   # VERIFY: your repo
+    path: deploy/sentinel
+    targetRevision: main
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml          # swap per env (values-dev.yaml / values-staging.yaml)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sentinel
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

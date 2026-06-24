@@ -1,0 +1,8 @@
+apiVersion: v2
+name: sentinel
+description: Sentinel — autonomous self-healing Playwright UI-testing agent (scheduled CI replay)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [testing, playwright, self-healing, ci]
+home: https://github.com/AlexGromer/sentinel

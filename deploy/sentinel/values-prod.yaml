@@ -1,0 +1,10 @@
+# prod namespace overrides
+schedule: "0 3 * * *"          # nightly
+target: "https://app.prod.example.com/"
+persistence:
+  enabled: true
+  storageClass: ceph-block
+  size: 5Gi
+resources:
+  requests: { cpu: 500m, memory: 1Gi }
+  limits: { cpu: "2", memory: 3Gi }

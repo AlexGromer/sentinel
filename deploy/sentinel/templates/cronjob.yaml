@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sentinel.fullname" . }}
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "sentinel.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ include "sentinel.serviceAccountName" . }}
+          restartPolicy: Never
+          containers:
+            - name: agent
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args:
+                - "run"
+                - "--replay"
+                - "--plan"
+                - "/config/plan.json"
+                - "--target"
+                - {{ .Values.target | quote }}
+                - "--ci"
+                - "--aut-version"
+                - {{ .Values.autVersion | quote }}
+              env:
+                {{- if .Values.transport }}
+                - name: MCP_TRANSPORT
+                  value: {{ .Values.transport | quote }}
+                {{- end }}
+                {{- if .Values.checkpointDsn }}
+                - name: CHECKPOINT_DSN
+                  value: {{ .Values.checkpointDsn | quote }}
+                {{- end }}
+                {{- range $k, $v := .Values.extraEnv }}
+                - name: {{ $k }}
+                  value: {{ $v | quote }}
+                {{- end }}
+              volumeMounts:
+                - name: plan
+                  mountPath: /config
+                {{- if .Values.persistence.enabled }}
+                - name: state
+                  mountPath: /app/state
+                {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+          volumes:
+            - name: plan
+              configMap:
+                name: {{ include "sentinel.fullname" . }}-plan
+            {{- if .Values.persistence.enabled }}
+            - name: state
+              persistentVolumeClaim:
+                claimName: {{ include "sentinel.fullname" . }}-state
+            {{- end }}

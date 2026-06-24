@@ -1,0 +1,39 @@
+# Default values for the Sentinel chart (M5-1). Override per-namespace with values-<env>.yaml.
+
+image:
+  repository: ghcr.io/alexgromer/sentinel   # VERIFY: your registry
+  tag: ""                                    # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# Scheduled replay (explore-once / replay-many model -> CronJob, ADR-017).
+schedule: "0 * * * *"        # hourly
+backoffLimit: 1
+concurrencyPolicy: Forbid
+
+# What to replay.
+target: "http://app.default.svc.cluster.local/"   # the app-under-test in-cluster
+autVersion: ""                # set to the AUT git SHA per release for flake quarantine
+transport: ""                 # "" = JSON-RPC (default); "mcp" = MCP SDK transport
+checkpointDsn: ""             # set a Postgres DSN to use AsyncPostgresSaver (M5-3); else SQLite
+
+# The frozen plan.json (replace with your committed plan, or mount a PVC instead).
+plan: "{}"
+
+serviceAccount:
+  create: true
+  name: ""
+
+persistence:
+  enabled: false              # set true to keep healed-locator/golden state on a PVC (Ceph)
+  storageClass: ""            # e.g. ceph-block
+  size: 1Gi
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 2Gi
+
+extraEnv: {}

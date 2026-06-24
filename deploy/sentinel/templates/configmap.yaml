@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sentinel.fullname" . }}-plan
+  labels:
+    {{- include "sentinel.labels" . | nindent 4 }}
+data:
+  plan.json: |-
+    {{- .Values.plan | default "{}" | nindent 4 }}
