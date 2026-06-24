@@ -4,6 +4,7 @@ RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report 
 Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
+import contextlib
 import json
 import os
 import pathlib
@@ -18,6 +19,21 @@ from .planner import HeuristicPlanner, LLMPlanner
 from .state import normalize_url, semantic_id
 
 _STORE_PATH = str(pathlib.Path("state") / "locators.db")
+
+
+@contextlib.contextmanager
+def _checkpointer(ckpt_path: str):
+    """LangGraph checkpointer (M5-3): Postgres when CHECKPOINT_DSN is set (K3s multi-runner) — a
+    near drop-in for the per-run SQLite file otherwise. Postgres needs a one-time setup()."""
+    dsn = os.environ.get("CHECKPOINT_DSN")
+    if dsn:
+        from langgraph.checkpoint.postgres import PostgresSaver
+        with PostgresSaver.from_conn_string(dsn) as saver:
+            saver.setup()
+            yield saver
+    else:
+        with SqliteSaver.from_conn_string(ckpt_path) as saver:
+            yield saver
 
 
 def _run_explore(ex, run_id, out, target, planner_name, coverage_target, max_steps) -> int:
@@ -49,7 +65,7 @@ def _run_explore(ex, run_id, out, target, planner_name, coverage_target, max_ste
             "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
         }
         ckpt = str((out / "checkpoint.db").resolve())
-        with SqliteSaver.from_conn_string(ckpt) as saver:
+        with _checkpointer(ckpt) as saver:
             app = build_graph(ex, planner, tx_write).compile(checkpointer=saver)
             final = app.invoke(init_state,
                                config={"recursion_limit": max(60, max_steps * 8),

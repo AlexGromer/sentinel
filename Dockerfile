@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
  && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /app/.venv \
  && /app/.venv/bin/pip install --no-cache-dir \
-      langgraph langgraph-checkpoint-sqlite anthropic grpcio grpcio-tools mcp
+      langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres anthropic grpcio grpcio-tools mcp
 COPY --from=go-build /out/agentctl /out/store-gateway /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
