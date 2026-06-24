@@ -7,8 +7,7 @@ gate lands; M4 establishes the data + reporting foundation.
 
 
 def calibrate(store, threshold: float = 0.85, cold_start: float = 0.90) -> dict:
-    rows = store.db.execute(
-        "SELECT strategy, outcome, confidence FROM healing_audit").fetchall()
+    rows = store.audit_rows()
     by_strategy = {}
     hist = {"<0.60": 0, "0.60-0.85": 0, ">=0.85": 0}
     for strategy, outcome, confidence in rows:

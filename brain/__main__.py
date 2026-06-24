@@ -73,7 +73,7 @@ def _run_explore(ex, run_id, out, target, planner_name, coverage_target, max_ste
 
 def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_version, ci, force) -> int:
     """M2/M3 replay or baseline-capture. Returns the structured exit code from the trust layer."""
-    from .store import Store
+    from .store import make_store
     from .healing import HealingEngine
     from .replay import run_replay
 
@@ -91,7 +91,8 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         log("FATAL: --force-replay is not allowed under --ci")
         return 3
     trace_path = str((out / "trace.zip").resolve())
-    store = Store(_STORE_PATH)
+    store = make_store(_STORE_PATH)
+    log(f"store={'grpc@' + os.environ['STORE_ADDR'] if os.environ.get('STORE_ADDR') else 'local'}")
     heal = HealingEngine(ex, store, run_id, use_llm=use_llm)
     log(f"{'baseline' if baseline else 'replay'}: plan={plan_file} target={target} "
         f"aut={aut_version or '-'} ci={ci}")
@@ -153,9 +154,9 @@ def _run_report(run_dir) -> int:
 
 def _run_calibrate() -> int:
     """M4: summarize healing_audit (outcome counts + confidence histogram)."""
-    from .store import Store
+    from .store import make_store
     from .calibrate import calibrate
-    st = Store(_STORE_PATH)
+    st = make_store(_STORE_PATH)
     try:
         c = calibrate(st)
         pathlib.Path("state").mkdir(parents=True, exist_ok=True)
@@ -167,8 +168,8 @@ def _run_calibrate() -> int:
 
 
 def _run_clear_quarantine() -> int:
-    from .store import Store
-    st = Store(_STORE_PATH)
+    from .store import make_store
+    st = make_store(_STORE_PATH)
     try:
         print(f"cleared {st.clear_quarantine()} step-failure record(s)")
         return 0

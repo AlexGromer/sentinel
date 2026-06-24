@@ -1,15 +1,15 @@
-"""Sentinel — interim brain-local persistence (SQLite) for M2 healing + M3 trust layer.
+"""Sentinel — persistence for healing (M2) + trust layer (M3).
 
-TEMPORARY (ADR-012): the brain writes SQLite directly. M2b moves all writes behind the Go
-store-gateway over gRPC, restoring the single-writer invariant (ADR-007). The DB lives under
-state/ (git-ignored). Locator values are opaque JSON strings serialized by the caller.
+Two interchangeable implementations behind one method interface (ADR-015):
+- LocalStore  — direct SQLite (interim brain-local; used by the offline test suite and as the
+                no-gateway fallback).
+- GrpcStore   — thin client to the Go store-gateway over gRPC (production single-writer, ADR-007).
 
-Tables:
-- healed_locators / healing_audit  — M2 self-healing (see brain/healing.py)
-- golden_snapshots                 — M3 dual a11y+screenshot baselines (page-keyed), ADR-006/013
-- step_failures                    — M3 AUT-SHA-gated flake quarantine
+`make_store(local_path)` returns GrpcStore when STORE_ADDR is set, else LocalStore. healing.py /
+replay.py / calibrate.py call the same methods on either. `Store` aliases LocalStore (tests import it).
 """
 import json
+import os
 import pathlib
 import sqlite3
 import time
@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS step_failures (
 """
 
 
-class Store:
-    """Thin SQLite wrapper. `now` is injectable for deterministic tests."""
+class LocalStore:
+    """Direct-SQLite implementation (interim; tests + no-gateway fallback). `now` injectable."""
 
     def __init__(self, path: str, now=None) -> None:
         pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -45,13 +45,11 @@ class Store:
         self.db.commit()
         self._now = now or time.time
 
-    # ---- M2: healed locators -------------------------------------------------
     def lookup(self, page_path, semantic_id, dom_subtree_hash):
-        cur = self.db.execute(
+        r = self.db.execute(
             "SELECT strategy,value,confidence,status FROM healed_locators "
             "WHERE page_path=? AND semantic_id=? AND dom_subtree_hash=? AND status='active'",
-            (page_path, semantic_id, dom_subtree_hash))
-        r = cur.fetchone()
+            (page_path, semantic_id, dom_subtree_hash)).fetchone()
         return {"strategy": r[0], "value": r[1], "confidence": r[2], "status": r[3]} if r else None
 
     def evict_stale(self, page_path, semantic_id, current_hash) -> None:
@@ -88,7 +86,9 @@ class Store:
             row)
         self.db.commit()
 
-    # ---- M3: golden baselines (immutable except via `baseline update`) -------
+    def audit_rows(self):
+        return list(self.db.execute("SELECT strategy,outcome,confidence FROM healing_audit").fetchall())
+
     def save_golden(self, page_key, a11y_hash, screenshot_hash) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO golden_snapshots(page_key,a11y_hash,screenshot_hash,created_at) "
@@ -101,24 +101,16 @@ class Store:
             (page_key,)).fetchone()
         return {"a11y_hash": r[0], "screenshot_hash": r[1]} if r else None
 
-    # ---- M3: AUT-SHA-gated flake quarantine ---------------------------------
     def record_step(self, plan_id, step_key, passed: bool, aut_sha: str) -> bool:
-        """Record a step outcome; return whether the step is now quarantined.
-
-        A failure counts toward flakiness only while the AUT sha is unchanged (an app change
-        resets the window). Quarantine at >=3 failures in the last 5; clear on 3 straight passes.
-        """
         row = self.db.execute(
             "SELECT last5,last_aut_sha,quarantined FROM step_failures WHERE plan_id=? AND step_key=?",
             (plan_id, step_key)).fetchone()
         last5 = json.loads(row[0]) if row and row[0] else []
         quarantined = bool(row[2]) if row else False
-        if row and row[1] != aut_sha:   # app under test changed -> reset the flake window
-            last5 = []
-            quarantined = False
+        if row and row[1] != aut_sha:
+            last5, quarantined = [], False
         last5 = (last5 + [1 if passed else 0])[-5:]
-        fails = sum(1 for x in last5 if x == 0)
-        if fails >= 3:
+        if sum(1 for x in last5 if x == 0) >= 3:
             quarantined = True
         if len(last5) >= 3 and last5[-3:] == [1, 1, 1]:
             quarantined = False
@@ -141,3 +133,77 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+
+
+class GrpcStore:
+    """Thin gRPC client to the Go store-gateway. Same method interface as LocalStore (ADR-015)."""
+
+    def __init__(self, addr: str) -> None:
+        import grpc
+        from .pb import persistence_pb2 as pbmsg, persistence_pb2_grpc as pbgrpc
+        self._pb = pbmsg
+        self._ch = grpc.insecure_channel(f"unix:{addr}")
+        self._stub = pbgrpc.PersistenceServiceStub(self._ch)
+
+    def lookup(self, page_path, semantic_id, dom_subtree_hash):
+        r = self._stub.Lookup(self._pb.LocatorKey(
+            page_path=page_path, semantic_id=semantic_id, dom_subtree_hash=dom_subtree_hash))
+        return None if not r.found else {
+            "strategy": r.strategy, "value": r.value, "confidence": r.confidence, "status": r.status}
+
+    def evict_stale(self, page_path, semantic_id, current_hash) -> None:
+        self._stub.EvictStale(self._pb.EvictRequest(
+            page_path=page_path, semantic_id=semantic_id, current_hash=current_hash))
+
+    def save_locator(self, page_path, semantic_id, strategy, value, confidence,
+                     dom_subtree_hash, status="active") -> None:
+        self._stub.SaveLocator(self._pb.LocatorRecord(
+            page_path=page_path, semantic_id=semantic_id, strategy=strategy, value=value,
+            confidence=confidence, dom_subtree_hash=dom_subtree_hash, status=status))
+
+    def bump_used(self, page_path, semantic_id, dom_subtree_hash) -> None:
+        self._stub.BumpUsed(self._pb.LocatorKey(
+            page_path=page_path, semantic_id=semantic_id, dom_subtree_hash=dom_subtree_hash))
+
+    def audit(self, **row) -> None:
+        self._stub.AppendAudit(self._pb.AuditRow(
+            run_id=row.get("run_id", ""), step=int(row.get("step") or 0),
+            semantic_id=row.get("semantic_id", ""), page_path=row.get("page_path", ""),
+            strategy=row.get("strategy", ""), original=row.get("original", ""),
+            healed=row.get("healed", ""), confidence=float(row.get("confidence") or 0.0),
+            outcome=row.get("outcome", ""), dom_hash=row.get("dom_hash", "")))
+
+    def audit_rows(self):
+        return [(r.strategy, r.outcome, r.confidence)
+                for r in self._stub.AuditRows(self._pb.Empty()).rows]
+
+    def save_golden(self, page_key, a11y_hash, screenshot_hash) -> None:
+        self._stub.SaveGolden(self._pb.Golden(
+            page_key=page_key, a11y_hash=a11y_hash, screenshot_hash=screenshot_hash))
+
+    def get_golden(self, page_key):
+        g = self._stub.GetGolden(self._pb.PageKey(page_key=page_key))
+        return None if not g.found else {"a11y_hash": g.a11y_hash, "screenshot_hash": g.screenshot_hash}
+
+    def record_step(self, plan_id, step_key, passed: bool, aut_sha: str) -> bool:
+        return self._stub.RecordStep(self._pb.StepResult(
+            plan_id=plan_id, step_key=step_key, passed=passed, aut_sha=aut_sha)).quarantined
+
+    def is_quarantined(self, plan_id, step_key) -> bool:
+        return self._stub.IsQuarantined(self._pb.StepKey(plan_id=plan_id, step_key=step_key)).quarantined
+
+    def clear_quarantine(self) -> int:
+        return self._stub.ClearQuarantine(self._pb.Empty()).n
+
+    def close(self) -> None:
+        self._ch.close()
+
+
+def make_store(local_path: str):
+    """GrpcStore when STORE_ADDR is set (Go store-gateway running), else LocalStore (ADR-015)."""
+    addr = os.environ.get("STORE_ADDR")
+    return GrpcStore(addr) if addr else LocalStore(local_path)
+
+
+# Backward-compatible alias: the offline test suite and existing imports use `Store`.
+Store = LocalStore

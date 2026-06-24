@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
+	"time"
 )
 
 func newRunID() string {
@@ -79,6 +81,53 @@ func spawnBrain(repo, runID string, extra []string) int {
 	return 0
 }
 
+// startGateway launches the Go store-gateway over a Unix socket (ADR-015). If the binary isn't
+// built it returns "" so the brain falls back to its LocalStore. Returns (STORE_ADDR, stop()).
+func startGateway(repo, runID string) (string, func()) {
+	gw := filepath.Join(repo, "bin", "store-gateway")
+	if _, err := os.Stat(gw); err != nil {
+		return "", func() {}
+	}
+	// socket lives under repo/state (on the project volume), NOT /tmp — /tmp may be full and
+	// net.Listen("unix",...) then fails to create the socket, silently dropping to LocalStore.
+	_ = os.MkdirAll(filepath.Join(repo, "state"), 0o755)
+	sock := filepath.Join(repo, "state", "sentinel-store-"+runID+".sock")
+	cmd := exec.Command(gw, "--addr", sock, "--db", filepath.Join(repo, "state", "locators.db"))
+	cmd.Dir = repo
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return "", func() {}
+	}
+	ok := false
+	for i := 0; i < 100; i++ { // wait up to ~5s for the socket to appear
+		if _, err := os.Stat(sock); err == nil {
+			ok = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ok {
+		fmt.Fprintln(os.Stderr, "[agentctl] store-gateway socket never appeared -> LocalStore")
+		_ = cmd.Process.Kill()
+		return "", func() {}
+	}
+	return sock, func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_, _ = cmd.Process.Wait()
+		_ = os.Remove(sock)
+	}
+}
+
+// runWithStore starts the gateway, injects STORE_ADDR, runs the brain, then stops the gateway.
+func runWithStore(repo, runID string, extra []string) int {
+	addr, stop := startGateway(repo, runID)
+	defer stop()
+	if addr != "" {
+		extra = append(extra, "STORE_ADDR="+addr)
+	}
+	return spawnBrain(repo, runID, extra)
+}
+
 func cmdRun(repo string, args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	target := fs.String("target", "", "target URL (required)")
@@ -112,7 +161,7 @@ func cmdRun(repo string, args []string) int {
 	dir := mkArtifactDir(repo, runID, *artifactDir)
 	fmt.Printf("[agentctl] run_id=%s mode=%s planner=%s target=%s\n", runID, runMode, *planner, *target)
 	fmt.Printf("[agentctl] artifacts=%s\n", dir)
-	return spawnBrain(repo, runID, []string{
+	extra := []string{
 		"RUN_MODE=" + runMode,
 		"TARGET_URL=" + *target,
 		"ARTIFACT_DIR=" + dir,
@@ -124,7 +173,11 @@ func cmdRun(repo string, args []string) int {
 		"AUT_VERSION=" + *autVersion,
 		"CI=" + boolEnv(*ci),
 		"FORCE_REPLAY=" + boolEnv(*force),
-	})
+	}
+	if *replay { // replay needs the locator/golden/quarantine store
+		return runWithStore(repo, runID, extra)
+	}
+	return spawnBrain(repo, runID, extra) // explore needs no store
 }
 
 func cmdBaseline(repo string, args []string) int {
@@ -144,7 +197,7 @@ func cmdBaseline(repo string, args []string) int {
 	runID := newRunID()
 	dir := mkArtifactDir(repo, runID, *artifactDir)
 	fmt.Printf("[agentctl] baseline update run_id=%s plan=%s\n", runID, *planFile)
-	return spawnBrain(repo, runID, []string{
+	return runWithStore(repo, runID, []string{
 		"RUN_MODE=baseline",
 		"TARGET_URL=" + *target,
 		"ARTIFACT_DIR=" + dir,
@@ -159,7 +212,7 @@ func cmdLocators(repo string, args []string) int {
 	}
 	runID := newRunID()
 	dir := mkArtifactDir(repo, runID, "")
-	return spawnBrain(repo, runID, []string{
+	return runWithStore(repo, runID, []string{
 		"RUN_MODE=clear-quarantine",
 		"ARTIFACT_DIR=" + dir,
 	})
@@ -205,7 +258,7 @@ func cmdReport(repo string, args []string) int {
 func cmdCalibrate(repo string, args []string) int {
 	runID := newRunID()
 	dir := mkArtifactDir(repo, runID, "")
-	return spawnBrain(repo, runID, []string{
+	return runWithStore(repo, runID, []string{
 		"RUN_MODE=calibrate",
 		"ARTIFACT_DIR=" + dir,
 	})

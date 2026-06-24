@@ -1,0 +1,83 @@
+// Sentinel PersistenceService (M2b-1) — the Go store-gateway's gRPC contract.
+// Mirrors brain/store.py 1:1 so brain/store.py can become a thin gRPC client (ADR-015).
+// Stubs are generated for Go + Python in CI; this file's hash is asserted against the
+// checked-in stubs (drift = build failure).
+syntax = "proto3";
+
+package sentinel.persistence.v1;
+
+option go_package = "github.com/AlexGromer/sentinel/internal/store/pb;pb";
+
+message Empty {}
+
+// --- healed locators (M2) ---------------------------------------------------
+message LocatorKey {
+  string page_path = 1;
+  string semantic_id = 2;
+  string dom_subtree_hash = 3;
+}
+message LocatorRecord {
+  string page_path = 1;
+  string semantic_id = 2;
+  string strategy = 3;
+  string value = 4;            // opaque JSON locator dict
+  double confidence = 5;
+  string dom_subtree_hash = 6;
+  string status = 7;           // active | flagged | deprecated
+  bool found = 8;              // false => no active record
+}
+message EvictRequest {
+  string page_path = 1;
+  string semantic_id = 2;
+  string current_hash = 3;
+}
+message AuditRow {
+  string run_id = 1;
+  int64 step = 2;
+  string semantic_id = 3;
+  string page_path = 4;
+  string strategy = 5;
+  string original = 6;
+  string healed = 7;
+  double confidence = 8;
+  string outcome = 9;
+  string dom_hash = 10;
+}
+message AuditRowsReply { repeated AuditRow rows = 1; }
+
+// --- golden baselines (M3) --------------------------------------------------
+message Golden {
+  string page_key = 1;
+  string a11y_hash = 2;
+  string screenshot_hash = 3;
+  bool found = 4;
+}
+message PageKey { string page_key = 1; }
+
+// --- flake quarantine (M3) --------------------------------------------------
+message StepResult {
+  string plan_id = 1;
+  string step_key = 2;
+  bool passed = 3;
+  string aut_sha = 4;
+}
+message StepKey {
+  string plan_id = 1;
+  string step_key = 2;
+}
+message Quarantine { bool quarantined = 1; }
+message Count { int64 n = 1; }
+
+service PersistenceService {
+  rpc Lookup(LocatorKey) returns (LocatorRecord);
+  rpc EvictStale(EvictRequest) returns (Empty);
+  rpc SaveLocator(LocatorRecord) returns (Empty);
+  rpc BumpUsed(LocatorKey) returns (Empty);
+  rpc AppendAudit(AuditRow) returns (Empty);
+  rpc SaveGolden(Golden) returns (Empty);
+  rpc GetGolden(PageKey) returns (Golden);
+  rpc RecordStep(StepResult) returns (Quarantine);
+  rpc IsQuarantined(StepKey) returns (Quarantine);
+  rpc ClearQuarantine(Empty) returns (Count);
+  rpc AuditRows(Empty) returns (AuditRowsReply);
+}

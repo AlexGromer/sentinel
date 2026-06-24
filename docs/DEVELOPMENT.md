@@ -28,8 +28,9 @@ npm run build                              # tsc → dist/server.js
 npx playwright install chromium-headless-shell   # one-time; matches pinned playwright version
 cd ..
 
-# Go — agentctl CLI
+# Go — control-plane (if /tmp is full: `go env -w GOTMPDIR=/opt/go/tmp` first — Go build scratch)
 go build -o bin/agentctl ./cmd/agentctl
+go build -o bin/store-gateway ./cmd/store-gateway   # M2b-1: gRPC persistence; agentctl auto-spawns it
 
 # Python — brain (LangGraph)
 uv venv                                    # creates .venv

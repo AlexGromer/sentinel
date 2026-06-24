@@ -6,80 +6,71 @@
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 14 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 16 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
-| BACKLOG.md | Task tracking | M0–M4 done; M2b + M4b + M5 pending |
+| BACKLOG.md | Task tracking | M0–M4 + M2b-1 done; M2b-2 + M4b + M5 pending |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
-| docs/M0..M4_CONTRACT.md | Frozen milestone contracts | per-milestone scope, wire, algorithm, Given/When/Then gate |
-| docs/STATE_MACHINE.md / SELF_HEALING.md / DETERMINISM.md | mechanics deep-dives | LangGraph / heal / replay-trust |
-| docs/MEMORY_PERSISTENCE.md / OBSERVABILITY.md / OUTPUTS.md | storage / telemetry / artifacts | reference |
-| docs/ROADMAP.md / DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
+| docs/M0..M4_CONTRACT.md, M2b_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
+| docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
+| docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 | memory/MEMORY.md, memory/session_summary.md | Project memory + session narrative | stack, decisions, in-progress |
 
 ## Quick Reference — source
 | Path | Lang | Purpose |
 |------|------|---------|
-| cmd/agentctl/main.go | Go | CLI subcommands: run · baseline update · locators clear-quarantine · export-spec · report · calibrate; exit 0/1/2/3 |
-| go.mod | Go | module github.com/AlexGromer/sentinel (go 1.26) |
-| brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate |
+| cmd/agentctl/main.go | Go | CLI subcommands: run / baseline update / locators clear-quarantine / export-spec / report / calibrate; spawns store-gateway (`runWithStore`); exit 0/1/2/3 |
+| cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
+| internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
+| internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
+| internal/store/pb/ | Go | generated gRPC stubs (from proto/persistence.proto) |
+| proto/persistence.proto | proto3 | PersistenceService contract (mirrors store.py 1:1) |
+| go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite) |
+| brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
 | brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (Opus 4.8, ADR-011) |
-| brain/healing.py | Python | HealingEngine: cache→L1–L6→verify-before-accept→confidence gate→audit |
-| brain/replay.py | Python | replay runner + M3 trust layer (plan_hash abort, golden-diff, quarantine, exit codes) |
-| brain/store.py | Python | interim SQLite: healed_locators/healing_audit/golden_snapshots/step_failures (→ M2b) |
-| brain/exporter.py | Python | M4: plan → Playwright `.spec.ts` (deterministic) |
-| brain/report.py | Python | M4: heal-report → report.html + report.json + metrics.prom (Prometheus textfile) |
-| brain/calibrate.py | Python | M4: healing_audit → confidence histogram + outcome counts |
-| brain/state.py | Python | RunState + normalize_url + semantic_id + canonical_plan_hash |
-| brain/executor.py | Python | JSON-RPC client over pw-executor subprocess (stdio) |
-| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic (uv) |
+| brain/healing.py | Python | HealingEngine (cache→L1–L6→verify→gate→audit) — store-agnostic |
+| brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
+| brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
+| brain/exporter.py / report.py / calibrate.py | Python | M4 generators (.spec.ts / HTML+JSON+Prom / heal histogram) |
+| brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
+| brain/pb/ | Python | generated gRPC stubs (PersistenceService) |
+| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, grpcio, grpcio-tools |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
-| pw-executor/package.json, tsconfig.json | TS | deps (playwright) + build (tsc → dist/) |
-| tests/test_m3_offline.py | Python | trust-layer + heal tests (fake executor) — 5 |
-| tests/test_m4_offline.py | Python | export/report/metrics/calibrate tests — 3 |
-| .github/workflows/ci.yml | CI | build → replay matrix (site→0 / site-v2→2) + explore on dispatch |
+| tests/test_m3_offline.py / test_m4_offline.py | Python | offline trust/heal + M4 generator tests (fake executor; 5 + 3) |
+| .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
 ## Directory Structure
 ```
 agent_development/
 ├── README.md ARCHITECTURE.md GAPS.md BACKLOG.md FILEMAP.md
-├── docs/         # contributor guide + deep-dives + design record + M0–M4 contracts
-├── memory/       # project memory + session summaries
-├── cmd/agentctl/ # Go control-plane CLI
-├── brain/        # Python brain (state/executor/planner/graph/healing/replay/store/exporter/report/calibrate/__main__)
-├── pw-executor/  # TS Playwright server — node_modules/ dist/ git-ignored
-├── tests/        # offline test suites (M3, M4)
-├── .github/workflows/   # CI
-├── testdata/     # m0.html + site/ + site-v2/ fixtures
-├── runs/ state/ bin/ .venv/ .claude/   # all git-ignored
-└── .claude-ver .gitignore
-```
-
-## Source layout — planned (not yet created; see docs/ROADMAP.md)
-```
-internal/store/        # Go — store-gateway, sole SQLite writer (M2b — replaces brain/store.py)
-internal/orchestrator/ # Go — run FSM, gRPC server (M2b/later)
-internal/report/       # Go — report-service (M4b)
-proto/                 # shared — protobuf3 contracts (M2b)
+├── docs/        memory/        testdata/       tests/        .github/workflows/
+├── cmd/agentctl/   cmd/store-gateway/        # Go binaries
+├── internal/store/  internal/store/pb/       # Go store-gateway + gRPC stubs
+├── proto/                                    # protobuf3 contract
+├── brain/  brain/pb/                         # Python brain + gRPC stubs
+├── pw-executor/                              # TS Playwright server (node_modules/ dist/ ignored)
+└── runs/ state/ bin/ .venv/ .claude/         # all git-ignored
 ```
 
 ## Module Dependency Map
 ```
-agentctl → brain (subprocess+env; .venv python) → pw-executor (subprocess, JSON-RPC/stdio) → Chromium
+agentctl ──spawn──▶ store-gateway (Go, gRPC/UDS) ◀──gRPC── brain.store.GrpcStore   [M2b-1]
+agentctl ──spawn+env──▶ brain (.venv) ──JSON-RPC/stdio──▶ pw-executor ──▶ Chromium
 explore:  brain.graph (LangGraph) → SqliteSaver → runs/<id>/checkpoint.db
-replay:   brain.replay (trust) → brain.healing → brain.store (state/locators.db, interim)
-M4:       brain.exporter / report / calibrate (pure generators over plan/heal-report/healing_audit)
-[M2b] brain → Go store-gateway (gRPC) → SQLite (sole writer)  |  transport → MCP SDK
+replay:   brain.replay (trust) → brain.healing → store (GrpcStore | LocalStore fallback)
+M4:       brain.exporter / report / calibrate (pure generators)
+[M2b-2] brain↔pw-executor transport → MCP SDK (pending)
 ```
 
 ## Build / run
-- TS:  `cd pw-executor && npm install && npm run build` (one-time `npx playwright install chromium-headless-shell`)
-- Go:  `go build -o bin/agentctl ./cmd/agentctl`
-- Py:  `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic`
-- tests: `.venv/bin/python tests/test_m3_offline.py && .venv/bin/python tests/test_m4_offline.py`
-- explore→baseline→replay (M1/M3) and `export-spec` / `report --run <dir>` / `calibrate` (M4) — see docs/DEVELOPMENT.md
+- gateway-aware: `go build -o bin/agentctl ./cmd/agentctl && go build -o bin/store-gateway ./cmd/store-gateway` (if /tmp full: `go env -w GOTMPDIR=/opt/go/tmp`)
+- TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
+- Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic grpcio grpcio-tools`
+- gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto` (+ go plugins for internal/store/pb)
+- tests: `go test ./internal/store/ && .venv/bin/python tests/test_m3_offline.py && .venv/bin/python tests/test_m4_offline.py`
+- full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
 - Last updated: 2026-06-24
-- Phase: **M0–M4 done — gates green / offline-verified**. Next: M2b (Go store-gateway/gRPC + MCP-SDK).
+- Phase: **M0–M4 + M2b-1 done — gates green**. Next: M2b-2 (MCP transport), then M4b / M5.
