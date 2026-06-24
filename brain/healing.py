@@ -13,6 +13,8 @@ import json
 import os
 import sys
 
+from .otel import prompt_hash, set_llm_tokens, span
+
 # Per-strategy base priors (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
 PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
           "xpath": 0.45, "visual": 0.80}  # visual (set-of-marks) lands in the FLAGGED band by design
@@ -115,9 +117,11 @@ class HealingEngine:
                 f"current_elements: {json.dumps(ctx.get('interactives', []))[:3000]}\n"
                 'Reply with ONLY JSON: {"css": "<selector>"} or {"none": true}.'
             )
-            msg = self._llm.messages.create(
-                model="claude-sonnet-4-6", max_tokens=200, temperature=0,
-                messages=[{"role": "user", "content": prompt}])
+            with span("heal.llm", model="claude-sonnet-4-6", prompt_hash=prompt_hash(prompt)) as _sp:
+                msg = self._llm.messages.create(
+                    model="claude-sonnet-4-6", max_tokens=200, temperature=0,
+                    messages=[{"role": "user", "content": prompt}])
+                set_llm_tokens(_sp, msg)
             text = "".join(getattr(b, "text", "") for b in msg.content).strip()
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if j.get("css"):

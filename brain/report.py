@@ -64,6 +64,24 @@ def _html(rep: dict) -> str:
         + "</tbody></table></body></html>")
 
 
+def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
+    """Push the run's sentinel_* metrics to a Prometheus Pushgateway (M4b, ADR-018 — batch fits push)."""
+    from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
+    reg = CollectorRegistry()
+
+    def _g(name: str, val, doc: str) -> None:
+        Gauge(name, doc, registry=reg).set(val)
+
+    _g("sentinel_run_steps", len(report.get("steps", [])), "steps in the run")
+    _g("sentinel_run_exit_code", report.get("exit_code", -1), "structured exit code")
+    _g("sentinel_heal_total", report.get("healed", 0), "healed steps")
+    _g("sentinel_failed_total", report.get("failed", 0), "failed steps")
+    _g("sentinel_regression_a11y_total",
+       sum(1 for x in report.get("regressions", []) if x.get("exit2")), "a11y golden regressions")
+    push_to_gateway(gateway, job=job, registry=reg,
+                    grouping_key={"run_id": str(report.get("plan_id", ""))})
+
+
 def generate(run_dir: str) -> dict:
     """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom."""
     rep = json.loads(open(os.path.join(run_dir, "heal-report.json")).read())

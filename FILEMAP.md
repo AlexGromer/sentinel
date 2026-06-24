@@ -56,6 +56,9 @@
 | deploy/sentinel/.helmignore | Project file | — |
 | deploy/argocd/sentinel-app.yaml | Configuration | — |
 | tests/test_m5_offline.py | Tests | — |
+| docs/M4b_CONTRACT.md | Documentation | — |
+| brain/otel.py | Python source | — |
+| tests/test_m4b_offline.py | Tests | — |
 ## Directory Structure
 ```
 agent_development/

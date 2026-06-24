@@ -7,6 +7,9 @@ dependencies = [
     "langgraph",
     "langgraph-checkpoint-sqlite",
     "langgraph-checkpoint-postgres",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "prometheus-client",
     "anthropic",
 ]
 

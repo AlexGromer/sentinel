@@ -14,6 +14,7 @@ import traceback
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .executor import log, make_executor
+from .otel import setup_tracing, span
 from .graph import build_graph
 from .planner import HeuristicPlanner, LLMPlanner
 from .state import normalize_url, semantic_id
@@ -165,6 +166,15 @@ def _run_report(run_dir) -> int:
         log(f"FATAL: heal-report.json not found in {run_dir}")
         return 2
     generate(run_dir)
+    gw = os.environ.get("PROM_PUSHGATEWAY")
+    if gw:
+        from .report import push_metrics
+        try:
+            rep = json.loads((pathlib.Path(run_dir) / "heal-report.json").read_text())
+            push_metrics(rep, gw)
+            log(f"metrics pushed -> {gw}")
+        except Exception as e:
+            log("pushgateway error:", e)
     print(f"report -> {run_dir}/report.html, report.json, metrics.prom")
     return 0
 
@@ -199,6 +209,7 @@ def main() -> int:
     run_id = os.environ.get("RUN_ID", "local")
     out = pathlib.Path(os.environ.get("ARTIFACT_DIR", f"./runs/{run_id}"))
     out.mkdir(parents=True, exist_ok=True)
+    setup_tracing()
 
     # --- no-browser modes (M3/M4) --------------------------------------------
     if run_mode == "clear-quarantine":
@@ -223,6 +234,10 @@ def main() -> int:
     log(f"run_id={run_id} mode={run_mode} transport={os.environ.get('MCP_TRANSPORT', 'jsonrpc')}")
     ex = make_executor(pw_cmd)
     rc = 1
+    _run_span = span("sentinel.run", run_id=run_id, mode=run_mode,
+                     transport=os.environ.get("MCP_TRANSPORT", "jsonrpc"),
+                     store=("grpc" if os.environ.get("STORE_ADDR") else "local"))
+    _run_span.__enter__()
     try:
         if run_mode in ("replay", "baseline"):
             rc = _run_replay(
@@ -243,6 +258,7 @@ def main() -> int:
         rc = 1
     finally:
         ex.close()
+        _run_span.__exit__(None, None, None)
     return rc
 
 
