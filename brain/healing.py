@@ -14,7 +14,8 @@ import os
 import sys
 
 # Per-strategy base priors (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
-PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65, "xpath": 0.45}
+PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
+          "xpath": 0.45, "visual": 0.80}  # visual (set-of-marks) lands in the FLAGGED band by design
 AUTO, FLAG = 0.85, 0.60  # confidence gate thresholds
 
 
@@ -25,8 +26,9 @@ def log(*a: object) -> None:
 class HealingEngine:
     """Re-grounds a broken locator. `ex` = pw-executor client; `store` = interim locator store."""
 
-    def __init__(self, ex, store, run_id: str, use_llm: bool = False) -> None:
+    def __init__(self, ex, store, run_id: str, use_llm: bool = False, use_visual: bool = False) -> None:
         self.ex, self.store, self.run_id, self.use_llm = ex, store, run_id, use_llm
+        self.use_visual = use_visual  # Tier-7 set-of-marks visual heal (M5-2, gated off by default)
         self._llm = None
         if use_llm:
             try:
@@ -76,6 +78,10 @@ class HealingEngine:
         if not chosen and self._llm:
             chosen = self._llm_reground(ctx)
 
+        # Tier-7: set-of-marks VISUAL re-grounding (M5-2, ADR-005/017) — gated last resort.
+        if not chosen and self._llm and self.use_visual:
+            chosen = self._visual_reground(ctx)
+
         if not chosen:
             self._audit(ctx, "none", "null", 0.0, "failed")
             return {"outcome": "failed", "confidence": 0.0}
@@ -119,6 +125,60 @@ class HealingEngine:
         except Exception as e:
             log("llm reground error:", e)
         return None
+
+    @staticmethod
+    def _mark_to_locator(m: dict):
+        """A chosen mark -> a REAL locator (testid > role+name), never a coordinate click (ADR-005)."""
+        if m.get("testid"):
+            return {"testid": m["testid"]}
+        if m.get("role") and m.get("name"):
+            return {"role": m["role"], "name": m["name"]}
+        return None
+
+    def _visual_reground(self, ctx: dict):
+        """Tier-7 (M5-2): overlay numbered marks, ask Sonnet vision to pick the element matching the
+        intent, map the chosen mark to a real locator. Discounted to the FLAGGED band. Returns
+        (strategy, locator, conf) | None. Gated by use_visual + a live vision LLM."""
+        import base64
+        import os as _os
+        import tempfile
+        img = None
+        try:
+            fd, img = tempfile.mkstemp(suffix=".png")
+            _os.close(fd)
+            som = self.ex.call("browser.setOfMarks", path=img)
+            marks = som.get("marks", [])
+            if not marks:
+                return None
+            with open(img, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            menu = [{"mark": m["mark"], "role": m.get("role"), "name": m.get("name")} for m in marks]
+            msg = self._llm.messages.create(
+                model="claude-sonnet-4-6", max_tokens=100, temperature=0,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text":
+                        "Numbered red marks overlay interactive UI elements. Pick the mark number for the "
+                        f"element matching this intent: {ctx.get('intent')}\n"
+                        f"marks: {json.dumps(menu)}\n"
+                        'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.'},
+                ]}])
+            text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            if j.get("none"):
+                return None
+            chosen = next((m for m in marks if m["mark"] == int(j["mark"])), None)
+            loc = self._mark_to_locator(chosen) if chosen else None
+            return ("visual", loc, PRIORS["visual"]) if loc else None
+        except Exception as e:
+            log("visual reground error:", e)
+            return None
+        finally:
+            if img:
+                try:
+                    _os.remove(img)
+                except Exception:
+                    pass
 
     def _audit(self, ctx: dict, strategy: str, healed: str, conf: float, outcome: str) -> None:
         self.store.audit(run_id=self.run_id, step=ctx.get("step"), semantic_id=ctx["semantic_id"],

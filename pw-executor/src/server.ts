@@ -127,6 +127,49 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       const buf = await page!.screenshot();
       return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
+    case 'browser.setOfMarks': {
+      // M5-2 visual heal: number every interactive element + (optionally) write an overlay
+      // screenshot, returning the mark->element map so the vision LLM picks a mark, not a pixel.
+      await ensureBrowser();
+      const outPath = params?.path as string | undefined;
+      const marks = await page!.$$eval(
+        'button, a[href], input, select, textarea, [role=button]',
+        (els) =>
+          els
+            .map((e, i) => {
+              const r = e.getBoundingClientRect();
+              return {
+                mark: i,
+                role: e.getAttribute('role') || e.tagName.toLowerCase(),
+                name: (e.getAttribute('aria-label') || (e as HTMLElement).innerText || e.textContent || '')
+                  .trim()
+                  .slice(0, 120),
+                testid: e.getAttribute('data-testid'),
+                bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+              };
+            })
+            .filter((m) => m.bbox.w > 0 && m.bbox.h > 0),
+      );
+      if (outPath) {
+        await page!.evaluate((ms) => {
+          const o = document.createElement('div');
+          o.id = '__som__';
+          for (const m of ms) {
+            const box = document.createElement('div');
+            box.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${m.bbox.y}px;width:${m.bbox.w}px;height:${m.bbox.h}px;border:2px solid red;z-index:2147483647;pointer-events:none`;
+            const lbl = document.createElement('div');
+            lbl.textContent = String(m.mark);
+            lbl.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${Math.max(0, m.bbox.y - 14)}px;background:red;color:#fff;font:10px monospace;z-index:2147483647;padding:0 2px`;
+            o.appendChild(box);
+            o.appendChild(lbl);
+          }
+          document.body.appendChild(o);
+        }, marks);
+        await page!.screenshot({ path: outPath });
+        await page!.evaluate(() => document.getElementById('__som__')?.remove());
+      }
+      return { marks, path: outPath ?? null };
+    }
     case 'browser.traceStop': {
       const path = params?.path as string | undefined;
       if (!path) throw new Error('traceStop: missing params.path');
@@ -153,6 +196,7 @@ const TOOL_METHODS = [
   'browser.probe',
   'browser.interactives',
   'browser.screenshotHash',
+  'browser.setOfMarks',
   'browser.traceStop',
 ];
 
@@ -201,6 +245,7 @@ async function mainMcp(): Promise<void> {
     'browser.probe': locatorShape,
     'browser.interactives': {},
     'browser.screenshotHash': {},
+    'browser.setOfMarks': { path: z.string() },
     'browser.traceStop': { path: z.string() },
   };
   for (const method of TOOL_METHODS) {

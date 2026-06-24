@@ -93,7 +93,8 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
     trace_path = str((out / "trace.zip").resolve())
     store = make_store(_STORE_PATH)
     log(f"store={'grpc@' + os.environ['STORE_ADDR'] if os.environ.get('STORE_ADDR') else 'local'}")
-    heal = HealingEngine(ex, store, run_id, use_llm=use_llm)
+    heal = HealingEngine(ex, store, run_id, use_llm=use_llm,
+                         use_visual=os.environ.get("HEAL_VISUAL") == "1")
     log(f"{'baseline' if baseline else 'replay'}: plan={plan_file} target={target} "
         f"aut={aut_version or '-'} ci={ci}")
     try:

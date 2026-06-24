@@ -55,6 +55,7 @@
 | deploy/sentinel/templates/pvc.yaml | Configuration | — |
 | deploy/sentinel/.helmignore | Project file | — |
 | deploy/argocd/sentinel-app.yaml | Configuration | — |
+| tests/test_m5_offline.py | Tests | — |
 ## Directory Structure
 ```
 agent_development/

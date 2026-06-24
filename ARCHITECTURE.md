@@ -154,6 +154,7 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | 2026-06-24 | M2b-2 delivered: pw-executor dual transport (JSON-RPC default + MCP SDK opt-in), brain McpExecutor behind Executor.call; offline-verified, JSON-RPC unchanged (closes GAP-VERIFY-002) | ADR-016 | @AlexGromer |
 | 2026-06-24 | M5 started: spec — deployment (Dockerfile + Helm CronJob + ArgoCD, M5-1), set-of-marks visual heal Tier-7 scaffold behind a ≥70% PoC gate (M5-2), Postgres checkpointer option (M5-3) | ADR-017 | @AlexGromer |
 | 2026-06-24 | M5-1 delivered: Dockerfile (multi-stage) + Helm chart (CronJob + per-env values + optional Ceph PVC) + ArgoCD Application; helm lint clean, renders ConfigMap/CronJob/PVC/SA | ADR-017 | @AlexGromer |
+| 2026-06-24 | M5-2 delivered: set-of-marks browser tool + HealingEngine Tier-7 visual heal (gated HEAL_VISUAL, mark→real locator, FLAGGED band); offline-tested (mock vision); real Sonnet-vision PoC gated/user-run | ADR-017 | @AlexGromer |
 
 ---
 
