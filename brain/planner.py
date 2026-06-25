@@ -17,7 +17,6 @@ See ../docs/M1_CONTRACT.md.
 from __future__ import annotations
 
 import json
-import os
 from typing import Optional, Protocol
 
 from .executor import log
@@ -52,26 +51,20 @@ class HeuristicPlanner:
 
 
 class LLMPlanner:
-    """Opus-4.8 explorer (temperature 0); falls back to the heuristic without a key/on error."""
+    """LLM explorer via a provider-agnostic backend (ADR-019); falls back to the heuristic when no
+    backend is configured (no key/SDK) or on any error. Best-effort — not plan_hash-stable."""
 
     name = "llm"
 
-    def __init__(self, model: str = "claude-opus-4-8") -> None:
-        self.model = model
-        self._client = None
+    def __init__(self, backend=None) -> None:
+        from .llm import make_backend
+        self._backend = backend if backend is not None else make_backend("planner")
+        # `model` is a transcript label: the real model when configured, else the historical default.
+        self.model = self._backend.model if self._backend else "claude-opus-4-8"
         self._fallback = HeuristicPlanner()
-        try:
-            import anthropic
-
-            if os.environ.get("ANTHROPIC_API_KEY"):
-                self._client = anthropic.Anthropic()
-            else:
-                log("LLMPlanner: ANTHROPIC_API_KEY unset -> heuristic fallback")
-        except Exception as e:  # import/env guard
-            log("LLMPlanner: anthropic unavailable -> heuristic:", e)
 
     def propose(self, state: dict, candidates: list) -> dict:
-        if not self._client:
+        if not self._backend:
             return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"),
@@ -87,12 +80,9 @@ class LLMPlanner:
                 f"candidates: {json.dumps(menu)}\n"
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
-            msg = self._client.messages.create(
-                model=self.model, max_tokens=200, temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = "".join(getattr(b, "text", "") for b in msg.content).strip()
-            tokens = {"prompt": msg.usage.input_tokens, "completion": msg.usage.output_tokens}
+            result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+            text = result.text
+            tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if j.get("done"):
                 return {"action": None, "done": True, "reason": "llm: done", "tokens": tokens}

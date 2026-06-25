@@ -50,15 +50,15 @@ def span(name: str, **attrs):
         yield sp
 
 
-def set_llm_tokens(sp, msg) -> None:
-    """Record an Anthropic response's token usage on a span (counts only — never content)."""
+def set_llm_tokens(sp, result) -> None:
+    """Record normalized LLM token counts on a span (counts only — never content).
+
+    `result` is an `llm.LLMResult` (prompt_tokens / completion_tokens). Tolerant of a None span
+    and of objects missing the fields (records 0)."""
     if sp is None:
         return
-    u = getattr(msg, "usage", None)
-    if u is None:
-        return
     try:
-        sp.set_attribute("llm.prompt_tokens", int(getattr(u, "input_tokens", 0) or 0))
-        sp.set_attribute("llm.completion_tokens", int(getattr(u, "output_tokens", 0) or 0))
+        sp.set_attribute("llm.prompt_tokens", int(getattr(result, "prompt_tokens", 0) or 0))
+        sp.set_attribute("llm.completion_tokens", int(getattr(result, "completion_tokens", 0) or 0))
     except Exception:
         pass

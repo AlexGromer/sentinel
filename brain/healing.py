@@ -10,7 +10,6 @@ pw-executor format, one of: {testid}, {role,name}, {label}, {text}, {css}, {xpat
 from __future__ import annotations
 
 import json
-import os
 import sys
 
 from .otel import prompt_hash, set_llm_tokens, span
@@ -28,19 +27,16 @@ def log(*a: object) -> None:
 class HealingEngine:
     """Re-grounds a broken locator. `ex` = pw-executor client; `store` = interim locator store."""
 
-    def __init__(self, ex, store, run_id: str, use_llm: bool = False, use_visual: bool = False) -> None:
+    def __init__(self, ex, store, run_id: str, use_llm: bool = False, use_visual: bool = False,
+                 backend=None) -> None:
         self.ex, self.store, self.run_id, self.use_llm = ex, store, run_id, use_llm
         self.use_visual = use_visual  # Tier-7 set-of-marks visual heal (M5-2, gated off by default)
-        self._llm = None
+        self._backend = None
         if use_llm:
-            try:
-                import anthropic
-                if os.environ.get("ANTHROPIC_API_KEY"):
-                    self._llm = anthropic.Anthropic()
-                else:
-                    log("no ANTHROPIC_API_KEY -> deterministic L1-L6 only")
-            except Exception as e:  # import/env guard
-                log("anthropic unavailable -> L1-L6 only:", e)
+            from .llm import make_backend
+            self._backend = backend if backend is not None else make_backend("heal")
+            if not self._backend:
+                log("no LLM backend -> deterministic L1-L6 only")
 
     def _probe(self, locator: dict) -> int:
         try:
@@ -76,12 +72,13 @@ class HealingEngine:
                 chosen = (strat, loc, PRIORS.get(strat, 0.5))
                 break
 
-        # 5. optional LLM re-grounding (Sonnet) — only if deterministic rotation failed.
-        if not chosen and self._llm:
+        # 5. optional LLM re-grounding — only if deterministic rotation failed.
+        if not chosen and self._backend:
             chosen = self._llm_reground(ctx)
 
         # Tier-7: set-of-marks VISUAL re-grounding (M5-2, ADR-005/017) — gated last resort.
-        if not chosen and self._llm and self.use_visual:
+        # Requires a vision-capable backend; a text-only provider skips straight to failed.
+        if not chosen and self._backend and self.use_visual and self._backend.supports_vision:
             chosen = self._visual_reground(ctx)
 
         if not chosen:
@@ -107,7 +104,7 @@ class HealingEngine:
         return {"outcome": "needs_review", "confidence": conf}
 
     def _llm_reground(self, ctx: dict):
-        """Sonnet 4.6 fallback: pick a CSS selector for the broken element. Returns (strategy,locator,conf)|None."""
+        """Text fallback: pick a CSS selector for the broken element. Returns (strategy,locator,conf)|None."""
         try:
             prompt = (
                 "A UI locator broke after a DOM change. Choose the current element matching the "
@@ -117,12 +114,10 @@ class HealingEngine:
                 f"current_elements: {json.dumps(ctx.get('interactives', []))[:3000]}\n"
                 'Reply with ONLY JSON: {"css": "<selector>"} or {"none": true}.'
             )
-            with span("heal.llm", model="claude-sonnet-4-6", prompt_hash=prompt_hash(prompt)) as _sp:
-                msg = self._llm.messages.create(
-                    model="claude-sonnet-4-6", max_tokens=200, temperature=0,
-                    messages=[{"role": "user", "content": prompt}])
-                set_llm_tokens(_sp, msg)
-            text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+            with span("heal.llm", model=self._backend.model, prompt_hash=prompt_hash(prompt)) as _sp:
+                result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+                set_llm_tokens(_sp, result)
+            text = result.text
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if j.get("css"):
                 return ("css", {"css": j["css"]}, PRIORS["css"] * 0.90)  # overconfidence discount
@@ -157,17 +152,13 @@ class HealingEngine:
             with open(img, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
             menu = [{"mark": m["mark"], "role": m.get("role"), "name": m.get("name")} for m in marks]
-            msg = self._llm.messages.create(
-                model="claude-sonnet-4-6", max_tokens=100, temperature=0,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text":
-                        "Numbered red marks overlay interactive UI elements. Pick the mark number for the "
-                        f"element matching this intent: {ctx.get('intent')}\n"
-                        f"marks: {json.dumps(menu)}\n"
-                        'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.'},
-                ]}])
-            text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+            prompt = (
+                "Numbered red marks overlay interactive UI elements. Pick the mark number for the "
+                f"element matching this intent: {ctx.get('intent')}\n"
+                f"marks: {json.dumps(menu)}\n"
+                'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.')
+            result = self._backend.complete_vision(prompt, b64, max_tokens=100, temperature=0)
+            text = result.text
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if j.get("none"):
                 return None

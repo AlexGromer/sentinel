@@ -16,7 +16,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M4 + M2b-1 done; M2b-2 + M4b + M5 pending |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
-| docs/M0..M4_CONTRACT.md, M2b_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
+| docs/M0..M5_CONTRACT.md, M2b_CONTRACT.md, M6_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
+| docs/M7_CONTRACT.md | M7 contract (**Proposed**, ADR-020) | MCP-server exposure + SamplingBackend |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 | memory/MEMORY.md, memory/session_summary.md | Project memory + session narrative | stack, decisions, in-progress |
@@ -33,16 +34,17 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite) |
 | brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
-| brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (Opus 4.8, ADR-011) |
+| brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) |
+| brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) |
 | brain/healing.py | Python | HealingEngine (cache→L1–L6→verify→gate→audit) — store-agnostic |
 | brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
 | brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
 | brain/exporter.py / report.py / calibrate.py | Python | M4 generators (.spec.ts / HTML+JSON+Prom / heal histogram) |
 | brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService) |
-| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, grpcio, grpcio-tools |
+| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
-| tests/test_m3_offline.py / test_m4_offline.py | Python | offline trust/heal + M4 generator tests (fake executor; 5 + 3) |
+| tests/test_*_offline.py (m3/m4/m4b/m5/b1) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend (fake executor/backend) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
@@ -66,17 +68,18 @@ agentctl ──spawn+env──▶ brain (.venv) ──JSON-RPC/stdio──▶ pw
 explore:  brain.graph (LangGraph) → SqliteSaver → runs/<id>/checkpoint.db
 replay:   brain.replay (trust) → brain.healing → store (GrpcStore | LocalStore fallback)
 M4:       brain.exporter / report / calibrate (pure generators)
-[M2b-2] brain↔pw-executor transport → MCP SDK (pending)
+[M2b-2] brain↔pw-executor: dual transport — JSON-RPC default + MCP SDK opt-in (env MCP_TRANSPORT), ADR-016 [done]
+[M6]    planner + heal LLM calls → brain.llm.LLMBackend (Anthropic | OpenAI-compat), provider-agnostic, ADR-019
 ```
 
 ## Build / run
 - gateway-aware: `go build -o bin/agentctl ./cmd/agentctl && go build -o bin/store-gateway ./cmd/store-gateway` (if /tmp full: `go env -w GOTMPDIR=/opt/go/tmp`)
 - TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
-- Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic grpcio grpcio-tools`
+- Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai grpcio grpcio-tools`
 - gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto` (+ go plugins for internal/store/pb)
-- tests: `go test ./internal/store/ && .venv/bin/python tests/test_m3_offline.py && .venv/bin/python tests/test_m4_offline.py`
+- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1; do .venv/bin/python tests/test_${t}_offline.py; done`
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
 - Last updated: 2026-06-25
-- Phase: **M0–M4 + M2b-1 done — gates green**. Next: M2b-2 (MCP transport), then M4b / M5.
+- Phase: **M0–M5 + M2b + M4b done — gates green**. In progress: **M6** (provider-agnostic LLM backend, ADR-019). Next: M7 (MCP-server exposure, ADR-020, contract frozen).
