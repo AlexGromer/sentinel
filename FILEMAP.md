@@ -20,7 +20,6 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/M7_CONTRACT.md | M7 contract (**Proposed**, ADR-020) | MCP-server exposure + SamplingBackend |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
-| memory/MEMORY.md, memory/session_summary.md | Project memory + session narrative | stack, decisions, in-progress |
 
 ## Quick Reference — source
 | Path | Lang | Purpose |

@@ -10,11 +10,15 @@
 # CLAUDE CODE LOCAL DATA (CRITICAL - NEVER COMMIT)
 # ─────────────────────────────────────────────────────────────────────────────
 .claude/
+.claude-ver
+.claude-init-attempted
 .mcp.json
 claude_desktop_config.json
 settings.local.json
 *.claude-session
 *.claude-transcript
+# project-local Claude memory (design notes / session narrative) — not for the public repo
+memory/
 *.jsonl
 
 # ─────────────────────────────────────────────────────────────────────────────
