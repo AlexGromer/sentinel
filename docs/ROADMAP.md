@@ -1,209 +1,219 @@
 # Sentinel — MVP Roadmap (M0–M5)
 
-Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+> 🌐 **Русский** (основная версия) · [English](ROADMAP.en.md)
+
+Производный документ синтеза дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
 
 ---
 
-## Critical Path: `pw-executor` (GAP-ARCH-001)
+## Критический путь: `pw-executor` (GAP-ARCH-001)
 
-The critical path across all six milestones is now **`pw-executor`** — our own TypeScript
-Playwright execution server that implements the MCP/JSON-RPC-2.0 stdio interface. Every
-milestone that spawns a browser subprocess depends on an incrementally delivered
-`pw-executor`. This server is not an off-the-shelf product; it is built and version-pinned
-by the Sentinel team. The initial surface (M0) is minimal: `navigate`,
-`accessibility_snapshot`, and `trace`. The visual set-of-marks overlay capability is added
-in M5, gated by the PoC accuracy threshold. No milestone may be considered complete until
-the `pw-executor` surface required by that milestone is implemented and covered by a
-contract test asserting tool names and input schemas. **GAP-ARCH-001** tracks this
-dependency; treat any regression in `pw-executor` as a blocker for the affected milestone.
-
----
-
-## M0 — Hello Browser (Days 1–3)
-
-**Languages:** Go, Python, TypeScript
-
-**Deliverable:**
-
-`agentctl run` spawns the Python brain via subprocess and environment variables — no gRPC
-yet. The brain consists of a single `perceive` node. On startup the brain spawns
-`pw-executor`, our TypeScript Playwright execution server implementing MCP/JSON-RPC-2.0
-over stdio, with the minimal surface: `navigate`, `accessibility_snapshot`, and `trace`.
-The brain calls `accessibility_snapshot()`, prints the a11y tree to stdout, and drops a
-`trace.zip` into `ARTIFACT_DIR`. Goal: prove the end-to-end wire across all three runtime
-layers (Go → Python → TypeScript over stdio). No LLM call, no state machine, no
-persistence. Intelligence comes later.
-
-**Acceptance Criterion:**
-
-> **Given** `pw-executor` is built and running (npm build succeeds; MCP handshake completes over stdio)
->
-> **When** `agentctl run --explore --target <URL>` is invoked against any live web page
->
-> **Then** the a11y tree JSON is printed to stdout with at least one interactive element
-> listed, **and** a `trace.zip` file is present in `ARTIFACT_DIR` and is openable by
-> `playwright show-trace` without error — both within 30 seconds of invocation.
+Критический путь через все шесть milestone теперь — **`pw-executor`**, наш собственный TypeScript
+Playwright execution server, реализующий MCP/JSON-RPC-2.0 stdio интерфейс. Каждый
+milestone, порождающий browser subprocess, зависит от инкрементально поставляемого
+`pw-executor`. Этот сервер — не готовый продукт «из коробки»; он собирается и фиксируется
+по версии командой Sentinel. Начальная поверхность (M0) минимальна: `navigate`,
+`accessibility_snapshot` и `trace`. Возможность visual set-of-marks overlay добавляется
+в M5, ограниченная порогом точности PoC. Ни один milestone не может считаться завершённым,
+пока поверхность `pw-executor`, требуемая этим milestone, не реализована и не покрыта
+контрактным тестом, проверяющим имена инструментов и входные схемы. **GAP-ARCH-001**
+отслеживает эту зависимость; любая регрессия в `pw-executor` является блокером для
+затронутого milestone.
 
 ---
 
-## M1 — Autonomous Walk (Days 4–10)
+## M0 — Hello Browser (Дни 1–3)
 
-**Languages:** Python
+**Языки:** Go, Python, TypeScript
 
-**Deliverable:**
+**Поставляемый результат:**
 
-All 9 LangGraph nodes are implemented (`perceive`, `ground`, `plan`, `act`, `verify`,
-`heal` — stubbed, `checkpoint`, `report`, plus `START`/`END`). The LangGraph
-`SqliteSaver` checkpointer writes to a **separate** DB file from the store-gateway DB
-(this is what makes the single-writer claim true). The `plan` node uses Opus 4.8 at
-`temperature=0`. Exploration terminates on a **measurable coverage target**
-(`coverage_target` + `nav_frontier` emptiness) — not on an LLM-asserted flag. The run
-produces `plan.json` (with `plan_hash`), `llm-transcript.jsonl`, and `trace.zip`.
+`agentctl run` запускает Python brain через subprocess и переменные окружения — без gRPC
+пока. Brain состоит из единственного узла `perceive`. При запуске brain порождает
+`pw-executor`, наш TypeScript Playwright execution server, реализующий MCP/JSON-RPC-2.0
+через stdio, с минимальной поверхностью: `navigate`, `accessibility_snapshot` и `trace`.
+Brain вызывает `accessibility_snapshot()`, выводит a11y tree в stdout и помещает
+`trace.zip` в `ARTIFACT_DIR`. Цель: доказать сквозную связь через все три уровня
+выполнения (Go → Python → TypeScript через stdio). Никаких обращений к LLM, никакой
+state machine, никакой персистентности. Интеллект — позже.
 
-**Acceptance Criterion:**
+**Критерий приёмки:**
 
-> **Given** a real multi-page web application is accessible at `TARGET_URL` with at least
-> 3 distinct pages reachable from the landing page
+> **Дано** `pw-executor` собран и запущен (npm build выполнен успешно; MCP handshake завершён через stdio)
 >
-> **When** `agentctl run --explore` completes (or terminates due to budget)
+> **Когда** `agentctl run --explore --target <URL>` вызван против любой живой веб-страницы
 >
-> **Then** `plan.json` exists in `ARTIFACT_DIR`, contains >= 5 distinct `PlannedAction`
-> entries with non-empty `locator` fields, **and** `coverage_achieved` is recorded as a
-> float in `[0.0, 1.0]` in the plan file — all verifiable by `jq '.coverage_achieved,
+> **Тогда** JSON a11y tree выведен в stdout с как минимум одним перечисленным интерактивным элементом,
+> **и** файл `trace.zip` присутствует в `ARTIFACT_DIR` и открывается командой
+> `playwright show-trace` без ошибок — всё в течение 30 секунд с момента вызова.
+
+---
+
+## M1 — Autonomous Walk (Дни 4–10)
+
+**Языки:** Python
+
+**Поставляемый результат:**
+
+Все 9 узлов LangGraph реализованы (`perceive`, `ground`, `plan`, `act`, `verify`,
+`heal` — заглушка, `checkpoint`, `report`, а также `START`/`END`). LangGraph
+`SqliteSaver` checkpointer записывает в **отдельный** DB-файл от базы данных store-gateway
+(именно это делает утверждение о single-writer верным). Узел `plan` использует Opus 4.8
+при `temperature=0`. Исследование завершается по **измеримой цели покрытия**
+(`coverage_target` + пустота `nav_frontier`) — не по флагу, утверждённому LLM. Запуск
+производит `plan.json` (с `plan_hash`), `llm-transcript.jsonl` и `trace.zip`.
+
+**Критерий приёмки:**
+
+> **Дано** реальное многостраничное веб-приложение доступно по `TARGET_URL`, и с landing page
+> достижимы как минимум 3 различные страницы
+>
+> **Когда** `agentctl run --explore` завершился (или прерван по бюджету)
+>
+> **Тогда** `plan.json` существует в `ARTIFACT_DIR`, содержит >= 5 различных записей `PlannedAction`
+> с непустыми полями `locator`, **и** `coverage_achieved` записан как float в `[0.0, 1.0]`
+> в файле плана — всё проверяемо командой `jq '.coverage_achieved,
 > (.steps | length)' plan.json`.
 
 ---
 
-## M2 — Self-Repairing Walker (Days 11–20)
+## M2 — Self-Repairing Walker (Дни 11–20)
 
-**Languages:** Go, Python
+**Языки:** Go, Python
 
-**Deliverable:**
+**Поставляемый результат:**
 
-The `heal` node is fully implemented via `healing-engine`: cache lookup → L1–L6
-deterministic strategy rotation → Sonnet 4.6 a11y re-grounding (structured output) →
-`verify-before-accept` live-DOM probe → confidence gate (>= 0.85 auto-heal, 0.60–0.84
-flagged, < 0.60 human gate) → post-heal verification (re-run action with healed locator
-before persisting) → append-only `healing_audit` write → `dom_subtree_hash` amortization
-with automatic stale eviction.
+Узел `heal` полностью реализован через `healing-engine`: поиск в кэше → детерминированная
+ротация стратегий L1–L6 → a11y re-grounding на Sonnet 4.6 (structured output) →
+live-DOM probe `verify-before-accept` → ворота уверенности (>= 0.85 auto-heal, 0.60–0.84
+отмечен, < 0.60 human gate) → post-heal верификация (повторный запуск действия с
+исправленным локатором перед сохранением) → запись `healing_audit` только для добавления →
+амортизация `dom_subtree_hash` с автоматическим вытеснением устаревших записей.
 
-The gRPC boundary is introduced at this milestone: `proto v1` (`PersistenceService`) is
-defined and stubs are generated for Go and Python in CI. The Go `store-gateway` is
-implemented (SQLite WAL: `runs`, `healed_locators`, `healing_audit` tables).
+На этом milestone вводится граница gRPC: определяется `proto v1` (`PersistenceService`) и
+стабы генерируются для Go и Python в CI. Реализуется Go `store-gateway` (SQLite WAL:
+таблицы `runs`, `healed_locators`, `healing_audit`).
 
-**Acceptance Criterion:**
+**Критерий приёмки:**
 
-> **Given** a plan.json produced by M1 has one selector manually changed to an invalid
-> value, **and** the brain's locator cache for that selector is empty
+> **Дано** в plan.json, полученном на M1, один selector вручную изменён на недопустимое
+> значение, **и** кэш локаторов brain для этого selector пуст
 >
-> **When** `agentctl run --replay` is executed once (first run), then executed again with
-> the same broken selector and the same AUT (second run)
+> **Когда** `agentctl run --replay` выполнен однажды (первый запуск), затем выполнен снова
+> с тем же сломанным selector и тем же AUT (второй запуск)
 >
-> **Then** the first run heals the broken selector with a recorded confidence >= 0.85,
-> persists a `HealedLocator` row with `status=active` in the store-gateway DB, and exits
-> 0; **and** the second run's `healing_audit` log shows zero LLM tokens consumed for
-> that semantic_id (cache hit, amortized reuse verified by `jq '.llm_tokens' healing-audit.jsonl`).
+> **Тогда** первый запуск восстанавливает сломанный selector с зафиксированной уверенностью
+> >= 0.85, сохраняет строку `HealedLocator` с `status=active` в базе данных store-gateway
+> и завершается с кодом 0; **и** журнал `healing_audit` второго запуска показывает ноль
+> потреблённых токенов LLM для этого semantic_id (попадание в кэш, амортизированное
+> повторное использование, проверяемое командой `jq '.llm_tokens' healing-audit.jsonl`).
 
 ---
 
-## M3 — CI-Ready Replay (Days 21–30)
+## M3 — CI-Ready Replay (Дни 21–30)
 
-**Languages:** Go, Python
+**Языки:** Go, Python
 
-**Deliverable:**
+**Поставляемый результат:**
 
-`replay` and `ci` run modes are implemented: the `plan` node is skipped entirely, and
-`ground` routes directly to `act` using frozen locators — zero LLM on the happy path.
-**`plan_hash` hard-abort** (exit code 3) is enforced at replay start. Dual `a11y_hash` +
-`screenshot_hash` golden baselines are validated per milestone step. AUT-SHA-gated flake
-quarantine is implemented (`step_failures` table; a step counts toward flake only if it
-fails N-of-5 without an AUT git-SHA change). Structured exit codes `0/1/2/3` are emitted.
-The orchestrator is extracted as a proper gRPC server (`RunControl`, subprocess
-supervision, per-step deadline enforcement). Per-job SQLite is used for CI
-(`AGENT_DB_PATH=/tmp/agent-{run_id}.db`). A GitHub Actions workflow is shipped
-(conditional explore job + parallel replay matrix).
+Реализованы режимы запуска `replay` и `ci`: узел `plan` полностью пропускается, а `ground`
+направляется непосредственно в `act`, используя замороженные локаторы — ноль обращений к
+LLM на happy path. **Жёсткое прерывание по `plan_hash`** (exit code 3) применяется при
+старте replay. Двойные golden baselines `a11y_hash` + `screenshot_hash` валидируются на
+каждом шаге milestone. Реализован AUT-SHA-gated карантин нестабильных тестов (таблица
+`step_failures`; шаг засчитывается как нестабильный только при N неудач из 5 без изменения
+AUT git-SHA). Генерируются структурированные exit codes `0/1/2/3`. Orchestrator выделен в
+отдельный gRPC-сервер (`RunControl`, надзор за subprocess, принудительное соблюдение
+дедлайна на шаг). Для CI используется per-job SQLite
+(`AGENT_DB_PATH=/tmp/agent-{run_id}.db`). Поставляется workflow GitHub Actions (условное
+задание explore + матрица параллельных replay).
 
-**Acceptance Criterion:**
+**Критерий приёмки:**
 
-> **Given** a valid `plan.json` is committed to the repository (hash verified), **and** a
-> second copy of that file has one step's `locator` field manually altered
+> **Дано** валидный `plan.json` зафиксирован в репозитории (hash верифицирован), **и** вторая
+> копия этого файла имеет вручную изменённое поле `locator` одного из шагов
 >
-> **When** three parallel CI replay jobs run against the committed `plan.json` (`--ci`
-> mode), **and** one additional replay runs against the hand-edited copy
+> **Когда** три параллельных задания CI replay запускаются против зафиксированного `plan.json`
+> (режим `--ci`), **и** одно дополнительное replay выполняется против вручную
+> отредактированной копии
 >
-> **Then** all three parallel replays complete in under 2 minutes each (wall clock) and
-> exit 0; **and** the replay against the hand-edited file exits 3 within 5 seconds of
-> plan load, with the stored and computed hashes both logged to stderr — measurable by CI
-> job timing and exit code assertions in the GitHub Actions workflow.
+> **Тогда** все три параллельных replay завершаются менее чем за 2 минуты каждое (wall clock)
+> и выходят с кодом 0; **и** replay против вручную отредактированного файла завершается с
+> кодом 3 в течение 5 секунд после загрузки плана, причём оба хэша — сохранённый и
+> вычисленный — записаны в stderr — измеряется по времени CI заданий и проверкам exit code
+> в workflow GitHub Actions.
 
 ---
 
-## M4 — Production-Observable v1.0 (Days 31–45)
+## M4 — Production-Observable v1.0 (Дни 31–45)
 
-**Languages:** Go, Python
+**Языки:** Go, Python
 
-**Deliverable:**
+**Поставляемый результат:**
 
-`report-service` is implemented (Go): emits `run_report.json` + `run_report.html`
-(mirroring Playwright HTML reporter structure), exposes Prometheus `/metrics`, and
-generates the exported `.spec.ts` from `RunState.executed_actions` via a Go template
-— with no dependency on a pw-executor codegen tool.
+Реализован `report-service` (Go): генерирует `run_report.json` + `run_report.html`
+(зеркалируя структуру Playwright HTML reporter), открывает Prometheus `/metrics` и создаёт
+экспортируемый `.spec.ts` из `RunState.executed_actions` через Go template — без зависимости
+от инструмента codegen pw-executor.
 
-OTel spans are added across all three runtime layers: every LangGraph node, every
-pw-executor MCP call, and every Go gRPC call. `prompt_HASH` is attached to LLM spans;
-prompt content is never stored. Export: OTLP → Grafana Alloy → Tempo.
+OTel spans добавлены во все три уровня выполнения: каждый узел LangGraph, каждый
+MCP-вызов pw-executor и каждый Go gRPC-вызов. `prompt_HASH` прикрепляется к LLM span;
+содержимое prompt никогда не хранится. Экспорт: OTLP → Grafana Alloy → Tempo.
 
-`agentctl calibrate` is implemented, running `healing_confidence_histogram` precision/recall
-computation against `human_verified` outcomes. Go-side hard budget ceiling reconciliation
-is activated. The `plan` node switches to Opus 4.8 in full (not gated or stubbed).
+Реализована команда `agentctl calibrate`, выполняющая вычисление precision/recall
+`healing_confidence_histogram` против исходов `human_verified`. Активирована согласованность
+жёсткого потолка бюджета на стороне Go. Узел `plan` полностью переключается на Opus 4.8
+(без ворот и заглушек).
 
-**Acceptance Criterion:**
+**Критерий приёмки:**
 
-> **Given** a 10-page AUT (>= 10 distinct URLs reachable) is explored or replayed to
-> completion
+> **Дано** AUT из 10 страниц (>= 10 различных доступных URL) исследован или воспроизведён
+> до завершения
 >
-> **When** the run finishes within the configured token budget
+> **Когда** запуск завершился в пределах настроенного бюджета токенов
 >
-> **Then** `run_report.html` is present, non-empty, and renders without errors in a
-> browser; the exported `.spec.ts` passes `tsc --noEmit` without type errors; `trace.zip`
-> is viewable via `playwright show-trace` without error; **and** `agent_cost_usd_total`
-> appears in the `/metrics` scrape output with a value greater than zero — all four
-> conditions verified in a single CI job.
+> **Тогда** `run_report.html` присутствует, непустой и отображается без ошибок в браузере;
+> экспортируемый `.spec.ts` проходит `tsc --noEmit` без ошибок типов; `trace.zip`
+> просматривается через `playwright show-trace` без ошибок; **и** `agent_cost_usd_total`
+> присутствует в выводе scrape `/metrics` со значением больше нуля — все четыре условия
+> верифицированы в одном CI задании.
 
 ---
 
-## M5 — Visual Heal PoC + K3s/ArgoCD (Days 46–60+)
+## M5 — Visual Heal PoC + K3s/ArgoCD (Дни 46–60+)
 
-**Languages:** Go, Python, TypeScript (PoC-gated)
+**Языки:** Go, Python, TypeScript (PoC-gated)
 
-**Deliverable:**
+**Поставляемый результат:**
 
-The set-of-marks visual heal path (healing strategy attempt 3) is **built into
-`pw-executor`** and activated only if the PoC achieves > 70% accuracy on 20 real
-broken-selector scenarios. The overlay capability is added to `pw-executor` as an
-additional MCP tool on the same stdio channel, providing numbered mark overlays mapped to
-DOM elements; the LLM returns a mark number, and `healing-engine` extracts a real semantic
-locator from the mapped node — no coordinate clicks. If the PoC threshold is not met, the
-feature remains deferred. There is no "if the official server lacks it" escape hatch:
-`pw-executor` is our server and we build whatever surface we need.
+Путь visual heal set-of-marks (попытка стратегии healing 3) **встроен в `pw-executor`**
+и активируется только если PoC достигает > 70% точности на 20 реальных сценариях со
+сломанными selector. Возможность overlay добавлена в `pw-executor` как дополнительный
+MCP-инструмент на том же stdio-канале, предоставляя пронумерованные mark overlays,
+сопоставленные с DOM-элементами; LLM возвращает номер метки, а `healing-engine` извлекает
+реальный semantic locator из сопоставленного узла — без координатных кликов. Если порог
+PoC не достигнут, функция остаётся отложенной. Нет запасного выхода «если официальный
+сервер этого не умеет»: `pw-executor` — наш сервер, и мы строим любую необходимую нам
+поверхность.
 
-Postgres + `AsyncPostgresSaver` are introduced **only** if the documented concurrency
-trigger is reached (> 50 concurrent shared-DB writers or distributed workers); otherwise
-SQLite WAL continues. A Helm chart and ArgoCD Application manifest are shipped for
-home-lab GitOps deployment, with per-namespace config for `dev` / `staging` / `prod`
-targets.
+Postgres + `AsyncPostgresSaver` вводятся **только** при достижении задокументированного
+порога конкурентности (> 50 параллельных shared-DB writers или distributed workers); в
+противном случае продолжается использование SQLite WAL. Для home-lab GitOps развёртывания
+поставляются Helm chart и манифест ArgoCD Application с конфигурацией per-namespace для
+целей `dev` / `staging` / `prod`.
 
-**Acceptance Criterion:**
+**Критерий приёмки:**
 
-> **Given** a labeled benchmark of exactly 20 real broken-selector scenarios is prepared,
-> each with a human-verified correct locator as ground truth
+> **Дано** подготовлен размеченный бенчмарк ровно из 20 реальных сценариев со сломанными
+> selector, каждый с верифицированным человеком корректным локатором в качестве эталона
 >
-> **When** `pw-executor`'s set-of-marks overlay tool is exercised by `healing-engine` on
-> all 20 scenarios (no L1–L6 or LLM a11y fallback — visual path only), with
-> `verify-before-accept` applied to every candidate
+> **Когда** инструмент set-of-marks overlay `pw-executor` применяется `healing-engine` ко всем
+> 20 сценариям (без L1–L6 или LLM a11y fallback — только visual path), с применением
+> `verify-before-accept` к каждому кандидату
 >
-> **Then** at least 15 of the 20 scenarios produce a healed locator that matches the
-> human-verified selector (>= 75% accuracy exceeds the 70% gate) — measured by automated
-> comparison and logged to `healing-audit.jsonl`; if fewer than 15 scenarios pass, the
-> set-of-marks feature is recorded as deferred in `ARCHITECTURE.md` and the `pw-executor`
-> overlay tool is removed from the shipped binary until a subsequent PoC cycle.
+> **Тогда** как минимум 15 из 20 сценариев дают исправленный локатор, соответствующий
+> верифицированному человеком selector (>= 75% точности превышает порог 70%) — измеряется
+> автоматизированным сравнением и записывается в `healing-audit.jsonl`; если менее 15
+> сценариев проходят, функция set-of-marks записывается как отложенная в `ARCHITECTURE.md`,
+> а инструмент overlay `pw-executor` удаляется из поставляемого бинарного файла до
+> следующего цикла PoC.

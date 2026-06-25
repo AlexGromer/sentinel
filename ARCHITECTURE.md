@@ -1,44 +1,46 @@
 # Architecture — Sentinel
 
-> Autonomous Self-Healing Playwright UI-Testing Agent.
-> Polyglot: **Go** spine / **Python** LangGraph brain / **TypeScript** Playwright executor.
-> Generated from a 3-phase design workflow (4 independent architects → 3 adversarial judges → lead synthesis), 2026-06-23.
-> Deep mechanics live in `docs/` (see §7). Design provenance in `docs/DESIGN_RECORD.md`.
+> 🌐 **Русский** (основная версия) · [English](ARCHITECTURE.en.md)
+
+> Автономный self-healing Playwright агент для UI-тестирования.
+> Полиглот: **Go** spine / **Python** LangGraph brain / **TypeScript** Playwright executor.
+> Создан в рамках трёхфазного процесса проектирования (4 независимых архитектора → 3 adversarial judge → синтез lead-архитектора), 2026-06-23.
+> Детальная механика — в `docs/` (см. §7). История проектирования — в `docs/DESIGN_RECORD.md`.
 
 ---
 
 ## 0. CONSTRAINT OVERRIDE — BUILD-ONLY (2026-06-23, hard)
 
-**User directive:** *"We cannot buy / adopt anything off-the-shelf; we can only write it ourselves."*
+**Директива пользователя:** *«Мы не можем покупать или принимать ничего готового; мы можем только писать всё сами.»*
 
-**Interpretation (assumption — to confirm):** open-source **libraries** we write code against (Playwright library, LangGraph, Anthropic SDK) are *"writing"* and allowed. Adopting a turnkey third-party **server / SaaS product** is *not* allowed. If even OSS libraries are off-limits (pure from-scratch incl. browser CDP), scope changes drastically — see GAP-ARCH-002 / open question.
+**Интерпретация (допущение — требует подтверждения):** open-source **библиотеки**, против которых мы пишем код (Playwright library, LangGraph, Anthropic SDK), считаются *«написанными нами»* и разрешены. Использование готового стороннего **сервера / SaaS-продукта** *не* разрешено. Если даже OSS-библиотеки запрещены (чисто с нуля, включая browser CDP), scope меняется кардинально — см. GAP-ARCH-002 / открытый вопрос.
 
-**Consequence:** the synthesis's single most-praised decision — *BUY the official Microsoft `@playwright/mcp` server* — is **REVERSED**. We **BUILD** our own TypeScript Playwright execution server (`pw-executor`). All three design judges flagged a hand-built Playwright server as the biggest "language-tourism" cost; that warning is **acknowledged and accepted** as the unavoidable price of build-only sovereignty. The MCP-over-stdio transport (ADR-002) **stays** — MCP is an open protocol we implement ourselves; we build the *server*, we do not buy it.
+**Следствие:** самое высоко оценённое решение синтеза — *КУПИТЬ официальный Microsoft-сервер `@playwright/mcp`* — **ОТМЕНЕНО**. Мы **СОЗДАЁМ** собственный TypeScript-сервер выполнения Playwright (`pw-executor`). Все три судьи-проектировщика указали на hand-built Playwright-сервер как на самый большой «language-tourism» cost; это предупреждение **принято** как неизбежная цена build-only суверенитета. Транспорт MCP-over-stdio (ADR-002) **остаётся** — MCP — открытый протокол, который мы реализуем сами; мы строим *сервер*, а не покупаем его.
 
 ---
 
-## 1. Context
+## 1. Контекст
 
-### Purpose
-A production-grade, standalone autonomous UI-testing agent that (1) explores an unknown web app on its own, (2) decides what flows to test, (3) freezes a deterministic, replayable test plan, (4) repairs broken locators when the DOM changes, and (5) emits engineer-consumable artifacts (reports, traces, exported Playwright specs, regression baselines). It is the differentiator over the existing `qa-automation-engineer` subagent, which only *writes* tests — Sentinel *discovers and maintains* them.
+### Назначение
+Production-grade автономный standalone агент UI-тестирования, который (1) самостоятельно исследует незнакомое веб-приложение, (2) решает, какие потоки тестировать, (3) фиксирует детерминированный, воспроизводимый план тестирования, (4) исправляет сломанные locators при изменении DOM и (5) генерирует артефакты для инженеров (отчёты, traces, экспортированные Playwright specs, regression baselines). Это отличие от существующего subagent `qa-automation-engineer`, который лишь *пишет* тесты — Sentinel *обнаруживает и поддерживает* их.
 
-### Actors
-| Actor | Role | Interface |
+### Участники
+| Актор | Роль | Интерфейс |
 |-------|------|-----------|
-| CI pipeline | Runs deterministic replay; consumes exit codes 0/1/2/3 + JSON/JUnit reports | `agentctl run --ci` |
-| QA / dev engineer | Triggers explore runs, reviews flagged heals + human gates, approves baselines, consumes `.spec.ts` | `agentctl` (interactive) |
-| Home-lab operator | Runs the long-lived service on K3s/ArgoCD, watches Grafana cost/health | Helm + ArgoCD (M5) |
-| The agent itself | Autonomous LLM explorer | Opus 4.8 (plan) / Sonnet 4.6 (heal) |
+| CI pipeline | Запускает детерминированный replay; потребляет exit codes 0/1/2/3 + JSON/JUnit-отчёты | `agentctl run --ci` |
+| QA / dev-инженер | Запускает explore-прогоны, просматривает помеченные heals + human gates, утверждает baselines, потребляет `.spec.ts` | `agentctl` (интерактивный) |
+| Home-lab оператор | Запускает долгоживущий сервис на K3s/ArgoCD, смотрит Grafana cost/health | Helm + ArgoCD (M5) |
+| Сам агент | Автономный LLM-исследователь | Opus 4.8 (plan) / Sonnet 4.6 (heal) |
 
-### Scope
-- **In scope:** autonomous exploratory testing; locator self-healing with confidence gating + human-in-loop; explore-once / replay-many CI determinism; short- + long-term memory; per-run token/cost budgets + tracing; artifact emission; headless CI + long-running service; home-lab K3s/ArgoCD target.
-- **Out of scope (v1):** being a Claude Code `.md` subagent (explicitly excluded); multi-tenant SaaS; auto-merging healed plans into protected branches without review; load/perf testing; mobile-native (non-web); cross-browser beyond Chromium at MVP (Firefox/WebKit deferred); assertions about business correctness beyond observable UI state.
+### Область применения
+- **В scope:** автономное exploratory testing; locator self-healing с confidence gating + human-in-loop; explore-once / replay-many CI-детерминизм; короткая и долгосрочная память; per-run token/cost budgets + tracing; генерация артефактов; headless CI + долгоживущий сервис; цель — home-lab K3s/ArgoCD.
+- **Вне scope (v1):** роль `.md` subagent Claude Code (явно исключено); multi-tenant SaaS; автоматическое слияние healed plans в защищённые ветки без ревью; load/perf testing; mobile-native (не web); cross-browser за пределами Chromium на MVP (Firefox/WebKit отложены); утверждения о корректности бизнес-логики за пределами observable UI state.
 
 ---
 
-## 2. Components / Areas
+## 2. Компоненты / Области
 
-### Overview
+### Обзор
 ```
                   ┌──────────── Go (control-plane / spine) ────────────┐
   CI / engineer ─►│ agentctl (CLI) → orchestrator (run FSM, gRPC srv,   │
@@ -59,54 +61,54 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
                   └─────────────────────────────────────────────────────┘
 ```
 
-### Component table
-| Component | Lang | Responsibility | Key tech |
-|-----------|------|----------------|----------|
-| **agentctl** | Go | Single CLI/CI binary: `run` (`--explore`/`--replay`/`--ci`), `gate`, `report`, `baseline update`, `locators`, `calibrate`. Exit codes **0** pass / **1** step-fail / **2** golden-diff regression / **3** plan-integrity-or-budget. Works non-TTY + interactive. | cobra/urfave-cli, gRPC client, Viper (YAML) |
-| **orchestrator** | Go | Run-lifecycle FSM (PENDING→RUNNING→HEALING→PAUSED→PARTIAL→DONE\|FAILED\|ABORTED), gRPC server (RunControl + EventStream), supervises Python brain subprocess (5s health-ping, restart-on-crash, SIGTERM on per-step deadline). Enforces **Go-side hard budget ceiling** (reconciled vs the brain's in-process counter — NOT a per-call round trip). Does not touch SQLite. | gRPC, goroutine supervisor, context deadlines |
-| **store-gateway** | Go | **Sole writer** to the main SQLite (WAL). All long-term state via PersistenceService gRPC; owns migrations; exposes read RPCs. (The LangGraph checkpointer uses a SEPARATE DB file — so single-writer is *actually* true.) | SQLite WAL, golang-migrate, gRPC |
-| **report-service** | Go | Assembles `run_report.json` + HTML (mirrors Playwright HTML-reporter), serves trace/spec/cost endpoints, exposes Prometheus `/metrics`. Generates `.spec.ts` from `RunState.executed_actions` via template (no codegen-tool dependency). Introduced @ M4. | Go html/template, client_golang |
-| **brain** | Python | LangGraph StateGraph (9 nodes). Owns ALL LLM calls (Opus 4.8 plan; Sonnet 4.6 heal). Spawns `pw-executor` + binds its MCP tools. gRPC client to orchestrator + store-gateway. Owns explore/replay switching, coverage-based convergence, `plan_hash`. | LangGraph StateGraph + checkpointer, MCP client (VERIFY pkg), Anthropic SDK |
-| **healing-engine** | Python | The heal node: bounded re-grounding hierarchy (cache → L1–L6 no-LLM rotation → LLM a11y → gated set-of-marks), grounded confidence model with verify-before-accept, append-only `healing_audit`. Hosts `agentctl calibrate` logic. | Playwright locator strategies via MCP, structured-output LLM |
-| **perception** | Python | Parses a11y snapshot → typed `PageModel`, computes `completeness_ratio` to pick modality, computes a11y-hash + subtree-scoped `dom_hash`. | a11y normalization, SHA-256 hashing |
-| **pw-executor** | **TS (BUILD)** | **OUR OWN** Node service exposing Playwright primitives (navigate, accessibility snapshot, click/type/etc., screenshot, trace control, locator resolve/probe, set-of-marks overlay) to the brain over an MCP (JSON-RPC 2.0) stdio interface **we implement**. Runs as a child subprocess of the brain. | Playwright (lib, pinned), MCP server impl (ours), stdio JSON-RPC |
-| **proto** | shared | protobuf3 single source of truth for Go↔Python. Services: RunControl, PersistenceService, EventStream. Stubs generated in CI for Go+Python; `.proto` hash asserted vs checked-in stubs (mismatch = build failure). Introduced @ M2. | buf/protoc, CI codegen + hash assertion |
+### Таблица компонентов
+| Компонент | Язык | Ответственность | Ключевые технологии |
+|-----------|------|-----------------|---------------------|
+| **agentctl** | Go | Единственный CLI/CI бинарник: `run` (`--explore`/`--replay`/`--ci`), `gate`, `report`, `baseline update`, `locators`, `calibrate`. Exit codes: **0** — успех / **1** — step-fail / **2** — golden-diff regression / **3** — plan-integrity-or-budget. Работает в non-TTY + interactive режимах. | cobra/urfave-cli, gRPC client, Viper (YAML) |
+| **orchestrator** | Go | FSM жизненного цикла прогона (PENDING→RUNNING→HEALING→PAUSED→PARTIAL→DONE\|FAILED\|ABORTED), gRPC server (RunControl + EventStream), управляет subprocess Python brain (5s health-ping, restart-on-crash, SIGTERM при per-step deadline). Применяет **Go-side hard budget ceiling** (согласовано со счётчиком brain — НЕ per-call round trip). SQLite не трогает. | gRPC, goroutine supervisor, context deadlines |
+| **store-gateway** | Go | **Единственный writer** основного SQLite (WAL). Всё долгосрочное состояние — через PersistenceService gRPC; управляет миграциями; предоставляет read RPCs. (LangGraph checkpointer использует ОТДЕЛЬНЫЙ DB-файл — single-writer *действительно* соблюдается.) | SQLite WAL, golang-migrate, gRPC |
+| **report-service** | Go | Собирает `run_report.json` + HTML (аналог Playwright HTML-reporter), раздаёт trace/spec/cost endpoints, предоставляет Prometheus `/metrics`. Генерирует `.spec.ts` из `RunState.executed_actions` по шаблону (без зависимости от codegen-инструментов). Введён в M4. | Go html/template, client_golang |
+| **brain** | Python | LangGraph StateGraph (9 узлов). Владеет ВСЕМИ LLM-вызовами (Opus 4.8 plan; Sonnet 4.6 heal). Порождает `pw-executor` + привязывает его MCP tools. gRPC-клиент к orchestrator + store-gateway. Управляет переключением explore/replay, coverage-based convergence, `plan_hash`. | LangGraph StateGraph + checkpointer, MCP client (VERIFY pkg), Anthropic SDK |
+| **healing-engine** | Python | Heal-узел: ограниченная иерархия re-grounding (cache → L1–L6 no-LLM rotation → LLM a11y → gated set-of-marks), grounded confidence model с verify-before-accept, append-only `healing_audit`. Содержит логику `agentctl calibrate`. | Playwright locator strategies via MCP, structured-output LLM |
+| **perception** | Python | Разбирает a11y snapshot → типизированный `PageModel`, вычисляет `completeness_ratio` для выбора модальности, вычисляет a11y-hash + subtree-scoped `dom_hash`. | a11y normalization, SHA-256 hashing |
+| **pw-executor** | **TS (BUILD)** | **НАШ СОБСТВЕННЫЙ** Node-сервис, предоставляющий brain Playwright-примитивы (navigate, accessibility snapshot, click/type/и др., screenshot, trace control, locator resolve/probe, set-of-marks overlay) через MCP (JSON-RPC 2.0) stdio-интерфейс **нашей реализации**. Запускается как дочерний subprocess brain. | Playwright (lib, pinned), MCP server impl (ours), stdio JSON-RPC |
+| **proto** | shared | protobuf3 — единый источник истины для Go↔Python. Services: RunControl, PersistenceService, EventStream. Stubs генерируются в CI для Go+Python; hash `.proto` проверяется против зафиксированных stubs (несовпадение = build failure). Введён в M2. | buf/protoc, CI codegen + hash assertion |
 
-### Key interactions / boundaries
-**Two live wire protocols; a third boundary deliberately eliminated.**
+### Ключевые взаимодействия / границы
+**Два активных протокола взаимодействия; третья граница намеренно устранена.**
 
-1. **Go ↔ Python — gRPC proto3** (bidi streaming, UDS single-host / TCP for K3s). *Why:* compile-time typed contracts (drift = build failure), server-push of budget/gate events without polling, deadline propagation = per-step timeout. **Phased in @ M2** — M0/M1 use plain subprocess + env vars (`TARGET_URL`, `RUN_ID`, `RUN_MODE`, `ARTIFACT_DIR`). Rejected: REST/JSON (no compile-time schema, no clean streaming/cancel).
-2. **Python ↔ TS — MCP (JSON-RPC 2.0) over stdio**, to `pw-executor`, bound via LangGraph's MCP tool integration. *Why:* native LLM tool-call protocol (zero adapter), stdio avoids CI port-allocation flakiness, subprocess lifecycle owned by the Python parent (SIGTERM cascade), EOF is a clean failure signal. **BUILD-only note:** we implement this server ourselves (ADR-001).
-3. **TS → Go (artifacts) — ELIMINATED.** Playwright traces written to a shared artifact dir; the brain receives the path in the MCP response and relays it to Go over the existing gRPC channel; `report-service` reads files directly. `.spec.ts` generated by Go from `RunState`, not pushed from TS. Fewer wires = fewer failure modes.
+1. **Go ↔ Python — gRPC proto3** (bidi streaming, UDS single-host / TCP для K3s). *Почему:* типизированные контракты на этапе компиляции (drift = build failure), server-push событий budget/gate без polling, propagation дедлайнов = per-step timeout. **Поэтапно вводится с M2** — M0/M1 используют обычный subprocess + env vars (`TARGET_URL`, `RUN_ID`, `RUN_MODE`, `ARTIFACT_DIR`). Отклонено: REST/JSON (нет compile-time schema, нет чистого streaming/cancel).
+2. **Python ↔ TS — MCP (JSON-RPC 2.0) over stdio**, к `pw-executor`, привязан через MCP tool integration LangGraph. *Почему:* нативный протокол LLM tool-call (zero adapter), stdio избегает нестабильности выделения портов в CI, жизненный цикл subprocess управляется Python-родителем (SIGTERM cascade), EOF — чистый сигнал об ошибке. **Примечание BUILD-only:** мы реализуем этот сервер сами (ADR-001).
+3. **TS → Go (artifacts) — УСТРАНЕНО.** Playwright traces записываются в общий artifact dir; brain получает путь в MCP-ответе и передаёт его Go по существующему gRPC-каналу; `report-service` читает файлы напрямую. `.spec.ts` генерируется Go из `RunState`, а не передаётся из TS. Меньше связей = меньше точек отказа.
 
-**Failure isolation (real):** TS/MCP crash → brain detects EOF, restarts subprocess once, re-navigates to checkpoint `page_model.url`, re-enters the node (no work lost — checkpoint precedes the action). Python crash → orchestrator detects gRPC stream termination, marks FAILED, persists partial state, leaves checkpoint intact (`agentctl run --resume`). Go crash → brain reconnects with backoff; main DB durable; budget degrades safely to the in-process counter.
+**Изоляция отказов (реальная):** сбой TS/MCP → brain обнаруживает EOF, однократно перезапускает subprocess, переходит к checkpoint `page_model.url`, повторно входит в узел (работа не теряется — checkpoint предшествует действию). Сбой Python → orchestrator обнаруживает завершение gRPC-потока, помечает FAILED, сохраняет частичное состояние, checkpoint остаётся нетронутым (`agentctl run --resume`). Сбой Go → brain переподключается с backoff; основная DB устойчива; budget безопасно деградирует до in-process counter.
 
 ---
 
-## 3. Decisions (ADR Log)
+## 3. Решения (журнал ADR)
 
-| ID | Date | Decision | Status | Context / rejected alternative |
-|----|------|----------|--------|--------------------------------|
-| ADR-001 | 2026-06-23 | **BUILD** our own TS Playwright execution server (`pw-executor`) over an MCP stdio interface we implement | **Accepted (constraint-driven; supersedes synthesis)** | Build-only directive (§0). We own the tool schema (stable) at the cost of owning Playwright-API-churn maintenance. **Rejected:** BUY official `@playwright/mcp` (disallowed by constraint — was the synthesis's top pick) |
-| ADR-002 | 2026-06-23 | MCP over stdio for the Python↔TS boundary | Accepted | Native LLM tool-call protocol; LangGraph binds it w/o adapter; stdio avoids CI port flakiness. **Rejected:** gRPC TS server; Python-Playwright in-process (violates polyglot lock, loses Node-native trace) |
-| ADR-003 | 2026-06-23 | gRPC proto3 for Go↔Python, **phased in @ M2** (M0/M1 = subprocess+env) | Accepted | Compile-time contracts, server-push, deadline propagation. **Rejected:** REST/JSON; gRPC-from-day-1 (premature) |
-| ADR-004 | 2026-06-23 | LangGraph StateGraph backbone; checkpointer in a **SEPARATE** DB file from store-gateway | Accepted | Free checkpoint/resume/conditional-heal-edges/human-pause; separate file makes "Go sole writer of main DB" true. **Rejected:** bespoke asyncio loop; shared checkpoint+store DB (two writers) |
-| ADR-005 | 2026-06-23 | a11y tree = primary perception; set-of-marks visual = fallback gated by `completeness_ratio<0.30` AND a measured PoC | Accepted | ARIA roles/names are semantic, re-skin-stable, cheap, yield usable selectors. **Rejected:** screenshot-primary (cost, fragile); full-DOM snapshot (token blowout) |
-| ADR-006 | 2026-06-23 | Explore-once / replay-many with `plan_hash` HARD-ABORT on replay + immutable golden baselines (operator-command update only) | Accepted | The frozen plan is the only trustworthy reproducibility guarantee (no provider determinism even at T=0). **Rejected:** seeded/T=0 LLM as the determinism mechanism; auto-regenerate plan on staleness (P2's fatal flaw); HAR replay |
-| ADR-007 | 2026-06-23 | Go store-gateway = single writer of one main SQLite (WAL); Postgres + AsyncPostgresSaver deferred to M5 behind explicit trigger | Accepted | Zero-ops, cp-backupable, single-writer + concurrent-readers matches access; per-job SQLite for CI parallelism. Postgres-compatible schema. **Rejected:** Postgres day-1; Python direct DB access |
-| ADR-008 | 2026-06-23 | Grounded, calibrated confidence: per-strategy priors + empirical discounts + MANDATORY verify-before-accept live-DOM probe + post-heal verification + scheduled calibration | Accepted | Every LLM/visual candidate re-probed live (confidence zeroed if absent); `calibrate` recomputes precision/recall vs human-verified; cold-start threshold raised to 0.90. **Rejected:** raw LLM self-report vs magic thresholds with no calibration path |
-| ADR-009 | 2026-06-23 | Model split: Opus 4.8 for explore/plan, Sonnet 4.6 for healing | Accepted | Planning quality drives the differentiator (runs once/explore); healing is bounded + structured + in the replay hot path (latency/cost). **Rejected:** uniform Opus (5–8× cost); local model (VERIFY home-lab GPU sufficiency if revisited) |
-| ADR-010 | 2026-06-23 | Exploration terminates on a MEASURABLE coverage target (fraction of discovered interactive elements exercised + empty nav frontier); budget = backstop | Accepted | Closes the cross-cutting hand-wave: an LLM "done" flag bounds, it does not converge. **Rejected:** LLM `exploration_complete` flag alone; fixed-depth-only cap |
-| ADR-011 | 2026-06-23 | Pluggable planner: `HeuristicPlanner` (default, offline, deterministic, zero-cost) + `LLMPlanner` (Opus 4.8, optional via `--planner llm`, falls back to heuristic) | Accepted | Makes the M1 explore-gate verifiable offline / in CI without network or LLM spend, and doubles as the budget-exhaustion graceful-degradation path (consistent with §8). LLM stays the primary "smart" explorer when a key is present. **Rejected:** Opus-only plan node (untestable offline, costs tokens per smoke run, blocks CI) |
-| ADR-012 | 2026-06-23 | M2 delivered heal-engine-first: deterministic L1–L6 rotation + verify-before-accept + confidence gate + minimal replay, with an **interim brain-local SQLite store**; Go store-gateway+gRPC+proto (M2b) and MCP-SDK transport deferred | Accepted | Self-healing is M2's value and is testable offline; gRPC/store-gateway is infra best introduced separately. Heal needs a stale-locator trigger → minimal replay pulled forward (without the M3 trust layer). Interim local store is a **documented temporary deviation** from ADR-007 (single-writer), restored at M2b. **Rejected:** full M2 bundle at once (high integration risk, untestable in the gated/offline env) |
-| ADR-013 | 2026-06-23 | Heal and golden-diff **coexist**: a healed step still executes AND its page is still golden-diffed, so a drift that heals via testid also raises an a11y golden regression (exit 2). Golden baselines are **page-keyed by URL basename** (cross-base comparison). M3 gRPC orchestrator stays in M2b | Accepted | Healing = test robustness (keep running); golden-diff = change detection (flag the change). They answer different questions and must both fire. Page-basename keying lets a plan explored on site/ be diffed against site-v2/. **Rejected:** treating a heal as suppressing the regression signal (would hide real app changes) |
-| ADR-014 | 2026-06-24 | M4 report / `.spec.ts` export / metrics / calibrate implemented as **brain (Python) generators** reading run artifacts + the interim store; the Go `report-service` (§2) and OTel→Tempo / Prometheus HTTP endpoint deferred until M2b consolidates persistence | Accepted | The user-facing value (readable reports + exported tests) is pure generation, testable offline now; a Go service reading the brain-local SQLite before M2b would be rework. **Rejected:** building report-service in Go pre-M2b (duplicates persistence wiring that M2b restructures) |
-| ADR-015 | 2026-06-24 | M2b-1: `store-gateway` = a Go gRPC service (sole SQLite writer) spawned by agentctl over a Unix-domain socket; `brain/store.py` is reimplemented as a thin gRPC client preserving its exact method interface (drop-in) so healing/replay/calibrate are unchanged. Restores ADR-007 | Accepted | The clean Store interface lets us swap SQLite→gRPC with near-zero churn to call sites; agentctl-as-supervisor avoids a separate daemon for local/CI. **Rejected:** Python keeps writing SQLite (perpetuates the ADR-012 deviation); a standalone always-on daemon (ops burden for local runs) |
-| ADR-016 | 2026-06-24 | M2b-2: pw-executor migrates to the MCP SDK (`@modelcontextprotocol/sdk` server); brain wraps an MCP stdio client behind the existing `Executor.call` interface; the hand-rolled JSON-RPC is retained as a documented fallback | Accepted | Realizes ADR-002 (native LangGraph MCP tool binding) and closes GAP-VERIFY-002; the wrapper keeps graph/healing/replay unchanged and de-risks SDK-API surprises. **Rejected:** staying on bespoke JSON-RPC forever (diverges from the MCP architecture target) |
-| ADR-017 | 2026-06-24 | M5: ship as a containerized **K8s CronJob** via a Helm chart + ArgoCD Application (home-lab GitOps); set-of-marks visual heal is a **Tier-7 scaffold gated off** until a PoC measures ≥70% accuracy on 20 real broken-selector scenarios (ADR-005); Postgres checkpointer is an opt-in (`CHECKPOINT_DSN`) | Accepted | A CronJob matches the explore-once/replay-many model (scheduled CI-style replays) and fits ArgoCD GitOps on the existing K3s; visual heal is costly + non-deterministic, so it must prove its worth before shipping on. **Rejected:** always-on Deployment (the agent is batch, not a service); enabling visual heal unmeasured (token cost + flakiness) |
-| ADR-018 | 2026-06-24 | M4b: observability = brain OTel tracing (prompt_HASH not content; OTLP export gated by `OTEL_EXPORTER_OTLP_ENDPOINT`, no-op default) + Prometheus **Pushgateway** for batch metrics. The always-on Go report-service HTTP `/metrics` is **dropped** in favor of push, because the agent is an ephemeral CronJob, not a scrapeable service | Accepted | Distributed traces are the real observability win and work with zero overhead when no collector is set; a batch job can't be HTTP-scraped, so push/textfile is the correct Prometheus integration. **Rejected:** an HTTP `/metrics` server in a job that exits in seconds (nothing to scrape); putting prompt content in spans (leaks secrets) |
+| ID | Дата | Решение | Статус | Контекст / отклонённая альтернатива |
+|----|------|---------|--------|--------------------------------------|
+| ADR-001 | 2026-06-23 | **СОЗДАТЬ** собственный TS-сервер выполнения Playwright (`pw-executor`) на базе MCP stdio-интерфейса нашей реализации | **Accepted (продиктовано ограничением; supersedes synthesis)** | Директива build-only (§0). Мы владеем схемой инструментов (стабильной) ценой поддержки Playwright-API-churn. **Отклонено:** КУПИТЬ официальный `@playwright/mcp` (запрещено ограничением — был лучшим выбором synthesis) |
+| ADR-002 | 2026-06-23 | MCP over stdio для границы Python↔TS | Accepted | Нативный протокол LLM tool-call; LangGraph привязывает без adapter; stdio избегает нестабильности портов в CI. **Отклонено:** gRPC TS-сервер; Python-Playwright in-process (нарушает polyglot lock, теряет Node-native trace) |
+| ADR-003 | 2026-06-23 | gRPC proto3 для Go↔Python, **поэтапно с M2** (M0/M1 = subprocess+env) | Accepted | Типизированные контракты на этапе компиляции, server-push, propagation дедлайнов. **Отклонено:** REST/JSON; gRPC с первого дня (преждевременно) |
+| ADR-004 | 2026-06-23 | LangGraph StateGraph backbone; checkpointer в **ОТДЕЛЬНОМ** DB-файле от store-gateway | Accepted | Бесплатный checkpoint/resume/conditional-heal-edges/human-pause; отдельный файл делает «Go — единственный writer основной DB» истинным. **Отклонено:** bespoke asyncio loop; shared checkpoint+store DB (два writer) |
+| ADR-005 | 2026-06-23 | a11y tree = первичное восприятие; set-of-marks visual = fallback, активируемый при `completeness_ratio<0.30` И измеренном PoC | Accepted | ARIA roles/names семантичны, устойчивы к ресайзу, дёшевы, дают пригодные selectors. **Отклонено:** screenshot-primary (стоимость, хрупкость); full-DOM snapshot (token blowout) |
+| ADR-006 | 2026-06-23 | Explore-once / replay-many с `plan_hash` HARD-ABORT при replay + неизменяемые golden baselines (обновление только командой оператора) | Accepted | Замороженный план — единственная надёжная гарантия воспроизводимости (нет детерминизма провайдера даже при T=0). **Отклонено:** seeded/T=0 LLM как механизм детерминизма; auto-regenerate plan при устаревании (фатальный изъян P2); HAR replay |
+| ADR-007 | 2026-06-23 | Go store-gateway = единственный writer одного основного SQLite (WAL); Postgres + AsyncPostgresSaver отложены до M5 за явным триггером | Accepted | Zero-ops, backupable через cp, single-writer + concurrent-readers соответствует паттерну доступа; per-job SQLite для параллелизма CI. Postgres-compatible schema. **Отклонено:** Postgres с первого дня; прямой доступ Python к DB |
+| ADR-008 | 2026-06-23 | Grounded, calibrated confidence: per-strategy priors + empirical discounts + ОБЯЗАТЕЛЬНЫЙ live-DOM probe verify-before-accept + post-heal verification + scheduled calibration | Accepted | Каждый LLM/visual кандидат повторно проверяется live (confidence обнуляется при отсутствии); `calibrate` пересчитывает precision/recall относительно human-verified; cold-start threshold поднят до 0.90. **Отклонено:** raw LLM self-report против magic thresholds без пути к калибровке |
+| ADR-009 | 2026-06-23 | Разделение моделей: Opus 4.8 для explore/plan, Sonnet 4.6 для healing | Accepted | Качество планирования — ключевой дифференциатор (выполняется один раз за explore); healing ограничен, структурирован, в replay hot path (latency/cost). **Отклонено:** uniform Opus (5–8× стоимость); local model (VERIFY достаточность home-lab GPU при пересмотре) |
+| ADR-010 | 2026-06-23 | Исследование завершается при ИЗМЕРИМОЙ цели охвата (доля обнаруженных интерактивных элементов, задействованных + пустой nav frontier); бюджет = подстраховка | Accepted | Закрывает сквозную неопределённость: флаг LLM «done» ограничивает, но не конвергирует. **Отклонено:** только флаг `exploration_complete` LLM; только cap фиксированной глубины |
+| ADR-011 | 2026-06-23 | Pluggable planner: `HeuristicPlanner` (по умолчанию, offline, детерминированный, zero-cost) + `LLMPlanner` (Opus 4.8, опционально через `--planner llm`, fallback на heuristic) | Accepted | Позволяет верифицировать M1 explore-gate offline / в CI без сети или LLM-расходов, а также служит путём graceful-degradation при исчерпании бюджета (согласовано с §8). LLM остаётся основным «умным» исследователем при наличии ключа. **Отклонено:** план только на Opus (нетестируемый offline, токены за каждый smoke-прогон, блокирует CI) |
+| ADR-012 | 2026-06-23 | M2 доставлен heal-engine-first: детерминированная L1–L6 rotation + verify-before-accept + confidence gate + minimal replay, с **промежуточным brain-local SQLite store**; Go store-gateway+gRPC+proto (M2b) и MCP-SDK transport отложены | Accepted | Self-healing — ценность M2, тестируется offline; gRPC/store-gateway — инфраструктура, лучше вводить отдельно. Heal требует триггера stale-locator → minimal replay вытащен вперёд (без M3 trust layer). Промежуточный local store — **задокументированное временное отклонение** от ADR-007 (single-writer), восстанавливается в M2b. **Отклонено:** полный пакет M2 сразу (высокий integration risk, нетестируемо в gated/offline среде) |
+| ADR-013 | 2026-06-23 | Heal и golden-diff **сосуществуют**: исправленный шаг всё равно выполняется И его страница всё равно проходит golden-diff, поэтому drift, исправленный через testid, также вызывает a11y golden regression (exit 2). Golden baselines **привязаны по URL basename** (cross-base comparison). M3 gRPC orchestrator остаётся в M2b | Accepted | Healing = robustness теста (продолжать выполнение); golden-diff = обнаружение изменений (сигнализировать об изменении). Они отвечают на разные вопросы и должны срабатывать оба. Page-basename keying позволяет диффить план, исследованный на site/, против site-v2/. **Отклонено:** считать heal подавляющим сигнал regression (скрыло бы реальные изменения приложения) |
+| ADR-014 | 2026-06-24 | M4 report / `.spec.ts` export / metrics / calibrate реализованы как **brain (Python) generators**, читающие run artifacts + interim store; Go `report-service` (§2) и OTel→Tempo / Prometheus HTTP endpoint отложены до консолидации persistence в M2b | Accepted | Ценность для пользователя (читаемые отчёты + экспортированные тесты) — чистая генерация, тестируемая offline сейчас; Go-сервис, читающий brain-local SQLite до M2b, потребует переработки. **Отклонено:** сборка report-service на Go до M2b (дублирует wiring persistence, который M2b реструктурирует) |
+| ADR-015 | 2026-06-24 | M2b-1: `store-gateway` = Go gRPC-сервис (единственный SQLite writer), порождаемый agentctl через Unix-domain socket; `brain/store.py` переписан как тонкий gRPC-клиент с сохранением точного метода-интерфейса (drop-in), чтобы healing/replay/calibrate оставались неизменными. Восстанавливает ADR-007 | Accepted | Чистый интерфейс Store позволяет заменить SQLite→gRPC с минимальными изменениями call sites; agentctl-as-supervisor избегает отдельного daemon для local/CI. **Отклонено:** Python продолжает писать SQLite (сохраняет отклонение ADR-012); standalone always-on daemon (операционная нагрузка для local-прогонов) |
+| ADR-016 | 2026-06-24 | M2b-2: pw-executor мигрирует на MCP SDK (`@modelcontextprotocol/sdk` server); brain оборачивает MCP stdio-клиент за существующим интерфейсом `Executor.call`; hand-rolled JSON-RPC сохраняется как задокументированный fallback | Accepted | Реализует ADR-002 (нативный LangGraph MCP tool binding) и закрывает GAP-VERIFY-002; wrapper сохраняет graph/healing/replay неизменными и снижает риски сюрпризов SDK-API. **Отклонено:** остаться на bespoke JSON-RPC навсегда (расходится с архитектурной целью MCP) |
+| ADR-017 | 2026-06-24 | M5: поставить как containerized **K8s CronJob** через Helm chart + ArgoCD Application (home-lab GitOps); set-of-marks visual heal — **Tier-7 scaffold, отключён** до PoC, измеряющего ≥70% точности на 20 реальных сценариях сломанных selectors (ADR-005); Postgres checkpointer — opt-in (`CHECKPOINT_DSN`) | Accepted | CronJob соответствует модели explore-once/replay-many (scheduled CI-style replays) и вписывается в ArgoCD GitOps на существующем K3s; visual heal дорог и недетерминирован, поэтому должен доказать ценность перед выкаткой. **Отклонено:** always-on Deployment (агент — batch, а не сервис); включение visual heal без измерений (токен cost + нестабильность) |
+| ADR-018 | 2026-06-24 | M4b: observability = brain OTel tracing (prompt_HASH, не содержимое; OTLP export через `OTEL_EXPORTER_OTLP_ENDPOINT`, no-op по умолчанию) + Prometheus **Pushgateway** для batch metrics. Always-on Go report-service HTTP `/metrics` **удалён** в пользу push, поскольку агент — ephemeral CronJob, а не scrapeable сервис | Accepted | Distributed traces — реальный выигрыш в observability и работают с нулевыми накладными расходами при отсутствии collector; batch job нельзя опрашивать по HTTP, поэтому push/textfile — правильная интеграция с Prometheus. **Отклонено:** HTTP `/metrics`-сервер в job, завершающемся за секунды (нечего scrape); помещение содержимого prompt в spans (утечка секретов) |
 
-> ADR template for new decisions:
+> Шаблон ADR для новых решений:
 > ```
 > ### ADR-NNN: Title
 > - Date / Status (Proposed/Accepted/Deprecated/Superseded) / Context / Decision / Consequences
@@ -114,86 +116,86 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 
 ---
 
-## 4. Constraints
+## 4. Ограничения
 
-| Constraint | Type | Impact | Mitigation |
-|------------|------|--------|------------|
-| **BUILD-ONLY — no off-the-shelf products** (§0) | Business/strategic | Must write the TS Playwright executor ourselves; cannot adopt `@playwright/mcp` | ADR-001; thin tool layer over Playwright's stable lib API; contract tests; pin version |
-| LLM non-determinism | Technical | Autonomous explorer not bit-reproducible | Explore-once/replay-many + `plan_hash` hard-abort (ADR-006) |
-| LLM token cost | Business | Explore on large SPAs is expensive (Opus) | Coverage convergence (ADR-010), per-run budgets, graceful degradation, Go-side hard ceiling |
-| a11y-tree blind spots | Technical | Shadow DOM / canvas / custom elements / cross-origin iframes give partial perception | `completeness_ratio` metric → gated visual fallback; recommend AUT add `data-testid`/ARIA |
-| Home-lab target (K3s/ArgoCD/Proxmox/Ceph) | Technical | Deploy as GitOps service @ M5 | Helm chart + ArgoCD Application; Postgres swap behind trigger |
-| Chromium-only @ MVP | Technical | Golden a11y/screenshot hashes differ per engine | Firefox/WebKit deferred; baseline portability is an open question |
-
----
-
-## 5. Principles
-1. **Trust is the product** — a non-deterministic LLM explorer must be *structurally* unable to silently rewrite its own baseline or run a tampered plan.
-2. **Build, own, control** — no turnkey third-party products; we own every boundary (build-only sovereignty).
-3. **Buy nothing, but reuse OSS libraries** — write code against Playwright/LangGraph/Anthropic SDK; build the *components*, not the *primitives*.
-4. **Defer infrastructure behind named triggers** — gRPC @ M2, Postgres @ M5, OTel @ M4 — no speculative gold-plating.
-5. **Verify before trust** — every healed locator is re-probed against the live DOM before acceptance; every confidence threshold is calibrated, never a magic constant.
-6. **Measure convergence, don't assert it** — coverage metric over LLM "done" flag.
+| Ограничение | Тип | Влияние | Смягчение |
+|-------------|-----|---------|-----------|
+| **BUILD-ONLY — никаких готовых продуктов** (§0) | Бизнес/стратегический | Необходимо написать TS Playwright executor самостоятельно; нельзя использовать `@playwright/mcp` | ADR-001; тонкий инструментальный слой над стабильным Playwright lib API; contract tests; pin version |
+| LLM non-determinism | Технический | Автономный исследователь не bit-воспроизводим | Explore-once/replay-many + `plan_hash` hard-abort (ADR-006) |
+| LLM token cost | Бизнес | Исследование крупных SPA дорогостояще (Opus) | Coverage convergence (ADR-010), per-run budgets, graceful degradation, Go-side hard ceiling |
+| Слепые пятна a11y-tree | Технический | Shadow DOM / canvas / custom elements / cross-origin iframes дают частичное восприятие | Метрика `completeness_ratio` → gated visual fallback; рекомендуется добавить в AUT `data-testid`/ARIA |
+| Цель — home-lab (K3s/ArgoCD/Proxmox/Ceph) | Технический | Разворачивание как GitOps-сервиса в M5 | Helm chart + ArgoCD Application; замена на Postgres за триггером |
+| Только Chromium на MVP | Технический | Golden a11y/screenshot hashes различаются для разных движков | Firefox/WebKit отложены; переносимость baseline — открытый вопрос |
 
 ---
 
-## 6. Change Log
-| Date | Change | ADR | Author |
-|------|--------|-----|--------|
-| 2026-06-23 | Initial architecture from design workflow (4 architects → 3 judges → synthesis) | ADR-001..010 | @AlexGromer / Claude |
-| 2026-06-23 | BUILD-ONLY override: ADR-001 reversed BUY→BUILD (`pw-executor` written in-house) | ADR-001 | @AlexGromer |
-| 2026-06-23 | M0 (Hello Browser) delivered: Go→Python→TS wire + trace.zip (commit e6844ba) | — | @AlexGromer |
-| 2026-06-23 | M1 started: LangGraph StateGraph + pluggable planner (heuristic default + Opus optional) | ADR-011 | @AlexGromer |
-| 2026-06-23 | M1 delivered: LangGraph 9-node explore, deterministic plan.json (8 steps, coverage 1.0); docs-first dev guide added | ADR-011 | @AlexGromer |
-| 2026-06-23 | M2 heal-core delivered: deterministic L1–L6 self-heal + verify-before-accept + minimal replay (healed=2/0 on drifted fixture); gRPC/store-gateway split to M2b | ADR-012 | @AlexGromer |
-| 2026-06-23 | M3 started: replay trust layer — plan_hash hard-abort, exit codes 0/1/2/3, dual golden baselines, AUT-SHA flake quarantine, GitHub Actions | ADR-006, ADR-013 | @AlexGromer |
-| 2026-06-23 | M3 delivered: trust layer live-green (CLEAN 0 / DRIFT heal+a11y-regression 2 / tampered 3); first-landing golden symmetry + visual-advisory (GAP-RISK-009); offline test suite + CI workflow | ADR-006, ADR-013 | @AlexGromer |
-| 2026-06-24 | M4 started: .spec.ts export, HTML+JSON report, Prometheus textfile metrics, agentctl calibrate (brain generators) | ADR-014 | @AlexGromer |
-| 2026-06-24 | M4 core delivered: .spec.ts export + HTML/JSON/Prometheus report + calibrate (offline-verified, 8 tests); OTel/Prometheus-HTTP/Go-report-service → M4b | ADR-014 | @AlexGromer |
-| 2026-06-24 | M2b started: spec for Go store-gateway+gRPC+proto (M2b-1) and MCP-SDK transport (M2b-2); split, store.py interface preserved | ADR-015, ADR-016 | @AlexGromer |
-| 2026-06-24 | M2b-1 delivered: Go store-gateway + gRPC + proto, live-verified (gate 0/2/3 over gRPC); store.py drop-in LocalStore/GrpcStore; socket→/opt + GOTMPDIR fixes; prod path no sqlite handle | ADR-015 | @AlexGromer |
-| 2026-06-24 | M2b-2 delivered: pw-executor dual transport (JSON-RPC default + MCP SDK opt-in), brain McpExecutor behind Executor.call; offline-verified, JSON-RPC unchanged (closes GAP-VERIFY-002) | ADR-016 | @AlexGromer |
-| 2026-06-24 | M5 started: spec — deployment (Dockerfile + Helm CronJob + ArgoCD, M5-1), set-of-marks visual heal Tier-7 scaffold behind a ≥70% PoC gate (M5-2), Postgres checkpointer option (M5-3) | ADR-017 | @AlexGromer |
-| 2026-06-24 | M5-1 delivered: Dockerfile (multi-stage) + Helm chart (CronJob + per-env values + optional Ceph PVC) + ArgoCD Application; helm lint clean, renders ConfigMap/CronJob/PVC/SA | ADR-017 | @AlexGromer |
-| 2026-06-24 | M5-2 delivered: set-of-marks browser tool + HealingEngine Tier-7 visual heal (gated HEAL_VISUAL, mark→real locator, FLAGGED band); offline-tested (mock vision); real Sonnet-vision PoC gated/user-run | ADR-017 | @AlexGromer |
-| 2026-06-24 | M5-3 delivered: Postgres checkpointer opt-in (CHECKPOINT_DSN → PostgresSaver else SQLite, near drop-in); default SQLite unchanged, offline-verified | ADR-017 | @AlexGromer |
-| 2026-06-24 | M4b started: OTel brain tracing (prompt_HASH, OTLP-gated no-op default) + Prometheus Pushgateway for batch metrics; Go report-service HTTP / TS+Go spans / budget-ceiling deferred (GAP-OBS-001) | ADR-018 | @AlexGromer |
-| 2026-06-24 | M4b delivered: brain OTel (sentinel.run + heal.llm spans, prompt_HASH, OTLP-gated no-op default) + Prometheus Pushgateway; offline-verified, suites green | ADR-018 | @AlexGromer |
+## 5. Принципы
+1. **Доверие — это продукт** — недетерминированный LLM-исследователь должен быть *структурно* неспособен молча переписать свой baseline или запустить подменённый план.
+2. **Строить, владеть, контролировать** — никаких готовых сторонних продуктов; мы владеем каждой границей (build-only суверенитет).
+3. **Ничего не покупать, но переиспользовать OSS-библиотеки** — писать код против Playwright/LangGraph/Anthropic SDK; строить *компоненты*, а не *примитивы*.
+4. **Откладывать инфраструктуру за именованными триггерами** — gRPC в M2, Postgres в M5, OTel в M4 — никакого спекулятивного gold-plating.
+5. **Верифицировать до доверия** — каждый исправленный locator повторно проверяется против live DOM до принятия; каждый confidence threshold откалиброван, никогда не является magic constant.
+6. **Измерять конвергенцию, не утверждать её** — метрика охвата вместо флага LLM «done».
 
 ---
 
-## 7. Where the detail lives (`docs/`)
-| File | Contents |
-|------|----------|
-| `docs/STATE_MACHINE.md` | Full LangGraph: 9 nodes, all edges (incl. conditional/heal), the `RunState` shared object schema |
-| `docs/SELF_HEALING.md` | The 10-step self-healing algorithm, L1–L6 strategy priors, confidence gate, calibration |
-| `docs/DETERMINISM.md` | Explore-once/replay-many, `plan_hash` hard-abort, immutable golden baselines, flake quarantine, exit codes |
-| `docs/MEMORY_PERSISTENCE.md` | Short/long-term memory, SQLite schema (all tables), checkpoint GC |
+## 6. История изменений
+| Дата | Изменение | ADR | Автор |
+|------|-----------|-----|-------|
+| 2026-06-23 | Исходная архитектура из процесса проектирования (4 архитектора → 3 judge → synthesis) | ADR-001..010 | @AlexGromer / Claude |
+| 2026-06-23 | BUILD-ONLY override: ADR-001 перевёл BUY→BUILD (`pw-executor` написан in-house) | ADR-001 | @AlexGromer |
+| 2026-06-23 | M0 (Hello Browser) доставлен: Go→Python→TS wire + trace.zip (commit e6844ba) | — | @AlexGromer |
+| 2026-06-23 | M1 начат: LangGraph StateGraph + pluggable planner (heuristic по умолчанию + Opus опционально) | ADR-011 | @AlexGromer |
+| 2026-06-23 | M1 доставлен: LangGraph 9-node explore, детерминированный plan.json (8 шагов, coverage 1.0); добавлено docs-first руководство разработчика | ADR-011 | @AlexGromer |
+| 2026-06-23 | M2 heal-core доставлен: детерминированный L1–L6 self-heal + verify-before-accept + minimal replay (healed=2/0 на drifted fixture); gRPC/store-gateway вынесен в M2b | ADR-012 | @AlexGromer |
+| 2026-06-23 | M3 начат: replay trust layer — plan_hash hard-abort, exit codes 0/1/2/3, dual golden baselines, AUT-SHA flake quarantine, GitHub Actions | ADR-006, ADR-013 | @AlexGromer |
+| 2026-06-23 | M3 доставлен: trust layer live-green (CLEAN 0 / DRIFT heal+a11y-regression 2 / tampered 3); first-landing golden symmetry + visual-advisory (GAP-RISK-009); offline test suite + CI workflow | ADR-006, ADR-013 | @AlexGromer |
+| 2026-06-24 | M4 начат: .spec.ts export, HTML+JSON report, Prometheus textfile metrics, agentctl calibrate (brain generators) | ADR-014 | @AlexGromer |
+| 2026-06-24 | M4 core доставлен: .spec.ts export + HTML/JSON/Prometheus report + calibrate (offline-verified, 8 tests); OTel/Prometheus-HTTP/Go-report-service → M4b | ADR-014 | @AlexGromer |
+| 2026-06-24 | M2b начат: spec для Go store-gateway+gRPC+proto (M2b-1) и MCP-SDK transport (M2b-2); split, интерфейс store.py сохранён | ADR-015, ADR-016 | @AlexGromer |
+| 2026-06-24 | M2b-1 доставлен: Go store-gateway + gRPC + proto, live-verified (gate 0/2/3 over gRPC); store.py drop-in LocalStore/GrpcStore; socket→/opt + GOTMPDIR fixes; prod path no sqlite handle | ADR-015 | @AlexGromer |
+| 2026-06-24 | M2b-2 доставлен: pw-executor dual transport (JSON-RPC по умолчанию + MCP SDK opt-in), brain McpExecutor за Executor.call; offline-verified, JSON-RPC неизменён (закрывает GAP-VERIFY-002) | ADR-016 | @AlexGromer |
+| 2026-06-24 | M5 начат: spec — deployment (Dockerfile + Helm CronJob + ArgoCD, M5-1), set-of-marks visual heal Tier-7 scaffold за PoC-gate ≥70% (M5-2), опция Postgres checkpointer (M5-3) | ADR-017 | @AlexGromer |
+| 2026-06-24 | M5-1 доставлен: Dockerfile (multi-stage) + Helm chart (CronJob + per-env values + optional Ceph PVC) + ArgoCD Application; helm lint clean, renders ConfigMap/CronJob/PVC/SA | ADR-017 | @AlexGromer |
+| 2026-06-24 | M5-2 доставлен: set-of-marks browser tool + HealingEngine Tier-7 visual heal (gated HEAL_VISUAL, mark→real locator, FLAGGED band); offline-tested (mock vision); реальный Sonnet-vision PoC gated/user-run | ADR-017 | @AlexGromer |
+| 2026-06-24 | M5-3 доставлен: Postgres checkpointer opt-in (CHECKPOINT_DSN → PostgresSaver else SQLite, near drop-in); SQLite по умолчанию неизменён, offline-verified | ADR-017 | @AlexGromer |
+| 2026-06-24 | M4b начат: OTel brain tracing (prompt_HASH, OTLP-gated no-op default) + Prometheus Pushgateway для batch metrics; Go report-service HTTP / TS+Go spans / budget-ceiling отложены (GAP-OBS-001) | ADR-018 | @AlexGromer |
+| 2026-06-24 | M4b доставлен: brain OTel (sentinel.run + heal.llm spans, prompt_HASH, OTLP-gated no-op default) + Prometheus Pushgateway; offline-verified, suites green | ADR-018 | @AlexGromer |
+
+---
+
+## 7. Где живут детали (`docs/`)
+| Файл | Содержимое |
+|------|------------|
+| `docs/STATE_MACHINE.md` | Полный LangGraph: 9 узлов, все рёбра (в т.ч. conditional/heal), схема shared объекта `RunState` |
+| `docs/SELF_HEALING.md` | 10-шаговый алгоритм self-healing, L1–L6 strategy priors, confidence gate, калибровка |
+| `docs/DETERMINISM.md` | Explore-once/replay-many, `plan_hash` hard-abort, иммутабельные golden baselines, flake quarantine, exit codes |
+| `docs/MEMORY_PERSISTENCE.md` | Краткосрочная/долгосрочная память, SQLite schema (все таблицы), checkpoint GC |
 | `docs/OBSERVABILITY.md` | OTel tracing, LLM transcript, token budget + hard caps, Prometheus metrics |
-| `docs/OUTPUTS.md` | The 10 emitted artifacts |
-| `docs/ROADMAP.md` | M0→M5 milestones with Given/When/Then acceptance gates + build-only deltas |
-| `docs/DESIGN_RECORD.md` | Full design provenance: 4 architect proposals + 3 judge verdicts + synthesis decision trail |
-| `GAPS.md` | Open questions, VERIFY items, risks, build-only consequences |
+| `docs/OUTPUTS.md` | 10 генерируемых артефактов |
+| `docs/ROADMAP.md` | Вехи M0→M5 с acceptance gates в формате Given/When/Then + build-only deltas |
+| `docs/DESIGN_RECORD.md` | Полная история проектирования: 4 архитекторских предложения + 3 вердикта judge + история решений synthesis |
+| `GAPS.md` | Открытые вопросы, VERIFY items, риски, последствия build-only |
 
-## 8. Top risks (summary — full list in GAPS.md)
-1. **`pw-executor` is now critical-path** (build-only): largest single build + ongoing Playwright-API-churn maintenance. *Mitigation:* thin tool layer over Playwright's stable Locator/accessibility API; contract tests; pin version.
-2. **Confidence-model cold start** — no human-verified outcomes early. *Mitigation:* default threshold 0.90 until N labeled; verify-before-accept + post-heal verify are model-independent gates.
-3. **Token-cost blowout on large SPAs.** *Mitigation:* coverage convergence, per-page budget, graceful degradation, incremental explore.
-4. **Heal-storm latency in the deterministic replay hot path.** *Mitigation:* hard 2-attempt cap + per-step deadline + cached-locator amortization (`dom_subtree_hash`).
-5. **`dom_hash` fragility.** *Mitigation:* hash the target SUBTREE, not the page; CSS ignore-list.
+## 8. Топ-риски (сводка — полный список в GAPS.md)
+1. **`pw-executor` теперь на критическом пути** (build-only): наибольший единичный объём сборки + постоянная поддержка Playwright-API-churn. *Смягчение:* тонкий инструментальный слой над стабильным Playwright Locator/accessibility API; contract tests; pin version.
+2. **Cold start модели confidence** — отсутствие human-verified результатов на начальном этапе. *Смягчение:* порог по умолчанию 0.90 до N размеченных примеров; verify-before-accept + post-heal verify — model-independent gates.
+3. **Token-cost blowout на крупных SPA.** *Смягчение:* coverage convergence, per-page budget, graceful degradation, incremental explore.
+4. **Задержки heal-storm в детерминированном replay hot path.** *Смягчение:* hard cap в 2 попытки + per-step deadline + amortization кешированных locators (`dom_subtree_hash`).
+5. **Хрупкость `dom_hash`.** *Смягчение:* хешировать целевой SUBTREE, не страницу; CSS ignore-list.
 
 ---
 
-## Type-Specific Extensions — Development
+## Расширения по типу — Разработка
 
-### Build & CI
-- **Languages/tools:** Go (control-plane), Python 3.x (brain, LangGraph), TypeScript/Node (pw-executor, Playwright).
-- **CI:** GitHub Actions — `explore` job (conditional/manual) + `replay` matrix; proto codegen + `.proto`-hash assertion (M2); gitleaks secrets scan; per-job SQLite for parallel replay.
-- **Pre-commit:** gitleaks; `.claude/` git-ignored (never committed).
+### Сборка и CI
+- **Языки/инструменты:** Go (control-plane), Python 3.x (brain, LangGraph), TypeScript/Node (pw-executor, Playwright).
+- **CI:** GitHub Actions — задача `explore` (conditional/manual) + матрица `replay`; proto codegen + утверждение `.proto`-hash (M2); gitleaks secrets scan; per-job SQLite для параллельного replay.
+- **Pre-commit:** gitleaks; `.claude/` git-ignored (никогда не коммитится).
 
-### Testing strategy
-- **Self-test split:** Go unit (orchestrator FSM, budget reconciliation), Python unit (node logic, confidence model), TS unit (pw-executor tool layer), contract tests (proto stubs, MCP tool schema), e2e (the agent against a fixture app).
-- **Acceptance = milestone gates** (`docs/ROADMAP.md`), expressed Given/When/Then with thresholds.
+### Стратегия тестирования
+- **Разбивка self-test:** Go unit (orchestrator FSM, budget reconciliation), Python unit (логика узлов, confidence model), TS unit (инструментальный слой pw-executor), contract tests (proto stubs, MCP tool schema), e2e (агент против fixture app).
+- **Acceptance = milestone gates** (`docs/ROADMAP.md`), выраженные в формате Given/When/Then с пороговыми значениями.
 
-### Dependencies (OSS libraries — allowed under build-only)
-Playwright (pinned), LangGraph + checkpointer, Anthropic SDK, gRPC/protobuf (buf/protoc), SQLite (WAL), Prometheus client, OpenTelemetry SDK. **No turnkey third-party servers/SaaS.**
+### Зависимости (OSS-библиотеки — разрешены по build-only)
+Playwright (pinned), LangGraph + checkpointer, Anthropic SDK, gRPC/protobuf (buf/protoc), SQLite (WAL), Prometheus client, OpenTelemetry SDK. **Никаких готовых сторонних серверов/SaaS.**

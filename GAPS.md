@@ -1,51 +1,53 @@
 # GAPS — Sentinel
 
-Tracking of open questions, items to verify, and known risks. Format: `GAP-[CAT]-[NUM]`.
-Categories: ARCH (architecture), VERIFY (needs fact-check), RISK, AGENT (missing tooling), DECISION (awaiting user).
+> 🌐 **Русский** (основная версия) · [English](GAPS.en.md)
 
-> Source: design workflow synthesis (2026-06-23) + BUILD-ONLY constraint reconciliation.
+Отслеживание открытых вопросов, пунктов для верификации и известных рисков. Формат: `GAP-[CAT]-[NUM]`.
+Категории: ARCH (архитектура), VERIFY (требует проверки фактов), RISK, AGENT (отсутствующий инструментарий), DECISION (ожидание решения пользователя).
+
+> Источник: синтез workflow дизайна (2026-06-23) + согласование ограничений BUILD-ONLY.
 
 ---
 
-## Decision / constraint gaps
+## Пробелы в решениях / ограничениях
 
-| ID | Priority | Gap | Status |
-|----|----------|-----|--------|
-| GAP-DECISION-001 | P1 | **BUILD-ONLY interpretation.** OSS libraries (Playwright, LangGraph, Anthropic SDK, MCP SDK) = allowed ("writing"); turnkey servers/SaaS products = not allowed. | **RESOLVED 2026-06-23** (confirmed by user). GAP-ARCH-002 unblocked → closed. |
-| GAP-ARCH-001 | P1 | **`pw-executor` is now critical-path.** Building + maintaining our own TS Playwright execution server is the largest single component and the highest ongoing-maintenance risk (tracks Playwright lib API churn). Mitigation: thin tool layer over Playwright's stable `Locator`/`accessibility` API; contract tests asserting tool names+schemas; pin Playwright version. | OPEN |
-| GAP-ARCH-002 | P2 | If GAP-DECISION-001 resolves to "no OSS either", re-evaluate the entire stack (LangGraph → bespoke loop, Playwright → raw CDP). Would invalidate ADR-002/004/005. | BLOCKED on GAP-DECISION-001 |
+| ID | Приоритет | Пробел | Статус |
+|----|-----------|--------|--------|
+| GAP-DECISION-001 | P1 | **Интерпретация BUILD-ONLY.** OSS-библиотеки (Playwright, LangGraph, Anthropic SDK, MCP SDK) = разрешены (это «написание»); готовые серверные продукты/SaaS = не разрешены. | **RESOLVED 2026-06-23** (подтверждено пользователем). GAP-ARCH-002 разблокирован → закрыт. |
+| GAP-ARCH-001 | P1 | **`pw-executor` теперь на критическом пути.** Создание и поддержка собственного TypeScript Playwright execution server — самый большой отдельный компонент и наибольший риск постоянного обслуживания (отслеживает изменения API библиотеки Playwright). Снижение риска: тонкий слой инструментов поверх стабильного API `Locator`/`accessibility` Playwright; контрактные тесты, проверяющие имена инструментов и схемы; фиксация версии Playwright. | OPEN |
+| GAP-ARCH-002 | P2 | Если GAP-DECISION-001 разрешится в «никакого OSS тоже», придётся переоценить весь стек (LangGraph → собственный цикл, Playwright → raw CDP). Аннулирует ADR-002/004/005. | BLOCKED on GAP-DECISION-001 |
 
-## VERIFY (fact-checks — anti-hallucination; do not assume)
+## VERIFY (проверка фактов — anti-hallucination; не предполагать)
 
-| ID | Priority | Item | Resolve by |
-|----|----------|------|------------|
-| GAP-VERIFY-001 | P1 | Underlying **Playwright library API** capabilities at the pinned version: `accessibility` snapshot surface, `tracing.start/stop`, locator engines (role/text/label/testid), `screenshot`. We DEFINE our own tool surface in `pw-executor`, but it sits on these primitives. | M0 |
-| GAP-VERIFY-002 | P1 | **Python↔MCP binding** package + maturity (e.g. `langchain-mcp-adapters`): stdio transport stability, tool-schema validation strictness, subprocess error propagation. Both ends are ours now (lowers risk). Keep a thin swappable adapter so a ~300-line custom JSON-RPC client is a low-risk fallback. | M1 |
-| GAP-VERIFY-003 | P2 | **LangGraph `SqliteSaver` / `AsyncPostgresSaver`** checkpointer API + separate-DB-file usage; `interrupt`/pause semantics for the human gate. | M1 |
-| GAP-VERIFY-004 | P3 | **Anthropic SDK** structured-output / tool-use call shape for plan + heal nodes (model IDs `claude-opus-4-8`, `claude-sonnet-4-6`). | M1 |
+| ID | Приоритет | Пункт | Устранить к |
+|----|-----------|-------|-------------|
+| GAP-VERIFY-001 | P1 | Возможности базового **Playwright library API** для зафиксированной версии: поверхность `accessibility` snapshot, `tracing.start/stop`, движки локаторов (role/text/label/testid), `screenshot`. Мы ОПРЕДЕЛЯЕМ собственную поверхность инструментов в `pw-executor`, но она опирается на эти примитивы. | M0 |
+| GAP-VERIFY-002 | P1 | Пакет **Python↔MCP binding** и его зрелость (например, `langchain-mcp-adapters`): стабильность транспорта stdio, строгость валидации схем инструментов, распространение ошибок subprocess. Оба конца теперь наши (снижает риск). Сохраняем тонкий заменяемый адаптер, чтобы кастомный JSON-RPC клиент на ~300 строк оставался запасным вариантом с низким риском. | M1 |
+| GAP-VERIFY-003 | P2 | API checkpointer **LangGraph `SqliteSaver` / `AsyncPostgresSaver`** + использование отдельного DB-файла; семантика `interrupt`/pause для human gate. | M1 |
+| GAP-VERIFY-004 | P3 | Формат вызовов structured-output / tool-use **Anthropic SDK** для узлов plan + heal (ID моделей `claude-opus-4-8`, `claude-sonnet-4-6`). | M1 |
 
-## Design open questions (from synthesis)
+## Открытые вопросы дизайна (из синтеза)
 
-| ID | Priority | Question |
-|----|----------|----------|
-| GAP-ARCH-003 | P1 | Precise **coverage metric** for ADR-010: "interactive element exercised" counted per `semantic_id` / per `(page,role,name)` / per distinct flow? Must not reward trivial clicks nor punish small apps. |
-| GAP-ARCH-004 | P1 | How to reliably derive the scenario's target **SUBTREE** for `dom_subtree_hash` scoping (nearest landmark/role container?) without over/under-scoping. Validate against real DOM drift. |
-| GAP-ARCH-005 | P2 | **Calibration bootstrap volume:** how many human-verified outcomes before lowering auto-accept threshold from the 0.90 default, and over what window? |
-| GAP-ARCH-006 | P2 | Is explore-mode **soft verification on Sonnet** worth its cost, or does a deterministic post-action state check (URL change, expected element present) suffice? Measure @ M3. |
-| GAP-ARCH-007 | P2 | **Cross-browser scope:** Chromium-only @ MVP assumed; confirm Firefox/WebKit near-term need (affects golden-baseline portability — hashes differ per engine). |
-| GAP-ARCH-008 | P1 | **Auth/secret handling** for the AUT (storage-state/cookie injection): where do credentials live (home-lab Vault?) and how are they referenced in `RunConfig` without landing in traces/transcripts? |
+| ID | Приоритет | Вопрос |
+|----|-----------|--------|
+| GAP-ARCH-003 | P1 | Точная **метрика покрытия** для ADR-010: «интерактивный элемент задействован» считается по `semantic_id` / по `(page,role,name)` / по отдельному flow? Не должна поощрять тривиальные клики и не должна штрафовать небольшие приложения. |
+| GAP-ARCH-004 | P1 | Как надёжно определить целевое **SUBTREE** сценария для скоупинга `dom_subtree_hash` (ближайший landmark/role container?) без избыточного или недостаточного охвата. Проверить на реальном DOM drift. |
+| GAP-ARCH-005 | P2 | **Объём начальной калибровки:** сколько верифицированных человеком исходов нужно до снижения порога auto-accept с 0.90 по умолчанию, и за какой период? |
+| GAP-ARCH-006 | P2 | Стоит ли **мягкая верификация на Sonnet** в режиме explore своих затрат, или достаточно детерминированной проверки состояния после действия (изменение URL, наличие ожидаемого элемента)? Измерить на M3. |
+| GAP-ARCH-007 | P2 | **Охват браузеров:** для MVP предполагается только Chromium; подтвердить краткосрочную потребность в Firefox/WebKit (влияет на переносимость golden-baseline — хэши различаются для каждого движка). |
+| GAP-ARCH-008 | P1 | **Обработка auth/секретов** для AUT (внедрение storage-state/cookie): где хранятся учётные данные (home-lab Vault?) и как они указываются в `RunConfig` без попадания в traces/транскрипты? |
 
-## Risks (full list; summary in ARCHITECTURE §8)
+## Риски (полный список; итог в ARCHITECTURE §8)
 
-| ID | Priority | Risk | Mitigation |
-|----|----------|------|------------|
-| GAP-RISK-001 | P1 | `pw-executor` maintenance burden (build-only) — see GAP-ARCH-001 | thin layer + contract tests + pinned version |
-| GAP-RISK-002 | P1 | Confidence-model cold start (no human-verified data when the store is being seeded with the most consequential records) | threshold 0.90 until N labeled; verify-before-accept + post-heal verify = model-independent gate; M2/M3 budget human review to bootstrap calibration set |
-| GAP-RISK-003 | P2 | Token-cost blowout on large SPAs (50+ pages, Opus pricing) | coverage convergence (ADR-010), depth cap, per-page budget, graceful degrade to partial frozen plan, Go hard ceiling, incremental explore (skip unchanged-a11y-hash pages) |
-| GAP-RISK-004 | P2 | Heal-storm latency/cost variance in deterministic replay hot path on a churning AUT | hard 2-attempt cap + per-step deadline + auto-skip; `dom_subtree_hash` amortization (recurrent change = 0 LLM after first heal); quarantine caps blast radius |
-| GAP-RISK-005 | P2 | a11y-tree blind spots (shadow DOM, canvas, custom web components, cross-origin iframes) | `completeness_ratio` first-class metric (Grafana histogram) triggers visual fallback + surfaced in report; recommend AUT team add data-testid/ARIA where chronically low |
-| GAP-RISK-006 | P2 | `dom_hash` fragility — whole-page hash invalidates all locators on unrelated change (ads/A-B/analytics) | hash target SUBTREE not page; configurable scope; CSS ignore-list for volatile widgets |
-| GAP-RISK-007 | P2 | SQLite write contention under parallel CI / multi-runner K3s | per-job SQLite for CI (no shared writer); single Go-writer + WAL for service; documented Postgres trigger (>50 concurrent shared-DB writers / distributed workers) |
-| GAP-RISK-008 | P3 | Proto/gRPC versioning friction as the brain evolves | CI-generated stubs from one `.proto`; proto-hash assertion (mismatch=build failure); optional fields + 1-major backward compat; boundary phased in only @ M2 |
-| GAP-RISK-009 | P2 | Screenshot-hash not byte-stable across separate browser launches (baseline run vs replay run) → flaky visual golden-diff. M3 mitigations: capture once per page at first landing (no focus/caret), and make **visual regression advisory** (a11y-hash drives exit 2). Full fix deferred: fixed viewport + font set + `animations:'disabled'`/`caret:'hide'`, or capture goldens in the same process | OPEN |
-| GAP-OBS-001 | P3 | M4b deferrals: Go `report-service` HTTP `/metrics` (dropped — batch CronJob uses Pushgateway/textfile, ADR-018); TS (`pw-executor`) + Go (`store-gateway`) OTel spans with W3C context propagation; Go-side hard budget ceiling (needs a long-running Go orchestrator + brain→Go token reporting; default heuristic path uses no LLM) | OPEN |
+| ID | Приоритет | Риск | Снижение риска |
+|----|-----------|------|----------------|
+| GAP-RISK-001 | P1 | Нагрузка по обслуживанию `pw-executor` (build-only) — см. GAP-ARCH-001 | тонкий слой + контрактные тесты + зафиксированная версия |
+| GAP-RISK-002 | P1 | Cold start модели уверенности (нет верифицированных человеком данных при первоначальном заполнении хранилища наиболее важными записями) | порог 0.90 до N размеченных записей; verify-before-accept + post-heal verify = model-independent gate; бюджет ручной проверки на M2/M3 для начальной калибровки |
+| GAP-RISK-003 | P2 | Взрывной рост стоимости токенов на больших SPA (50+ страниц, ценообразование Opus) | convergence покрытия (ADR-010), ограничение глубины, бюджет на страницу, плавная деградация до частично замороженного плана, жёсткий потолок Go, инкрементальное исследование (пропуск страниц с неизменённым a11y-hash) |
+| GAP-RISK-004 | P2 | Дисперсия задержки/стоимости heal-storm в детерминированном replay hot path при активно изменяющемся AUT | жёсткий лимит в 2 попытки + дедлайн на шаг + автопропуск; амортизация `dom_subtree_hash` (повторяющееся изменение = 0 запросов к LLM после первого heal); карантин ограничивает радиус поражения |
+| GAP-RISK-005 | P2 | Слепые зоны a11y-tree (shadow DOM, canvas, кастомные web-компоненты, cross-origin iframes) | `completeness_ratio` — метрика первого класса (Grafana histogram) запускает visual fallback + отображается в отчёте; рекомендуем команде AUT добавить data-testid/ARIA там, где хронически низкое значение |
+| GAP-RISK-006 | P2 | Хрупкость `dom_hash` — хэш всей страницы аннулирует все локаторы при несвязанном изменении (реклама/A-B/аналитика) | хэшировать целевое SUBTREE, а не страницу; настраиваемый скоуп; CSS-список игнорирования для волатильных виджетов |
+| GAP-RISK-007 | P2 | Конкуренция за запись в SQLite при параллельном CI / multi-runner K3s | per-job SQLite для CI (без общего writer); единственный Go-writer + WAL для сервиса; задокументированный триггер перехода на Postgres (>50 параллельных shared-DB writers / distributed workers) |
+| GAP-RISK-008 | P3 | Сложности версионирования Proto/gRPC по мере развития brain | стабы, генерируемые CI из одного `.proto`; проверка proto-hash (несовпадение = ошибка сборки); необязательные поля + обратная совместимость 1 major; граница вводится только на M2 |
+| GAP-RISK-009 | P2 | Screenshot-hash нестабилен побайтно при отдельных запусках браузера (baseline run vs replay run) → нестабильный visual golden-diff. Снижение риска на M3: захват один раз на страницу при первом посещении (без фокуса/каретки), и сделать **visual regression advisory** (a11y-hash управляет exit 2). Полное исправление отложено: фиксированный viewport + набор шрифтов + `animations:'disabled'`/`caret:'hide'`, или захват goldens в одном процессе | OPEN |
+| GAP-OBS-001 | P3 | Отложенные пункты M4b: Go `report-service` HTTP `/metrics` (убран — batch CronJob использует Pushgateway/textfile, ADR-018); TS (`pw-executor`) + Go (`store-gateway`) OTel spans с W3C context propagation; жёсткий потолок бюджета на стороне Go (требует долгоживущего Go orchestrator + отчётности brain→Go о токенах; путь эвристики по умолчанию не использует LLM) | OPEN |

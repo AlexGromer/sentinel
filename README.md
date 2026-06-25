@@ -1,32 +1,38 @@
 # Sentinel
 
-**Autonomous, self-healing UI-testing agent.** Sentinel explores a web app on its own,
-decides what to test, freezes a deterministic & replayable test plan, and repairs broken
-locators when the DOM drifts — emitting engineer-consumable artifacts (reports, traces,
-exported Playwright specs, regression baselines).
+> 🌐 **Русский** (основная версия) · [English](README.en.md)
 
-It is the differentiator over a plain test-writer: Sentinel **discovers and maintains**
-tests rather than only writing them.
+**Автономный self-healing агент для UI-тестирования.** Sentinel самостоятельно исследует веб-приложение,
+решает, что тестировать, замораживает детерминированный и воспроизводимый план тестирования и восстанавливает
+сломанные локаторы при дрейфе DOM — генерируя артефакты для инженеров (отчёты, трассировки,
+экспортированные Playwright-спеки, regression baselines).
 
-## Status
-| Milestone | State |
-|-----------|-------|
-| **M0 — Hello Browser** | ✅ done — Go→Python→TS wire produces a11y tree + `trace.zip` |
-| **M1 — Autonomous Walk** | 🚧 in progress — LangGraph StateGraph, coverage-converged explore, `plan.json` |
-| M2–M5 | planned — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+Это ключевое отличие от обычного test-writer: Sentinel **обнаруживает и поддерживает**
+тесты, а не только пишет их.
 
-## Architecture at a glance (polyglot — each language where it is strongest)
+## Язык / Language
+
+Русский — основная и авторитетная версия документации. Английские копии находятся в файлах с суффиксом `*.en.md`.
+
+## Статус
+| Milestone | Состояние |
+|-----------|-----------|
+| **M0 — Hello Browser** | ✅ готово — цепочка Go→Python→TS формирует a11y tree + `trace.zip` |
+| **M1 — Autonomous Walk** | 🚧 в процессе — LangGraph StateGraph, исследование до convergence покрытия, `plan.json` |
+| M2–M5 | запланировано — см. [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+
+## Архитектура вкратце (polyglot — каждый язык там, где он сильнее)
 ```
 agentctl (Go)  ── spawn + env ──▶  brain (Python, LangGraph)  ── JSON-RPC/stdio ──▶  pw-executor (TS, Playwright)
 control-plane / CLI                perceive→plan→act→verify→heal               our own browser server  ── Chromium
 ```
-- **Go** — control-plane spine: CLI, run lifecycle, (M2+) orchestrator, store-gateway, reports.
-- **Python** — the brain: LangGraph state machine + planning/healing logic.
-- **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
+- **Go** — позвоночник control-plane: CLI, жизненный цикл запуска, (M2+) orchestrator, store-gateway, отчёты.
+- **Python** — мозг: state machine на LangGraph + логика планирования и healing.
+- **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (10 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (10 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
-## Quickstart (M0)
+## Быстрый старт (M0)
 ```bash
 # 1. build the TS browser server
 cd pw-executor && npm install && npm run build && npx playwright install chromium-headless-shell && cd ..
@@ -37,18 +43,18 @@ go build -o bin/agentctl ./cmd/agentctl
 # → prints the accessibility tree and writes runs/<id>/trace.zip
 ```
 
-## Project map
-| Path | What |
-|------|------|
-| `ARCHITECTURE.md`, `GAPS.md`, `BACKLOG.md`, `FILEMAP.md` | canonical design, open questions, tasks, file index |
-| `docs/` | per-area specs + milestone contracts (`M*_CONTRACT.md`) + design record |
+## Карта проекта
+| Путь | Назначение |
+|------|------------|
+| `ARCHITECTURE.md`, `GAPS.md`, `BACKLOG.md`, `FILEMAP.md` | канонический дизайн, открытые вопросы, задачи, индекс файлов |
+| `docs/` | спецификации по областям + контракты milestone (`M*_CONTRACT.md`) + история дизайна |
 | `cmd/agentctl/` | Go CLI |
 | `brain/` | Python LangGraph brain |
 | `pw-executor/` | TypeScript Playwright server |
-| `testdata/` | test fixtures |
+| `testdata/` | тестовые фикстуры |
 
-## Contributing / extending
-Read **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** — toolchain setup, per-component build, how to run
-the milestone gates, and step-by-step recipes for extending (add a pw-executor tool, add a planner,
-add a LangGraph node). **Docs-first:** every milestone has a contract in `docs/` written before code;
-all code carries docstrings; no undocumented modules.
+## Участие в разработке / расширение
+Прочитайте **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** — настройка toolchain, сборка по компонентам, запуск
+milestone gates, и пошаговые рецепты расширения (добавить инструмент pw-executor, добавить planner,
+добавить узел LangGraph). **Сначала документация:** каждый milestone имеет контракт в `docs/`, написанный до кода;
+весь код снабжён docstring; нет недокументированных модулей.

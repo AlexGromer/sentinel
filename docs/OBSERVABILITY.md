@@ -1,173 +1,176 @@
-# Sentinel — Observability and Cost Controls
+# Sentinel — Наблюдаемость и управление затратами
 
-Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+> 🌐 **Русский** (основная версия) · [English](OBSERVABILITY.en.md)
 
----
-
-## Overview
-
-Observability in Sentinel is layered across four orthogonal concerns: distributed tracing
-(added at M4), an immutable per-run LLM decision transcript, token budget enforcement with
-graceful degradation, and Playwright browser traces. All four are first-class artifacts,
-not retrofits.
+Основано на синтезе дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
 
 ---
 
-## 1. Distributed Tracing (OpenTelemetry)
+## Обзор
 
-OTel spans are introduced at **M4** — not day 1. This is a deliberate anti-over-engineering
-choice: the framework is stable before the telemetry layer is added.
+Наблюдаемость в Sentinel организована в четыре ортогональных уровня: распределённая трассировка
+(добавляется в M4), неизменяемый транскрипт принятых LLM-решений для каждого запуска, контроль
+токенового бюджета с graceful degradation и трассировки браузера Playwright. Все четыре являются
+первоклассными артефактами, а не доработками постфактум.
 
-**Scope:** Every LangGraph node emits one OTel span. MCP tool calls (pw-executor) and Go
-gRPC calls are child spans of their enclosing node span, forming a complete parent-child
-hierarchy per run.
+---
 
-**Span attributes per node span:**
+## 1. Распределённая трассировка (OpenTelemetry)
 
-| Attribute | Description |
+OTel-спаны вводятся в **M4** — не с первого дня. Это намеренный выбор против
+оверинжиниринга: фреймворк стабилизируется до добавления слоя телеметрии.
+
+**Охват:** Каждый узел LangGraph испускает один OTel-спан. Вызовы MCP-инструментов (pw-executor)
+и gRPC-вызовы Go являются дочерними спанами охватывающего спана узла, формируя полную
+иерархию parent-child для каждого запуска.
+
+**Атрибуты спана узла:**
+
+| Атрибут | Описание |
 |---|---|
-| `run_id` | UUID of the current run |
-| `node_name` | LangGraph node (perceive, ground, plan, act, verify, heal, checkpoint, report) |
-| `step_index` | Index of the plan step being executed |
+| `run_id` | UUID текущего запуска |
+| `node_name` | Узел LangGraph (perceive, ground, plan, act, verify, heal, checkpoint, report) |
+| `step_index` | Индекс выполняемого шага плана |
 | `run_mode` | `explore` / `replay` / `ci` |
-| `model` | Model identifier used in this node (if LLM call present) |
+| `model` | Идентификатор модели, использованной в данном узле (если присутствует вызов LLM) |
 
-**Additional attributes on LLM-call spans:**
+**Дополнительные атрибуты для спанов вызовов LLM:**
 
-| Attribute | Description |
+| Атрибут | Описание |
 |---|---|
-| `prompt_tokens` | Prompt token count |
-| `completion_tokens` | Completion token count |
-| `latency_ms` | End-to-end LLM call latency in milliseconds |
-| `cost_usd` | Computed cost from config-driven price table |
-| `decision_type` | Classification of the LLM decision (e.g., `plan_action`, `heal_locator`) |
-| `confidence` | Confidence score emitted by the node |
-| `prompt_HASH` | SHA-256 of the prompt text — **never the prompt content itself** |
+| `prompt_tokens` | Количество токенов промпта |
+| `completion_tokens` | Количество токенов ответа |
+| `latency_ms` | Сквозная задержка вызова LLM в миллисекундах |
+| `cost_usd` | Вычисленная стоимость из конфигурируемой таблицы цен |
+| `decision_type` | Классификация принятого LLM-решения (например, `plan_action`, `heal_locator`) |
+| `confidence` | Оценка уверенности, испущенная узлом |
+| `prompt_HASH` | SHA-256 текста промпта — **никогда не само содержимое промпта** |
 
-Storing the hash, not the content, prevents secrets embedded in page state from appearing
-in trace backends.
+Хранение хеша вместо содержимого предотвращает появление секретов, встроенных в состояние
+страницы, в бэкендах трассировки.
 
-**Context propagation:** W3C Trace Context is propagated in gRPC metadata (Go↔Python
-boundary) and in MCP call metadata (Python↔pw-executor boundary), so a single trace ID
-flows across all three runtime layers.
+**Распространение контекста:** W3C Trace Context распространяется в gRPC-метаданных
+(граница Go↔Python) и в метаданных MCP-вызовов (граница Python↔pw-executor), поэтому
+единственный trace ID проходит через все три уровня среды выполнения.
 
-**Export path:** OTLP → Grafana Alloy → **Tempo** (home lab) / **Jaeger** (dev).
+**Путь экспорта:** OTLP → Grafana Alloy → **Tempo** (домашняя лаборатория) / **Jaeger** (dev).
 
-**Sampling:** 100% for both `explore` and `ci` runs. Every run must be auditable for
-trust; no head-based dropping.
+**Семплирование:** 100% для запусков `explore` и `ci`. Каждый запуск должен быть
+проверяемым для доверия; головное отбрасывание не применяется.
 
 ---
 
-## 2. Immutable LLM Transcript
+## 2. Неизменяемый транскрипт LLM
 
-**Location:** `/runs/{run_id}/llm-transcript.jsonl`
+**Расположение:** `/runs/{run_id}/llm-transcript.jsonl`
 
-Every LLM call appends exactly one JSON line. The file is `fsync`-ed at run end and is
-**never overwritten or mutated** after that point. It is emitted as a CI artifact alongside
-`run_report.json`.
+Каждый вызов LLM дописывает ровно одну JSON-строку. Файл выполняет `fsync` в конце запуска
+и **никогда не перезаписывается и не изменяется** после этого момента. Он испускается как
+CI-артефакт вместе с `run_report.json`.
 
-**Record schema:**
+**Схема записи:**
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `ts` | ISO-8601 | Timestamp of the call |
-| `run_id` | string | Run identifier |
-| `step_id` | string | Plan step this call belongs to |
-| `node` | string | LangGraph node name |
-| `model` | string | Model identifier |
-| `prompt_tokens` | int | Prompt token count |
-| `completion_tokens` | int | Completion token count |
-| `latency_ms` | int | Wall-clock latency |
-| `cost_usd` | float | Cost for this call |
-| `decision_summary` | string | Human-readable summary of the decision (not the full output) |
-| `temperature` | float | Temperature used |
+| `ts` | ISO-8601 | Временная метка вызова |
+| `run_id` | string | Идентификатор запуска |
+| `step_id` | string | Шаг плана, к которому относится вызов |
+| `node` | string | Имя узла LangGraph |
+| `model` | string | Идентификатор модели |
+| `prompt_tokens` | int | Количество токенов промпта |
+| `completion_tokens` | int | Количество токенов ответа |
+| `latency_ms` | int | Настенное время задержки |
+| `cost_usd` | float | Стоимость данного вызова |
+| `decision_summary` | string | Человекочитаемый итог решения (не полный вывод) |
+| `temperature` | float | Использованная температура |
 
-**Use cases:** offline decision debugging; per-node cost attribution; prompt iteration
-without re-hitting the API; compliance audit ("what did the agent decide and why").
+**Сценарии использования:** отладка решений в offline-режиме; атрибуция затрат по узлам;
+итерация промптов без повторного обращения к API; аудит соответствия («что решил агент и почему»).
 
 ---
 
-## 3. Token Budget, In-Process Counter, and Go-Side Hard Ceiling
+## 3. Токеновый бюджет, внутрипроцессный счётчик и жёсткий потолок на стороне Go
 
-Token budget enforcement uses a three-layer design. Each layer is independent; the outer
-layer enforces even if the inner one fails.
+Контроль токенового бюджета использует трёхуровневую конструкцию. Каждый уровень независим;
+внешний уровень срабатывает даже при сбое внутреннего.
 
-### Layer 1 — In-process counter (Python brain)
+### Уровень 1 — Внутрипроцессный счётчик (Python brain)
 
-The brain maintains a `token_usage` dict keyed by `model_id → {prompt, completion, cost_usd}`
-and a `token_budget` dict with per-model limits. **Before every LLM call**, the brain checks
-the remaining budget. No per-call gRPC round-trip is made — this was an over-engineering
-pattern discarded from earlier proposals.
+Brain поддерживает dict `token_usage` с ключом `model_id → {prompt, completion, cost_usd}`
+и dict `token_budget` с ограничениями по моделям. **Перед каждым вызовом LLM** brain
+проверяет остаток бюджета. Никаких gRPC-вызовов туда-обратно на каждый вызов LLM не
+выполняется — этот антипаттерн оверинжиниринга был отброшен из ранних предложений.
 
-**Config defaults:**
+**Лимиты по умолчанию:**
 
-| Budget | Model | Default |
+| Бюджет | Модель | По умолчанию |
 |---|---|---|
-| `plan_token_limit` | Opus 4.8 | 50 000 tokens/run |
-| `heal_token_limit` | Sonnet 4.6 | 20 000 tokens/run |
+| `plan_token_limit` | Opus 4.8 | 50 000 токенов/запуск |
+| `heal_token_limit` | Sonnet 4.6 | 20 000 токенов/запуск |
 
-### Layer 2 — Go-side hard ceiling (orchestrator)
+### Уровень 2 — Жёсткий потолок на стороне Go (оркестратор)
 
-The Go orchestrator independently enforces a hard ceiling by reconciling the brain's token
-counter, received on each `RunEvent` stream message. If the brain ever overruns, Go flags
-the overrun and can terminate the brain subprocess. The Go ceiling operates **without** a
-per-LLM-call gRPC round-trip — it reconciles at event granularity.
+Оркестратор Go независимо применяет жёсткий потолок, сверяя счётчик токенов brain, получаемый
+в каждом сообщении потока `RunEvent`. Если brain превышает лимит, Go фиксирует превышение и
+может завершить дочерний процесс brain. Потолок Go работает **без** gRPC-вызова на каждый
+вызов LLM — сверка выполняется с гранулярностью событий.
 
-### Layer 3 — Graceful degradation (not abort)
+### Уровень 3 — Graceful degradation (не аварийное завершение)
 
-Budget exhaustion does **not** hard-abort the run. Instead:
+Исчерпание бюджета **не приводит** к жёсткому прерыванию запуска. Вместо этого:
 
-- **Plan node:** stops issuing new exploration actions; the current plan is frozen as a
-  partial plan (plan_hash still computed over available steps).
-- **Heal node:** falls back to L1–L6 deterministic strategy rotation only; no Sonnet or
-  Opus calls are made.
+- **Узел plan:** прекращает генерировать новые действия исследования; текущий план замораживается
+  как частичный (plan_hash по-прежнему вычисляется по доступным шагам).
+- **Узел heal:** откатывается на детерминированную ротацию стратегий L1–L6 только; вызовы
+  Sonnet или Opus не выполняются.
 
-At **80% utilisation** the brain emits a `BUDGET_WARNING` event (visible in the
-orchestrator log and surfaced in the run report).
-
----
-
-## 4. Playwright Traces
-
-**Source:** `pw-executor` (our TypeScript Playwright execution server) starts/stops a
-trace per run. One `trace.zip` is written to the shared artifact directory configured at
-server launch.
-
-**Relay path:** `pw-executor` → path returned in MCP tool response → Python brain →
-gRPC `RunEvent` → Go orchestrator → report-service serves it at `/runs/{run_id}/trace`.
-
-**Viewing:** `playwright show-trace trace.zip`
-
-No custom trace infrastructure is required; Playwright's built-in trace format (network,
-console, DOM snapshots, screenshots, action timeline) is the primary CI-failure debugging
-artifact.
+При **80% использования** brain испускает событие `BUDGET_WARNING` (отображается в журнале
+оркестратора и выводится в отчёт о запуске).
 
 ---
 
-## 5. Prometheus Metrics
+## 4. Трассировки Playwright
 
-Exposed by `report-service` at `/metrics` (standard Prometheus scrape endpoint).
-A Grafana dashboard template is shipped in the repository.
+**Источник:** `pw-executor` (наш TypeScript-сервер выполнения Playwright) запускает/останавливает
+трассировку для каждого запуска. Один файл `trace.zip` записывается в общую директорию
+артефактов, настроенную при запуске сервера.
 
-| Metric | Labels | Description |
+**Путь передачи:** `pw-executor` → путь, возвращённый в ответе MCP-инструмента → Python brain →
+gRPC `RunEvent` → оркестратор Go → `report-service` предоставляет доступ по адресу
+`/runs/{run_id}/trace`.
+
+**Просмотр:** `playwright show-trace trace.zip`
+
+Никакой пользовательской инфраструктуры трассировки не требуется; встроенный формат трассировки
+Playwright (сеть, консоль, снимки DOM, скриншоты, временная шкала действий) является основным
+артефактом отладки сбоев CI.
+
+---
+
+## 5. Метрики Prometheus
+
+Предоставляются `report-service` по адресу `/metrics` (стандартная точка сбора Prometheus).
+В репозитории поставляется шаблон дашборда Grafana.
+
+| Метрика | Метки | Описание |
 |---|---|---|
-| `agent_run_total` | `mode`, `status` | Counter of completed runs by mode and exit status |
-| `agent_run_duration_seconds` | — | Histogram of total run wall-clock time |
-| `agent_tokens_total` | `model`, `node` | Counter of tokens consumed, by model and LangGraph node |
-| `agent_cost_usd_total` | `model` | Counter of cost in USD, by model |
-| `agent_heal_attempts_total` | `strategy`, `outcome` | Counter of heal attempts by strategy (L1–L6, llm_a11y, llm_visual, cache) and outcome |
-| `agent_heal_success_rate` | — | Gauge: rolling ratio of successful heals to total attempts |
-| `healing_confidence_histogram` | `strategy` | Histogram of final confidence scores per healing strategy — the calibration signal |
-| `agent_flake_quarantine_count` | — | Gauge: number of currently quarantined steps |
-| `agent_a11y_completeness_ratio` | `url` | Histogram of per-page completeness_ratio (canvas-heavy-app early warning) |
-| `agent_budget_remaining_ratio` | — | Gauge: fraction of token budget remaining (plan + heal combined) |
+| `agent_run_total` | `mode`, `status` | Счётчик завершённых запусков по режиму и статусу завершения |
+| `agent_run_duration_seconds` | — | Гистограмма общего настенного времени запуска |
+| `agent_tokens_total` | `model`, `node` | Счётчик потреблённых токенов по модели и узлу LangGraph |
+| `agent_cost_usd_total` | `model` | Счётчик стоимости в USD по модели |
+| `agent_heal_attempts_total` | `strategy`, `outcome` | Счётчик попыток исцеления по стратегии (L1–L6, llm_a11y, llm_visual, cache) и результату |
+| `agent_heal_success_rate` | — | Gauge: скользящее соотношение успешных исцелений к общему числу попыток |
+| `healing_confidence_histogram` | `strategy` | Гистограмма итоговых оценок уверенности по стратегии исцеления — сигнал калибровки |
+| `agent_flake_quarantine_count` | — | Gauge: количество шагов, находящихся в карантине |
+| `agent_a11y_completeness_ratio` | `url` | Гистограмма completeness_ratio на страницу (раннее предупреждение для приложений с обилием canvas) |
+| `agent_budget_remaining_ratio` | — | Gauge: доля оставшегося токенового бюджета (plan + heal в сумме) |
 
 ---
 
-## 6. Alertmanager Rules
+## 6. Правила Alertmanager
 
-| Alert name | Condition | Severity | Action |
+| Название алерта | Условие | Важность | Действие |
 |---|---|---|---|
-| `DOM_INSTABILITY` | `agent_heal_attempts_total` rate > 0.20 per run | warning | Investigate AUT DOM churn; review strategy_degradation events |
-| `BUDGET_WARNING` | `agent_budget_remaining_ratio` < 0.20 (i.e., budget > 80% consumed) | warning | Review explore scope; consider raising limits or scoping AUT surface |
-| `CI_QUARANTINE_THRESHOLD` | `agent_flake_quarantine_count` > 5 | critical | **Blocks CI pipeline**; review quarantined steps with `agentctl locators list` |
+| `DOM_INSTABILITY` | Скорость `agent_heal_attempts_total` > 0.20 на запуск | warning | Исследовать DOM-чёрн AUT; проверить события strategy_degradation |
+| `BUDGET_WARNING` | `agent_budget_remaining_ratio` < 0.20 (то есть бюджет потреблён более чем на 80%) | warning | Пересмотреть охват explore; рассмотреть увеличение лимитов или сужение поверхности AUT |
+| `CI_QUARANTINE_THRESHOLD` | `agent_flake_quarantine_count` > 5 | critical | **Блокирует CI-конвейер**; проверить шаги в карантине с помощью `agentctl locators list` |

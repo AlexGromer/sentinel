@@ -1,54 +1,56 @@
 # M5 Contract — "Deploy + Visual Heal" (frozen 2026-06-24)
 
-Goal: ship Sentinel to the home-lab K3s/ArgoCD as GitOps, and scaffold the **set-of-marks visual
-heal** (Tier-7) behind a measured PoC gate. Split into three; M5-1 is the value-first, offline-authorable part.
+> 🌐 **Русский** (основная версия) · [English](M5_CONTRACT.en.md)
 
-## Scope split
-- **M5-1 — Deployment (GitOps).** Multi-stage Dockerfile (Go + Python + Node + Playwright browser);
-  Helm chart packaging the agent as a **CronJob/Job** (scheduled replay) + per-namespace values
-  (dev/staging/prod); an **ArgoCD Application** manifest. Authorable as YAML/Dockerfile now; user
-  deploys to their K3s (not testable here — no cluster).
-- **M5-2 — Visual heal scaffold (Tier-7).** pw-executor `browser.setOfMarks` (numbered overlay over
-  interactive elements → marks[]); HealingEngine Tier-7 (vision: Sonnet picks a mark → real locator),
-  **gated** behind `--heal-visual` + `--heal-llm` AND a PoC accuracy gate (**ship only if ≥70%** on 20
-  real broken-selector scenarios — ADR-005). Needs a vision LLM (key/network) → PoC run by the user.
-- **M5-3 — Postgres checkpointer option.** Swap LangGraph `SqliteSaver` → `AsyncPostgresSaver` when
-  `CHECKPOINT_DSN` is set (for K3s multi-runner). Config-only.
+Цель: развернуть Sentinel в домашнюю K3s/ArgoCD как GitOps и создать заготовку **set-of-marks visual
+heal** (Tier-7) за измеряемым PoC-гейтом. Разбит на три части; M5-1 — часть, ориентированная на ценность и authorable offline.
 
-## M5-1 deployment (authorable offline)
-- `Dockerfile`: stage1 `golang:1.26` builds `agentctl` + `store-gateway`; stage2 `node:24` builds
-  `pw-executor` (`npm ci && npm run build`); stage3 runtime `mcr.microsoft.com/playwright` (or python
-  base + `playwright install`) with the venv (`uv pip install …`), copying the Go binaries + dist +
+## Разбивка scope
+- **M5-1 — Развёртывание (GitOps).** Многостадийный Dockerfile (Go + Python + Node + Playwright browser);
+  Helm chart, упаковывающий агента как **CronJob/Job** (запланированный replay) + значения для каждого namespace
+  (dev/staging/prod); манифест **ArgoCD Application**. Authorable как YAML/Dockerfile сейчас; пользователь
+  деплоит в свой K3s (не тестируется здесь — нет кластера).
+- **M5-2 — Visual heal scaffold (Tier-7).** `browser.setOfMarks` pw-executor (пронумерованный оверлей над
+  интерактивными элементами → marks[]); HealingEngine Tier-7 (vision: Sonnet выбирает метку → реальный локатор),
+  **заблокирован** за `--heal-visual` + `--heal-llm` И PoC-гейтом точности (**поставлять только если ≥70%** на 20
+  реальных сценариях со сломанными селекторами — ADR-005). Требует vision LLM (ключ/сеть) → PoC запускается пользователем.
+- **M5-3 — Опция Postgres checkpointer.** Заменить LangGraph `SqliteSaver` → `AsyncPostgresSaver` при
+  установленном `CHECKPOINT_DSN` (для K3s multi-runner). Только конфигурация.
+
+## Развёртывание M5-1 (authorable offline)
+- `Dockerfile`: stage1 `golang:1.26` собирает `agentctl` + `store-gateway`; stage2 `node:24` собирает
+  `pw-executor` (`npm ci && npm run build`); stage3 runtime `mcr.microsoft.com/playwright` (или python
+  base + `playwright install`) с venv (`uv pip install …`), копируя Go-бинари + dist +
   brain. Entrypoint `agentctl`.
-- `deploy/sentinel/` Helm chart: `Chart.yaml`, `values.yaml` (image, schedule, target URL, plan
-  source, `--ci`, `--aut-version`, resources), templates: `cronjob.yaml` (scheduled `agentctl run
-  --replay --ci`), `configmap.yaml` (plan.json / config), `serviceaccount.yaml`. Per-namespace:
+- Helm chart `deploy/sentinel/`: `Chart.yaml`, `values.yaml` (image, schedule, target URL, источник плана,
+  `--ci`, `--aut-version`, resources), шаблоны: `cronjob.yaml` (запланированный `agentctl run
+  --replay --ci`), `configmap.yaml` (plan.json / config), `serviceaccount.yaml`. Для каждого namespace:
   `values-dev.yaml` / `values-staging.yaml` / `values-prod.yaml`.
-- `deploy/argocd/sentinel-app.yaml`: ArgoCD `Application` → the chart (auto-sync, the home-lab repo).
-- **VERIFY at deploy:** image base for Playwright browser; the agent in-cluster reaches its target;
-  persistent volume for `state/` (Ceph PVC) if the store-gateway runs as a sidecar.
+- `deploy/argocd/sentinel-app.yaml`: ArgoCD `Application` → chart (auto-sync, домашний репозиторий).
+- **VERIFY при деплое:** базовый образ для браузера Playwright; агент в кластере достигает своего target;
+  persistent volume для `state/` (Ceph PVC), если store-gateway работает как sidecar.
 
 ## M5-2 visual heal (scaffold + gate)
-- `browser.setOfMarks` → `{marks: [{mark:int, role, name, css, bbox}], screenshot_path}` — overlays a
-  numbered box per interactive element (DOM-eval bbox + a data-URL/screenshot), returns the mark→element map.
-- HealingEngine **Tier-7** (after L1–L6 + LLM-a11y fail AND `completeness_ratio < 0.30`): Sonnet vision
-  is given the screenshot + marks, returns a `mark` number; we extract that element's **real** locator
-  (NOT a coordinate click). Discount ×0.85 (ADR-005). Behind `--heal-visual` (off by default).
-- **PoC gate** (`agentctl heal-poc --scenarios <dir>`): runs Tier-7 over ≥20 labeled broken-selector
-  scenarios, reports precision/recall; **Tier-7 ships enabled only if ≥70%** (else stays scaffolded/off).
-- ANTI-HALLUCINATION: do not assume a specific vision API shape — reuse the existing Sonnet path in
-  `healing.py._llm_reground`; extend it with image content; VERIFY the Anthropic image-block API.
+- `browser.setOfMarks` → `{marks: [{mark:int, role, name, css, bbox}], screenshot_path}` — накладывает
+  пронумерованный блок на каждый интерактивный элемент (DOM-eval bbox + data-URL/скриншот), возвращает карту mark→element.
+- HealingEngine **Tier-7** (после сбоя L1–L6 + LLM-a11y И `completeness_ratio < 0.30`): Sonnet vision
+  получает скриншот + метки, возвращает номер `mark`; мы извлекаем **реальный** локатор этого элемента
+  (НЕ клик по координатам). Скидка ×0.85 (ADR-005). За `--heal-visual` (по умолчанию выключен).
+- **PoC gate** (`agentctl heal-poc --scenarios <dir>`): запускает Tier-7 на ≥20 размеченных сценариях со сломанными
+  селекторами, сообщает точность/полноту; **Tier-7 поставляется включённым только при ≥70%** (иначе остаётся scaffolded/выключен).
+- ANTI-HALLUCINATION: не предполагать конкретную форму vision API — повторно использовать существующий путь Sonnet в
+  `healing.py._llm_reground`; расширить его блоком с изображением; VERIFY API Anthropic image-block.
 
 ## M5-3 Postgres checkpointer
-`brain/__main__.py`: if `CHECKPOINT_DSN` set → `AsyncPostgresSaver.from_conn_string(dsn)` else the
-SqliteSaver (current). One-constructor swap; VERIFY `langgraph-checkpoint-postgres` package + API.
+`brain/__main__.py`: если `CHECKPOINT_DSN` установлен → `AsyncPostgresSaver.from_conn_string(dsn)`, иначе
+SqliteSaver (текущий). Замена одного конструктора; VERIFY пакет `langgraph-checkpoint-postgres` + API.
 
 ## Acceptance gate (Given/When/Then)
-- **M5-1:** `helm template deploy/sentinel` renders valid manifests (offline); `docker build` produces an
-  image whose `agentctl run --replay --ci` works (user runs on cluster / locally); ArgoCD app lints.
-- **M5-2:** `browser.setOfMarks` returns a marks[] map; Tier-7 is wired + gated off; `heal-poc` harness
-  runs and prints an accuracy figure (user supplies a key + scenarios).
-- **M5-3:** with `CHECKPOINT_DSN` set the explore run checkpoints to Postgres (user-run); unset → SQLite (unchanged).
+- **M5-1:** `helm template deploy/sentinel` рендерит валидные манифесты (offline); `docker build` создаёт
+  образ, в котором `agentctl run --replay --ci` работает (пользователь запускает на кластере / локально); ArgoCD app линтуется.
+- **M5-2:** `browser.setOfMarks` возвращает карту marks[]; Tier-7 подключён + выключен по умолчанию; harness `heal-poc`
+  запускается и выводит показатель точности (пользователь предоставляет ключ + сценарии).
+- **M5-3:** при установленном `CHECKPOINT_DSN` explore-запуск делает checkpoint в Postgres (запускается пользователем); без установки → SQLite (без изменений).
 
-## Out of scope
-Production observability (M4b) · multi-tenant SaaS · cross-browser matrix · auto-merge of healed plans.
+## Вне scope
+Production observability (M4b) · multi-tenant SaaS · кросс-браузерная матрица · авто-слияние healedных планов.

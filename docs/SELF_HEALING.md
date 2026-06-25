@@ -1,107 +1,111 @@
 # Self-Healing — Sentinel
 
-> Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+> 🌐 **Русский** (основная версия) · [English](SELF_HEALING.en.md)
 
-**Scope:** This document describes the complete self-healing pipeline executed inside the `heal` node
-via the `healing-engine` Python module. The entry contract is a `HealingContext` struct:
-`{semantic_id, failure_type, attempted_locator, element_description}`. The pipeline is bounded,
-calibrated, and verify-before-trust.
+> Составлено по результатам проектного синтеза 2026-06-23; итоговое описание — в ../ARCHITECTURE.md.
 
-**Browser interface note (BUILD_ONLY_DELTA):** All MCP tool calls referenced below
-(`accessibility_snapshot`, locator resolution/probe, screenshot) are issued to **`pw-executor`** —
-our own TypeScript Playwright execution server that we BUILD, implementing an MCP/JSON-RPC-2.0
-stdio interface. The MCP-over-stdio transport is identical to any other MCP server; `pw-executor`
-is a bespoke implementation, not an off-the-shelf product.
+**Область применения:** данный документ описывает полный пайплайн самовосстановления,
+выполняемый внутри узла `heal` через Python-модуль `healing-engine`. Входной контракт —
+структура `HealingContext`: `{semantic_id, failure_type, attempted_locator, element_description}`.
+Пайплайн ограничен, откалиброван и работает по принципу «проверять перед принятием».
+
+**Замечание по интерфейсу браузера (BUILD_ONLY_DELTA):** Все упомянутые ниже вызовы MCP-инструментов
+(`accessibility_snapshot`, разрешение/зондирование локаторов, screenshot) направляются в **`pw-executor`** —
+наш собственный TypeScript-сервер выполнения Playwright, который мы СОЗДАЁМ, реализующий stdio-интерфейс
+MCP/JSON-RPC-2.0. Транспорт MCP-over-stdio идентичен любому другому MCP-серверу; `pw-executor` —
+это специализированная реализация, а не готовый продукт.
 
 ---
 
-## Step 1 — Failure Classification
+## Шаг 1 — Классификация сбоя
 
-Catch the MCP error returned from the `act` node and classify it into one of four categories before
-any healing attempt begins:
+Перехватить ошибку MCP, возвращённую из узла `act`, и классифицировать её в одну из четырёх
+категорий перед началом какой-либо попытки восстановления:
 
-| Class | Meaning | Action |
+| Класс | Значение | Действие |
 |---|---|---|
-| `LOCATOR_STALE` | Element present in a11y tree but selector no longer matches | Proceed through the healing pipeline |
-| `ELEMENT_GONE` | Element absent from tree — removed, conditional, or A/B variant | Proceed through the healing pipeline |
-| `TIMING` | Element present but not interactable at call time | Retry `act` once with a short wait **before** escalating to healing |
-| `UNEXPECTED_ERROR` | Navigation / network / JS error | Do NOT heal — emit event, route directly to `report` |
+| `LOCATOR_STALE` | Элемент присутствует в a11y-дереве, но селектор больше не соответствует | Продолжить через пайплайн восстановления |
+| `ELEMENT_GONE` | Элемент отсутствует в дереве — удалён, условный или вариант A/B | Продолжить через пайплайн восстановления |
+| `TIMING` | Элемент присутствует, но недоступен для взаимодействия в момент вызова | Повторить `act` один раз с коротким ожиданием **перед** эскалацией к восстановлению |
+| `UNEXPECTED_ERROR` | Ошибка навигации / сети / JS | НЕ восстанавливать — генерировать событие, направить прямо в `report` |
 
-Only `LOCATOR_STALE` and `ELEMENT_GONE` enter the full healing pipeline. `TIMING` gets one
-cheap retry first. `UNEXPECTED_ERROR` is never a healing candidate.
-
----
-
-## Step 2 — Perception Refresh
-
-Do not reuse the stale snapshot from the previous cycle.
-
-1. Call `pw-executor` → `accessibility_snapshot()` fresh.
-2. Recompute `completeness_ratio` = named interactive elements / total interactive elements.
-3. If `completeness_ratio < 0.30` (canvas, shadow DOM, custom elements, or cross-origin iframe),
-   **also** capture a screenshot via `pw-executor` → `screenshot()` for the gated visual attempt
-   in Step 6.
-4. Recompute the **subtree-scoped** `dom_hash` for the scenario's target container only (not the
-   whole page — see Risk note in ../ARCHITECTURE.md §Risks).
-
-The fresh snapshot prevents healing against DOM state that may have already changed again between
-the failure and the heal cycle.
+Только `LOCATOR_STALE` и `ELEMENT_GONE` проходят через полный пайплайн восстановления.
+`TIMING` сначала получает одну дешёвую повторную попытку. `UNEXPECTED_ERROR` никогда не является
+кандидатом на восстановление.
 
 ---
 
-## Step 3 — Cache Lookup (zero LLM)
+## Шаг 2 — Обновление восприятия
 
-Query `store-gateway` → `ReadLocators(page_url)` for `(semantic_id)` where
-`status IN {human_verified, active}`.
+Не использовать устаревший снимок из предыдущего цикла.
 
-**Cache hit:** if a record exists **and** its stored `dom_subtree_hash` matches the current subtree
-hash → **reuse immediately**. This is the amortization payoff: the LLM is paid once; the healed
-locator is reused across all replay runs until structural drift is detected.
+1. Выполнить свежий вызов `pw-executor` → `accessibility_snapshot()`.
+2. Пересчитать `completeness_ratio` = именованные интерактивные элементы / все интерактивные элементы.
+3. Если `completeness_ratio < 0.30` (canvas, shadow DOM, кастомные элементы или cross-origin iframe),
+   **также** сделать снимок экрана через `pw-executor` → `screenshot()` для шлюзуемой визуальной
+   попытки на Шаге 6.
+4. Пересчитать **ограниченный поддеревом** `dom_hash` только для целевого контейнера сценария
+   (не для всей страницы — см. замечание о рисках в ../ARCHITECTURE.md §Risks).
 
-**Cache miss / hash mismatch:** evict the stale record (mark `deprecated`) and continue to
-Step 4. This auto-eviction prevents the silent propagation of an outdated locator.
-
-No LLM tokens are consumed in this step.
+Свежий снимок предотвращает восстановление относительно состояния DOM, которое к моменту
+heal-цикла уже могло снова измениться.
 
 ---
 
-## Step 4 — Strategy Rotation L1–L6 (zero LLM, deterministic)
+## Шаг 3 — Поиск в кеше (нулевой LLM)
 
-For the failed intent, build candidate locators and **probe** each against the live DOM via
-`pw-executor` MCP locator resolution. Take the **first candidate that resolves to exactly one
-element**.
+Запросить `store-gateway` → `ReadLocators(page_url)` для `(semantic_id)`,
+где `status IN {human_verified, active}`.
 
-| # | Strategy | Selector form | Base prior |
+**Попадание в кеш:** если запись существует **и** её сохранённый `dom_subtree_hash` совпадает
+с текущим хешем поддерева → **немедленно использовать повторно**. Это эффект амортизации:
+LLM оплачивается один раз; восстановленный локатор переиспользуется во всех запусках replay
+до обнаружения структурного дрейфа.
+
+**Промах кеша / несоответствие хеша:** выгрузить устаревшую запись (пометить `deprecated`)
+и перейти к Шагу 4. Это автоматическое вытеснение предотвращает молчаливое распространение
+устаревшего локатора.
+
+На этом шаге токены LLM не расходуются.
+
+---
+
+## Шаг 4 — Ротация стратегий L1–L6 (нулевой LLM, детерминированная)
+
+Для проблемного намерения построить кандидатные локаторы и **зондировать** каждый в живом DOM
+через разрешение MCP-локаторов `pw-executor`. Выбрать **первого кандидата, разрешающего в ровно один элемент**.
+
+| # | Стратегия | Форма селектора | Базовый prior |
 |---|---|---|---|
-| L1 | `data-testid` / `data-cy` / `data-pw` attribute | `[data-testid="…"]` | **0.95** |
-| L2 | ARIA role + accessible name | `role=button[name="Submit"]` | **0.90** |
-| L3 | `aria-label` exact match | `[aria-label="…"]` | **0.88** |
-| L4 | Visible text content + role | `text=Sign in >> role=link` | **0.80** |
-| L5 | Scoped CSS — semantic container + element type | `.form-login input[type=email]` | **0.65** |
-| L6 | XPath positional | `//table/tbody/tr[2]/td[1]` | **0.45** |
+| L1 | атрибут `data-testid` / `data-cy` / `data-pw` | `[data-testid="…"]` | **0.95** |
+| L2 | ARIA role + доступное имя | `role=button[name="Submit"]` | **0.90** |
+| L3 | точное совпадение `aria-label` | `[aria-label="…"]` | **0.88** |
+| L4 | Видимый текстовый контент + role | `text=Sign in >> role=link` | **0.80** |
+| L5 | Ограниченный CSS — семантический контейнер + тип элемента | `.form-login input[type=email]` | **0.65** |
+| L6 | Позиционный XPath | `//table/tbody/tr[2]/td[1]` | **0.45** |
 
-A successful match at **L5 or L6** emits a `strategy_degradation` metric — a signal that the AUT
-has unstable DOM structure and warrants attention from the development team.
+Успешное совпадение на **L5 или L6** генерирует метрику `strategy_degradation` — сигнал того,
+что AUT имеет нестабильную структуру DOM и требует внимания команды разработки.
 
-If any level L1–L6 yields a unique match, the confidence value from the table above is carried
-forward to Step 7 (Verify-Before-Accept). No LLM tokens are consumed.
+Если на каком-либо уровне L1–L6 получено уникальное совпадение, значение уверенности из таблицы
+выше передаётся на Шаг 7 (Verify-Before-Accept). Токены LLM не расходуются.
 
 ---
 
-## Step 5 — LLM Re-Grounding (Sonnet 4.6, structured output)
+## Шаг 5 — Повторное связывание через LLM (Sonnet 4.6, структурированный вывод)
 
-Invoked **only if Steps 3–4 both fail** to produce a unique live match.
+Вызывается **только если Шаги 3–4 оба не дали** уникального совпадения в живом DOM.
 
-**Budget pre-check:** verify remaining Sonnet token budget before calling the model. If budget
-is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
+**Предварительная проверка бюджета:** проверить остаток бюджета токенов Sonnet перед вызовом модели.
+Если бюджет исчерпан, сразу перейти к порогу уверенности на Шаге 8 с confidence = 0.
 
-**Prompt inputs:**
-- Original intent and `element_description`
-- `attempted_locator` (the one that failed)
-- The failed-strategy table from Step 4 (which levels were tried and why they missed)
-- Current a11y tree, truncated to budget, target subtree first
+**Входные данные промпта:**
+- Оригинальное намерение и `element_description`
+- `attempted_locator` (тот, который не сработал)
+- Таблица неудавшихся стратегий из Шага 4 (какие уровни проверялись и почему не подошли)
+- Текущее a11y-дерево, усечённое до бюджета, сначала целевое поддерево
 
-**Model output** (structured JSON):
+**Вывод модели** (структурированный JSON):
 ```json
 {
   "strategy": "aria_role_name | css | xpath | …",
@@ -111,135 +115,136 @@ is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
 }
 ```
 
-**Discount applied:** `final_confidence = model_confidence × 0.90`
-(LLM-overconfidence discount — models systematically over-report selector certainty).
+**Применяемая скидка:** `final_confidence = model_confidence × 0.90`
+(скидка на самоуверенность LLM — модели систематически завышают уверенность в правильности селектора).
 
-The discounted confidence is passed to Step 7.
-
----
-
-## Step 6 — Visual Set-of-Marks (Sonnet 4.6 vision) — GATED
-
-This step is only reached and only executed when **all three gates pass**:
-
-1. `completeness_ratio < 0.30` (a11y tree is sparse — canvas, shadow DOM, custom components)
-2. Step 5 (LLM re-grounding) failed to produce a valid candidate
-3. The M5 PoC has been validated with **> 70% accuracy** on at least 20 real broken-selector
-   scenarios (gate is off by default until M5 delivers the measurement)
-
-**Mechanism:**
-- Numbered overlay marks are rendered on the screenshot captured in Step 2.
-- A `mark → DOM-element` map is built (mark numbers to semantic nodes in the a11y tree).
-- Sonnet 4.6 vision receives the annotated screenshot and returns a `mark_number`.
-- We extract a **real semantic locator** from the mapped DOM node — **not** a coordinate click.
-  Coordinate clicks are fragile to viewport size, device-pixel-ratio, and scroll position.
-
-**Discount applied:** `final_confidence = model_confidence × 0.85`
-(visual modality discount — pixel rendering adds variance beyond text reasoning).
+Скорректированная уверенность передаётся на Шаг 7.
 
 ---
 
-## Step 7 — Verify-Before-Accept (live DOM re-probe)
+## Шаг 6 — Визуальный Set-of-Marks (Sonnet 4.6 vision) — ШЛЮЗУЕМЫЙ
 
-**Every candidate produced by Steps 5 or 6** is re-probed against the **live DOM** via
-`pw-executor` locator resolution before any confidence value is trusted.
+Этот шаг достигается и выполняется только при **прохождении всех трёх условий**:
 
-- If the candidate **does not resolve to exactly one element**: `confidence = 0` (zeroed, not
-  discounted — it is simply wrong).
-- If the candidate resolves to exactly one element: the discounted confidence from Step 5 or 6
-  is confirmed.
+1. `completeness_ratio < 0.30` (a11y-дерево разреженное — canvas, shadow DOM, кастомные компоненты)
+2. Шаг 5 (повторное связывание через LLM) не дал валидного кандидата
+3. M5 PoC подтверждён с **точностью > 70%** не менее чем на 20 реальных сценариях с нерабочими
+   селекторами (шлюз по умолчанию отключён до получения измерения в M5)
+
+**Механизм:**
+- На снимке экрана, сделанном в Шаге 2, отрисовываются нумерованные метки-оверлеи.
+- Строится карта `mark → DOM-element` (номера меток к семантическим узлам a11y-дерева).
+- Sonnet 4.6 vision получает аннотированный снимок и возвращает `mark_number`.
+- Из сопоставленного узла DOM извлекается **реальный семантический локатор** — **не** координатный клик.
+  Координатные клики ненадёжны при изменениях размера viewport, device-pixel-ratio и позиции прокрутки.
+
+**Применяемая скидка:** `final_confidence = model_confidence × 0.85`
+(скидка на визуальную модальность — пиксельный рендеринг добавляет дисперсию сверх текстового рассуждения).
+
+---
+
+## Шаг 7 — Проверка перед принятием (повторное зондирование живого DOM)
+
+**Каждый кандидат, созданный на Шагах 5 или 6**, повторно проверяется в **живом DOM**
+через разрешение локаторов `pw-executor`, прежде чем доверять каким-либо значениям уверенности.
+
+- Если кандидат **не разрешается в ровно один элемент**: `confidence = 0` (обнуляется, а не
+  применяется скидка — он просто ошибочен).
+- Если кандидат разрешается в ровно один элемент: подтверждается скорректированная уверенность
+  из Шага 5 или 6.
 
 ```
 final_confidence = max(confidence values that passed the live-probe check)
 ```
 
-Candidates from Step 4 (L1–L6) are already probed live during the rotation — they do not require
-a second probe here. Only LLM and visual candidates (Steps 5–6) go through this gate.
+Кандидаты из Шага 4 (L1–L6) уже зондируются в живом DOM во время ротации — они не требуют
+повторной проверки здесь. Только кандидаты LLM и визуальные (Шаги 5–6) проходят через этот шлюз.
 
-This step closes the gap between "model says this locator works" and "locator actually works right
-now."
-
----
-
-## Step 8 — Confidence Gate (calibrated, not magic)
-
-The `final_confidence` computed in Step 7 is evaluated against three tiers. The thresholds are
-not hard-coded constants — they are recalibrated by `agentctl calibrate` against past
-`human_verified` outcomes.
-
-| Confidence band | Decision | Behaviour |
-|---|---|---|
-| **≥ 0.85** | **AUTO-HEAL** | Run one post-heal verification: re-execute the action with the healed locator. On success, persist `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`, update `RunState` and the in-memory plan, continue. On failure, demote to HUMAN GATE. |
-| **0.60 – 0.84** | **FLAGGED** | Apply optimistically; set `healing_flagged=true`; persist with `review_required=true`. Surfaces in the run report's healing-audit section. Does **not** block execution. |
-| **< 0.60** | **HUMAN GATE** | Do not persist the locator. Emit `NEEDS_HUMAN_REVIEW`. CI mode: skip the step and record `SKIPPED_HEALING_FAILURE`, then continue. Interactive mode: async `checkpoint` pause until `agentctl gate approve/skip/abort` resolves (auto-skip after configurable timeout, default 30 min). |
-
-**Calibration note — cold-start (0.90 default):** The 0.85 auto-accept threshold is only valid
-once enough labeled outcomes exist. Until a sufficient number of `human_verified` records have
-accumulated (calibration bootstrap), the default auto-accept threshold is raised to **0.90** to
-reduce the risk of seeding the locator store with confidently-wrong healed selectors. The
-threshold lowers toward 0.85 as `agentctl calibrate` produces a reliable precision/recall signal.
+Этот шаг устраняет разрыв между «модель говорит, что локатор работает» и «локатор действительно
+работает прямо сейчас».
 
 ---
 
-## Step 9 — Audit (append-only)
+## Шаг 8 — Порог уверенности (откалиброванный, не магический)
 
-Every healing attempt — regardless of outcome — writes one row to `healing_audit`. The table is
-**append-only**: no `UPDATE` or `DELETE` is ever issued against it. This makes the audit a
-forensic-grade record and the ground truth for calibration.
+Значение `final_confidence`, вычисленное на Шаге 7, оценивается относительно трёх уровней.
+Пороги — не жёстко закодированные константы: они перекалибруются командой `agentctl calibrate`
+по прошлым результатам `human_verified`.
 
-**Row schema:**
-
-| Column | Type | Description |
+| Диапазон уверенности | Решение | Поведение |
 |---|---|---|
-| `run_id` | uuid | The run that triggered this heal attempt |
-| `step` | int | Step index within the plan |
-| `semantic_id` | str | The element's semantic identifier |
-| `original_selector` | str | The selector that failed |
+| **≥ 0.85** | **АВТО-ВОССТАНОВЛЕНИЕ** | Выполнить одну послевосстановительную проверку: повторно выполнить действие с восстановленным локатором. При успехе сохранить `HealedLocator(status=active)`, привязанный к `(page_url, semantic_id, dom_subtree_hash)`, обновить `RunState` и план в памяти, продолжить. При неудаче перевести в ШЛЮЗ ОПЕРАТОРА. |
+| **0.60 – 0.84** | **ПОМЕЧЕНО** | Применить оптимистически; установить `healing_flagged=true`; сохранить с `review_required=true`. Отображается в разделе аудита восстановления отчёта запуска. **Не** блокирует выполнение. |
+| **< 0.60** | **ШЛЮЗ ОПЕРАТОРА** | Не сохранять локатор. Генерировать `NEEDS_HUMAN_REVIEW`. Режим CI: пропустить шаг и записать `SKIPPED_HEALING_FAILURE`, затем продолжить. Интерактивный режим: асинхронная пауза на `checkpoint` до разрешения через `agentctl gate approve/skip/abort` (автоматический пропуск по истечении настраиваемого таймаута, по умолчанию 30 мин). |
+
+**Замечание по калибровке — холодный старт (по умолчанию 0.90):** Порог автоматического принятия
+0.85 действителен только при наличии достаточного числа размеченных результатов. До накопления
+достаточного количества записей `human_verified` (bootstrap калибровки) порог автоматического
+принятия по умолчанию повышается до **0.90**, чтобы снизить риск заполнения хранилища локаторов
+уверенно-ошибочными восстановленными селекторами. Порог снижается к 0.85 по мере того, как
+`agentctl calibrate` формирует надёжный сигнал precision/recall.
+
+---
+
+## Шаг 9 — Аудит (только добавление)
+
+Каждая попытка восстановления — независимо от результата — записывает одну строку в `healing_audit`.
+Таблица содержит **только добавление**: ни одного `UPDATE` или `DELETE` к ней никогда не применяется.
+Это делает аудит криминалистически достоверной записью и источником истины для калибровки.
+
+**Схема строки:**
+
+| Столбец | Тип | Описание |
+|---|---|---|
+| `run_id` | uuid | UUID запуска, инициировавшего данную попытку восстановления |
+| `step` | int | Индекс шага в плане |
+| `semantic_id` | str | Семантический идентификатор элемента |
+| `original_selector` | str | Селектор, который не сработал |
 | `strategy_used` | enum | `L1`–`L6` \| `llm_a11y` \| `llm_visual` \| `cache` |
-| `healed_selector` | str | The candidate selector (may be `null` on total failure) |
-| `confidence` | float | Final confidence after discounts and live-probe |
+| `healed_selector` | str | Кандидатный селектор (может быть `null` при полной неудаче) |
+| `confidence` | float | Итоговая уверенность после скидок и проверки в живом DOM |
 | `outcome` | enum | `auto_healed` \| `flagged` \| `human_gate` \| `failed` |
-| `llm_tokens` | int | Tokens consumed by Steps 5–6 (0 for cache/L1–L6 paths) |
-| `duration_ms` | int | Wall-clock time for the full heal cycle |
-| `dom_hash_before` | str | Subtree hash at the time of failure |
-| `dom_hash_after` | str | Subtree hash after fresh perception (Step 2) |
-| `timestamp` | datetime | UTC timestamp of the attempt |
+| `llm_tokens` | int | Токены, потреблённые Шагами 5–6 (0 для путей cache/L1–L6) |
+| `duration_ms` | int | Реальное время выполнения полного heal-цикла |
+| `dom_hash_before` | str | Хеш поддерева в момент сбоя |
+| `dom_hash_after` | str | Хеш поддерева после свежего восприятия (Шаг 2) |
+| `timestamp` | datetime | UTC-временная метка попытки |
 
-The `healing_audit` table is emitted as a `healing-audit.jsonl` CI artifact and as OpenTelemetry
-span attributes (`selector` and `confidence` fields only — **never** prompt content, to avoid
-leaking any AUT credentials that may appear in the a11y tree).
+Таблица `healing_audit` выгружается как CI-артефакт `healing-audit.jsonl` и как атрибуты
+OpenTelemetry span (только поля `selector` и `confidence` — **никогда** не содержимое промптов,
+во избежание утечки учётных данных AUT, которые могут присутствовать в a11y-дереве).
 
 ---
 
-## Step 10 — Bounded Retry and Quarantine
+## Шаг 10 — Ограниченные повторы и карантин
 
-### Attempt cap
+### Лимит попыток
 
-`heal_attempts` is hard-capped per step:
+`heal_attempts` жёстко ограничен на шаг:
 
-- **3 attempts** in explore mode (allows broader strategy search during plan authoring)
-- **2 attempts** in replay / CI hot path (bounds latency variance; replay correctness matters more
-  than thoroughness)
+- **3 попытки** в режиме explore (позволяет более широкий поиск стратегий при авторинге плана)
+- **2 попытки** в критическом пути replay / CI (ограничивает дисперсию задержки; корректность
+  replay важнее полноты)
 
-On reaching the cap without an accepted locator, the step is escalated rather than retried further.
+При достижении лимита без принятого локатора шаг эскалируется, а не повторяется дальше.
 
-### AUT-SHA-gated flake quarantine
+### Карантин нестабильных тестов с учётом AUT SHA
 
-A step is placed in quarantine only when it satisfies the gating condition:
+Шаг помещается в карантин только при выполнении условия шлюза:
 
-> The step fails **N-of-5** recent runs **without** an AUT `git-SHA` change between those runs.
+> Шаг завершается неудачей в **N из 5** последних запусков **без** изменения `git-SHA` AUT между этими запусками.
 
-This separates two distinct failure modes:
-- **Real regression:** locator failure correlates with an AUT code change → surfaces as exit 1/2,
-  not quarantined, must be addressed.
-- **Environmental flake:** repeated failure with no AUT change → quarantined, non-blocking.
+Это разделяет два различных режима сбоев:
+- **Реальная регрессия:** сбой локатора коррелирует с изменением кода AUT → проявляется как exit 1/2,
+  не попадает в карантин, должна быть устранена.
+- **Нестабильность окружения:** повторяющийся сбой без изменения AUT → карантин, не блокирует.
 
-**Quarantine behaviour:**
-- Quarantined steps still execute in every run.
-- They do **not** contribute to exit code 1 or 2.
-- They are visible in the run report under a dedicated quarantine section.
-- **Cleared by:** `agentctl locators clear-quarantine <step>` or 3 consecutive passes on the same
-  AUT SHA.
+**Поведение при карантине:**
+- Помещённые в карантин шаги всё равно выполняются в каждом запуске.
+- Они **не** влияют на коды завершения 1 или 2.
+- Они видны в отчёте запуска в отдельном разделе карантина.
+- **Снятие карантина:** `agentctl locators clear-quarantine <step>` или 3 последовательных
+  прохождения на одном и том же AUT SHA.
 
-This rule is sourced from P3 (TrustFirst) as the cleanest mechanism to separate genuine regression
-signal from environmental noise without suppressing real failures.
+Это правило взято из P3 (TrustFirst) как наиболее чистый механизм разделения реального сигнала
+регрессии от шума окружения без подавления реальных сбоев.

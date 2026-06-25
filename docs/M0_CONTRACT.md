@@ -1,7 +1,9 @@
 # M0 Contract — "Hello Browser" (frozen 2026-06-23)
 
-Goal of M0: **prove the wire across all three languages and produce a `trace.zip`** — NOT intelligence.
-Scope excludes: gRPC, store-gateway, LLM, healing, the full 9-node LangGraph (those are M1+).
+> 🌐 **Русский** (основная версия) · [English](M0_CONTRACT.en.md)
+
+Цель M0: **проверить передачу данных через все три языка и сформировать `trace.zip`** — НЕ сбор разведывательных данных.
+Scope исключает: gRPC, store-gateway, LLM, healing, полный 9-узловой LangGraph (они относятся к M1+).
 
 ```
 agentctl run --target <URL> [--artifact-dir DIR] [--mode explore]   (Go)
@@ -11,43 +13,43 @@ agentctl run --target <URL> [--artifact-dir DIR] [--mode explore]   (Go)
 ```
 
 ## Boundary A — agentctl → brain (subprocess + env)
-agentctl generates `RUN_ID`, creates the artifact dir, then spawns `python3 -m brain`
-(cwd = repo root, `PYTHONPATH` = repo root) with env:
+agentctl генерирует `RUN_ID`, создаёт директорию артефактов, затем запускает `python3 -m brain`
+(cwd = repo root, `PYTHONPATH` = repo root) со следующими переменными окружения:
 
-| Env var | Meaning |
+| Env var | Значение |
 |---------|---------|
-| `TARGET_URL` | URL to perceive (required) |
-| `RUN_ID` | random hex id (agentctl-generated) |
-| `RUN_MODE` | `explore` (M0 only) |
-| `ARTIFACT_DIR` | absolute output dir (agentctl creates it; default `./runs/<RUN_ID>`) |
-| `PW_EXECUTOR_CMD` | command brain uses to launch pw-executor (e.g. `node <repo>/pw-executor/dist/server.js`) — Go owns this config |
+| `TARGET_URL` | URL для восприятия (обязательный) |
+| `RUN_ID` | случайный hex-идентификатор (генерируется agentctl) |
+| `RUN_MODE` | `explore` (только M0) |
+| `ARTIFACT_DIR` | абсолютный путь к директории вывода (agentctl создаёт её; по умолчанию `./runs/<RUN_ID>`) |
+| `PW_EXECUTOR_CMD` | команда, которую brain использует для запуска pw-executor (например, `node <repo>/pw-executor/dist/server.js`) — Go владеет этой конфигурацией |
 
-brain streams stdout/stderr to agentctl (inherited). Exit 0 = success (trace.zip present & non-empty), else non-zero. agentctl propagates the exit code.
+brain транслирует stdout/stderr в agentctl (унаследованные потоки). Exit 0 = успех (trace.zip присутствует и непустой), иначе ненулевой. agentctl передаёт код завершения.
 
 ## Boundary B — brain → pw-executor (JSON-RPC 2.0 over stdio)
-**Transport:** one JSON object per line. **CRITICAL:** pw-executor stdout carries ONLY JSON-RPC; all logs go to stderr.
+**Транспорт:** один JSON-объект на строку. **КРИТИЧНО:** stdout pw-executor несёт ТОЛЬКО JSON-RPC; все логи идут в stderr.
 - Request: `{"jsonrpc":"2.0","id":<n>,"method":"<m>","params":{...}}\n`
-- Response: `{"jsonrpc":"2.0","id":<n>,"result":{...}}\n` or `{...,"error":{"code":<c>,"message":"<m>"}}\n`
+- Response: `{"jsonrpc":"2.0","id":<n>,"result":{...}}\n` или `{...,"error":{"code":<c>,"message":"<m>"}}\n`
 
 | Method | Params | Result |
 |--------|--------|--------|
-| `initialize` | — | `{name, version, capabilities[]}` — also lazily launches Chromium + starts tracing |
+| `initialize` | — | `{name, version, capabilities[]}` — также лениво запускает Chromium и начинает трассировку |
 | `browser.navigate` | `{url}` | `{url, title, status}` |
 | `browser.snapshot` | — | `{ariaSnapshot: <string>, nodeCount}` (Playwright `ariaSnapshot()`) |
-| `browser.traceStop` | `{path}` | `{path}` — stops tracing, writes `path` (the trace.zip) |
-| `shutdown` | — | `{ok:true}` — closes browser, server exits 0 |
+| `browser.traceStop` | `{path}` | `{path}` — останавливает трассировку, записывает `path` (trace.zip) |
+| `shutdown` | — | `{ok:true}` — закрывает браузер, сервер завершается с exit 0 |
 
-pw-executor session: lazily on first call → `chromium.launch({headless:true})` → `newContext()` → `context.tracing.start({screenshots:true, snapshots:true})` → `newPage()`.
+Сессия pw-executor: лениво при первом вызове → `chromium.launch({headless:true})` → `newContext()` → `context.tracing.start({screenshots:true, snapshots:true})` → `newPage()`.
 
-## brain "perceive" flow (M0)
-`initialize` → `browser.navigate(TARGET_URL)` → `browser.snapshot()` (print aria tree to stdout + write `ARTIFACT_DIR/snapshot.aria.yaml`) → `browser.traceStop(ARTIFACT_DIR/trace.zip)` → `shutdown`. Verify `trace.zip` exists & non-empty → exit 0/1.
+## brain «perceive» flow (M0)
+`initialize` → `browser.navigate(TARGET_URL)` → `browser.snapshot()` (вывести aria-дерево в stdout + записать `ARTIFACT_DIR/snapshot.aria.yaml`) → `browser.traceStop(ARTIFACT_DIR/trace.zip)` → `shutdown`. Проверить, что `trace.zip` существует и непустой → exit 0/1.
 
 ## Acceptance gate (Given/When/Then)
-- **GIVEN** a reachable target URL and a built pw-executor + brain + agentctl,
-- **WHEN** `agentctl run --target https://example.com` is executed,
-- **THEN** the accessibility tree is printed to stdout AND `runs/<RUN_ID>/trace.zip` exists with size > 0 AND exit code = 0.
+- **GIVEN** доступный целевой URL и собранные pw-executor + brain + agentctl,
+- **WHEN** выполняется `agentctl run --target https://example.com`,
+- **THEN** дерево доступности выведено в stdout И `runs/<RUN_ID>/trace.zip` существует с размером > 0 И exit code = 0.
 
 ## M1 deltas (NOT in M0)
-- Replace hand-rolled JSON-RPC with the **MCP SDK** (`@modelcontextprotocol/sdk` server + Python MCP client) — GAP-VERIFY-002.
-- Wrap `perceive` as one node in a real **LangGraph StateGraph** (then add the other 8 nodes).
-- Introduce `RunState`, plan node (Opus 4.8), coverage convergence, `plan_hash`.
+- Заменить написанный вручную JSON-RPC на **MCP SDK** (`@modelcontextprotocol/sdk` server + Python MCP client) — GAP-VERIFY-002.
+- Обернуть `perceive` как один узел в реальный **LangGraph StateGraph** (затем добавить остальные 8 узлов).
+- Ввести `RunState`, узел plan (Opus 4.8), сходимость покрытия, `plan_hash`.

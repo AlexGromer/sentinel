@@ -1,312 +1,310 @@
-# Sentinel — Memory Architecture and Persistence
+# Sentinel — Архитектура памяти и персистентность
 
-Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+> 🌐 **Русский** (основная версия) · [English](MEMORY_PERSISTENCE.en.md)
 
-> **Type:** Explanation
-> **Audience:** backend engineers, operators, contributors
-> **Last updated:** 2026-06-23
-> **Related:** [DETERMINISM.md](./DETERMINISM.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
+Основано на синтезе дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
 
-## Overview
+> **Тип:** Explanation
+> **Аудитория:** backend engineers, operators, contributors
+> **Последнее обновление:** 2026-06-23
+> **Связанные документы:** [DETERMINISM.md](./DETERMINISM.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
-Sentinel operates two distinct memory tiers with deliberately separated ownership:
-**short-term episodic memory** persisted by the Python LangGraph brain into its own
-checkpoint database, and **long-term cross-session memory** owned exclusively by
-the Go `store-gateway` component. Python and TypeScript never hold a direct database
-handle. All long-term writes flow through the `PersistenceService` gRPC interface.
+## Обзор
 
-This separation is the architectural fix to the contradiction present in earlier
-proposals (P1/P2), which claimed single DB ownership while simultaneously allowing
-the LangGraph checkpointer to write the same file.
+Sentinel работает с двумя отдельными уровнями памяти с намеренно разграниченным владением:
+**краткосрочная эпизодическая память**, сохраняемая Python LangGraph brain в собственную базу данных
+checkpoint, и **долгосрочная межсессионная память**, принадлежащая исключительно компоненту Go
+`store-gateway`. Python и TypeScript никогда не держат прямой хендл к базе данных. Все
+долгосрочные записи проходят через gRPC-интерфейс `PersistenceService`.
+
+Это разделение является архитектурным исправлением противоречия, присутствовавшего в ранних
+предложениях (P1/P2), которые декларировали единое владение базой данных, одновременно позволяя
+LangGraph checkpointer писать в тот же файл.
 
 ---
 
-## Short-Term Memory — Episodic (within a run)
+## Краткосрочная память — эпизодическая (в рамках запуска)
 
-### Mechanism
+### Механизм
 
-The LangGraph `RunState` object **is** the working memory for a run. It is a typed
-`TypedDict` that accumulates page observations, planned actions, executed outcomes,
-heal attempts, budget counters, and human-gate state throughout the run lifecycle.
+Объект LangGraph `RunState` **и есть** рабочая память для запуска. Это типизированный
+`TypedDict`, который накапливает наблюдения за страницей, запланированные действия, выполненные
+результаты, попытки исцеления, счётчики бюджета и состояние human-gate на протяжении всего
+жизненного цикла запуска.
 
-`RunState` is checkpointed at every `checkpoint` node transition by a LangGraph
-`SqliteSaver`, which writes to a **separate DB file** from the store-gateway's
-main database.
+`RunState` сохраняется в checkpoint при каждом переходе узла `checkpoint` через LangGraph
+`SqliteSaver`, который пишет в **отдельный файл базы данных** от основной базы данных
+store-gateway.
 
-### Database file locations
+### Расположение файлов базы данных
 
-| Context | Checkpoint DB path | Main store-gateway DB path |
+| Контекст | Путь checkpoint DB | Путь основной DB store-gateway |
 |---------|-------------------|---------------------------|
 | CI (per-job) | `/tmp/agent-{run_id}-ckpt.db` | `/tmp/agent-{run_id}.db` |
-| Long-running service | Distinct file configured in `YAML` | Shared service DB |
-| K3s (M5+) | `AsyncPostgresSaver` schema | Postgres (same instance, separate schema) |
+| Long-running service | Отдельный файл, настроенный в `YAML` | Общая служебная БД |
+| K3s (M5+) | Схема `AsyncPostgresSaver` | Postgres (тот же экземпляр, отдельная схема) |
 
-These are **never the same file**. The `SqliteSaver` and the Go store-gateway are
-independent single-writers of their respective databases. This is what makes the
-"Go store-gateway is sole writer of the main DB" claim structurally true.
+Это **никогда не один и тот же файл**. `SqliteSaver` и Go store-gateway являются
+независимыми единственными писателями своих соответствующих баз данных. Именно это делает
+утверждение «Go store-gateway — единственный писатель основной базы данных» структурно истинным.
 
-### Episodic buffer and context bounding
+### Эпизодический буфер и ограничение контекста
 
-`RunState` contains an `episodic_buffer` — a bounded `deque` with a maximum of
-50 events. When the buffer is full, the oldest events are summarised by a Sonnet
-call into a ~200-token episode summary before eviction. This bounds the context
-window growth across long explore runs without losing the narrative continuity the
-plan node needs.
+`RunState` содержит `episodic_buffer` — ограниченный `deque` максимум на
+50 событий. Когда буфер заполнен, наиболее старые события суммируются вызовом Sonnet
+в ~200-токенный эпизодический итог перед вытеснением. Это ограничивает рост окна контекста
+при длительных explore-запусках без потери нарративной непрерывности, необходимой узлу plan.
 
-### Crash-resume
+### Восстановление после сбоя
 
-If the Python brain crashes mid-run:
-1. The orchestrator detects gRPC stream termination (within the 5-second health
-   ping interval).
-2. The run is marked `FAILED` and partial state is recorded via store-gateway.
-3. The LangGraph checkpoint DB remains intact on disk.
-4. `agentctl run --resume <run_id>` restarts the brain, which reloads
-   `RunState` from the checkpoint and continues from the last node boundary —
-   no work lost.
+Если Python brain падает в процессе запуска:
+1. Оркестратор обнаруживает завершение gRPC-потока (в пределах интервала health-ping 5 секунд).
+2. Запуск помечается как `FAILED`, частичное состояние записывается через store-gateway.
+3. Файл checkpoint DB LangGraph остаётся нетронутым на диске.
+4. `agentctl run --resume <run_id>` перезапускает brain, который перезагружает
+   `RunState` из checkpoint и продолжает с последней границы узла —
+   без потери работы.
 
 ---
 
-## Long-Term Memory — Cross-Session (store-gateway)
+## Долгосрочная память — межсессионная (store-gateway)
 
-Long-term state is owned **exclusively** by the Go `store-gateway` component.
+Долгосрочное состояние принадлежит **исключительно** компоненту Go `store-gateway`.
 
-- **Single writer:** all writes are serialised through the `PersistenceService`
-  gRPC interface. No Python or TypeScript component ever opens a direct DB
-  connection.
-- **Concurrent readers:** `report-service` and `agentctl` may read concurrently
-  under SQLite WAL mode without blocking the writer.
-- **Schema migrations:** managed by `golang-migrate` inside `store-gateway`.
-  Migrations run at startup; the schema is Postgres-compatible.
+- **Единственный писатель:** все записи сериализуются через gRPC-интерфейс `PersistenceService`.
+  Ни один компонент Python или TypeScript никогда не открывает прямое соединение с БД.
+- **Параллельные читатели:** `report-service` и `agentctl` могут читать параллельно
+  в режиме SQLite WAL без блокировки писателя.
+- **Миграции схемы:** управляются `golang-migrate` внутри `store-gateway`.
+  Миграции запускаются при старте; схема совместима с Postgres.
 
-### Tables
+### Таблицы
 
 #### `healed_locators`
 
-The primary amortisation cache. A healed locator is stored once after its first
-successful heal and reused on subsequent runs until the target subtree's structural
-hash drifts — at which point it is auto-evicted.
+Основной кеш амортизации. Исцелённый локатор сохраняется один раз после первого успешного
+исцеления и повторно используется в последующих запусках до тех пор, пока структурный хеш
+целевого поддерева не изменится — после чего он автоматически вытесняется.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
 | `id` | UUID | Primary key |
-| `page_url` | TEXT | URL of the page where healing occurred |
-| `semantic_id` | TEXT | Stable semantic identifier of the element (e.g. `auth/sign-in-button`) |
-| `element_label` | TEXT | Human-readable element description |
-| `original_selector` | TEXT | The broken selector that triggered healing |
-| `healed_selector` | TEXT | The replacement locator produced by the healing engine |
-| `healing_method` | TEXT | Strategy used: `L1`..`L6`, `llm_a11y`, `llm_visual`, or `cache` |
-| `confidence` | REAL | Grounded confidence score after discounts and live-DOM probe |
-| `dom_subtree_hash` | TEXT | SHA-256 of the scenario's target subtree at heal time |
-| `times_validated` | INTEGER | Number of times this locator has been successfully reused |
-| `status` | TEXT | `active`, `flagged`, `human_verified`, `deprecated`, or `quarantined` |
-| `human_verified` | BOOLEAN | True if an operator has manually approved this locator |
-| `created_at` | TIMESTAMP | When the heal was first persisted |
-| `last_used_at` | TIMESTAMP | When the locator was last successfully reused |
+| `page_url` | TEXT | URL страницы, на которой произошло исцеление |
+| `semantic_id` | TEXT | Стабильный семантический идентификатор элемента (например, `auth/sign-in-button`) |
+| `element_label` | TEXT | Человекочитаемое описание элемента |
+| `original_selector` | TEXT | Сломанный селектор, вызвавший исцеление |
+| `healed_selector` | TEXT | Замещающий локатор, выданный движком исцеления |
+| `healing_method` | TEXT | Использованная стратегия: `L1`..`L6`, `llm_a11y`, `llm_visual` или `cache` |
+| `confidence` | REAL | Итоговая оценка уверенности после скидок и проверки в живом DOM |
+| `dom_subtree_hash` | TEXT | SHA-256 целевого поддерева сценария на момент исцеления |
+| `times_validated` | INTEGER | Количество успешных повторных использований этого локатора |
+| `status` | TEXT | `active`, `flagged`, `human_verified`, `deprecated` или `quarantined` |
+| `human_verified` | BOOLEAN | True, если оператор вручную одобрил этот локатор |
+| `created_at` | TIMESTAMP | Когда исцеление было впервые сохранено |
+| `last_used_at` | TIMESTAMP | Когда локатор в последний раз был успешно использован |
 
-**Primary lookup key:** `(page_url, semantic_id)`
+**Первичный ключ поиска:** `(page_url, semantic_id)`
 
-**Amortisation and auto-eviction:** on cache lookup, the stored `dom_subtree_hash`
-is compared to the current subtree hash. Match → reuse with zero LLM cost.
-Mismatch → mark record `deprecated`, proceed with fresh healing. This scopes
-invalidation to the element's structural neighbourhood, not the whole page —
-an unrelated ad, banner, or analytics widget cannot invalidate all cached locators.
+**Амортизация и автовытеснение:** при поиске в кеше хранимый `dom_subtree_hash`
+сравнивается с текущим хешем поддерева. Совпадение → повторное использование с нулевыми
+затратами LLM. Несовпадение → запись помечается `deprecated`, выполняется свежее исцеление.
+Это ограничивает инвалидацию структурным окружением элемента, а не всей страницей —
+посторонние рекламные объявления, баннеры или аналитические виджеты не могут инвалидировать
+все кешированные локаторы.
 
 ---
 
 #### `page_models`
 
-Structural state of each page as last observed. Used for drift detection and as
-context for the `ground` node during replay.
+Структурное состояние каждой страницы в том виде, в котором она наблюдалась последний раз.
+Используется для обнаружения дрейфа и как контекст для узла `ground` во время replay.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `url_hash` | TEXT | SHA-256 of the page URL (primary key) |
-| `a11y_tree_json` | TEXT | Full serialised accessibility tree (normalised) |
-| `landmarks_json` | TEXT | Page landmark regions (header, nav, main, footer, etc.) |
-| `form_count` | INTEGER | Number of `<form>` elements detected |
-| `interactive_count` | INTEGER | Number of interactive elements in the a11y tree |
-| `a11y_hash` | TEXT | SHA-256 of the normalised a11y tree (structural fingerprint) |
-| `screenshot_hash` | TEXT | Perceptual hash of the page screenshot |
-| `last_updated` | TIMESTAMP | When this record was last written |
+| `url_hash` | TEXT | SHA-256 URL страницы (primary key) |
+| `a11y_tree_json` | TEXT | Полное сериализованное дерево доступности (нормализованное) |
+| `landmarks_json` | TEXT | Ориентирные регионы страницы (header, nav, main, footer и т.д.) |
+| `form_count` | INTEGER | Количество обнаруженных элементов `<form>` |
+| `interactive_count` | INTEGER | Количество интерактивных элементов в дереве a11y |
+| `a11y_hash` | TEXT | SHA-256 нормализованного дерева a11y (структурный отпечаток) |
+| `screenshot_hash` | TEXT | Перцептивный хеш скриншота страницы |
+| `last_updated` | TIMESTAMP | Когда эта запись была последний раз записана |
 
-Used by `ground` in replay to detect `STRUCTURAL_CHANGE` (a11y_hash divergence)
-and `VISUAL_WARN` (screenshot_hash divergence) before executing any step.
+Используется `ground` в режиме replay для обнаружения `STRUCTURAL_CHANGE` (расхождение
+a11y_hash) и `VISUAL_WARN` (расхождение screenshot_hash) перед выполнением любого шага.
 
 ---
 
 #### `golden_snapshots`
 
-The immutable regression baselines captured at each milestone step during an
-explore run. Never auto-updated by a CI run.
+Неизменяемые регрессионные базовые линии, фиксируемые на каждом шаге вехи во время
+explore-запуска. Никогда не обновляются автоматически при CI-запуске.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `plan_id` | UUID | Plan this snapshot belongs to |
-| `step_id` | TEXT | Step identifier within the plan |
-| `a11y_hash` | TEXT | SHA-256 of the normalised a11y tree after the step completes |
-| `screenshot_hash` | TEXT | Perceptual hash of the post-action screenshot |
-| `content_path` | TEXT | Filesystem path to the stored snapshot content |
-| `created_at` | TIMESTAMP | When the baseline was recorded |
-| `superseded_by` | UUID | `plan_id` of the replacement snapshot if a baseline update was performed; `NULL` otherwise |
+| `plan_id` | UUID | План, к которому относится этот снимок |
+| `step_id` | TEXT | Идентификатор шага внутри плана |
+| `a11y_hash` | TEXT | SHA-256 нормализованного дерева a11y после завершения шага |
+| `screenshot_hash` | TEXT | Перцептивный хеш скриншота после действия |
+| `content_path` | TEXT | Путь файловой системы к сохранённому содержимому снимка |
+| `created_at` | TIMESTAMP | Когда базовая линия была записана |
+| `superseded_by` | UUID | `plan_id` замещающего снимка, если выполнялось обновление базовой линии; `NULL` в противном случае |
 
-**Mutation path:** `agentctl baseline update --plan-id <id> --aut-version <sha>` is
-the **only** command that writes new rows. It archives the previous record by
-setting `superseded_by` and writes a new `plan_hash`. CI runs have no code path
-that touches this table as a writer.
+**Путь мутации:** `agentctl baseline update --plan-id <id> --aut-version <sha>` —
+**единственная** команда, записывающая новые строки. Она архивирует предыдущую запись,
+устанавливая `superseded_by`, и записывает новый `plan_hash`. В CI-запусках отсутствует
+кодовый путь, делающий эту таблицу доступной для записи.
 
 ---
 
 #### `healing_audit`
 
-An append-only forensic ledger of every heal attempt. No `UPDATE` or `DELETE`
-statement is ever issued against this table. It is the source of truth for
-`agentctl calibrate` and the `healing-audit.jsonl` CI artifact.
+Append-only криминалистический журнал каждой попытки исцеления. Против этой таблицы никогда
+не выполняется ни одного оператора `UPDATE` или `DELETE`. Это источник истины для
+`agentctl calibrate` и CI-артефакта `healing-audit.jsonl`.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `run_id` | UUID | Run in which the attempt occurred |
-| `step` | INTEGER | Step index within the plan |
-| `semantic_id` | TEXT | Target element's semantic identifier |
-| `original_selector` | TEXT | The locator that failed |
-| `strategy_used` | TEXT | `L1`..`L6`, `llm_a11y`, `llm_visual`, or `cache` |
-| `healed_selector` | TEXT | Candidate locator produced by the strategy |
-| `confidence` | REAL | Final score after all discounts and the verify-before-accept probe |
-| `outcome` | TEXT | `persisted`, `flagged`, `human_gate`, `quarantined`, or `skipped` |
-| `llm_tokens` | INTEGER | Tokens consumed if an LLM strategy was invoked; `0` otherwise |
-| `duration_ms` | INTEGER | Total wall time of the heal cycle |
-| `dom_hash_before` | TEXT | Subtree hash before the heal attempt |
-| `dom_hash_after` | TEXT | Subtree hash after the heal attempt (may be identical) |
-| `timestamp` | TIMESTAMP | Row append time |
+| `run_id` | UUID | Запуск, в котором произошла попытка |
+| `step` | INTEGER | Индекс шага внутри плана |
+| `semantic_id` | TEXT | Семантический идентификатор целевого элемента |
+| `original_selector` | TEXT | Локатор, который не сработал |
+| `strategy_used` | TEXT | `L1`..`L6`, `llm_a11y`, `llm_visual` или `cache` |
+| `healed_selector` | TEXT | Кандидат-локатор, выданный стратегией |
+| `confidence` | REAL | Итоговая оценка после всех скидок и проверки verify-before-accept |
+| `outcome` | TEXT | `persisted`, `flagged`, `human_gate`, `quarantined` или `skipped` |
+| `llm_tokens` | INTEGER | Потреблённые токены, если использовалась LLM-стратегия; `0` в противном случае |
+| `duration_ms` | INTEGER | Общее настенное время цикла исцеления |
+| `dom_hash_before` | TEXT | Хеш поддерева до попытки исцеления |
+| `dom_hash_after` | TEXT | Хеш поддерева после попытки исцеления (может совпадать) |
+| `timestamp` | TIMESTAMP | Время добавления строки |
 
-This table is the input to `agentctl calibrate`, which computes precision and
-recall of auto-healed locators against `human_verified` outcomes over a rolling
-window, and recalibrates the auto-accept confidence threshold away from the cold-
-start default of 0.90.
+Эта таблица является входными данными для `agentctl calibrate`, который вычисляет точность и
+полноту автоматически исцелённых локаторов относительно результатов `human_verified` за
+скользящее окно и перекалибрует порог автопринятия уверенности от начального значения по
+умолчанию 0.90.
 
 ---
 
 #### `step_failures`
 
-Per-step failure tracking for the AUT-SHA-gated flake quarantine logic.
+Трекинг сбоев на уровне шагов для логики карантина нестабильных тестов с учётом AUT-SHA.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `plan_id` | UUID | Plan the step belongs to |
-| `step_key` | TEXT | Composite key identifying the step (e.g. `plan_id:step_id`) |
-| `fail_count` | INTEGER | Consecutive failure count |
-| `last_5_results` | TEXT | JSON array of the last 5 outcomes (`pass`, `fail`, `healed`, `quarantined`) |
-| `last_seen_aut_sha` | TEXT | AUT git SHA recorded on the most recent failure |
-| `quarantine_status` | TEXT | `none`, `quarantined`, or `cleared` |
+| `plan_id` | UUID | План, к которому относится шаг |
+| `step_key` | TEXT | Составной ключ, идентифицирующий шаг (например, `plan_id:step_id`) |
+| `fail_count` | INTEGER | Счётчик последовательных сбоев |
+| `last_5_results` | TEXT | JSON-массив последних 5 результатов (`pass`, `fail`, `healed`, `quarantined`) |
+| `last_seen_aut_sha` | TEXT | AUT git SHA, записанный при последнем сбое |
+| `quarantine_status` | TEXT | `none`, `quarantined` или `cleared` |
 
-**Quarantine logic:** a step is only quarantined after failing in N-of-5 recent
-runs **without** an AUT SHA change between those failures. If the AUT SHA changes,
-the `fail_count` and `last_seen_aut_sha` are reset. Quarantined steps are cleared
-by `agentctl locators clear-quarantine` or by 3 consecutive passes.
+**Логика карантина:** шаг помещается в карантин только после сбоя в N-из-5 последних
+запусков **без** изменения AUT SHA между этими сбоями. Если AUT SHA меняется,
+`fail_count` и `last_seen_aut_sha` сбрасываются. Шаги в карантине снимаются через
+`agentctl locators clear-quarantine` или 3 последовательными прохождениями.
 
 ---
 
 #### `runs`
 
-One row per run. The primary cost and trend data source for Grafana and
+По одной строке на запуск. Основной источник данных о затратах и трендах для Grafana и
 `agentctl report`.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `run_id` | UUID | Unique run identifier |
-| `target_url` | TEXT | AUT URL |
-| `plan_hash` | TEXT | SHA-256 of plan steps at run start |
-| `run_mode` | TEXT | `explore`, `replay`, or `ci` |
+| `run_id` | UUID | Уникальный идентификатор запуска |
+| `target_url` | TEXT | URL AUT |
+| `plan_hash` | TEXT | SHA-256 шагов плана в начале запуска |
+| `run_mode` | TEXT | `explore`, `replay` или `ci` |
 | `status` | TEXT | `PENDING`, `RUNNING`, `HEALING`, `PAUSED`, `PARTIAL`, `DONE`, `FAILED`, `ABORTED` |
-| `aut_version` | TEXT | git SHA of the AUT at run start |
-| `token_cost_usd` | REAL | Total LLM spend across all nodes |
-| `plan_tokens` | INTEGER | Tokens consumed in the `plan` node (Opus 4.8) |
-| `heal_tokens` | INTEGER | Tokens consumed in the `heal` node (Sonnet 4.6) |
-| `duration_ms` | INTEGER | Total wall time of the run |
-| `steps_pass` | INTEGER | Count of steps that passed |
-| `steps_fail` | INTEGER | Count of steps that failed |
-| `steps_healed` | INTEGER | Count of steps successfully auto-healed |
-| `steps_quarantined` | INTEGER | Count of steps currently quarantined |
-| `coverage_achieved` | REAL | Final `len(exercised) / max(1, len(seen))` ratio |
-| `started` | TIMESTAMP | Run start time |
-| `completed` | TIMESTAMP | Run completion time (`NULL` if in progress) |
+| `aut_version` | TEXT | git SHA AUT в начале запуска |
+| `token_cost_usd` | REAL | Суммарные затраты LLM по всем узлам |
+| `plan_tokens` | INTEGER | Токены, потреблённые в узле `plan` (Opus 4.8) |
+| `heal_tokens` | INTEGER | Токены, потреблённые в узле `heal` (Sonnet 4.6) |
+| `duration_ms` | INTEGER | Общее настенное время запуска |
+| `steps_pass` | INTEGER | Количество успешно пройденных шагов |
+| `steps_fail` | INTEGER | Количество упавших шагов |
+| `steps_healed` | INTEGER | Количество успешно автоисцелённых шагов |
+| `steps_quarantined` | INTEGER | Количество шагов, находящихся в карантине |
+| `coverage_achieved` | REAL | Итоговое соотношение `len(exercised) / max(1, len(seen))` |
+| `started` | TIMESTAMP | Время начала запуска |
+| `completed` | TIMESTAMP | Время завершения запуска (`NULL` если в процессе) |
 
 ---
 
 #### `run_transcripts`
 
-File references to per-run LLM transcript files. Does not store transcript
-content inline to keep the DB size bounded.
+Ссылки на файлы транскриптов LLM для каждого запуска. Содержимое транскриптов не хранится
+inline для ограничения размера БД.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `run_id` | UUID | Foreign key to `runs` |
-| `transcript_path` | TEXT | Absolute filesystem path to the `llm-transcript.jsonl` file |
-| `byte_size` | INTEGER | File size at the time of registration |
-| `recorded_at` | TIMESTAMP | When the path was registered |
+| `run_id` | UUID | Foreign key к `runs` |
+| `transcript_path` | TEXT | Абсолютный путь файловой системы к файлу `llm-transcript.jsonl` |
+| `byte_size` | INTEGER | Размер файла на момент регистрации |
+| `recorded_at` | TIMESTAMP | Когда путь был зарегистрирован |
 
-The `.jsonl` file itself contains one JSON object per LLM call:
+Сам файл `.jsonl` содержит один JSON-объект на каждый вызов LLM:
 `{ts, run_id, step_id, node, model, prompt_tokens, completion_tokens, latency_ms,
-cost_usd, decision_summary, temperature}`. It is written with `fsync` at run end
-and never overwritten.
+cost_usd, decision_summary, temperature}`. Записывается с `fsync` в конце запуска
+и никогда не перезаписывается.
 
 ---
 
 #### `page_object_cache`
 
-Generated Playwright test code keyed by URL pattern. Populated by `report-service`
-when it generates `.spec.ts` exports from `RunState.executed_actions`.
+Сгенерированный код тестов Playwright с привязкой по URL-паттерну. Заполняется `report-service`
+при генерации экспортов `.spec.ts` из `RunState.executed_actions`.
 
-| Column | Type | Description |
+| Столбец | Тип | Описание |
 |--------|------|-------------|
-| `url_pattern` | TEXT | Normalised URL pattern (primary key; query strings stripped) |
-| `spec_path` | TEXT | Filesystem path to the generated `.spec.ts` file |
-| `page_object_path` | TEXT | Filesystem path to the generated page-object class file |
-| `plan_id` | UUID | Plan from which this code was generated |
-| `generated_at` | TIMESTAMP | Generation timestamp |
-| `invalidated_at` | TIMESTAMP | Set when the plan is superseded; `NULL` if current |
+| `url_pattern` | TEXT | Нормализованный URL-паттерн (primary key; строки запросов отброшены) |
+| `spec_path` | TEXT | Путь файловой системы к сгенерированному файлу `.spec.ts` |
+| `page_object_path` | TEXT | Путь файловой системы к сгенерированному файлу класса page-object |
+| `plan_id` | UUID | План, из которого был сгенерирован этот код |
+| `generated_at` | TIMESTAMP | Временная метка генерации |
+| `invalidated_at` | TIMESTAMP | Устанавливается, когда план superseded; `NULL` если актуален |
 
 ---
 
-## Storage Rationale
+## Обоснование хранилища
 
-### Why SQLite WAL for the main store
+### Почему SQLite WAL для основного хранилища
 
-- **Zero operational burden:** no daemon, no network port, no cluster — a single
-  file. Backup is `cp` or `sqlite3 .dump`. Appropriate for 1–10 concurrent
-  single-host runs.
-- **Single-writer model:** Go's exclusive write ownership via the `store-gateway`
-  serialises all mutations. WAL mode allows unlimited concurrent readers
-  (`report-service`, `agentctl`) without writer blocking.
-- **Schema portability:** the schema is written to be Postgres-compatible. The
-  migration when Postgres is introduced is a driver change in `store-gateway`
-  — no schema rewrites.
+- **Нулевая операционная нагрузка:** нет демона, сетевого порта, кластера — один файл.
+  Резервное копирование — это `cp` или `sqlite3 .dump`. Подходит для 1–10 параллельных
+  запусков на одном хосте.
+- **Модель единственного писателя:** эксклюзивное право записи Go через `store-gateway`
+  сериализует все мутации. WAL-режим позволяет неограниченному числу параллельных читателей
+  (`report-service`, `agentctl`) работать без блокировки писателя.
+- **Переносимость схемы:** схема написана с совместимостью с Postgres. При введении Postgres
+  миграция представляет собой смену драйвера в `store-gateway` — без переписывания схемы.
 
-### Why the checkpoint DB is separate
+### Почему checkpoint DB отделена
 
-Keeping the LangGraph `SqliteSaver` in its own file makes the ownership contract
-unambiguous: Go store-gateway is the sole writer of the main database, Python
-brain is the sole writer of the checkpoint database, TypeScript `pw-executor`
-writes nothing to either. Two independent single-writer guarantees, verified by
-inspection rather than convention.
+Хранение LangGraph `SqliteSaver` в отдельном файле делает контракт владения однозначным:
+Go store-gateway — единственный писатель основной базы данных, Python brain — единственный
+писатель базы данных checkpoint, TypeScript `pw-executor` не пишет ни в ту, ни в другую.
+Два независимых гарантии единственного писателя, проверяемые инспекцией, а не соглашением.
 
-### Postgres and AsyncPostgresSaver
+### Postgres и AsyncPostgresSaver
 
-Postgres is **not pre-built**. It is introduced at M5 and only when one of these
-explicit triggers is hit:
+Postgres **не заготовлен заранее**. Он вводится в M5 и только при достижении одного из
+явных триггеров:
 
-- More than 50 concurrent shared-DB writers, **or**
-- Workers distributed across multiple hosts (K3s multi-node).
+- Более 50 параллельных писателей в общую БД, **или**
+- Воркеры распределены по нескольким хостам (K3s multi-node).
 
-When triggered: `store-gateway` switches its `database/sql` driver from
-`modernc.org/sqlite` to `lib/pq`; LangGraph's `SqliteSaver` is replaced by
-`AsyncPostgresSaver` (one constructor change in the brain). The schema requires
-no changes.
+При срабатывании: `store-gateway` переключает свой `database/sql`-драйвер с
+`modernc.org/sqlite` на `lib/pq`; LangGraph `SqliteSaver` заменяется на
+`AsyncPostgresSaver` (одно изменение конструктора в brain). Схема изменений не требует.
 
-### Checkpoint GC
+### GC checkpoint'ов
 
-Checkpoints for completed runs accumulate over time. A maintenance goroutine in
-`store-gateway` prunes checkpoint records for runs in a terminal state
-(`DONE`, `FAILED`, `ABORTED`) that are older than N runs (default: keep the 10
-most recent completed runs per `target_url`). The checkpoint DB files themselves
-are deleted from disk after the corresponding run's retention window expires. This
-bounds checkpoint DB growth without manual intervention.
+Checkpoint'ы завершённых запусков накапливаются со временем. Горутина обслуживания в
+`store-gateway` удаляет записи checkpoint для запусков в терминальном состоянии
+(`DONE`, `FAILED`, `ABORTED`), которые старше N запусков (по умолчанию: хранить 10
+последних завершённых запусков для каждого `target_url`). Сами файлы checkpoint DB
+удаляются с диска по истечении окна хранения соответствующего запуска. Это ограничивает
+рост checkpoint DB без ручного вмешательства.

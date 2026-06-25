@@ -1,26 +1,29 @@
-# Sentinel — Determinism, CI Contract, and Plan Integrity
+# Sentinel — Детерминизм, контракт CI и целостность плана
 
-Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+> 🌐 **Русский** (основная версия) · [English](DETERMINISM.en.md)
 
-> **Type:** Explanation
-> **Audience:** CI engineers, QA leads, operators
+Составлено по результатам проектного синтеза 2026-06-23; итоговое описание — в ../ARCHITECTURE.md.
+
+> **Тип:** Explanation
+> **Аудитория:** инженеры CI, руководители QA, операторы
 > **Last updated:** 2026-06-23
 > **Related:** [MEMORY_PERSISTENCE.md](./MEMORY_PERSISTENCE.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
-## Overview
+## Обзор
 
-Sentinel separates the non-deterministic, human-supervised **explore** phase from the
-fully deterministic, LLM-free **replay** phase. This document defines every contract,
-rule, and policy that makes that separation trustworthy: plan freezing, hash-abort,
-golden baselines, the no-self-mutation rule, AUT version drift policy, seeded
-exploration, structured exit codes, and CI parallelism strategy.
+Sentinel разделяет недетерминированную, контролируемую человеком фазу **explore**
+и полностью детерминированную, не использующую LLM фазу **replay**. Данный документ
+определяет все контракты, правила и политики, делающие это разделение надёжным:
+заморозку плана, hash-abort, эталонные базовые линии, правило запрета самомутации,
+политику дрейфа версии AUT, засеянное исследование, структурированные коды завершения
+и стратегию параллелизма CI.
 
 ---
 
-## Core Contract: Explore-Once / Replay-Many
+## Основной контракт: Explore-Once / Replay-Many
 
-CI **never** runs explore. Explore is a one-time (or operator-triggered) event.
-Replay is the CI workhorse.
+CI **никогда** не запускает explore. Explore — это одноразовое (или инициируемое оператором) событие.
+Replay — рабочая лошадка CI.
 
 ```
 explore run (non-deterministic, human-supervised, one-time)
@@ -32,23 +35,21 @@ explore run (non-deterministic, human-supervised, one-time)
                 replay run × N  ← CI executes these, never explore
 ```
 
-The frozen `plan.json` is the only trustworthy reproducibility guarantee. LLM
-providers do not contractually guarantee bit-identical output even at
-`temperature=0` with a fixed seed (streaming tokenisation, model bumps). The
-explore-once contract accepts that non-determinism and quarantines it to a single
-human-reviewed event.
+Замороженный `plan.json` — единственная надёжная гарантия воспроизводимости. Провайдеры LLM
+не гарантируют контрактно побитово идентичный вывод даже при `temperature=0` с фиксированным seed
+(потоковая токенизация, обновления модели). Контракт explore-once принимает эту недетерминированность
+и ограничивает её единственным проверенным человеком событием.
 
 ---
 
-## Plan Freezing and the `plan.json` Schema
+## Заморозка плана и схема `plan.json`
 
-At the end of a successful explore run, the brain serialises the ordered
-`PlannedAction` sequence — including resolved locators, L1–L6 alternatives,
-expected outcomes, and golden snapshot hashes — into `plan.json`. This file is
-committed to the application repository and becomes the authoritative test
-definition.
+По завершении успешного запуска explore мозг сериализует упорядоченную последовательность
+`PlannedAction` — включая разрешённые локаторы, альтернативы L1–L6, ожидаемые результаты
+и хеши эталонных снимков — в `plan.json`. Этот файл фиксируется в репозитории приложения
+и становится авторитетным определением теста.
 
-### Schema
+### Схема
 
 ```json
 {
@@ -90,24 +91,23 @@ definition.
 }
 ```
 
-**Hash canonicalisation:** `plan_hash` is SHA-256 of the JSON serialisation of
-`steps[]` with all object keys sorted lexicographically and floats normalised to
-6 decimal places. This is computed in the brain at freeze time and re-computed at
-replay start for integrity verification.
+**Канонизация хеша:** `plan_hash` — это SHA-256 от JSON-сериализации `steps[]` со всеми ключами
+объектов, отсортированными лексикографически, и числами с плавающей точкой, нормализованными
+до 6 знаков после запятой. Вычисляется мозгом во время заморозки и пересчитывается при
+запуске replay для проверки целостности.
 
 ---
 
-## Plan-Hash Hard-Abort
+## Жёсткий аварийный останов по хешу плана
 
-At the start of every replay or CI run, before any browser action, the brain
-re-computes the hash of the loaded `steps[]` array and compares it to the stored
-`plan_hash`.
+В начале каждого запуска replay или CI, перед любым действием в браузере, мозг
+пересчитывает хеш загруженного массива `steps[]` и сравнивает его с сохранённым `plan_hash`.
 
-**Match:** proceed normally.
+**Совпадение:** продолжить в штатном режиме.
 
-**Mismatch:** immediate abort — exit code **3** — with both the stored hash and
-the computed hash written to stderr and the run log. A hand-edited, partially
-healed, or accidentally merged plan can never run silently in replay mode.
+**Несоответствие:** немедленный аварийный останов — код завершения **3** — с записью сохранённого
+и вычисленного хешей в stderr и журнал запуска. Вручную отредактированный, частично восстановленный
+или случайно слитый план никогда не может выполниться молча в режиме replay.
 
 ```
 agentctl run --ci --plan-id <id> --aut-version $(git rev-parse HEAD)
@@ -119,238 +119,235 @@ agentctl run --ci --plan-id <id> --aut-version $(git rev-parse HEAD)
 [sentinel] exit 3
 ```
 
-**Bypass (interactive only):** `--force-replay` exists as an escape hatch for
-debugging. Using it emits a loud warning to stderr and stdout, records the
-override in the run transcript, and is **disallowed in CI mode** (the orchestrator
-rejects it with exit 3).
+**Обход (только в интерактивном режиме):** `--force-replay` существует как аварийный выход
+для отладки. Его использование генерирует громкое предупреждение в stderr и stdout, записывает
+переопределение в транскрипт запуска и **запрещено в режиме CI** (оркестратор отклоняет его
+с кодом завершения 3).
 
 ---
 
-## LLM-Free Replay Happy Path
+## Успешный путь replay без LLM
 
-In replay and CI mode, the `plan` node is **skipped entirely**. The `ground` node
-routes directly to `act`, which executes the frozen locator without any LLM
-involvement.
+В режимах replay и CI узел `plan` **полностью пропускается**. Узел `ground` направляет
+управление прямо в `act`, который выполняет замороженный локатор без какого-либо участия LLM.
 
 ```
 perceive → ground → act → verify → checkpoint → (next step)
                                   └── heal (only on live locator failure)
 ```
 
-Consequences:
-- **Zero planning tokens** consumed per CI run.
-- **Deterministic timing**: no LLM inference latency on the critical path.
-- **The only LLM call in replay** is a healing cycle, triggered solely when a live
-  locator probe fails. Healing is hard-capped at **2 attempts per step** plus a
-  per-step gRPC deadline and auto-skip, so a heal-storm on a churning AUT cannot
-  blow up CI runtime or cost.
+Следствия:
+- **Ноль токенов планирования** на запуск CI.
+- **Детерминированное время**: без задержки инференса LLM на критическом пути.
+- **Единственный вызов LLM в replay** — heal-цикл, запускаемый исключительно при сбое
+  проверки живого локатора. Восстановление жёстко ограничено **2 попытками на шаг** плюс
+  дедлайн gRPC на шаг и автоматический пропуск, поэтому heal-шторм на нестабильном AUT
+  не может привести к скачку времени выполнения или стоимости CI.
 
 ---
 
-## Immutable Golden Baselines
+## Неизменяемые эталонные базовые линии
 
-Every milestone step records two hashes at explore time:
+Каждый этапный шаг записывает два хеша во время explore:
 
-| Hash | What it covers | Regression type caught |
+| Хеш | Что охватывает | Тип обнаруживаемой регрессии |
 |------|---------------|----------------------|
-| `a11y_hash` | SHA-256 of the normalised accessibility tree after the step | Structural DOM change — new/removed elements, role/label drift |
-| `screenshot_hash` | Perceptual hash of the post-action screenshot | Visual-only regression — CSS layout, colour, hidden elements |
+| `a11y_hash` | SHA-256 нормализованного дерева доступности после шага | Структурное изменение DOM — новые/удалённые элементы, дрейф role/label |
+| `screenshot_hash` | Перцептивный хеш снимка экрана после действия | Исключительно визуальная регрессия — CSS-вёрстка, цвет, скрытые элементы |
 
-Golden baselines are **never auto-updated by a CI run**. The only mutation path is
-an explicit operator command:
+Эталонные базовые линии **никогда не обновляются автоматически при запуске CI**. Единственный
+путь изменения — явная команда оператора:
 
 ```bash
 agentctl baseline update --plan-id <id> --aut-version $(git rev-parse HEAD)
 ```
 
-This command:
-1. Runs a full replay against the live AUT.
-2. Accepts all current snapshots as the new golden state.
-3. Writes a **new** `plan_hash`, archiving the old one with a `superseded_by`
-   reference in `golden_snapshots`.
+Эта команда:
+1. Выполняет полный replay на живом AUT.
+2. Принимает все текущие снимки как новое эталонное состояние.
+3. Записывает **новый** `plan_hash`, архивируя старый со ссылкой `superseded_by`
+   в `golden_snapshots`.
 
-This design makes "the tests rewrote their own baseline" structurally impossible.
-Dual hashing catches visual-only (CSS/layout) regressions that pure a11y diffing
-is blind to, surfaced as a `VISUAL_WARN` event rather than a hard failure
-(configurable).
+Такая конструкция структурно исключает ситуацию «тесты перезаписали собственный эталон».
+Двойное хеширование выявляет исключительно визуальные (CSS/вёрстка) регрессии, которые
+чистый a11y-diff не замечает, генерируя событие `VISUAL_WARN`, а не жёсткий сбой
+(настраивается).
 
 ---
 
-## No Self-Mutating Plan Rule
+## Правило запрета самомутирующего плана
 
-If the replay detects plan staleness — defined as ≥ 2 heal attempts on ≥ 3
-distinct `semantic_id`s in one run — it emits a `PLAN_STALE` event and a
-recommendation in the run report. It **does not** auto-trigger a fresh explore run
-or overwrite `plan_hash`.
+Если replay обнаруживает устаревание плана — определяемое как ≥ 2 попыток восстановления
+на ≥ 3 различных `semantic_id` за один запуск — он генерирует событие `PLAN_STALE` и
+рекомендацию в отчёте запуска. Он **не** запускает автоматически новый explore или
+перезаписывает `plan_hash`.
 
-Re-explore is always an **explicit operator action**:
+Повторный explore — всегда **явное действие оператора**:
 
 ```bash
 agentctl run --explore --target https://app.local --aut-version $(git rev-parse HEAD)
 ```
 
-This produces a **new** `plan_id` — the old plan remains intact and archivable.
+Это создаёт **новый** `plan_id` — старый план остаётся нетронутым и может быть архивирован.
 
-When an auto-heal updates a frozen locator during replay, the change is emitted as
-a **PR artifact** (a proposed `plan.json` diff) for human review. It is never
-silently auto-committed to the plan file. Engineers review, approve, and commit
-the diff manually.
+Когда авто-восстановление обновляет замороженный локатор во время replay, изменение
+выгружается как **артефакт PR** (предложенный diff `plan.json`) для проверки человеком.
+Оно никогда не фиксируется автоматически в файле плана без уведомления. Инженеры
+проверяют, одобряют и фиксируют diff вручную.
 
 ---
 
-## AUT Version Drift Policy
+## Политика дрейфа версии AUT
 
-Every run accepts an `--aut-version` flag (typically `$(git rev-parse HEAD)`).
-Sentinel compares this to the `aut_version` stored in `plan.json`.
+Каждый запуск принимает флаг `--aut-version` (обычно `$(git rev-parse HEAD)`).
+Sentinel сравнивает его с `aut_version`, сохранённым в `plan.json`.
 
-| Relationship | Default behaviour | Override |
+| Соотношение | Поведение по умолчанию | Переопределение |
 |---|---|---|
-| Match | Proceed normally | — |
-| Mismatch | `--on-aut-mismatch=warn` (default): log warning, enable healing, mark healed steps as flagged | `--on-aut-mismatch=heal` or `--on-aut-mismatch=abort` |
+| Совпадение | Продолжить в штатном режиме | — |
+| Несоответствие | `--on-aut-mismatch=warn` (по умолчанию): записать предупреждение, включить восстановление, пометить восстановленные шаги как отмеченные | `--on-aut-mismatch=heal` или `--on-aut-mismatch=abort` |
 
-The stored `aut_version` is also the key for the AUT-SHA-gated flake quarantine: a
-step is only quarantined after failing N-of-5 recent runs **without** an AUT SHA
-change. SHA changes reset the failure counter, separating real regression from
-environmental flake.
+Сохранённый `aut_version` также является ключом для карантина нестабильных тестов с учётом
+AUT SHA: шаг помещается в карантин только после N неудач из 5 последних запусков **без**
+изменения AUT SHA. Изменения SHA сбрасывают счётчик неудач, разделяя реальную регрессию
+от нестабильности окружения.
 
 ---
 
-## Seeded Exploration
+## Засеянное исследование
 
-The explore run is seeded but not guaranteed bit-identical. The brain records:
+Запуск explore засеян, но без гарантии побитовой идентичности. Мозг записывает:
 
 ```
 exploration_seed = SHA-256(target_url + nav_structure_fingerprint)
 ```
 
-All planning LLM calls use `temperature=0`. The seed and temperature are logged in
-`plan.json` and the LLM transcript, making the exploration context fully auditable
-and re-runnable with the same anchor — even though LLM provider non-determinism
-means output is not bit-identical across model versions or provider-side changes.
+Все вызовы LLM при планировании используют `temperature=0`. Seed и temperature записываются
+в `plan.json` и транскрипт LLM, делая контекст исследования полностью проверяемым и
+повторно запускаемым с тем же якорем — хотя недетерминированность провайдера LLM означает,
+что вывод не является побитово идентичным при разных версиях модели или изменениях на стороне
+провайдера.
 
-This is the correct trade-off: the frozen `plan.json` absorbs the non-determinism
-after the fact. The seed provides auditability, not a reproducibility guarantee
-the provider cannot give (see ADR-006 in `../ARCHITECTURE.md`).
+Это правильный компромисс: замороженный `plan.json` поглощает недетерминированность
+постфактум. Seed обеспечивает проверяемость, а не гарантию воспроизводимости,
+которую провайдер не может дать (см. ADR-006 в `../ARCHITECTURE.md`).
 
 ---
 
-## Structured Exit Codes
+## Структурированные коды завершения
 
-| Code | Meaning | Typical cause |
+| Код | Значение | Типичная причина |
 |------|---------|--------------|
-| **0** | All non-quarantined steps passed | Clean CI run |
-| **1** | One or more step failures, no golden-diff regression | Functional test failure; no baseline impact |
-| **2** | Golden-diff regression on a non-quarantined step | `diff_ratio` above threshold **or** `screenshot_hash` divergence on a milestone step |
-| **3** | Plan-integrity violation **or** budget exhausted | Hash mismatch on load, explicit budget cap hit, or `--force-replay` used in CI mode |
+| **0** | Все не находящиеся в карантине шаги прошли | Чистый запуск CI |
+| **1** | Один или несколько сбоев шагов, без регрессии golden-diff | Функциональный сбой теста; базовая линия не затронута |
+| **2** | Регрессия golden-diff на шаге вне карантина | `diff_ratio` выше порога **или** расхождение `screenshot_hash` на этапном шаге |
+| **3** | Нарушение целостности плана **или** исчерпание бюджета | Несоответствие хеша при загрузке, достижение явного лимита бюджета или использование `--force-replay` в режиме CI |
 
-Quarantined steps are **excluded** from exit-code computation: a quarantined step
-that fails does not push the run from exit 0 to exit 1. Quarantine exists precisely
-to prevent known-flaky steps from blocking the CI signal.
+Шаги в карантине **исключаются** из вычисления кода завершения: шаг в карантине,
+завершившийся неудачей, не переводит запуск с кода 0 на код 1. Карантин существует именно
+для того, чтобы известные нестабильные шаги не блокировали сигнал CI.
 
-Alertmanager integration: `heal_rate > 0.20/run` → `DOM_INSTABILITY`;
-`budget > 80%` → `BUDGET_WARNING`; `quarantine_count > 5` → blocks CI pipeline.
+Интеграция с Alertmanager: `heal_rate > 0.20/run` → `DOM_INSTABILITY`;
+`budget > 80%` → `BUDGET_WARNING`; `quarantine_count > 5` → блокирует CI-пайплайн.
 
 ---
 
-## CI Parallelism and Database Strategy
+## Параллелизм CI и стратегия базы данных
 
-### Per-job SQLite (CI)
+### SQLite на задание (CI)
 
-Every CI job writes to an **isolated, per-run SQLite file**:
+Каждое задание CI записывает в **изолированный SQLite-файл на запуск**:
 
 ```
 AGENT_DB_PATH=/tmp/agent-{run_id}.db       # main store-gateway DB
 AGENT_CKPT_PATH=/tmp/agent-{run_id}-ckpt.db  # LangGraph checkpoint DB (separate)
 ```
 
-Concurrent CI jobs never contend on a shared writer. Files are ephemeral and
-discarded after the job uploads its artifacts.
+Параллельные задания CI никогда не конкурируют за общий писатель. Файлы эфемерны
+и удаляются после загрузки артефактов заданием.
 
-### Shared SQLite (home-lab service)
+### Общий SQLite (home-lab сервис)
 
-The long-lived service on K3s uses a single shared SQLite (WAL mode) under the Go
-store-gateway's exclusive write ownership. Concurrent reads from `report-service`
-and `agentctl` are safe under WAL.
+Долгоживущий сервис на K3s использует единый общий SQLite (режим WAL) под эксклюзивным
+правом записи Go store-gateway. Параллельные чтения из `report-service` и `agentctl`
+безопасны под WAL.
 
-### Postgres Migration Trigger
+### Триггер миграции на Postgres
 
-Postgres with `AsyncPostgresSaver` is introduced **only** when either of these
-explicit triggers is hit:
+Postgres с `AsyncPostgresSaver` вводится **только** при достижении одного из этих явных триггеров:
 
-- More than 50 concurrent shared-DB writers, **or**
-- Distributed workers spanning multiple hosts
+- Более 50 одновременных писателей в общую БД, **или**
+- Распределённые воркеры, охватывающие несколько хостов
 
-The schema is Postgres-compatible by design; the migration is a driver swap in
-`store-gateway` with no schema changes. This is deferred to M5 — not pre-built.
+Схема по своей конструкции совместима с Postgres; миграция — это замена драйвера в
+`store-gateway` без изменений схемы. Откладывается до M5 — не строится заранее.
 
 ---
 
-## End-to-end Session Walkthrough
+## Сквозной разбор сессии
 
-*Derived from `.result.final.dataFlowNarrative` — two sessions: one explore, one CI replay.*
+*Составлено на основе `.result.final.dataFlowNarrative` — две сессии: одна explore, одна CI replay.*
 
-### Session 1 — Explore
+### Сессия 1 — Explore
 
-An engineer runs:
+Инженер запускает:
 
 ```bash
 agentctl run --explore --target https://app.local --aut-version $(git rev-parse HEAD)
 ```
 
-**Startup.** `agentctl` (Go) loads the YAML config and, at M2+, calls
-`orchestrator.StartRun` over gRPC. The orchestrator spawns the Python brain
-subprocess with environment variables: `RUN_ID`, `RUN_MODE=explore`,
-`ARTIFACT_DIR`, `AGENT_DB_PATH`.
+**Запуск.** `agentctl` (Go) загружает YAML-конфигурацию и, начиная с M2+, вызывает
+`orchestrator.StartRun` через gRPC. Оркестратор запускает подпроцесс Python-мозга
+с переменными окружения: `RUN_ID`, `RUN_MODE=explore`, `ARTIFACT_DIR`, `AGENT_DB_PATH`.
 
-**Brain initialisation.** The brain initialises a LangGraph `StateGraph` with a
-`SqliteSaver` checkpointer pointed at a **separate** checkpoint DB file
-(`{ARTIFACT_DIR}/ckpt.db`). It spawns the `pw-executor` TS MCP server (built by
-us) as a child process over stdio and binds its tools via the LangGraph MCP
-adapter.
+**Инициализация мозга.** Мозг инициализирует LangGraph `StateGraph` с `SqliteSaver`
+checkpointer, указывающим на **отдельный** файл БД checkpoint (`{ARTIFACT_DIR}/ckpt.db`).
+Запускает MCP-сервер `pw-executor` TS (созданный нами) как дочерний процесс через stdio
+и привязывает его инструменты через LangGraph MCP-адаптер.
 
-**perceive.** `START → perceive`: the brain calls `pw-executor`'s
-`accessibility_snapshot()` tool. The `perception` module parses the result into a
-`PageModel`, computes `completeness_ratio` (say 0.62 — a11y-primary path), and
-derives `a11y_hash`, `screenshot_hash`, and `dom_subtree_hash` for the scenario's
-target container. Playwright tracing is started via `pw-executor`.
+**perceive.** `START → perceive`: мозг вызывает инструмент `accessibility_snapshot()`
+у `pw-executor`. Модуль `perception` разбирает результат в `PageModel`, вычисляет
+`completeness_ratio` (например, 0.62 — основной путь a11y) и получает `a11y_hash`,
+`screenshot_hash` и `dom_subtree_hash` для целевого контейнера сценария. Playwright-трассировка
+запускается через `pw-executor`.
 
-**ground.** `ground` updates `interactive_seen` and `nav_frontier`, computes
-`coverage_achieved = 0.0`. Since `coverage < target` and mode is explore,
+**ground.** `ground` обновляет `interactive_seen` и `nav_frontier`, вычисляет
+`coverage_achieved = 0.0`. Поскольку `coverage < target` и режим — explore,
 `ground → plan`.
 
-**plan.** Opus 4.8 (`temperature=0`) reads the `PageModel`, the episodic tail,
-the nav frontier, and the remaining budget. It returns the next `PlannedAction`
-(e.g., click "Sign in"). The in-process token counter increments. The orchestrator
-reconciles the Go-side hard budget ceiling on the next `RunEvent`.
+**plan.** Opus 4.8 (`temperature=0`) читает `PageModel`, хвост эпизодических событий,
+nav frontier и оставшийся бюджет. Возвращает следующий `PlannedAction` (например, клик
+"Sign in"). Внутрипроцессный счётчик токенов увеличивается. Оркестратор согласовывает
+жёсткий потолок бюджета на стороне Go при следующем `RunEvent`.
 
-**act → verify.** `plan → act` executes the click via `pw-executor`.
-`act → verify` re-snapshots; the step passes and is a milestone, so
-`verify → checkpoint`. The `checkpoint` node flushes the LangGraph checkpoint and
-the new `page_model` to the store-gateway over gRPC.
+**act → verify.** `plan → act` выполняет клик через `pw-executor`.
+`act → verify` делает повторный снимок; шаг проходит и является этапным, поэтому
+`verify → checkpoint`. Узел `checkpoint` сбрасывает LangGraph checkpoint и новый
+`page_model` в store-gateway через gRPC.
 
-**Mid-run heal.** Later, a locator probe fails with `LOCATOR_STALE`.
-`verify → heal` invokes the healing engine:
+**Восстановление в середине запуска.** Позже зондирование локатора завершается неудачей
+с `LOCATOR_STALE`. `verify → heal` вызывает движок восстановления:
 
-1. Cache lookup — miss (no prior heal for this `semantic_id` / `dom_subtree_hash`).
-2. L1–L6 rotation — L2 ARIA role + name match found; verify-before-accept probe
-   confirms the candidate resolves to exactly one live element.
-3. `confidence = 0.90 ≥ 0.85` → auto-heal path: post-heal verification re-runs the
-   action successfully.
-4. `HealedLocator` persisted to store-gateway (keyed to `dom_subtree_hash`);
-   `healing_audit` row appended (append-only).
+1. Поиск в кеше — промах (нет предыдущего восстановления для этого `semantic_id` / `dom_subtree_hash`).
+2. Ротация L1–L6 — найдено совпадение L2 ARIA role + name; зондирование verify-before-accept
+   подтверждает, что кандидат разрешается в ровно один живой элемент.
+3. `confidence = 0.90 ≥ 0.85` → путь авто-восстановления: послевосстановительная проверка
+   успешно повторяет действие.
+4. `HealedLocator` сохранён в store-gateway (ключ — `dom_subtree_hash`);
+   строка `healing_audit` добавлена (только добавление).
 
-The loop continues: each Opus decision expands coverage and the nav frontier
-shrinks.
+Цикл продолжается: каждое решение Opus расширяет покрытие, и nav frontier уменьшается.
 
-**Convergence.** When `coverage_achieved ≥ 0.85` AND `nav_frontier` is empty,
-`ground` sets `exploration_complete = True` and routes to `report`.
+**Сходимость.** Когда `coverage_achieved ≥ 0.85` И `nav_frontier` пуст,
+`ground` устанавливает `exploration_complete = True` и направляет в `report`.
 
-**Freeze and emit.** The brain freezes `plan.json` (computes `plan_hash`, writes
-dual golden baselines per milestone step), stops the `pw-executor` trace, and
-relays `trace_path` to Go via gRPC. `report-service` emits HTML/JSON artifacts
-and an exported `.spec.ts` generated from `RunState.executed_actions`.
+**Заморозка и выгрузка.** Мозг замораживает `plan.json` (вычисляет `plan_hash`,
+записывает двойные эталонные базовые линии для каждого этапного шага), останавливает
+трассировку `pw-executor` и передаёт `trace_path` в Go через gRPC. `report-service`
+генерирует HTML/JSON-артефакты и экспортированный `.spec.ts`, сгенерированный из
+`RunState.executed_actions`.
 
-**Engineer review.** The engineer reviews flagged heals in the report, then:
+**Проверка инженером.** Инженер проверяет отмеченные восстановления в отчёте, затем:
 
 ```bash
 git add plan.json
@@ -359,9 +356,9 @@ git commit -m "feat(sentinel): add explore plan for https://app.local"
 
 ---
 
-### Session 2 — CI Replay
+### Сессия 2 — CI Replay
 
-CI runs:
+CI запускает:
 
 ```bash
 agentctl run --ci \
@@ -369,35 +366,36 @@ agentctl run --ci \
   --aut-version $(git rev-parse HEAD)
 ```
 
-with `AGENT_DB_PATH=/tmp/agent-{run_id}.db` (per-job isolation).
+с `AGENT_DB_PATH=/tmp/agent-{run_id}.db` (изоляция на уровне задания).
 
-**Hash integrity check.** The brain loads `plan.json` and **immediately**
-re-computes `plan_hash`. The hashes match — proceed.
+**Проверка целостности хеша.** Мозг загружает `plan.json` и **немедленно**
+пересчитывает `plan_hash`. Хеши совпадают — продолжить.
 
-**Golden baseline validation.** The `ground` node validates each milestone step's
-`a11y_hash` and `screenshot_hash` against the immutable golden baselines stored in
-`golden_snapshots`. No drift detected — proceed.
+**Валидация эталонных базовых линий.** Узел `ground` проверяет `a11y_hash` и
+`screenshot_hash` каждого этапного шага по неизменяемым эталонным базовым линиям,
+хранящимся в `golden_snapshots`. Дрейф не обнаружен — продолжить.
 
-**LLM-free execution.** The `plan` node is **skipped**. `ground → act` uses the
-frozen locator for each step. Zero planning tokens consumed. Most steps pass
-deterministically.
+**Выполнение без LLM.** Узел `plan` **пропускается**. `ground → act` использует
+замороженный локатор для каждого шага. Токены планирования не расходуются. Большинство
+шагов проходят детерминированно.
 
-**Amortised cache heal.** One step's `data-testid` was renamed by a developer in a
-recent commit. `verify → heal`, cache lookup finds the `HealedLocator` written
-during the explore session — its `dom_subtree_hash` still matches the current
-subtree. The cached healed locator is reused **instantly, zero LLM**
-(amortisation: LLM cost paid once at explore time, reused until structural drift).
+**Амортизированное кеш-восстановление.** Атрибут `data-testid` одного шага был
+переименован разработчиком в недавнем коммите. `verify → heal`, поиск в кеше находит
+`HealedLocator`, записанный во время сессии explore — его `dom_subtree_hash` всё ещё
+совпадает с текущим поддеревом. Кешированный восстановленный локатор переиспользуется
+**мгновенно, без LLM** (амортизация: стоимость LLM оплачена один раз во время explore,
+переиспользуется до структурного дрейфа).
 
-**Low-confidence step.** Another element is genuinely gone. L1–L6 rotation and one
-Sonnet attempt (hard 2-cap + per-step deadline) yield `confidence = 0.55`.
-In CI mode, `confidence < 0.60` → `SKIPPED_HEALING_FAILURE` recorded; the run
-continues without blocking.
+**Шаг с низкой уверенностью.** Другой элемент действительно исчез. Ротация L1–L6
+и одна попытка Sonnet (жёсткий лимит 2 + дедлайн на шаг) дают `confidence = 0.55`.
+В режиме CI `confidence < 0.60` → записывается `SKIPPED_HEALING_FAILURE`; запуск
+продолжается без блокировки.
 
-**Flake quarantine.** A third step fails for the third consecutive time, all
-failures occurring without an AUT SHA change between them. The step is quarantined
-(non-blocking); its failure does not affect the exit code.
+**Карантин нестабильного теста.** Третий шаг завершается неудачей третий раз подряд,
+при этом все неудачи происходят без изменения AUT SHA между ними. Шаг помещается в
+карантин (не блокирует); его неудача не влияет на код завершения.
 
-**Exit and artifacts.** The run exits **0** (no golden regression, no critical
-unquarantined failure). `report-service` publishes JSON + HTML + `trace.zip`. The
-proposed `plan.json` diff for the amortised-reuse locator change is emitted as a
-PR artifact — for human review, never auto-committed.
+**Завершение и артефакты.** Запуск завершается с кодом **0** (нет регрессии golden,
+нет критических неудач вне карантина). `report-service` публикует JSON + HTML + `trace.zip`.
+Предложенный diff `plan.json` для изменения локатора при амортизированном переиспользовании
+выгружается как артефакт PR — для проверки человеком, никогда не фиксируется автоматически.

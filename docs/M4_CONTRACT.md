@@ -1,25 +1,27 @@
 # M4 Contract — "Production-Observable" (frozen 2026-06-24)
 
-Goal: make a run **consumable by humans and machines** — export reusable Playwright tests, emit a
-readable report + Prometheus metrics, and surface healing calibration data. Value-first + offline-testable.
+> 🌐 **Русский** (основная версия) · [English](M4_CONTRACT.en.md)
+
+Цель: сделать запуск **потребляемым людьми и машинами** — экспортировать переиспользуемые Playwright-тесты, генерировать
+читаемый отчёт + метрики Prometheus и выводить данные калибровки healing. Value-first + offline-тестируемый.
 
 ## Scope decision (ADR-014)
-**In M4 (pure generators, offline-testable):** `.spec.ts` export from a plan; HTML + JSON run report;
-Prometheus textfile metrics incl. `healing_confidence_histogram`; `agentctl calibrate`.
-**Deferred:** the Go `report-service` (ARCHITECTURE §2) and OTel→Tempo / Prometheus HTTP `/metrics`
-endpoint and the Go-side budget ceiling — they need the Go service layer (M2b) or external infra.
-M4 generators run in the **brain (Python)** now, reading run artifacts + the interim store; the Go
-report-service is their eventual home once M2b consolidates persistence.
+**В M4 (чистые генераторы, offline-тестируемые):** экспорт `.spec.ts` из плана; HTML + JSON отчёт о запуске;
+текстовые метрики Prometheus включая `healing_confidence_histogram`; `agentctl calibrate`.
+**Отложено:** Go `report-service` (ARCHITECTURE §2) и OTel→Tempo / Prometheus HTTP `/metrics`
+endpoint и потолок бюджета на стороне Go — они требуют слоя Go-сервисов (M2b) или внешней инфраструктуры.
+Генераторы M4 работают в **brain (Python)** сейчас, читая артефакты запуска + промежуточное хранилище; Go
+report-service — их конечное место, как только M2b консолидирует персистентность.
 
-## New agentctl subcommands (each a brain RUN_MODE; no browser needed)
-| Command | RUN_MODE | Reads | Writes |
-|---------|----------|-------|--------|
-| `agentctl export-spec --plan <p> [-o <file>]` | export-spec | plan.json | `<run>/exported.spec.ts` (or `-o`) |
+## Новые подкоманды agentctl (каждая — RUN_MODE в brain; браузер не нужен)
+| Команда | RUN_MODE | Читает | Записывает |
+|---------|----------|--------|------------|
+| `agentctl export-spec --plan <p> [-o <file>]` | export-spec | plan.json | `<run>/exported.spec.ts` (или `-o`) |
 | `agentctl report --run <dir>` | report | `<dir>/heal-report.json` (+ plan.json) | `<dir>/report.json`, `report.html`, `metrics.prom` |
 | `agentctl calibrate` | calibrate | `state/locators.db` `healing_audit` | `state/calibration.json` (+ stdout) |
 
-## .spec.ts export (brain/exporter.py)
-Pure function `plan -> str` (no browser, no MCP-codegen dependency — ADR satisfied). Emits idiomatic
+## Экспорт .spec.ts (brain/exporter.py)
+Чистая функция `plan -> str` (нет браузера, нет зависимости от MCP-codegen — ADR выполнен). Генерирует идиоматический
 `@playwright/test`:
 ```ts
 import { test, expect } from '@playwright/test';
@@ -30,37 +32,37 @@ test('sentinel: <plan_id>', async ({ page }) => {
   // ...
 });
 ```
-Locator → Playwright mapping (matches pw-executor `buildLocator`): testid→`getByTestId`, role+name→
+Маппинг локатор → Playwright (совпадает с `buildLocator` pw-executor): testid→`getByTestId`, role+name→
 `getByRole(role,{name})`, label→`getByLabel`, text→`getByText`, css→`locator`, xpath→`locator('xpath=…')`;
-navigate→`page.goto`. Strings escaped. **Deterministic**: same plan → byte-identical spec.
+navigate→`page.goto`. Строки экранированы. **Детерминированный**: тот же план → побитово идентичный spec.
 
-## HTML + JSON report (brain/report.py)
-From `heal-report.json`: a self-contained HTML (no external assets) — header (run_id, mode, target,
-**exit code** with color), a per-step table (step / type / outcome / heal strategy+confidence /
-regression / quarantined), and summary counts. `report.json` = the same data, machine-readable.
+## HTML + JSON отчёт (brain/report.py)
+Из `heal-report.json`: самодостаточный HTML (без внешних ресурсов) — заголовок (run_id, mode, target,
+**exit code** с цветом), таблица для каждого шага (шаг / тип / результат / стратегия heal+confidence /
+регрессия / quarantined) и сводные счётчики. `report.json` = те же данные, машиночитаемые.
 
-## Prometheus textfile metrics (`metrics.prom`)
-node_exporter textfile-collector format (no HTTP server). Metrics:
+## Текстовые метрики Prometheus (`metrics.prom`)
+Формат textfile-collector для node_exporter (нет HTTP-сервера). Метрики:
 `sentinel_run_steps`, `sentinel_run_exit_code`, `sentinel_heal_total{strategy}`,
 `sentinel_regression_total{kind}` (a11y / visual), `sentinel_quarantined_total`,
-`sentinel_healing_confidence_bucket{strategy,le}` (histogram buckets 0.60/0.85/1.0).
+`sentinel_healing_confidence_bucket{strategy,le}` (гистограммные бакеты 0.60/0.85/1.0).
 
 ## agentctl calibrate (brain/calibrate.py)
-Reads `healing_audit`. M4 (no human-verified labels yet): reports outcome counts by strategy
-(auto_healed / flagged / needs_review / failed / cache_hit), the confidence histogram, and the active
-threshold (0.85; cold-start 0.90). Writes `calibration.json`. Full precision/recall vs human-verified
-outcomes is wired when the human gate lands (future). Foundation for ADR-008's calibration loop.
+Читает `healing_audit`. M4 (без верифицированных человеком меток пока): сообщает счётчики результатов по стратегии
+(auto_healed / flagged / needs_review / failed / cache_hit), гистограмму confidence и активный
+порог (0.85; cold-start 0.90). Записывает `calibration.json`. Полная точность/полнота vs верифицированных человеком
+результатов будет подключена, когда приземлится human gate (в будущем). Основа цикла калибровки ADR-008.
 
 ## Acceptance gate (Given/When/Then)
-1. **GIVEN** a plan.json, **WHEN** `agentctl export-spec --plan <p>`, **THEN** a syntactically valid
-   `.spec.ts` exists containing `page.goto` + the click locators; **deterministic** (re-export = identical bytes);
-   `npx tsc --noEmit` (with @playwright/test types) reports no errors.
-2. **GIVEN** a drift run's `heal-report.json`, **WHEN** `agentctl report --run <dir>`, **THEN**
-   `report.html` (valid, shows heals + a11y regression rows), `report.json`, and a valid `metrics.prom` exist.
-3. **GIVEN** prior heals in the store, **WHEN** `agentctl calibrate`, **THEN** `calibration.json` with
-   per-strategy outcome counts + confidence histogram.
-4. Offline unit tests cover exporter / report / metrics / calibrate with fixtures (no browser).
+1. **GIVEN** plan.json, **WHEN** `agentctl export-spec --plan <p>`, **THEN** синтаксически корректный
+   `.spec.ts` существует, содержащий `page.goto` + локаторы клика; **детерминированный** (re-export = идентичные байты);
+   `npx tsc --noEmit` (с типами @playwright/test) не сообщает ошибок.
+2. **GIVEN** `heal-report.json` из запуска с дрейфом, **WHEN** `agentctl report --run <dir>`, **THEN**
+   `report.html` (валидный, показывает heal'ы + строки a11y-регрессии), `report.json` и корректный `metrics.prom` существуют.
+3. **GIVEN** предыдущие heal'ы в хранилище, **WHEN** `agentctl calibrate`, **THEN** `calibration.json` со
+   счётчиками результатов по стратегиям + гистограммой confidence.
+4. Offline unit-тесты покрывают exporter / report / metrics / calibrate с фикстурами (без браузера).
 
-## Out of scope (later)
-Go report-service (post-M2b) · OTel collector/Tempo + Prometheus HTTP endpoint · Go-side token budget
-ceiling (needs Go orchestrator, M2b) · live LLM transcript token accounting beyond what explore already writes.
+## Вне scope (позже)
+Go report-service (после M2b) · OTel collector/Tempo + Prometheus HTTP endpoint · потолок токенного бюджета на стороне Go
+(требует Go orchestrator, M2b) · учёт токенов live-транскрипта LLM помимо того, что уже записывает explore.

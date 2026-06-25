@@ -1,331 +1,334 @@
 # State Machine — Sentinel
 
-Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md (see §7).
+> 🌐 **Русский** (основная версия) · [English](STATE_MACHINE.en.md)
+
+Составлено по результатам проектного синтеза 2026-06-23; итоговое описание — в ../ARCHITECTURE.md (см. §7).
 
 ---
 
-## 1. Framework
+## 1. Фреймворк
 
-The Sentinel cognitive loop is implemented as a **LangGraph `StateGraph`** (Python).
-All in-flight state is persisted between node invocations by a **`SqliteSaver` checkpointer**
-that writes to a *separate* SQLite file from the Go `store-gateway` main database.
-This separation is what makes the "single-writer" guarantee over the main DB actually hold.
+Когнитивный цикл Sentinel реализован как **LangGraph `StateGraph`** (Python).
+Всё промежуточное состояние между вызовами узлов сохраняет **`SqliteSaver` checkpointer**,
+записывающий данные в *отдельный* SQLite-файл, отличный от основной базы данных Go `store-gateway`.
+Именно это разделение обеспечивает реальную работу гарантии «единственного писателя» для основной БД.
 
-| Concern | Detail |
+| Область | Детали |
 |---|---|
-| Framework | LangGraph `StateGraph` (Python, `langgraph` package) |
-| Checkpoint store | `langgraph.checkpoint.sqlite.SqliteSaver` |
-| Checkpoint DB path (CI) | `/tmp/agent-{run_id}-ckpt.db` — one file per job, no contention |
-| Checkpoint DB path (service) | Distinct file or `AsyncPostgresSaver` schema, never the store-gateway file |
-| Thread identity key | `thread_id = run_id` |
-| Production swap (K3s, M5) | `AsyncPostgresSaver` replaces `SqliteSaver` — one constructor change, schema unchanged |
-| Browser execution layer | **`pw-executor`** — our own TypeScript server implementing MCP/JSON-RPC 2.0 over stdio (built, not bought; replaces any off-the-shelf browser MCP server) |
+| Фреймворк | LangGraph `StateGraph` (Python, пакет `langgraph`) |
+| Хранилище checkpoint | `langgraph.checkpoint.sqlite.SqliteSaver` |
+| Путь к БД checkpoint (CI) | `/tmp/agent-{run_id}-ckpt.db` — один файл на задание, без конкуренции за запись |
+| Путь к БД checkpoint (сервис) | Отдельный файл или схема `AsyncPostgresSaver`, никогда не store-gateway файл |
+| Ключ идентификации потока | `thread_id = run_id` |
+| Замена в продакшне (K3s, M5) | `AsyncPostgresSaver` заменяет `SqliteSaver` — один аргумент конструктора, схема не меняется |
+| Уровень выполнения в браузере | **`pw-executor`** — наш собственный TypeScript-сервер, реализующий MCP/JSON-RPC 2.0 через stdio (создан самостоятельно, не куплен; заменяет любой готовый MCP-сервер браузера) |
 
 ---
 
-## 2. Shared State Object — `RunState` (TypedDict)
+## 2. Общий объект состояния — `RunState` (TypedDict)
 
-`RunState` is the single shared object threaded through every node.
-All fields are checkpointed at each `checkpoint` node invocation.
+`RunState` — единственный общий объект, передаваемый через каждый узел.
+Все поля сохраняются в контрольную точку при каждом вызове узла `checkpoint`.
 
-### 2.1 Identity and Mode
+### 2.1 Идентификация и режим
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `session_id` | `str` | Unique session identifier |
-| `run_id` | `str` | Unique run identifier; doubles as LangGraph `thread_id` |
-| `run_mode` | `Literal["explore", "replay", "ci"]` | Controls which nodes are active and which are skipped |
-| `target_url` | `str` | Root URL of the application under test |
-| `aut_version` | `str` | Git SHA of the application under test, recorded at run start |
-| `current_url` | `str` | URL currently loaded in the browser |
+| `session_id` | `str` | Уникальный идентификатор сессии |
+| `run_id` | `str` | Уникальный идентификатор запуска; одновременно служит LangGraph `thread_id` |
+| `run_mode` | `Literal["explore", "replay", "ci"]` | Определяет, какие узлы активны, а какие пропускаются |
+| `target_url` | `str` | Корневой URL тестируемого приложения |
+| `aut_version` | `str` | Git SHA тестируемого приложения, записывается при старте запуска |
+| `current_url` | `str` | URL, загруженный в браузере в текущий момент |
 
-### 2.2 Perception
+### 2.2 Восприятие
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `page_model` | `PageModel` | Parsed page representation: `{url, title, a11y_tree: dict, landmarks, forms, interactive_elements, completeness_ratio, a11y_hash, screenshot_hash, dom_subtree_hash}` |
+| `page_model` | `PageModel` | Разобранное представление страницы: `{url, title, a11y_tree: dict, landmarks, forms, interactive_elements, completeness_ratio, a11y_hash, screenshot_hash, dom_subtree_hash}` |
 
-### 2.3 Plan
+### 2.3 План
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `exploration_plan` | `list[PlannedAction]` | Ordered sequence of planned steps. Each `PlannedAction`: `{step_id, intent, semantic_id, action_type, locator, locator_alternatives[L1..L6], value?, expected_outcome, assertion, is_critical, is_milestone, healed: bool}` |
-| `plan_hash` | `str` | SHA-256 of canonical JSON of all steps (sorted keys, floats normalized to 6 dp). Hard-abort on mismatch in replay/ci mode |
-| `current_step` | `int` | Index into `exploration_plan` |
+| `exploration_plan` | `list[PlannedAction]` | Упорядоченная последовательность запланированных шагов. Каждый `PlannedAction`: `{step_id, intent, semantic_id, action_type, locator, locator_alternatives[L1..L6], value?, expected_outcome, assertion, is_critical, is_milestone, healed: bool}` |
+| `plan_hash` | `str` | SHA-256 канонического JSON всех шагов (ключи отсортированы, числа с плавающей точкой нормализованы до 6 знаков). Жёсткий аварийный останов при несоответствии в режиме replay/ci |
+| `current_step` | `int` | Индекс в `exploration_plan` |
 
-### 2.4 Coverage / Convergence
+### 2.4 Покрытие / Сходимость
 
-> These fields replace the LLM-only `exploration_complete` flag from earlier proposals.
-> The LLM may *propose* done but cannot force it; the metric decides.
+> Эти поля заменяют флаг `exploration_complete`, который ранее устанавливался только LLM.
+> LLM может *предложить* завершение, но не может его принудить; решение принимает метрика.
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `coverage_target` | `float` | Fraction of discovered interactive elements that must be exercised before exploration ends. Default: `0.85` |
-| `interactive_seen` | `set[str]` | Semantic IDs of all interactive elements discovered |
-| `interactive_exercised` | `set[str]` | Semantic IDs of interactive elements acted upon |
-| `nav_frontier` | `deque[str]` | Unexplored URLs and links remaining |
-| `coverage_achieved` | `float` | Computed as `len(exercised) / max(1, len(seen))` |
-| `exploration_complete` | `bool` | `True` only when `coverage_achieved >= coverage_target` AND `nav_frontier` is empty |
+| `coverage_target` | `float` | Доля обнаруженных интерактивных элементов, с которыми необходимо провести взаимодействие перед завершением исследования. По умолчанию: `0.85` |
+| `interactive_seen` | `set[str]` | Семантические идентификаторы всех обнаруженных интерактивных элементов |
+| `interactive_exercised` | `set[str]` | Семантические идентификаторы интерактивных элементов, с которыми выполнено взаимодействие |
+| `nav_frontier` | `deque[str]` | Неисследованные URL и ссылки, оставшиеся в очереди |
+| `coverage_achieved` | `float` | Вычисляется как `len(exercised) / max(1, len(seen))` |
+| `exploration_complete` | `bool` | `True` только когда `coverage_achieved >= coverage_target` И `nav_frontier` пуст |
 
-### 2.5 Episodic Memory
+### 2.5 Эпизодическая память
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `episodic_buffer` | `deque[EpisodicEvent]` | Bounded circular buffer, max 50 entries. When full, oldest events are LLM-summarised (Sonnet) into ~200-token episode summaries to bound context growth |
-| `executed_actions` | `list[ExecutedAction]` | Full action history: `{step, action_type, locator, outcome, duration_ms, pre_hash, post_hash, healing_flagged}` |
+| `episodic_buffer` | `deque[EpisodicEvent]` | Ограниченный кольцевой буфер, максимум 50 записей. При заполнении старейшие события суммируются LLM (Sonnet) в краткие сводки (~200 токенов) для ограничения роста контекста |
+| `executed_actions` | `list[ExecutedAction]` | Полная история действий: `{step, action_type, locator, outcome, duration_ms, pre_hash, post_hash, healing_flagged}` |
 
-### 2.6 Healing
+### 2.6 Восстановление
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `healing_context` | `Optional[HealingContext]` | Active heal context: `{semantic_id, failure_type, attempted_locator, element_description}`. `None` when no heal is in progress |
-| `heal_attempts` | `int` | Per-step heal counter. Reset at each `checkpoint`. Hard cap: 3 in explore mode, 2 in replay hot path |
-| `pending_human_review` | `list[HealCandidate]` | Heal candidates awaiting human gate decision |
-| `healed_locators` | `list[HealedLocator]` | Healed locators pending flush to `store-gateway` at next `checkpoint` |
+| `healing_context` | `Optional[HealingContext]` | Активный контекст восстановления: `{semantic_id, failure_type, attempted_locator, element_description}`. `None`, когда восстановление не выполняется |
+| `heal_attempts` | `int` | Счётчик попыток восстановления на шаг. Сбрасывается при каждом `checkpoint`. Жёсткий лимит: 3 в режиме explore, 2 в критическом пути replay |
+| `pending_human_review` | `list[HealCandidate]` | Кандидаты на восстановление, ожидающие решения человека на «шлюзе» |
+| `healed_locators` | `list[HealedLocator]` | Восстановленные локаторы, ожидающие сброса в `store-gateway` на следующем `checkpoint` |
 
-### 2.7 Token Budget
+### 2.7 Токен-бюджет
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `token_usage` | `dict[str, TokenCount]` | Per-model-id usage: `model_id → {prompt, completion, cost_usd}`. In-process counter; Go orchestrator independently enforces a hard ceiling |
-| `token_budget` | `dict[str, int]` | Per-model-id budget limits (from config). Defaults: 50k tokens/run for Opus 4.8 (plan), 20k tokens/run for Sonnet 4.6 (heal) |
-| `budget_warning_emitted` | `bool` | Set when 80% of any budget is consumed; prevents duplicate `BUDGET_WARNING` events |
+| `token_usage` | `dict[str, TokenCount]` | Использование по идентификатору модели: `model_id → {prompt, completion, cost_usd}`. Счётчик в процессе; оркестратор Go независимо применяет жёсткий потолок |
+| `token_budget` | `dict[str, int]` | Лимиты бюджета по идентификатору модели (из конфигурации). По умолчанию: 50k токенов/запуск для Opus 4.8 (plan), 20k токенов/запуск для Sonnet 4.6 (heal) |
+| `budget_warning_emitted` | `bool` | Устанавливается при расходовании 80% любого бюджета; предотвращает дублирование событий `BUDGET_WARNING` |
 
-### 2.8 Human Gate / Control
+### 2.8 Шлюз оператора / Управление
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `human_gate_pending` | `bool` | `True` when the run is paused at a `checkpoint` awaiting operator decision |
-| `human_gate_reason` | `Optional[str]` | Human-readable explanation of why the gate was raised |
-| `human_gate_decision` | `Optional[Literal["approve", "skip", "abort"]]` | Resolution set by `agentctl gate approve|skip|abort` |
-| `human_gate_resolved_locator` | `Optional[str]` | Operator-supplied locator when decision is `"approve"` |
-| `stop_signal` | `bool` | Externally injected stop flag (e.g., CI timeout or operator `agentctl run --stop`) |
+| `human_gate_pending` | `bool` | `True`, когда запуск приостановлен в `checkpoint`, ожидая решения оператора |
+| `human_gate_reason` | `Optional[str]` | Понятное человеку объяснение причины активации «шлюза» |
+| `human_gate_decision` | `Optional[Literal["approve", "skip", "abort"]]` | Решение, устанавливаемое командой `agentctl gate approve|skip|abort` |
+| `human_gate_resolved_locator` | `Optional[str]` | Локатор, предоставленный оператором при решении `"approve"` |
+| `stop_signal` | `bool` | Флаг останова, введённый извне (например, таймаут CI или оператор `agentctl run --stop`) |
 
-### 2.9 Artifacts
+### 2.9 Артефакты
 
-| Field | Type | Description |
+| Поле | Тип | Описание |
 |---|---|---|
-| `run_dir` | `str` | Filesystem path to the per-run artifact directory |
-| `artifacts` | `RunArtifacts` | `{trace_path, screenshot_paths, spec_path, report_path}` — paths to emitted files |
-| `step_failures` | `dict[str, int]` | `step_key → consecutive_failure_count`. Input to AUT-SHA-gated flake quarantine logic |
+| `run_dir` | `str` | Путь в файловой системе к каталогу артефактов данного запуска |
+| `artifacts` | `RunArtifacts` | `{trace_path, screenshot_paths, spec_path, report_path}` — пути к сгенерированным файлам |
+| `step_failures` | `dict[str, int]` | `step_key → consecutive_failure_count`. Входные данные для логики карантина нестабильных тестов с учётом AUT SHA |
 
 ---
 
-## 3. Nodes
+## 3. Узлы
 
-There are **8 named nodes** plus the two implicit LangGraph built-in nodes (`START`, `END`).
-The framework wires `START` → first node and `END` as the graph terminal automatically.
+Граф содержит **8 именованных узлов** и два неявных встроенных узла LangGraph (`START`, `END`).
+Фреймворк автоматически связывает `START` с первым узлом и назначает `END` терминальным узлом графа.
 
-### Node summary
+### Сводка по узлам
 
-| # | Node | LLM | Model | Notes |
+| # | Узел | LLM | Модель | Примечания |
 |---|---|---|---|---|
-| 1 | `perceive` | No | — | Entry of every cycle; calls `pw-executor` for a11y snapshot |
-| 2 | `ground` | No | — | Parses `PageModel`; validates against golden baselines in replay |
-| 3 | `plan` | Yes | Opus 4.8 | **Explore mode only** — skipped entirely in replay/ci |
-| 4 | `act` | No | — | Executes the current step via `pw-executor` |
-| 5 | `verify` | Conditional | Sonnet 4.6 | Sonnet only for explore-mode soft assertion; deterministic in replay |
-| 6 | `heal` | Conditional | Sonnet 4.6 | Sonnet for a11y re-grounding (L5+); gated visual also Sonnet |
-| 7 | `checkpoint` | No | — | Flushes LangGraph checkpoint + `store-gateway` writes; handles human gate pause |
-| 8 | `report` | No | — | Terminal node; assembles and emits `RunResult` |
+| 1 | `perceive` | Нет | — | Вход каждого цикла; вызывает `pw-executor` для получения a11y-снимка |
+| 2 | `ground` | Нет | — | Разбирает `PageModel`; в режиме replay проверяет соответствие эталонным базовым линиям |
+| 3 | `plan` | Да | Opus 4.8 | **Только в режиме explore** — полностью пропускается в replay/ci |
+| 4 | `act` | Нет | — | Выполняет текущий шаг через `pw-executor` |
+| 5 | `verify` | Условно | Sonnet 4.6 | Sonnet только для мягкой проверки утверждений в режиме explore; детерминирован в replay |
+| 6 | `heal` | Условно | Sonnet 4.6 | Sonnet для повторного связывания с a11y-деревом (L5+); визуальный шлюзовый режим тоже Sonnet |
+| 7 | `checkpoint` | Нет | — | Сбрасывает LangGraph checkpoint + записывает в `store-gateway`; обрабатывает паузу на «шлюзе» оператора |
+| 8 | `report` | Нет | — | Терминальный узел; собирает и отправляет `RunResult` |
 
 ### 3.1 `perceive`
 
-**LLM: None.**
+**LLM: нет.**
 
-Entry point of every agent cycle.
+Точка входа каждого цикла агента.
 
-- Calls `pw-executor` (via MCP/JSON-RPC 2.0 over stdio) for `accessibility_snapshot()`.
-- Computes `completeness_ratio` (named interactive elements / total interactive elements).
-- If `completeness_ratio < 0.30` (canvas, shadow DOM, custom elements, cross-origin iframes),
-  also calls `screenshot()` on `pw-executor` to produce a set-of-marks context for the visual
-  healing fallback — this expenditure is gated and does not occur on every cycle.
-- Computes `a11y_hash`, `screenshot_hash`, and `dom_subtree_hash` (subtree-scoped, not
-  whole-page, to prevent unrelated ad/banner changes from invalidating all cached locators).
-- Starts or resumes the `pw-executor` Playwright trace at run start.
+- Вызывает `pw-executor` (через MCP/JSON-RPC 2.0 по stdio) для `accessibility_snapshot()`.
+- Вычисляет `completeness_ratio` (именованные интерактивные элементы / все интерактивные элементы).
+- Если `completeness_ratio < 0.30` (canvas, shadow DOM, кастомные элементы, cross-origin iframes),
+  дополнительно вызывает `screenshot()` у `pw-executor` для формирования контекста set-of-marks
+  при визуальном восстановлении — этот вызов защищён шлюзом и не выполняется на каждом цикле.
+- Вычисляет `a11y_hash`, `screenshot_hash` и `dom_subtree_hash` (с областью видимости поддерева,
+  а не всей страницы, чтобы изменения в несвязанных рекламных баннерах не инвалидировали
+  все кешированные локаторы).
+- Запускает или возобновляет Playwright-трассировку через `pw-executor` при старте запуска.
 
 ### 3.2 `ground`
 
-**LLM: None.**
+**LLM: нет.**
 
-- Parses the raw a11y tree into the typed `PageModel`.
-- Updates `interactive_seen` and `nav_frontier` from newly discovered elements and links.
-- Computes `coverage_achieved = len(interactive_exercised) / max(1, len(interactive_seen))`.
-- Sets `exploration_complete = True` only when `coverage_achieved >= coverage_target`
-  AND `nav_frontier` is empty.
-- **In replay/ci mode:** validates `a11y_hash` and `screenshot_hash` against the immutable
-  golden baseline for each milestone step. Emits `STRUCTURAL_CHANGE` on a11y drift or
-  `VISUAL_WARN` on screenshot-hash divergence without failing the step outright.
+- Разбирает сырое a11y-дерево в типизированную структуру `PageModel`.
+- Обновляет `interactive_seen` и `nav_frontier` на основе вновь обнаруженных элементов и ссылок.
+- Вычисляет `coverage_achieved = len(interactive_exercised) / max(1, len(interactive_seen))`.
+- Устанавливает `exploration_complete = True` только когда `coverage_achieved >= coverage_target`
+  И `nav_frontier` пуст.
+- **В режиме replay/ci:** проверяет `a11y_hash` и `screenshot_hash` по неизменяемой эталонной
+  базовой линии для каждого этапного шага. Генерирует `STRUCTURAL_CHANGE` при дрейфе a11y
+  или `VISUAL_WARN` при расхождении screenshot-хеша, не считая шаг провальным.
 
 ### 3.3 `plan`
 
-**LLM: Opus 4.8, temperature = 0. Explore mode only.**
+**LLM: Opus 4.8, temperature = 0. Только режим explore.**
 
-- Skipped entirely in `replay` and `ci` modes — `ground` routes straight to `act`.
-- Input context: `page_model`, episodic tail from `episodic_buffer`, `nav_frontier`,
-  remaining token budget, and `coverage_achieved`.
-- Output: one or more `PlannedAction` entries to append to `exploration_plan`, or a
-  *proposed* `exploration_complete = True`.
-- The LLM may propose done but the flag is only set if the coverage metric independently
-  confirms it (`ground` owns the authoritative check).
-- Applies an in-process budget pre-check before the LLM call; degrades gracefully (partial
-  plan freeze) rather than aborting.
-- On completion of exploration: freezes `plan.json` and computes `plan_hash`.
+- Полностью пропускается в режимах `replay` и `ci` — `ground` направляет управление прямо в `act`.
+- Входной контекст: `page_model`, хвост эпизодических событий из `episodic_buffer`, `nav_frontier`,
+  оставшийся токен-бюджет и `coverage_achieved`.
+- Вывод: одна или несколько записей `PlannedAction` для добавления в `exploration_plan`, либо
+  *предложение* `exploration_complete = True`.
+- LLM может предложить завершение, но флаг устанавливается только при независимом
+  подтверждении метрикой покрытия (авторитетная проверка принадлежит `ground`).
+- Выполняет внутрипроцессную предварительную проверку бюджета перед вызовом LLM;
+  при недостатке бюджета деградирует мягко (частичная заморозка плана), а не аварийно завершается.
+- По завершении исследования: замораживает `plan.json` и вычисляет `plan_hash`.
 
 ### 3.4 `act`
 
-**LLM: None.**
+**LLM: нет.**
 
-- Pops `exploration_plan[current_step]`.
-- **Explore mode:** executes the action via `pw-executor` using the `locator_hint` from
-  the plan.
-- **Replay/ci mode:** executes the *frozen* locator from the committed `plan.json`.
-  No LLM invoked; zero token cost on the happy path.
-- Appends a skeleton `ExecutedAction` record to `executed_actions`.
-- On any `pw-executor` error (selector not found, element not interactable, etc.): routes
-  to `verify`, which classifies the failure before escalating to `heal`.
+- Извлекает `exploration_plan[current_step]`.
+- **Режим explore:** выполняет действие через `pw-executor`, используя `locator_hint` из плана.
+- **Режим replay/ci:** выполняет *замороженный* локатор из зафиксированного `plan.json`.
+  LLM не вызывается; нулевые токен-расходы на успешном пути.
+- Добавляет скелетную запись `ExecutedAction` в `executed_actions`.
+- При любой ошибке `pw-executor` (селектор не найден, элемент не взаимодействуем и т.п.):
+  направляет в `verify`, который классифицирует сбой перед передачей в `heal`.
 
 ### 3.5 `verify`
 
-**LLM: Conditional — Sonnet 4.6 only for explore-mode soft assertion.**
+**LLM: условно — Sonnet 4.6 только для мягкой проверки утверждений в режиме explore.**
 
-- Re-snapshots the page inline (calls `pw-executor accessibility_snapshot()` after the action).
-- Classifies the outcome into one of:
+- Повторно снимает снимок страницы inline (вызывает `pw-executor accessibility_snapshot()` после действия).
+- Классифицирует результат в одну из категорий:
   - `PASS`
-  - `LOCATOR_STALE` — element present in the a11y tree but selector no longer resolves
-  - `ELEMENT_GONE` — element absent from the tree (removed, conditional, or A/B variant)
-  - `TIMING` — element present but not yet interactable; retry `act` once with a short wait
-    *before* escalating to `heal`
-  - `UNEXPECTED_ERROR` — navigation/network/JS error; not healed, routed directly to `report`
-- **In replay mode:** performs a structural a11y diff against the golden baseline
-  (`diff_ratio` check) and a screenshot-hash comparison for milestone steps.
-- **In explore mode:** uses Sonnet for soft assertion evaluation when the step has a
-  non-trivial `expected_outcome`/`assertion`.
-- A genuine assertion mismatch (element found, observed value wrong) is a real `FAIL`
-  and is NOT healed — it routes to `report`.
+  - `LOCATOR_STALE` — элемент присутствует в a11y-дереве, но селектор более не разрешается
+  - `ELEMENT_GONE` — элемент отсутствует в дереве (удалён, условный или вариант A/B)
+  - `TIMING` — элемент присутствует, но ещё не доступен для взаимодействия; выполнить одну
+    повторную попытку `act` с коротким ожиданием *перед* эскалацией в `heal`
+  - `UNEXPECTED_ERROR` — ошибка навигации/сети/JS; не восстанавливается, направляется прямо в `report`
+- **В режиме replay:** выполняет структурный a11y-diff по эталонной базовой линии
+  (проверка `diff_ratio`) и сравнение screenshot-хешей для этапных шагов.
+- **В режиме explore:** использует Sonnet для оценки мягких утверждений, когда шаг содержит
+  нетривиальные `expected_outcome`/`assertion`.
+- Подлинное несоответствие утверждения (элемент найден, но наблюдаемое значение неверно) — это
+  настоящий `FAIL`, который НЕ восстанавливается — направляется в `report`.
 
 ### 3.6 `heal`
 
-**LLM: Conditional — Sonnet 4.6 (a11y re-grounding, visual set-of-marks).**
+**LLM: условно — Sonnet 4.6 (повторное связывание с a11y-деревом, визуальный set-of-marks).**
 
-Delegates all healing logic to the `healing-engine` module.
-Operates on `HealingContext {semantic_id, failure_type, attempted_locator, element_description}`.
+Делегирует всю логику восстановления модулю `healing-engine`.
+Работает с `HealingContext {semantic_id, failure_type, attempted_locator, element_description}`.
 
-Healing proceeds in bounded, ordered steps:
+Восстановление выполняется ограниченным и упорядоченным образом:
 
-1. **Cache lookup** (zero LLM): query `store-gateway` for a `healed_locator` matching
-   `(page_url, semantic_id)` with a still-valid `dom_subtree_hash`. On hit: reuse immediately.
-   On miss: evict (mark `deprecated`) and proceed.
-2. **Strategy rotation L1–L6** (zero LLM): probe candidates in order via `pw-executor`;
-   take the first resolving to exactly one element.
+1. **Поиск в кеше** (нулевой LLM): запрос к `store-gateway` для поиска `healed_locator`,
+   соответствующего `(page_url, semantic_id)` с действующим `dom_subtree_hash`. При попадании:
+   немедленное переиспользование. При промахе: выгрузить (пометить `deprecated`) и продолжить.
+2. **Ротация стратегий L1–L6** (нулевой LLM): проверка кандидатов по порядку через `pw-executor`;
+   выбрать первого, разрешающего в ровно один элемент.
 
-   | Level | Strategy | Prior |
+   | Уровень | Стратегия | Prior |
    |---|---|---|
    | L1 | `data-testid` / `data-cy` / `data-pw` | 0.95 |
-   | L2 | ARIA role + accessible name | 0.90 |
-   | L3 | `aria-label` exact match | 0.88 |
-   | L4 | Visible text + role | 0.80 |
-   | L5 | Scoped CSS (semantic container + element type) | 0.65 |
-   | L6 | XPath positional | 0.45 |
+   | L2 | ARIA role + доступное имя | 0.90 |
+   | L3 | точное совпадение `aria-label` | 0.88 |
+   | L4 | Видимый текст + role | 0.80 |
+   | L5 | Ограниченный CSS (семантический контейнер + тип элемента) | 0.65 |
+   | L6 | Позиционный XPath | 0.45 |
 
-   A match at L5/L6 emits a `strategy_degradation` metric (DOM instability signal).
+   Совпадение на L5/L6 генерирует метрику `strategy_degradation` (сигнал нестабильности DOM).
 
-3. **LLM a11y re-grounding** (Sonnet 4.6, structured output): only if cache + L1–L6 all fail.
-   Applies LLM-overconfidence discount `× 0.90`.
-4. **Visual set-of-marks** (Sonnet 4.6 vision): only if `completeness_ratio < 0.30`
-   AND step 3 failed AND the M5 PoC validated `> 70%` accuracy on 20 real broken-selector
-   scenarios. Returns a `mark_number` mapped to a real semantic locator, not a coordinate click.
-   Applies visual discount `× 0.85`.
-5. **Verify-before-accept**: every LLM/visual candidate is re-probed against the live DOM
-   via `pw-executor`. If it does not resolve to exactly one element, confidence is zeroed.
-6. **Confidence gate**:
-   - `≥ 0.85` → auto-heal: run the action once with the healed locator; on success persist
-     `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`.
-   - `0.60–0.84` → flagged: apply optimistically, set `healing_flagged = True`, persist with
-     `review_required = True`; surfaces in the run report.
-   - `< 0.60` → human gate: do not persist; emit `NEEDS_HUMAN_REVIEW`; in CI auto-skip
-     the step; in interactive mode pause at `checkpoint` until `agentctl gate` resolves it.
-7. **Audit** (append-only): every attempt writes a `healing_audit` row — no `UPDATE`/`DELETE`
-   ever. Written as `healing-audit.jsonl` CI artifact and as OTel span attributes
-   (selector + confidence only; never prompt content).
-8. **Bounded retry + quarantine**: `heal_attempts` hard-capped at 3 (explore) / 2 (replay).
-   On cap: AUT-SHA-gated flake quarantine — a step is quarantined only when it fails in
-   N-of-5 recent runs *without* an AUT git-SHA change.
+3. **Повторное связывание с a11y через LLM** (Sonnet 4.6, структурированный вывод): только если
+   кеш + L1–L6 — все не подошли. Применяет скидку на самоуверенность LLM `× 0.90`.
+4. **Визуальный set-of-marks** (Sonnet 4.6 vision): только при `completeness_ratio < 0.30`
+   И неудаче шага 3, И при том что M5 PoC подтвердил точность `> 70%` на 20 реальных сценариях
+   с нерабочими селекторами. Возвращает `mark_number`, отображённый в реальный семантический
+   локатор, а не в координатный клик. Применяет визуальную скидку `× 0.85`.
+5. **Проверка перед принятием**: каждый LLM/визуальный кандидат повторно проверяется в живом DOM
+   через `pw-executor`. Если он не разрешается в ровно один элемент, уверенность обнуляется.
+6. **Порог уверенности**:
+   - `≥ 0.85` → автоматическое восстановление: выполнить действие с восстановленным локатором;
+     при успехе сохранить `HealedLocator(status=active)`, привязанный к `(page_url, semantic_id, dom_subtree_hash)`.
+   - `0.60–0.84` → помечено: применить оптимистически, установить `healing_flagged = True`,
+     сохранить с `review_required = True`; отображается в отчёте запуска.
+   - `< 0.60` → «шлюз» оператора: не сохранять; генерировать `NEEDS_HUMAN_REVIEW`; в CI
+     автоматически пропустить шаг; в интерактивном режиме приостановить на `checkpoint`
+     до разрешения через `agentctl gate`.
+7. **Аудит** (только добавление): каждая попытка записывает строку в `healing_audit` —
+   никаких `UPDATE`/`DELETE`. Записывается как CI-артефакт `healing-audit.jsonl` и как
+   атрибуты OTel span (только selector + confidence; содержимое промптов никогда не включается).
+8. **Ограниченные повторы + карантин**: `heal_attempts` жёстко ограничен до 3 (explore) / 2 (replay).
+   При достижении лимита: карантин нестабильных тестов с учётом AUT SHA — шаг помещается
+   в карантин только при N неудачах из 5 последних запусков *без* изменения AUT git-SHA.
 
-> **Cold-start note:** the auto-accept threshold defaults to **0.90** (not 0.85) until
-> enough human-verified outcomes accumulate for `agentctl calibrate` to compute
-> precision/recall and lower it safely.
+> **Замечание по холодному старту:** порог автоматического принятия по умолчанию равен **0.90**
+> (не 0.85), пока не накопится достаточно верифицированных человеком результатов для вычисления
+> precision/recall командой `agentctl calibrate` и безопасного снижения порога.
 
 ### 3.7 `checkpoint`
 
-**LLM: None.**
+**LLM: нет.**
 
-- Flushes the LangGraph checkpoint to the separate checkpoint DB
+- Сбрасывает LangGraph checkpoint в отдельную БД checkpoint
   (`SqliteSaver` / `AsyncPostgresSaver`).
-- Flushes `pending healed_locators` and the updated `page_model` to `store-gateway`
-  via `PersistenceService` gRPC.
-- Records a `checkpoint_id` event with the Go `orchestrator`.
-- Resets `heal_attempts` and clears `healing_context`.
-- **If `human_gate_pending = True`:** calls `RunControl.Checkpoint` / `Pause` on the
-  orchestrator and suspends the LangGraph thread until `agentctl gate approve|skip|abort`
-  delivers a resolution via gRPC. In CI mode the gate auto-skips after the configured
-  timeout (default 30 min).
+- Сбрасывает ожидающие `healed_locators` и обновлённый `page_model` в `store-gateway`
+  через gRPC `PersistenceService`.
+- Записывает событие `checkpoint_id` в Go `orchestrator`.
+- Сбрасывает `heal_attempts` и очищает `healing_context`.
+- **Если `human_gate_pending = True`:** вызывает `RunControl.Checkpoint` / `Pause` на оркестраторе
+  и приостанавливает поток LangGraph до получения решения через gRPC от `agentctl gate approve|skip|abort`.
+  В режиме CI «шлюз» автоматически пропускается по истечении настроенного таймаута (по умолчанию 30 мин).
 
 ### 3.8 `report`
 
-**LLM: None. Terminal node.**
+**LLM: нет. Терминальный узел.**
 
-- Stops the `pw-executor` Playwright trace; relays `trace_path` to the orchestrator via gRPC.
-- Serialises `plan.json` (with `plan_hash` + dual golden baselines) if not yet frozen.
-- Builds the `RunResult`:
-  - Per-step outcomes: `PASS` / `FAIL` / `SKIP` / `HEALED` / `QUARANTINED`
-  - Healing-audit section (original vs healed locator, confidence, reasoning,
-    flagged-for-review list)
-  - Golden-diff and screenshot-hash drift warnings
-  - Coverage map (exercised vs discovered elements)
-  - Cost breakdown by node and model
-  - Human-gate pending list
-  - Plan integrity status
-- Calls `WriteRunResult` on `store-gateway`.
-- Emits `DONE` event to the orchestrator (exit code propagated to `agentctl`).
+- Останавливает Playwright-трассировку `pw-executor`; передаёт `trace_path` оркестратору через gRPC.
+- Сериализует `plan.json` (с `plan_hash` + двойными эталонными базовыми линиями),
+  если ещё не заморожен.
+- Формирует `RunResult`:
+  - Результаты по шагам: `PASS` / `FAIL` / `SKIP` / `HEALED` / `QUARANTINED`
+  - Раздел аудита восстановления (оригинальный и восстановленный локатор, уверенность,
+    обоснование, список отмеченных для проверки)
+  - Предупреждения о дрейфе golden-diff и screenshot-хешей
+  - Карта покрытия (обработанные vs обнаруженные элементы)
+  - Разбивка стоимости по узлам и моделям
+  - Список ожидающих решения на «шлюзе» оператора
+  - Статус целостности плана
+- Вызывает `WriteRunResult` на `store-gateway`.
+- Генерирует событие `DONE` для оркестратора (код завершения передаётся в `agentctl`).
 
 ---
 
-## 4. Edges
+## 4. Рёбра
 
-### 4.1 Edge Table
+### 4.1 Таблица рёбер
 
-| From | To | Condition / Trigger |
+| От | До | Условие / Триггер |
 |---|---|---|
-| `START` | `perceive` | Always (graph entry) |
-| `perceive` | `ground` | Always |
+| `START` | `perceive` | Всегда (вход в граф) |
+| `perceive` | `ground` | Всегда |
 | `ground` | `plan` | `run_mode == "explore"` AND `not exploration_complete` |
 | `ground` | `act` | `run_mode in {"replay", "ci"}` OR (`explore` AND plan exists AND `current_step > 0`) |
 | `ground` | `report` | `run_mode == "explore"` AND `exploration_complete` |
-| `plan` | `checkpoint` | Plan just frozen (exploration complete at planning layer) |
-| `plan` | `act` | Next action queued; exploration continuing |
-| `plan` | `report` | `exploration_complete` confirmed OR budget exhausted |
-| `act` | `verify` | Always |
-| `verify` | `heal` | Outcome is `LOCATOR_STALE` OR `ELEMENT_GONE` OR `TIMING` |
-| `verify` | `checkpoint` | Outcome is `PASS` AND `step.is_milestone == True` |
-| `verify` | `act` | Outcome is `PASS` AND `not is_milestone` AND steps remain |
-| `verify` | `report` | All steps done OR outcome is `UNEXPECTED_ERROR` OR genuine `FAIL` on a critical step |
-| `heal` | `act` | `confidence >= 0.60` AND `heal_attempts < cap` — retry with healed locator |
-| `heal` | `checkpoint` | `confidence < 0.60` — human gate raised |
-| `heal` | `checkpoint` | `heal_attempts >= cap` — quarantine and flush |
-| `heal` | `act` *(next step)* | Heal failed AND `step.is_critical == False` — skip step, continue |
-| `checkpoint` | `heal` | Human gate resolved with `decision == "approve"` and a locator |
-| `checkpoint` | `act` | Human gate resolved with `decision == "skip"` — resume at next step |
-| `checkpoint` | `END` | Human gate resolved with `decision == "abort"` |
-| `checkpoint` | `perceive` | Normal cycle continuation (no gate, no terminal condition) |
-| `checkpoint` | `report` | Terminal condition met: coverage achieved OR budget exhausted OR `stop_signal` |
-| `report` | `END` | Always (terminal) |
+| `plan` | `checkpoint` | План только что заморожен (исследование завершено на уровне планирования) |
+| `plan` | `act` | Следующее действие поставлено в очередь; исследование продолжается |
+| `plan` | `report` | `exploration_complete` подтверждён ИЛИ бюджет исчерпан |
+| `act` | `verify` | Всегда |
+| `verify` | `heal` | Результат — `LOCATOR_STALE` ИЛИ `ELEMENT_GONE` ИЛИ `TIMING` |
+| `verify` | `checkpoint` | Результат — `PASS` И `step.is_milestone == True` |
+| `verify` | `act` | Результат — `PASS` И `not is_milestone` И шаги остаются |
+| `verify` | `report` | Все шаги выполнены ИЛИ результат `UNEXPECTED_ERROR` ИЛИ подлинный `FAIL` на критическом шаге |
+| `heal` | `act` | `confidence >= 0.60` И `heal_attempts < cap` — повтор с восстановленным локатором |
+| `heal` | `checkpoint` | `confidence < 0.60` — активирован «шлюз» оператора |
+| `heal` | `checkpoint` | `heal_attempts >= cap` — карантин и сброс |
+| `heal` | `act` *(следующий шаг)* | Восстановление не удалось И `step.is_critical == False` — пропустить шаг, продолжить |
+| `checkpoint` | `heal` | «Шлюз» оператора разрешён с `decision == "approve"` и локатором |
+| `checkpoint` | `act` | «Шлюз» оператора разрешён с `decision == "skip"` — продолжить со следующего шага |
+| `checkpoint` | `END` | «Шлюз» оператора разрешён с `decision == "abort"` |
+| `checkpoint` | `perceive` | Нормальное продолжение цикла (нет шлюза, нет терминального условия) |
+| `checkpoint` | `report` | Терминальное условие: достигнуто покрытие ИЛИ бюджет исчерпан ИЛИ `stop_signal` |
+| `report` | `END` | Всегда (терминальный) |
 
-### 4.2 Conditional Edge Logic — Summary
+### 4.2 Логика условных рёбер — сводка
 
-Three nodes emit conditional edges driven by `RunState` fields:
+Три узла генерируют условные рёбра на основе полей `RunState`:
 
-**`ground`** (mode router):
+**`ground`** (маршрутизатор режимов):
 ```
 if run_mode == "explore" and exploration_complete  →  report
 if run_mode == "explore" and not exploration_complete  →  plan
@@ -333,7 +336,7 @@ if run_mode in {"replay", "ci"}  →  act
 if run_mode == "explore" and plan_exists and current_step > 0  →  act
 ```
 
-**`verify`** (outcome classifier):
+**`verify`** (классификатор результатов):
 ```
 if outcome in {LOCATOR_STALE, ELEMENT_GONE, TIMING}  →  heal
 if outcome == PASS and is_milestone  →  checkpoint
@@ -341,7 +344,7 @@ if outcome == PASS and not is_milestone and steps_remain  →  act
 else (done | error | critical fail)  →  report
 ```
 
-**`heal`** (confidence gate + attempt cap):
+**`heal`** (порог уверенности + лимит попыток):
 ```
 if confidence >= 0.60 and heal_attempts < cap  →  act          # retry
 if confidence < 0.60  →  checkpoint                            # human gate
@@ -349,7 +352,7 @@ if heal_attempts >= cap  →  checkpoint                         # quarantine
 if heal_failed and not is_critical  →  act (next step)         # skip
 ```
 
-**`checkpoint`** (gate resolver + cycle controller):
+**`checkpoint`** (обработчик «шлюза» + контроллер цикла):
 ```
 if human_gate_pending and decision == "approve"  →  heal
 if human_gate_pending and decision == "skip"  →  act
@@ -360,7 +363,7 @@ else  →  perceive
 
 ---
 
-## 5. ASCII Flow Diagram
+## 5. ASCII-диаграмма потока
 
 ```
                         ┌─────────┐
@@ -441,44 +444,44 @@ else  →  perceive
                   (explore+complete OR budget OR stop)
 ```
 
-> Simplified for readability — see Section 4 for the precise conditional rules.
-> `checkpoint → perceive` (normal cycle) is the primary back-edge driving the loop.
+> Упрощено для наглядности — точные условные правила см. в Разделе 4.
+> `checkpoint → perceive` (нормальный цикл) — основное обратное ребро, управляющее циклом.
 
 ---
 
-## 6. LLM Usage Per Node — Quick Reference
+## 6. Использование LLM по узлам — краткий справочник
 
-| Node | LLM Called | Model | When |
+| Узел | LLM-вызов | Модель | Когда |
 |---|---|---|---|
-| `perceive` | No | — | — |
-| `ground` | No | — | — |
-| `plan` | Yes | Opus 4.8 (temperature 0) | Explore mode only; skipped in replay/ci |
-| `act` | No | — | — |
-| `verify` | Conditional | Sonnet 4.6 | Explore mode only, for soft assertion evaluation |
-| `heal` | Conditional | Sonnet 4.6 | Only after cache + L1–L6 rotation fail; vision also Sonnet |
-| `checkpoint` | No | — | — |
-| `report` | No | — | — |
+| `perceive` | Нет | — | — |
+| `ground` | Нет | — | — |
+| `plan` | Да | Opus 4.8 (temperature 0) | Только в режиме explore; пропускается в replay/ci |
+| `act` | Нет | — | — |
+| `verify` | Условно | Sonnet 4.6 | Только в режиме explore, для оценки мягких утверждений |
+| `heal` | Условно | Sonnet 4.6 | Только после того, как кеш + ротация L1–L6 не дали результата; визуальный режим тоже Sonnet |
+| `checkpoint` | Нет | — | — |
+| `report` | Нет | — | — |
 
-**Budget defaults** (configurable; enforced in-process with Go-side hard ceiling):
+**Значения бюджета по умолчанию** (настраиваемые; применяются внутри процесса с жёстким потолком на стороне Go):
 
-| Budget key | Model | Default |
+| Ключ бюджета | Модель | По умолчанию |
 |---|---|---|
-| `plan_token_limit` | Opus 4.8 | 50,000 tokens / run |
-| `heal_token_limit` | Sonnet 4.6 | 20,000 tokens / run |
+| `plan_token_limit` | Opus 4.8 | 50 000 токенов / запуск |
+| `heal_token_limit` | Sonnet 4.6 | 20 000 токенов / запуск |
 
-Exceeding 80% of any budget emits `BUDGET_WARNING`; exhaustion degrades gracefully
-(plan node stops issuing new exploration steps; heal node falls back to L1–L6 rotation only)
-rather than aborting the run.
+При превышении 80% любого бюджета генерируется `BUDGET_WARNING`; при исчерпании бюджета
+система деградирует мягко (узел plan прекращает выдавать новые шаги исследования;
+узел heal откатывается только к ротации L1–L6), а не аварийно завершает запуск.
 
 ---
 
-## 7. pw-executor — Build Note
+## 7. pw-executor — замечание о сборке
 
-All references above to `pw-executor` refer to our **own TypeScript Playwright execution server**
-that we build and maintain. It implements the MCP/JSON-RPC 2.0 stdio transport interface and
-exposes browser primitives (navigation, `accessibility_snapshot`, `click`/`type`, trace control,
-and `screenshot`) to the Python brain over a stdio pipe. The brain spawns it as a child process
-and owns its lifecycle; SIGTERM cascades on brain exit.
+Все упоминания `pw-executor` выше относятся к нашему **собственному TypeScript-серверу выполнения Playwright**,
+который мы создаём и поддерживаем. Он реализует транспортный интерфейс MCP/JSON-RPC 2.0 через stdio и
+предоставляет примитивы браузера (навигация, `accessibility_snapshot`, `click`/`type`,
+управление трассировкой и `screenshot`) Python-мозгу через stdio-канал. Мозг запускает его
+как дочерний процесс и управляет его жизненным циклом; SIGTERM каскадирует при выходе мозга.
 
-Any API surface details flagged as **VERIFY** must be confirmed against the actual
-`pw-executor` implementation before deployment.
+Любые детали API-поверхности, помеченные как **VERIFY**, необходимо подтвердить по реальной
+реализации `pw-executor` перед развёртыванием.

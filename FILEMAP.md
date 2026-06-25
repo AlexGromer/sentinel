@@ -2,6 +2,12 @@
 
 <!-- Check this before Glob/Grep. Update on file create/delete/major refactor. -->
 
+## Documentation language
+Docs are **bilingual**: every `*.md` is the **Russian primary (authoritative)** version and
+carries a paired `*.en.md` English copy (e.g. `README.md` ↔ `README.en.md`). Each file links to
+its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror into `.en.md`.
+(`FILEMAP.md` and `BACKLOG.md` are working files — kept single-language.)
+
 ## Quick Reference — docs
 | Path | Purpose | Key contents |
 |------|---------|--------------|
@@ -40,25 +46,6 @@
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
-| docs/M5_CONTRACT.md | Documentation | — |
-| Dockerfile | Container definition | — |
-| .dockerignore | Project file | — |
-| deploy/sentinel/Chart.yaml | Configuration | — |
-| deploy/sentinel/values.yaml | Configuration | — |
-| deploy/sentinel/values-dev.yaml | Configuration | — |
-| deploy/sentinel/values-staging.yaml | Configuration | — |
-| deploy/sentinel/values-prod.yaml | Configuration | — |
-| deploy/sentinel/templates/_helpers.tpl | Project file | — |
-| deploy/sentinel/templates/cronjob.yaml | Configuration | — |
-| deploy/sentinel/templates/configmap.yaml | Configuration | — |
-| deploy/sentinel/templates/serviceaccount.yaml | Configuration | — |
-| deploy/sentinel/templates/pvc.yaml | Configuration | — |
-| deploy/sentinel/.helmignore | Project file | — |
-| deploy/argocd/sentinel-app.yaml | Configuration | — |
-| tests/test_m5_offline.py | Tests | — |
-| docs/M4b_CONTRACT.md | Documentation | — |
-| brain/otel.py | Python source | — |
-| tests/test_m4b_offline.py | Tests | — |
 ## Directory Structure
 ```
 agent_development/
@@ -91,5 +78,5 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
-- Last updated: 2026-06-24
+- Last updated: 2026-06-25
 - Phase: **M0–M4 + M2b-1 done — gates green**. Next: M2b-2 (MCP transport), then M4b / M5.

@@ -1,22 +1,24 @@
 # M1 Contract — "Autonomous Walk" (frozen 2026-06-23)
 
-Goal: turn M0's linear `perceive` into a real **LangGraph StateGraph** that autonomously
-explores a multi-page site, converges on a **measurable coverage target**, and freezes a
-deterministic `plan.json` (+ `plan_hash`). Heal stays a stub (M2). Transport stays the M0
-JSON-RPC (MCP-SDK migration deferred to M2, GAP-VERIFY-002).
+> 🌐 **Русский** (основная версия) · [English](M1_CONTRACT.en.md)
+
+Цель: превратить линейный `perceive` из M0 в реальный **LangGraph StateGraph**, который автономно
+исследует многостраничный сайт, сходится к **измеримой цели по покрытию** и фиксирует
+детерминированный `plan.json` (+ `plan_hash`). Heal остаётся заглушкой (M2). Транспорт остаётся
+JSON-RPC из M0 (миграция на MCP-SDK отложена до M2, GAP-VERIFY-002).
 
 ## Planner (ADR-011 — pluggable)
 `Planner.propose(state) -> {action: PlannedAction|None, done: bool, reason: str}`
-- **HeuristicPlanner** (default, offline, deterministic, $0): on the current page, pick the first
-  *unexercised* interactive element (reading order, prefer button/link); else navigate to the next
-  same-origin URL in `nav_frontier`; else `done`. No LLM, no network.
-- **LLMPlanner** (Opus 4.8, T=0; `--planner llm`): prompt = page_model summary + seen/exercised +
-  frontier + remaining budget → next-action JSON. Requires `ANTHROPIC_API_KEY`; on missing key or
-  error → **falls back to HeuristicPlanner** (graceful degradation). Logs tokens to transcript.
-- Convergence gate (ADR-010) is enforced by the graph, NOT the planner: `exploration_complete` is set
-  True only when `coverage_achieved >= coverage_target` AND `nav_frontier` empty. `max_steps` is a backstop.
+- **HeuristicPlanner** (по умолчанию, offline, детерминированный, $0): на текущей странице выбирает первый
+  *неиспользованный* интерактивный элемент (в порядке чтения, предпочтение button/link); иначе переходит к следующему
+  URL с тем же источником из `nav_frontier`; иначе `done`. Нет LLM, нет сети.
+- **LLMPlanner** (Opus 4.8, T=0; `--planner llm`): prompt = краткое описание page_model + seen/exercised +
+  frontier + оставшийся бюджет → JSON следующего действия. Требует `ANTHROPIC_API_KEY`; при отсутствии ключа или
+  ошибке → **переключается на HeuristicPlanner** (graceful degradation). Записывает токены в транскрипт.
+- Гейт сходимости (ADR-010) обеспечивается графом, НЕ планировщиком: `exploration_complete` устанавливается
+  в True только когда `coverage_achieved >= coverage_target` И `nav_frontier` пуст. `max_steps` — предохранитель.
 
-## RunState (M1 subset; TypedDict)
+## RunState (подмножество M1; TypedDict)
 ```
 run_id, run_mode='explore', target_url, base_origin, current_url
 page_model: {url, title, aria, interactive: [{semantic_id, role, name, kind}], link_count}
@@ -27,51 +29,51 @@ executed_actions:list; episodic:list; token_usage:dict
 max_steps=40 (backstop); artifact_dir; errors:list
 ```
 `PlannedAction = {step_id, intent, semantic_id, action_type:'navigate'|'click', target, locator:{role,name}|{css}, is_milestone}`
-`semantic_id = sha1(f"{url_path}|{role}|{name}")[:12]` (stable across runs of the same DOM).
+`semantic_id = sha1(f"{url_path}|{role}|{name}")[:12]` (стабильный между запусками для одного и того же DOM).
 
-## Nodes (9) and edges
-`perceive → ground → plan → act → verify → (heal*) → checkpoint → report`  (* heal = stub @ M1)
-- **perceive**: `browser.snapshot` + `browser.currentUrl` → page_model; start trace at run start.
-- **ground**: parse interactive elements → assign semantic_ids → update `interactive_seen`;
-  `browser.links` → push same-origin unseen URLs to `nav_frontier`; recompute `coverage_achieved`.
-- **plan**: `Planner.propose`; append PlannedAction OR set `exploration_complete` (gated). Log to transcript.
-- **act**: execute via pw-executor (`browser.navigate` | `browser.click`); record executed_action;
-  mark semantic_id exercised; `current_step++`.
-- **verify**: re-snapshot; classify PASS / changed. M1 heal is a stub → failure logs + continues.
-- **heal**: STUB — logs "heal deferred to M2"; routes to checkpoint.
-- **checkpoint**: LangGraph `SqliteSaver` checkpoint to a **SEPARATE** db `runs/<id>/checkpoint.db`.
-- **report**: freeze `plan.json` + compute `plan_hash`; stop trace; print summary.
+## Узлы (9) и рёбра
+`perceive → ground → plan → act → verify → (heal*) → checkpoint → report`  (* heal = заглушка @ M1)
+- **perceive**: `browser.snapshot` + `browser.currentUrl` → page_model; запускает трассировку в начале запуска.
+- **ground**: разбор интерактивных элементов → назначение semantic_ids → обновление `interactive_seen`;
+  `browser.links` → добавление непросмотренных URL с тем же источником в `nav_frontier`; пересчёт `coverage_achieved`.
+- **plan**: `Planner.propose`; добавление PlannedAction ИЛИ установка `exploration_complete` (с гейтом). Запись в транскрипт.
+- **act**: выполнение через pw-executor (`browser.navigate` | `browser.click`); запись executed_action;
+  пометка semantic_id как использованного; `current_step++`.
+- **verify**: повторный снимок; классификация PASS / changed. Heal в M1 — заглушка → ошибка логируется, выполнение продолжается.
+- **heal**: ЗАГЛУШКА — логирует "heal deferred to M2"; направляет в checkpoint.
+- **checkpoint**: LangGraph `SqliteSaver` checkpoint в **отдельную** БД `runs/<id>/checkpoint.db`.
+- **report**: фиксация `plan.json` + вычисление `plan_hash`; остановка трассировки; вывод сводки.
 
-Conditional edges: `ground→report` if explore_complete; `plan→report` if done/`max_steps`; else loop
-`checkpoint→perceive`. `verify→heal` on failure (stub), else `verify→checkpoint`.
+Условные рёбра: `ground→report` если explore_complete; `plan→report` при done/`max_steps`; иначе цикл
+`checkpoint→perceive`. `verify→heal` при ошибке (заглушка), иначе `verify→checkpoint`.
 
-## pw-executor — new tools (M1)
+## pw-executor — новые инструменты (M1)
 | Method | Params | Result |
 |--------|--------|--------|
-| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url}` (via `getByRole`/css) |
-| `browser.links` | — | `{links:[{href,text}]}` (anchors; brain filters same-origin) |
+| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url}` (через `getByRole`/css) |
+| `browser.links` | — | `{links:[{href,text}]}` (якоря; brain фильтрует по same-origin) |
 | `browser.currentUrl` | — | `{url, title}` |
-(plus M0: `initialize`, `browser.navigate`, `browser.snapshot`, `browser.traceStop`, `shutdown`)
+(плюс из M0: `initialize`, `browser.navigate`, `browser.snapshot`, `browser.traceStop`, `shutdown`)
 
-## Artifacts
+## Артефакты
 - `plan.json`: `{plan_id, plan_hash, target_url, run_mode, coverage_target, coverage_achieved,
   interactive_seen, interactive_exercised, steps:[PlannedAction]}`.
-- **`plan_hash`** = `sha256(canonical_json(steps))` — sorted keys, `(",",":")` separators, floats→6dp;
-  **EXCLUDES** volatile fields (`plan_id`, timestamps) so re-runs over the same DOM are bit-identical.
-- `llm-transcript.jsonl`: one line per plan decision `{step, planner, model|null, prompt_tokens|null,
+- **`plan_hash`** = `sha256(canonical_json(steps))` — отсортированные ключи, разделители `(",",":")`, числа с плавающей запятой→6 знаков;
+  **ИСКЛЮЧАЕТ** волатильные поля (`plan_id`, временные метки), поэтому повторные запуски над одним и тем же DOM побитово идентичны.
+- `llm-transcript.jsonl`: одна строка на каждое решение планировщика `{step, planner, model|null, prompt_tokens|null,
   completion_tokens|null, decision, reason}`.
-- `trace.zip` (as M0).
+- `trace.zip` (как в M0).
 
 ## Env / spawn
-- `brain/pyproject.toml`: deps `langgraph`, `langgraph-checkpoint-sqlite`, `anthropic`. Managed by **uv** (`.venv`).
-- agentctl spawns the venv python: `BRAIN_PYTHON` env (default `<repo>/.venv/bin/python`, fallback `python3`).
-- agentctl new flags: `--planner heuristic|llm` (default heuristic), `--coverage-target` (0.85), `--max-steps` (40).
+- `brain/pyproject.toml`: зависимости `langgraph`, `langgraph-checkpoint-sqlite`, `anthropic`. Управляется **uv** (`.venv`).
+- agentctl запускает Python из venv: переменная окружения `BRAIN_PYTHON` (по умолчанию `<repo>/.venv/bin/python`, fallback `python3`).
+- Новые флаги agentctl: `--planner heuristic|llm` (по умолчанию heuristic), `--coverage-target` (0.85), `--max-steps` (40).
 
 ## Acceptance gate (Given/When/Then)
-- **GIVEN** a multi-page fixture site (≥3 pages, ≥5 interactive elements, internal links) at `testdata/site/`,
+- **GIVEN** многостраничный фикстурный сайт (≥3 страницы, ≥5 интерактивных элементов, внутренние ссылки) в `testdata/site/`,
 - **WHEN** `agentctl run --explore --target file://.../site/index.html --planner heuristic`,
-- **THEN** `runs/<id>/plan.json` exists with **≥5 steps**, `coverage_achieved` recorded (>0), `plan_hash` present,
-  `trace.zip` present, exit 0; **AND** a second identical run produces the **same `plan_hash`** (determinism).
+- **THEN** `runs/<id>/plan.json` существует с **≥5 шагами**, записанным `coverage_achieved` (>0), наличием `plan_hash`,
+  наличием `trace.zip`, exit 0; **И** второй идентичный запуск даёт **тот же `plan_hash`** (детерминизм).
 
-## Out of scope (M2+)
+## Вне scope (M2+)
 real heal, MCP-SDK transport, gRPC + store-gateway, golden baselines, replay mode.

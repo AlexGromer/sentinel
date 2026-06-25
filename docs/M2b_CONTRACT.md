@@ -1,64 +1,63 @@
 # M2b Contract — "Service Layer" (frozen 2026-06-24)
 
-Goal: pay down the ADR-012 interim deviation — introduce the **Go `store-gateway` (gRPC)** as the
-sole SQLite writer (restores ADR-007) and migrate the brain↔pw-executor transport to the **MCP SDK**
-(closes GAP-VERIFY-002). Pure infrastructure: **no new user-facing value**, and the **least
-offline-testable** milestone (needs live Go+Python+Node processes). Split into two independent halves.
+> 🌐 **Русский** (основная версия) · [English](M2b_CONTRACT.en.md)
 
-## Scope split (do M2b-1 first)
-- **M2b-1 — Go store-gateway + gRPC + proto.** Replace `brain/store.py`'s SQLite with a Go service
-  owning the DB; brain talks to it over gRPC. Restores single-writer (ADR-007).
-- **M2b-2 — MCP-SDK transport.** Replace the hand-rolled newline JSON-RPC (brain↔pw-executor) with
-  the MCP SDK; `pw-executor` becomes an MCP server, brain an MCP client. Closes GAP-VERIFY-002,
-  realizes ADR-002's "LangGraph binds MCP tools natively".
+Цель: погасить долг из временного отклонения ADR-012 — ввести **Go `store-gateway` (gRPC)** как
+единственного SQLite-писателя (восстанавливает ADR-007) и мигрировать транспорт brain↔pw-executor на **MCP SDK**
+(закрывает GAP-VERIFY-002). Чистая инфраструктура: **никакой новой пользовательской ценности**, и **наименее
+offline-тестируемый** milestone (требует живых процессов Go+Python+Node). Разбит на две независимые части.
 
-## Key lever (low-risk swaps)
-`brain/store.py` and `brain/executor.py` are clean interfaces. M2b swaps their **implementations**
-only — `healing.py` / `replay.py` / `calibrate.py` / `graph.py` keep calling the same
-`store.<method>` / `ex.call(method, **params)` and are **unchanged**. This bounds the blast radius.
+## Разбивка scope (выполнять M2b-1 первым)
+- **M2b-1 — Go store-gateway + gRPC + proto.** Заменить SQLite в `brain/store.py` Go-сервисом,
+  владеющим БД; brain общается с ним через gRPC. Восстанавливает single-writer (ADR-007).
+- **M2b-2 — MCP-SDK transport.** Заменить написанный вручную newline JSON-RPC (brain↔pw-executor)
+  MCP SDK; `pw-executor` становится MCP-сервером, brain — MCP-клиентом. Закрывает GAP-VERIFY-002,
+  реализует ADR-002 «LangGraph связывает MCP-инструменты нативно».
+
+## Ключевой рычаг (замены с низким риском)
+`brain/store.py` и `brain/executor.py` — чистые интерфейсы. M2b заменяет только их **реализации** —
+`healing.py` / `replay.py` / `calibrate.py` / `graph.py` продолжают вызывать те же
+`store.<method>` / `ex.call(method, **params)` и остаются **неизменными**. Это ограничивает радиус взрыва.
 
 ## M2b-1 — proto / store-gateway / gRPC
-**proto (`proto/persistence.proto`, protobuf3)** — `PersistenceService` mirrors today's `Store` 1:1:
+**proto (`proto/persistence.proto`, protobuf3)** — `PersistenceService` зеркально повторяет текущий `Store` 1:1:
 `Lookup`, `EvictStale`, `SaveLocator`, `BumpUsed`, `AppendAudit`, `SaveGolden`, `GetGolden`,
-`RecordStep`(→quarantined bool), `IsQuarantined`, `ClearQuarantine`, `AuditRows`(for calibrate).
-Stubs generated for Go + Python in CI; `.proto`-hash asserted against checked-in stubs (drift = build fail).
+`RecordStep`(→quarantined bool), `IsQuarantined`, `ClearQuarantine`, `AuditRows`(для calibrate).
+Стабы генерируются для Go + Python в CI; хэш `.proto` проверяется против зарегистрированных стабов (расхождение = ошибка сборки).
 
-**Go store-gateway (`internal/store/`)** — owns the SQLite (WAL) + schema migrations + single-writer;
-implements `PersistenceService`. Lifecycle: **agentctl spawns it as a child** over a Unix-domain socket
-(local/CI), passing the address to brain via `STORE_ADDR`. TCP option for K3s later.
+**Go store-gateway (`internal/store/`)** — владеет SQLite (WAL) + миграциями схемы + single-writer;
+реализует `PersistenceService`. Жизненный цикл: **agentctl запускает его как дочерний процесс** через Unix-domain socket
+(local/CI), передавая адрес в brain через `STORE_ADDR`. Опция TCP для K3s позже.
 
-**Brain (`brain/store.py`)** — reimplemented as a thin gRPC client preserving the EXACT current method
-signatures (drop-in). `calibrate.py`'s direct `store.db` access is replaced by an `AuditRows` RPC.
+**Brain (`brain/store.py`)** — переписан как тонкий gRPC-клиент, сохраняющий ТОЧНЫЕ текущие сигнатуры методов (drop-in). Прямой доступ `calibrate.py` к `store.db` заменён RPC `AuditRows`.
 
-**Toolchain (VERIFY at impl):** `protoc`/`buf`; Go `google.golang.org/grpc` + `google.golang.org/protobuf`;
-Python `grpcio` + `grpcio-tools`; a pure-Go SQLite driver (`modernc.org/sqlite`, cgo-free) preferred.
+**Toolchain (VERIFY при реализации):** `protoc`/`buf`; Go `google.golang.org/grpc` + `google.golang.org/protobuf`;
+Python `grpcio` + `grpcio-tools`; предпочтителен чистый Go SQLite-драйвер (`modernc.org/sqlite`, cgo-free).
 
-**M2b-1 gate:** with store-gateway running, explore + baseline + replay + calibrate behave identically
-(same exit codes / heal / golden) ; `grep -r sqlite3 brain/` returns nothing (brain holds no DB handle);
-Go unit tests for the gateway; the Python offline suite runs against an in-proc fake store implementing
-the same interface (so trust-layer/heal tests stay browser+grpc-free).
+**Гейт M2b-1:** при работающем store-gateway explore + baseline + replay + calibrate ведут себя идентично
+(те же exit codes / heal / golden); `grep -r sqlite3 brain/` не возвращает ничего (brain не держит дескриптор БД);
+Go unit-тесты для gateway; Python offline-набор работает с in-proc fake store, реализующим тот же интерфейс (так что тесты trust-layer/heal остаются свободными от browser+grpc).
 
 ## M2b-2 — MCP-SDK transport
-**pw-executor** — rewrite `server.ts` on `@modelcontextprotocol/sdk` (`McpServer` + `StdioServerTransport`),
-registering the 7 tools (navigate, snapshot, click, probe, interactives, screenshotHash, traceStop) with
-input schemas; same behaviors, stdout reserved for the protocol.
-**Brain (`brain/executor.py`)** — replace the hand-rolled client with an MCP stdio client (`mcp`), wrapped
-behind the existing `Executor.call(method, **params)` so `graph`/`healing`/`replay` are unchanged. Keep a
-feature-flag fallback to the JSON-RPC client (GAP-VERIFY-002 risk mitigation).
-**Toolchain (VERIFY):** `@modelcontextprotocol/sdk` (npm), `mcp` (pypi) — confirm versions + the
-`McpServer.registerTool` / `ClientSession.call_tool` API before coding (anti-hallucination).
-**M2b-2 gate:** `tools/list` returns the 7 tools; M0–M3 live gates still pass over MCP transport.
+**pw-executor** — переписать `server.ts` на `@modelcontextprotocol/sdk` (`McpServer` + `StdioServerTransport`),
+регистрируя 7 инструментов (navigate, snapshot, click, probe, interactives, screenshotHash, traceStop) со схемами входных данных; поведение то же, stdout зарезервирован для протокола.
+**Brain (`brain/executor.py`)** — заменить написанный вручную клиент MCP stdio-клиентом (`mcp`), обёрнутым
+за существующим `Executor.call(method, **params)`, так что `graph`/`healing`/`replay` не изменяются. Сохранить
+fallback на JSON-RPC клиент с feature-flag (снижение риска GAP-VERIFY-002).
+**Toolchain (VERIFY):** `@modelcontextprotocol/sdk` (npm), `mcp` (pypi) — подтвердить версии + API
+`McpServer.registerTool` / `ClientSession.call_tool` перед кодированием (anti-hallucination).
+**Гейт M2b-2:** `tools/list` возвращает 7 инструментов; live-гейты M0–M3 всё ещё проходят через MCP transport.
 
-## Testability (honest)
-Cross-process gRPC + MCP-stdio can't be fully exercised offline here → the **live gates are handed to
-the user** (as for M0–M3). Offline coverage is preserved via: in-proc fake `PersistenceService` for the
-Python suite, Go unit tests for the gateway, and MCP tool-schema contract tests.
+## Тестируемость (честно)
+Кросс-процессные gRPC + MCP-stdio не могут быть полностью проверены offline здесь → **live-гейты передаются
+пользователю** (как для M0–M3). Offline-покрытие сохраняется через: in-proc fake `PersistenceService` для
+Python-набора, Go unit-тесты для gateway и contract-тесты схемы инструментов MCP.
 
-## ADRs
-- **ADR-015 (M2b-1):** store-gateway = Go gRPC service spawned by agentctl over UDS; `brain/store.py`
-  becomes a thin gRPC client preserving its method interface (drop-in). Restores ADR-007.
-- **ADR-016 (M2b-2):** pw-executor migrates to the MCP SDK; brain wraps an MCP client behind the existing
-  `ex.call` interface; JSON-RPC retained as a documented fallback.
+## ADR'ы
+- **ADR-015 (M2b-1):** store-gateway = Go gRPC-сервис, запускаемый agentctl через UDS; `brain/store.py`
+  становится тонким gRPC-клиентом, сохраняющим интерфейс методов (drop-in). Восстанавливает ADR-007.
+- **ADR-016 (M2b-2):** pw-executor мигрирует на MCP SDK; brain обёртывает MCP-клиент за существующим
+  интерфейсом `ex.call`; JSON-RPC сохраняется как задокументированный fallback.
 
-## Out of scope
-M4b observability (Go report-service, OTel→Tempo, Prometheus HTTP) · M5 (visual heal PoC, K3s/ArgoCD).
+## Вне scope
+Наблюдаемость M4b (Go report-service, OTel→Tempo, Prometheus HTTP) · M5 (visual heal PoC, K3s/ArgoCD).

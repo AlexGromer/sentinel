@@ -1,37 +1,38 @@
 # M4b Contract — "Observability" (frozen 2026-06-24)
 
-Goal: distributed tracing + push metrics for runs, now that the Go service layer (M2b) exists.
+> 🌐 **Русский** (основная версия) · [English](M4b_CONTRACT.en.md)
 
-## Scope decision (ADR-018) — honest
-**In M4b (offline-authorable, gated export):**
-- **OTel tracing in the brain** — a run span + LLM spans carrying **prompt_HASH, never prompt content**;
-  exports to an OTLP collector (→ Tempo) IFF `OTEL_EXPORTER_OTLP_ENDPOINT` is set, else **no-op** (zero overhead).
-- **Prometheus Pushgateway** for the batch metrics (`PROM_PUSHGATEWAY`), since the agent is a **CronJob**.
+Цель: распределённая трассировка + push-метрики для запусков, теперь когда слой Go-сервисов (M2b) существует.
 
-**Deferred (with rationale, → GAP-OBS-001):**
-- Always-on Go `report-service` HTTP `/metrics` endpoint — the agent is an **ephemeral batch job**, not a
-  scrapeable service; Pushgateway / node_exporter textfile fit the model. (HTML/JSON report already ships in M4.)
-- TS (`pw-executor`) + Go (`store-gateway`) OTel spans — extension points (W3C context propagation in gRPC/MCP metadata).
-- Go-side hard budget ceiling — needs a long-running Go orchestrator + brain→Go token reporting; the default
-  heuristic path uses no LLM, so low value now.
+## Scope decision (ADR-018) — честно
+**В M4b (offline-authorable, с gated export):**
+- **OTel трассировка в brain** — span запуска + LLM-span'ы, несущие **prompt_HASH, никогда не содержимое prompt**;
+  экспортирует в OTLP collector (→ Tempo) ЕСЛИ `OTEL_EXPORTER_OTLP_ENDPOINT` установлен, иначе **no-op** (нулевые накладные расходы).
+- **Prometheus Pushgateway** для пакетных метрик (`PROM_PUSHGATEWAY`), так как агент — это **CronJob**.
+
+**Отложено (с обоснованием, → GAP-OBS-001):**
+- Всегда включённый HTTP endpoint `/metrics` для Go `report-service` — агент является **эфемерным пакетным заданием**, а не
+  scraped-сервисом; Pushgateway / textfile для node_exporter подходят к этой модели. (HTML/JSON отчёт уже поставляется в M4.)
+- OTel span'ы TS (`pw-executor`) + Go (`store-gateway`) — точки расширения (W3C context propagation в gRPC/MCP metadata).
+- Жёсткий потолок бюджета на стороне Go — требует long-running Go orchestrator + отчётности о токенах brain→Go; эвристический путь по умолчанию не использует LLM, поэтому низкая ценность сейчас.
 
 ## OTel (`brain/otel.py`)
-- `setup_tracing()` — if `OTEL_EXPORTER_OTLP_ENDPOINT` is set, configure a `TracerProvider` +
-  `OTLPSpanExporter` (gRPC) + `BatchSpanProcessor` + `Resource(service.name="sentinel-brain")`; else a no-op.
-  Robust to OTel not being installed (try/except → no-op).
-- `span(name, **attrs)` contextmanager; `prompt_hash(text)` = `sha256`.
-- Spans: `sentinel.run` (run_id, mode, transport, store); `heal.llm` / `plan.llm` (model, **prompt_hash**,
-  prompt_tokens, completion_tokens). **Span attributes NEVER carry prompt or page content.** Sampling 100%.
+- `setup_tracing()` — если `OTEL_EXPORTER_OTLP_ENDPOINT` установлен, настроить `TracerProvider` +
+  `OTLPSpanExporter` (gRPC) + `BatchSpanProcessor` + `Resource(service.name="sentinel-brain")`; иначе no-op.
+  Устойчив к отсутствию OTel (try/except → no-op).
+- Контекстный менеджер `span(name, **attrs)`; `prompt_hash(text)` = `sha256`.
+- Span'ы: `sentinel.run` (run_id, mode, transport, store); `heal.llm` / `plan.llm` (model, **prompt_hash**,
+  prompt_tokens, completion_tokens). **Атрибуты span'а НИКОГДА не несут prompt или содержимое страницы.** Sampling 100%.
 
 ## Prometheus Pushgateway (`brain/report.py`)
-`push_metrics(report, gateway, job="sentinel", grouping)` builds a `CollectorRegistry` with the same
-`sentinel_*` series and `push_to_gateway(...)`. Called from the `report` mode when `PROM_PUSHGATEWAY` is set;
-the `metrics.prom` textfile still ships.
+`push_metrics(report, gateway, job="sentinel", grouping)` строит `CollectorRegistry` с теми же
+`sentinel_*` сериями и вызывает `push_to_gateway(...)`. Вызывается из режима `report` при установленном `PROM_PUSHGATEWAY`;
+текстовый файл `metrics.prom` всё равно поставляется.
 
 ## Acceptance gate (Given/When/Then)
-- **Unset:** `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` absent → spans no-op, no push, suites green, zero new failure modes.
-- **Set (user, with a collector/gateway):** run traces appear in Tempo; metrics appear in the Pushgateway.
-- **Offline test:** `otel.setup_tracing()` no-op path + `span()` work without a collector; `push_metrics` import + no-op guard.
+- **Не установлен:** `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` отсутствуют → span'ы no-op, нет push, тесты зелёные, нет новых режимов сбоя.
+- **Установлен (пользователем, с collector/gateway):** трейсы запуска появляются в Tempo; метрики появляются в Pushgateway.
+- **Offline-тест:** путь no-op `otel.setup_tracing()` + `span()` работают без collector; импорт `push_metrics` + no-op guard.
 
-## Out of scope
-Go report-service HTTP, TS/Go spans, Go budget ceiling (GAP-OBS-001); SLO dashboards.
+## Вне scope
+Go report-service HTTP, TS/Go span'ы, потолок бюджета Go (GAP-OBS-001); SLO-дашборды.
