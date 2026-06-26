@@ -27,6 +27,10 @@ class Executor:
     def call(self, method: str, **params: object) -> dict:
         assert self.proc.stdin and self.proc.stdout
         self._id += 1
+        from .otel import inject_context           # M8: W3C trace-context → pw-executor (no-op if off)
+        meta = inject_context({})
+        if meta:
+            params = {**params, "_meta": meta}
         req = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
         self.proc.stdin.write(json.dumps(req) + "\n")
         self.proc.stdin.flush()
@@ -104,6 +108,10 @@ class McpExecutor:
         if self._session is None:
             raise RuntimeError("MCP session not initialized")
         tool = method.replace("browser.", "browser_")
+        from .otel import inject_context           # M8: W3C trace-context → pw-executor (no-op if off)
+        meta = inject_context({})
+        if meta:
+            params = {**params, "_meta": meta}
         fut = asyncio.run_coroutine_threadsafe(self._session.call_tool(tool, params), self._loop)
         res = fut.result(timeout=60)
         if getattr(res, "isError", False):

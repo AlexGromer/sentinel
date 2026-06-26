@@ -19,6 +19,8 @@ import sys
 
 from langgraph.graph import StateGraph, START, END
 
+from . import runcontrol
+from .otel import span
 from .state import RunState, normalize_url, semantic_id, canonical_plan_hash
 
 
@@ -60,6 +62,7 @@ def _buttons_from_interactives(elements: list, path: str) -> list:
 
 def build_graph(ex, planner, tx_write):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer."""
+    rc = runcontrol.make_client()  # M8: report token deltas to the Go orchestrator (no-op if ORCH_ADDR unset)
 
     def perceive(state: RunState) -> dict:
         """Snapshot the current page (URL + accessibility tree). No LLM."""
@@ -138,6 +141,9 @@ def build_graph(ex, planner, tx_write):
         tx_write({"step": sid, "planner": planner.name, "model": planner.model,
                   "decision": a["intent"], "reason": decision.get("reason", ""),
                   "prompt_tokens": tok.get("prompt"), "completion_tokens": tok.get("completion")})
+        if rc.report(state.get("run_id", ""), "plan", tok.get("prompt"), tok.get("completion")):
+            log("plan: orchestrator budget abort -> converging")
+            return {"exploration_complete": True}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + [planned],
                 "_pending": planned}
 
@@ -199,11 +205,18 @@ def build_graph(ex, planner, tx_write):
     def route_checkpoint(state: RunState) -> str:
         return "report" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
 
+    def _traced(node_name, fn):
+        """Wrap a node in a per-node OTel span (M8, ADR-021); no-op when tracing isn't configured."""
+        def wrapped(state):
+            with span(f"node.{node_name}"):
+                return fn(state)
+        return wrapped
+
     b = StateGraph(RunState)
     for name, fn in [("perceive", perceive), ("ground", ground), ("plan", plan),
                      ("act", act), ("verify", verify), ("heal", heal),
                      ("checkpoint", checkpoint), ("report", report)]:
-        b.add_node(name, fn)
+        b.add_node(name, _traced(name, fn))
     b.add_edge(START, "perceive")
     b.add_edge("perceive", "ground")
     b.add_edge("ground", "plan")

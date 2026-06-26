@@ -81,6 +81,35 @@ def test_otel_context_helpers_noop_without_endpoint():
     assert otel.extract_context({"traceparent": "x"}) is None          # no-op extract
 
 
+def test_runcontrol_noop_without_orchestrator():
+    os.environ.pop("ORCH_ADDR", None)
+    from brain import runcontrol
+    rc = runcontrol.make_client()
+    assert rc.report("run", "plan", 100, 50) is False   # no orchestrator -> never aborts
+    rc.close()
+
+
+def test_runcontrol_stubs_import():
+    from brain.pb import runcontrol_pb2 as pb, runcontrol_pb2_grpc as pbg
+    assert hasattr(pbg, "RunControlStub")
+    ev = pb.RunEvent(run_id="r", node="plan", prompt_tokens=7, completion_tokens=11, status="running")
+    assert ev.prompt_tokens == 7 and ev.node == "plan"
+
+
+def test_graph_builds_with_per_node_spans_and_runcontrol():
+    os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    os.environ.pop("ORCH_ADDR", None)
+    from brain.graph import build_graph
+    from brain.planner import HeuristicPlanner
+
+    class FakeEx:
+        def call(self, *a, **k):
+            return {}
+
+    b = build_graph(FakeEx(), HeuristicPlanner(), lambda r: None)   # span-wrap + no-op runcontrol
+    assert b is not None and hasattr(b, "add_node")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

@@ -31,6 +31,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
 | internal/store/pb/ | Go | generated gRPC stubs (from proto/persistence.proto) |
 | proto/persistence.proto | proto3 | PersistenceService contract (mirrors store.py 1:1) |
+| proto/runcontrol.proto | proto3 | M8 RunControl contract (StartRun/ReportEvent→Control/Abort); brain↔orchestrator token-reconcile (ADR-021) |
 | go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite) |
 | brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
@@ -38,12 +39,13 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + SamplingBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) + MCP sampling (ADR-020, M7) |
 | brain/server.py | Python | M7 brain MCP server (FastMCP): tools explore/heal/replay/report; SamplingBackend via host sampling; sync graph in worker-thread (ADR-020) |
 | brain/budget.py | Python | M8 BudgetTracker — per-role token accumulator + `exceeded()` guard; graceful degradation planner→heuristic / heal→L1–L6 (ADR-021) |
+| brain/runcontrol.py | Python | M8 RunControl client — reports token deltas to the Go orchestrator + honours abort; no-op when ORCH_ADDR unset (ADR-021) |
 | brain/healing.py | Python | HealingEngine (cache→L1–L6→verify→gate→audit) — store-agnostic |
 | brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
 | brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
 | brain/exporter.py / report.py / calibrate.py | Python | M4 generators (.spec.ts / HTML+JSON+Prom / heal histogram) |
 | brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
-| brain/pb/ | Python | generated gRPC stubs (PersistenceService) |
+| brain/pb/ | Python | generated gRPC stubs (PersistenceService + RunControl) |
 | brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C (fake executor/backend/session) |
@@ -78,7 +80,7 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - gateway-aware: `go build -o bin/agentctl ./cmd/agentctl && go build -o bin/store-gateway ./cmd/store-gateway` (if /tmp full: `go env -w GOTMPDIR=/opt/go/tmp`)
 - TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
 - Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai grpcio grpcio-tools`
-- gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto` (+ go plugins for internal/store/pb)
+- gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto proto/runcontrol.proto` — then patch the `_pb2_grpc.py` top-level import to `from . import` (package-relative); (+ go plugins for internal/store/pb, internal/orchestrator/pb)
 - tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8; do .venv/bin/python tests/test_${t}_offline.py; done`
 - full contributor guide: docs/DEVELOPMENT.md
 
