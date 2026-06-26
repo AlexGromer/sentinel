@@ -51,6 +51,10 @@
 | GAP-M9-06 | P2 | Инъекция `traceparent` во все запросы браузера → корреляция UI-теста с backend/Kafka-trace в Tempo | M9.5 |
 | GAP-M9-07 | P2 | Режимы браузера: headed + CDP-attach к браузеру пользователя (`connectOverCDP`) + co-pilot takeover/return | M9.6 / ветка-2 |
 | GAP-M9-08 | P3 | Pluggable adapters (auth/deploy/model/backend) — универсальность не-только-DH | M9.7 |
+| GAP-M9-09 | P2 | RunConfig-файл (YAML) + config-surfaces: режим/goal/auth/бюджеты через флаги · env · файл · интерактивно (чат). Сейчас только флаги+env, per-run | M9.2/M9.3 |
+| GAP-M9-10 | P2 | Validation / негативное тестирование: генератор невалидных вводов по типу/маске поля + assert-слой («UI отверг ввод») | M9.1 |
+| GAP-M9-11 | P3 | **Security-модуль (M10, отдельный):** XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM поверх explore-карты; **authorization-gated** | M10 |
+| GAP-M9-12 | P3 | CI-шаблоны: Jenkinsfile + `.gitlab-ci.yml` (Sentinel = CLI + exit-коды → любой CI на коммит) | M9.3 |
 
 ## Риски (полный список; итог в ARCHITECTURE §8)
 

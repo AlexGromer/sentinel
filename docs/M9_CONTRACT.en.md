@@ -37,6 +37,10 @@ now**, **browser extension later**.
   `explore` (for simple pages without business processes); an NL goal supplied → `goal`. **Not** a
   "magic complexity auto-detector".
 - The pluggable **`GoalPlanner`** slots into the existing `Planner` seam (ADR-011) beside Heuristic/LLM.
+- **Config surfaces (the mode is chosen per-run, not a live toggle):** (1) `agentctl` flags → env
+  (DH ConfigMap/Secret); (2) a **RunConfig YAML** for rich runs (goal text, auth, budgets, scenarios — too
+  much for flags); (3) **interactively via the chat-UI** (M9.3) — describe the goal in words, the mode is
+  implied. There is no live switch mid-run: a run commits to a mode. (GAP-M9-09)
 
 ## D. Tabs: in-app vs browser (explicitly distinguished)
 - **In-app tabs** (DOM tab widgets) — interactive elements; explore clicks them, the `tabpanel`
