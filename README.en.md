@@ -14,8 +14,15 @@ tests rather than only writing them.
 | Milestone | State |
 |-----------|-------|
 | **M0 — Hello Browser** | ✅ done — Go→Python→TS wire produces a11y tree + `trace.zip` |
-| **M1 — Autonomous Walk** | 🚧 in progress — LangGraph StateGraph, coverage-converged explore, `plan.json` |
-| M2–M5 | planned — see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| **M1 — Autonomous Walk** | ✅ done — LangGraph StateGraph, coverage-converged explore, `plan.json` + `plan_hash` |
+| **M2 + M2b — Self-Healing + Service Layer** | ✅ done — heal engine (L1–L6 + LLM); Go store-gateway (gRPC) + MCP-SDK transport |
+| **M3 — CI-Ready Replay** | ✅ done — trust layer, exit codes 0/1/2/3, golden baselines, flake quarantine |
+| **M4 + M4b — Reports + Observability** | ✅ done — HTML/JSON/Prometheus reports, `.spec.ts` export; brain OTel + Pushgateway |
+| **M5 — Deploy + Visual Heal** | ✅ done — Dockerfile + Helm CronJob + ArgoCD; set-of-marks Tier-7 (gated) |
+| **M6 — Provider-Agnostic Brain** | ✅ done — planner/heal on any provider (Anthropic / OpenAI-compat), ADR-019 |
+| **M7 — MCP-Server Exposure** | 📝 contract frozen (Proposed, ADR-020) — see [`docs/M7_CONTRACT.md`](docs/M7_CONTRACT.md) |
+
+Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Architecture at a glance (polyglot — each language where it is strongest)
 ```
@@ -26,7 +33,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (10 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (20 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Quickstart (M0)
 ```bash

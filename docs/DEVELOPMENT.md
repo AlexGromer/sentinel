@@ -36,7 +36,8 @@ go build -o bin/store-gateway ./cmd/store-gateway   # M2b-1: gRPC persistence; a
 
 # Python — brain (LangGraph)
 uv venv                                    # creates .venv
-uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai
+#   openai опционален — нужен только для OpenAI-совместимых провайдеров (M6); import-guarded
 ```
 `agentctl` автоматически использует `./.venv/bin/python` для запуска brain (переопределяется через `BRAIN_PYTHON`).
 
@@ -59,6 +60,35 @@ uv pip install langgraph langgraph-checkpoint-sqlite anthropic
 > Шаги сборки (`npm`, `go build`, `uv pip`) работают нормально; запускайте `agentctl` самостоятельно (например, через префикс `!`)
 > и предпочитайте локальные `file://` фикстуры внешним целям.
 
+### LLM backend (M6, провайдер-нейтральный)
+По умолчанию (ноль env) — Anthropic, как раньше: `claude-opus-4-8` (planner) / `claude-sonnet-4-6`
+(heal), ключ `ANTHROPIC_API_KEY`; без ключа planner откатывается на heuristic, heal — на L1–L6.
+Чтобы пустить **planner** и/или **heal** на любой OpenAI-совместимый endpoint (ChatGPT, DeepSeek,
+Qwen, Gemini-compat, OpenRouter, Ollama, vLLM) — выставь env **per-role**. Precedence:
+`LLM_<KEY>_<ROLE>` > `LLM_<KEY>` > дефолт (роли: `PLANNER`, `HEAL`).
+
+| Ключ | Global | Per-role override | Дефолт (как до M6) |
+|------|--------|-------------------|--------------------|
+| `LLM_BACKEND` | да | `LLM_BACKEND_PLANNER` / `_HEAL` | `anthropic` |
+| `LLM_MODEL` | да | `LLM_MODEL_PLANNER` / `_HEAL` | `claude-opus-4-8` / `claude-sonnet-4-6` |
+| `LLM_BASE_URL` | да | `LLM_BASE_URL_PLANNER` / `_HEAL` | — |
+| `LLM_API_KEY` | да | `LLM_API_KEY_PLANNER` / `_HEAL` | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `LLM_VISION` | да | `LLM_VISION_HEAL` | provider default (anthropic=on) |
+
+```bash
+# planner на OpenRouter/DeepSeek, heal остаётся на Anthropic-дефолте
+LLM_BACKEND_PLANNER=openai LLM_BASE_URL_PLANNER=https://openrouter.ai/api/v1 \
+  LLM_API_KEY_PLANNER=… LLM_MODEL_PLANNER=deepseek/deepseek-chat \
+  ./bin/agentctl run --target "file://$PWD/testdata/site/index.html" --planner llm
+
+# vision-heal на другом провайдере (set-of-marks Tier-7 требует vision-модель)
+LLM_BACKEND_HEAL=openai LLM_BASE_URL_HEAL=… LLM_MODEL_HEAL=… LLM_VISION_HEAL=1 \
+  ./bin/agentctl run --replay --plan runs/<id>/plan.json --target "file://…" --heal-llm
+```
+`make_backend(role)` (`brain/llm.py`) собирает backend из env или возвращает `None` ⇒ сохраняется
+offline-fallback (heuristic / L1–L6); **никогда не бросает**. Text-only провайдер пропускает Tier-7
+(нет vision) → детерминированный L1–L6. Источник истины: `brain/llm.py` + `docs/M6_CONTRACT.md`.
+
 ## 4. Гейты вех (приёмка)
 - **M0** (`M0_CONTRACT.md`): дерево a11y выведено + `runs/<id>/trace.zip` размер>0 + exit 0.
 - **M1** (`M1_CONTRACT.md`): `plan.json` с **≥5 шагами**, `coverage_achieved` записан, `plan_hash` присутствует, `trace.zip` присутствует; второй идентичный запуск выдаёт **тот же `plan_hash`** (детерминизм — heuristic planner).
@@ -67,6 +97,19 @@ uv pip install langgraph langgraph-checkpoint-sqlite anthropic
 # determinism check (M1)
 A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/null; jq -r .plan_hash runs/*/plan.json | tail -1)
 # run again, compare plan_hash — must match
+```
+
+- **M2** (`M2_CONTRACT.md`): сломанный locator в replay исцелён с уверенностью **≥ 0.85**, строка `HealedLocator` `status=active` сохранена, exit 0; второй прогон — **ноль LLM-токенов** для того же semantic_id (попадание в кэш).
+- **M2b** (`M2b_CONTRACT.md`): со `store-gateway` (Go gRPC через UDS) explore/baseline/replay/calibrate идентичны; `grep -r sqlite3 brain/` пуст; `tools/list` pw-executor возвращает **7 инструментов**; live-гейты M0–M3 проходят через MCP-транспорт (live — user-run).
+- **M3** (`M3_CONTRACT.md`): 3 параллельных replay `--ci` **< 2 мин** каждый, exit 0; replay по подменённому `plan_hash` — **exit 3** за < 5 c (оба хэша в stderr).
+- **M4** (`M4_CONTRACT.md`): `run_report.html` непустой и рендерится; экспортированный `.spec.ts` проходит `tsc --noEmit`; `trace.zip` открывается; `agent_cost_usd_total` **> 0** в `/metrics`.
+- **M4b** (`M4b_CONTRACT.md`): без `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` — span'ы no-op, push нет, offline-тесты зелёные; с endpoint+gateway (user-run) трейсы в Tempo, метрики в Pushgateway.
+- **M5** (`M5_CONTRACT.md`): set-of-marks visual heal — **≥ 15/20** сценариев совпали с human-verified (≥ 75% > 70% порог), иначе функция отложена и overlay удалён из бинаря.
+- **M6** (`M6_CONTRACT.md`): offline `test_b1_offline` (8) + `test_m5_offline` (4) зелёные, регресс `test_m3` / `test_m4` / `test_m4b` зелёный, **default-path байт-в-байт**; реальный smoke провайдера — user-run.
+
+```bash
+# offline-набор (без сети/бинарей: M6 default-path + регресс m3/m4/m4b)
+for t in m3 m4 m4b m5 b1; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Проводные контракты (где определены границы)

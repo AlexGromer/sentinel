@@ -30,7 +30,7 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | CI pipeline | Runs deterministic replay; consumes exit codes 0/1/2/3 + JSON/JUnit reports | `agentctl run --ci` |
 | QA / dev engineer | Triggers explore runs, reviews flagged heals + human gates, approves baselines, consumes `.spec.ts` | `agentctl` (interactive) |
 | Home-lab operator | Runs the long-lived service on K3s/ArgoCD, watches Grafana cost/health | Helm + ArgoCD (M5) |
-| The agent itself | Autonomous LLM explorer | Opus 4.8 (plan) / Sonnet 4.6 (heal) |
+| The agent itself | Autonomous LLM explorer | Opus 4.8 (plan) / Sonnet 4.6 (heal) — **defaults**; planner/heal are provider-agnostic per-role via `LLM_BACKEND*` (Anthropic or any OpenAI-compatible), ADR-019 |
 
 ### Scope
 - **In scope:** autonomous exploratory testing; locator self-healing with confidence gating + human-in-loop; explore-once / replay-many CI determinism; short- + long-term memory; per-run token/cost budgets + tracing; artifact emission; headless CI + long-running service; home-lab K3s/ArgoCD target.
@@ -68,9 +68,10 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | **orchestrator** | Go | Run-lifecycle FSM (PENDING→RUNNING→HEALING→PAUSED→PARTIAL→DONE\|FAILED\|ABORTED), gRPC server (RunControl + EventStream), supervises Python brain subprocess (5s health-ping, restart-on-crash, SIGTERM on per-step deadline). Enforces **Go-side hard budget ceiling** (reconciled vs the brain's in-process counter — NOT a per-call round trip). Does not touch SQLite. | gRPC, goroutine supervisor, context deadlines |
 | **store-gateway** | Go | **Sole writer** to the main SQLite (WAL). All long-term state via PersistenceService gRPC; owns migrations; exposes read RPCs. (The LangGraph checkpointer uses a SEPARATE DB file — so single-writer is *actually* true.) | SQLite WAL, golang-migrate, gRPC |
 | **report-service** | Go | Assembles `run_report.json` + HTML (mirrors Playwright HTML-reporter), serves trace/spec/cost endpoints, exposes Prometheus `/metrics`. Generates `.spec.ts` from `RunState.executed_actions` via template (no codegen-tool dependency). Introduced @ M4. | Go html/template, client_golang |
-| **brain** | Python | LangGraph StateGraph (9 nodes). Owns ALL LLM calls (Opus 4.8 plan; Sonnet 4.6 heal). Spawns `pw-executor` + binds its MCP tools. gRPC client to orchestrator + store-gateway. Owns explore/replay switching, coverage-based convergence, `plan_hash`. | LangGraph StateGraph + checkpointer, MCP client (VERIFY pkg), Anthropic SDK |
+| **brain** | Python | LangGraph StateGraph (9 nodes). Owns ALL LLM calls through the provider-neutral `LLMBackend` (`brain/llm.py`: `AnthropicBackend` \| `OpenAICompatBackend`, per-role `make_backend`; defaults Opus 4.8 plan / Sonnet 4.6 heal), falls back to heuristic / L1–L6 when no key/SDK. Spawns `pw-executor` + binds its MCP tools. gRPC client to orchestrator + store-gateway. Owns explore/replay switching, coverage-based convergence, `plan_hash`. | LangGraph StateGraph + checkpointer, MCP client (VERIFY pkg), Anthropic / OpenAI SDK |
 | **healing-engine** | Python | The heal node: bounded re-grounding hierarchy (cache → L1–L6 no-LLM rotation → LLM a11y → gated set-of-marks), grounded confidence model with verify-before-accept, append-only `healing_audit`. Hosts `agentctl calibrate` logic. | Playwright locator strategies via MCP, structured-output LLM |
 | **perception** | Python | Parses a11y snapshot → typed `PageModel`, computes `completeness_ratio` to pick modality, computes a11y-hash + subtree-scoped `dom_hash`. | a11y normalization, SHA-256 hashing |
+| **brain/llm.py** | Python | Provider-agnostic `LLMBackend` abstraction (Protocol): `AnthropicBackend` (native) \| `OpenAICompatBackend` (ChatGPT/DeepSeek/Qwen/Gemini-compat/OpenRouter/Ollama/vLLM); `make_backend(role)` picks a backend per role via env (`LLM_BACKEND[_PLANNER\|_HEAL]`, `_MODEL`, `_BASE_URL`, `_API_KEY`, `_VISION`) → `None` when key/SDK absent ⇒ heuristic / L1–L6 fallback. The LLM path is best-effort; vision gated by `supports_vision`; defaults Opus 4.8 (planner) / Sonnet 4.6 (heal). (ADR-019) | Anthropic / OpenAI SDK, `typing.Protocol` |
 | **pw-executor** | **TS (BUILD)** | **OUR OWN** Node service exposing Playwright primitives (navigate, accessibility snapshot, click/type/etc., screenshot, trace control, locator resolve/probe, set-of-marks overlay) to the brain over an MCP (JSON-RPC 2.0) stdio interface **we implement**. Runs as a child subprocess of the brain. | Playwright (lib, pinned), MCP server impl (ours), stdio JSON-RPC |
 | **proto** | shared | protobuf3 single source of truth for Go↔Python. Services: RunControl, PersistenceService, EventStream. Stubs generated in CI for Go+Python; `.proto` hash asserted vs checked-in stubs (mismatch = build failure). Introduced @ M2. | buf/protoc, CI codegen + hash assertion |
 
@@ -177,7 +178,9 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | `docs/MEMORY_PERSISTENCE.md` | Short/long-term memory, SQLite schema (all tables), checkpoint GC |
 | `docs/OBSERVABILITY.md` | OTel tracing, LLM transcript, token budget + hard caps, Prometheus metrics |
 | `docs/OUTPUTS.md` | The 10 emitted artifacts |
-| `docs/ROADMAP.md` | M0→M5 milestones with Given/When/Then acceptance gates + build-only deltas |
+| `docs/ROADMAP.md` | M0→M7 milestones with Given/When/Then acceptance gates + build-only deltas |
+| `docs/M6_CONTRACT.md` | M6 contract: provider-agnostic LLM backend (`brain/llm.py`, ADR-019) |
+| `docs/M7_CONTRACT.md` | M7 contract (Proposed): expose the brain as an MCP server + `SamplingBackend` (ADR-020) |
 | `docs/DESIGN_RECORD.md` | Full design provenance: 4 architect proposals + 3 judge verdicts + synthesis decision trail |
 | `GAPS.md` | Open questions, VERIFY items, risks, build-only consequences |
 

@@ -4,6 +4,8 @@
 
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md (see §7).
 
+> **Note on models:** the model names in this document (Opus 4.8 / Sonnet 4.6) are **per-role defaults**; planner/heal are provider-agnostic since M6 (ADR-019) — any backend via `LLM_BACKEND*` (Anthropic or OpenAI-compatible). `HeuristicPlanner` stays the deterministic anchor.
+
 ---
 
 ## 1. Framework
@@ -73,7 +75,7 @@ All fields are checkpointed at each `checkpoint` node invocation.
 
 | Field | Type | Description |
 |---|---|---|
-| `episodic_buffer` | `deque[EpisodicEvent]` | Bounded circular buffer, max 50 entries. When full, oldest events are LLM-summarised (Sonnet) into ~200-token episode summaries to bound context growth |
+| `episodic_buffer` | `deque[EpisodicEvent]` | Bounded circular buffer, max 50 entries. When full, oldest events are LLM-summarised (Sonnet by default) into ~200-token episode summaries to bound context growth |
 | `executed_actions` | `list[ExecutedAction]` | Full action history: `{step, action_type, locator, outcome, duration_ms, pre_hash, post_hash, healing_flagged}` |
 
 ### 2.6 Healing
@@ -90,7 +92,7 @@ All fields are checkpointed at each `checkpoint` node invocation.
 | Field | Type | Description |
 |---|---|---|
 | `token_usage` | `dict[str, TokenCount]` | Per-model-id usage: `model_id → {prompt, completion, cost_usd}`. In-process counter; Go orchestrator independently enforces a hard ceiling |
-| `token_budget` | `dict[str, int]` | Per-model-id budget limits (from config). Defaults: 50k tokens/run for Opus 4.8 (plan), 20k tokens/run for Sonnet 4.6 (heal) |
+| `token_budget` | `dict[str, int]` | Per-model-id budget limits (from config). Defaults: 50k tokens/run for Opus 4.8 (plan, default), 20k tokens/run for Sonnet 4.6 (heal, default) |
 | `budget_warning_emitted` | `bool` | Set when 80% of any budget is consumed; prevents duplicate `BUDGET_WARNING` events |
 
 ### 2.8 Human Gate / Control
@@ -124,10 +126,10 @@ The framework wires `START` → first node and `END` as the graph terminal autom
 |---|---|---|---|---|
 | 1 | `perceive` | No | — | Entry of every cycle; calls `pw-executor` for a11y snapshot |
 | 2 | `ground` | No | — | Parses `PageModel`; validates against golden baselines in replay |
-| 3 | `plan` | Yes | Opus 4.8 | **Explore mode only** — skipped entirely in replay/ci |
+| 3 | `plan` | Yes | Opus 4.8 (default) | **Explore mode only** — skipped entirely in replay/ci |
 | 4 | `act` | No | — | Executes the current step via `pw-executor` |
-| 5 | `verify` | Conditional | Sonnet 4.6 | Sonnet only for explore-mode soft assertion; deterministic in replay |
-| 6 | `heal` | Conditional | Sonnet 4.6 | Sonnet for a11y re-grounding (L5+); gated visual also Sonnet |
+| 5 | `verify` | Conditional | Sonnet 4.6 (default) | Sonnet only for explore-mode soft assertion; deterministic in replay |
+| 6 | `heal` | Conditional | Sonnet 4.6 (default) | Sonnet for a11y re-grounding (L5+); gated visual also Sonnet |
 | 7 | `checkpoint` | No | — | Flushes LangGraph checkpoint + `store-gateway` writes; handles human gate pause |
 | 8 | `report` | No | — | Terminal node; assembles and emits `RunResult` |
 
@@ -161,7 +163,7 @@ Entry point of every agent cycle.
 
 ### 3.3 `plan`
 
-**LLM: Opus 4.8, temperature = 0. Explore mode only.**
+**LLM: Opus 4.8 (default), temperature = 0. Explore mode only.**
 
 - Skipped entirely in `replay` and `ci` modes — `ground` routes straight to `act`.
 - Input context: `page_model`, episodic tail from `episodic_buffer`, `nav_frontier`,
@@ -189,7 +191,7 @@ Entry point of every agent cycle.
 
 ### 3.5 `verify`
 
-**LLM: Conditional — Sonnet 4.6 only for explore-mode soft assertion.**
+**LLM: Conditional — Sonnet 4.6 (default) only for explore-mode soft assertion.**
 
 - Re-snapshots the page inline (calls `pw-executor accessibility_snapshot()` after the action).
 - Classifies the outcome into one of:
@@ -208,7 +210,7 @@ Entry point of every agent cycle.
 
 ### 3.6 `heal`
 
-**LLM: Conditional — Sonnet 4.6 (a11y re-grounding, visual set-of-marks).**
+**LLM: Conditional — Sonnet 4.6 (default) (a11y re-grounding, visual set-of-marks).**
 
 Delegates all healing logic to the `healing-engine` module.
 Operates on `HealingContext {semantic_id, failure_type, attempted_locator, element_description}`.
@@ -232,9 +234,9 @@ Healing proceeds in bounded, ordered steps:
 
    A match at L5/L6 emits a `strategy_degradation` metric (DOM instability signal).
 
-3. **LLM a11y re-grounding** (Sonnet 4.6, structured output): only if cache + L1–L6 all fail.
+3. **LLM a11y re-grounding** (Sonnet 4.6 by default, structured output): only if cache + L1–L6 all fail.
    Applies LLM-overconfidence discount `× 0.90`.
-4. **Visual set-of-marks** (Sonnet 4.6 vision): only if `completeness_ratio < 0.30`
+4. **Visual set-of-marks** (Sonnet 4.6 vision by default): only if `completeness_ratio < 0.30`
    AND step 3 failed AND the M5 PoC validated `> 70%` accuracy on 20 real broken-selector
    scenarios. Returns a `mark_number` mapped to a real semantic locator, not a coordinate click.
    Applies visual discount `× 0.85`.
@@ -454,10 +456,10 @@ else  →  perceive
 |---|---|---|---|
 | `perceive` | No | — | — |
 | `ground` | No | — | — |
-| `plan` | Yes | Opus 4.8 (temperature 0) | Explore mode only; skipped in replay/ci |
+| `plan` | Yes | Opus 4.8 (default, temperature 0) | Explore mode only; skipped in replay/ci |
 | `act` | No | — | — |
-| `verify` | Conditional | Sonnet 4.6 | Explore mode only, for soft assertion evaluation |
-| `heal` | Conditional | Sonnet 4.6 | Only after cache + L1–L6 rotation fail; vision also Sonnet |
+| `verify` | Conditional | Sonnet 4.6 (default) | Explore mode only, for soft assertion evaluation |
+| `heal` | Conditional | Sonnet 4.6 (default) | Only after cache + L1–L6 rotation fail; vision also Sonnet |
 | `checkpoint` | No | — | — |
 | `report` | No | — | — |
 
@@ -465,8 +467,8 @@ else  →  perceive
 
 | Budget key | Model | Default |
 |---|---|---|
-| `plan_token_limit` | Opus 4.8 | 50,000 tokens / run |
-| `heal_token_limit` | Sonnet 4.6 | 20,000 tokens / run |
+| `plan_token_limit` | Opus 4.8 (default) | 50,000 tokens / run |
+| `heal_token_limit` | Sonnet 4.6 (default) | 20,000 tokens / run |
 
 Exceeding 80% of any budget emits `BUDGET_WARNING`; exhaustion degrades gracefully
 (plan node stops issuing new exploration steps; heal node falls back to L1–L6 rotation only)

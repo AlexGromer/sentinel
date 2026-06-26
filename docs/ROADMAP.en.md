@@ -1,4 +1,4 @@
-# Sentinel — MVP Roadmap (M0–M5)
+# Sentinel — MVP Roadmap (M0–M7)
 
 > 🌐 [Русский](ROADMAP.md) (основная версия) · **English**
 
@@ -8,7 +8,7 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 
 ## Critical Path: `pw-executor` (GAP-ARCH-001)
 
-The critical path across all six milestones is now **`pw-executor`** — our own TypeScript
+The critical path across all main milestones (M0–M7, plus the M2b/M4b sub-milestones) is now **`pw-executor`** — our own TypeScript
 Playwright execution server that implements the MCP/JSON-RPC-2.0 stdio interface. Every
 milestone that spawns a browser subprocess depends on an incrementally delivered
 `pw-executor`. This server is not an off-the-shelf product; it is built and version-pinned
@@ -108,6 +108,35 @@ implemented (SQLite WAL: `runs`, `healed_locators`, `healing_audit` tables).
 
 ---
 
+## M2b — Service Layer (Go store-gateway + MCP-SDK transport)
+
+**Languages:** Go, Python, TypeScript
+
+**Deliverable:**
+
+Pure infrastructure with no new user value (ADR-015/016): it pays down the debt of the temporary
+ADR-012 deviation. **M2b-1** — the Go `store-gateway` (gRPC, `PersistenceService` proto) becomes the
+single SQLite writer (restoring ADR-007); `brain/store.py` is rewritten as a thin gRPC client with the
+same signatures; `agentctl` spawns the gateway as a child process over a Unix-domain socket
+(`STORE_ADDR`). **M2b-2** — the brain↔pw-executor transport is migrated to the MCP SDK
+(`pw-executor` = MCP server, brain = MCP client behind the same `ex.call`); closes GAP-VERIFY-002,
+with JSON-RPC kept as a feature-flagged fallback.
+
+**Acceptance Criterion:**
+
+> **Given** `store-gateway` is built and spawned by `agentctl` over a UDS, and `pw-executor` is
+> rewritten on the MCP SDK
+>
+> **When** explore + baseline + replay + calibrate run through the service layer, and `tools/list` is
+> queried
+>
+> **Then** all four behave identically (same exit codes / heal / golden), `grep -r sqlite3 brain/` is
+> empty (the brain holds no DB handle), `tools/list` returns 7 tools, **and** the M0–M3 live gates
+> still pass over the MCP transport — Go unit tests + the Python offline suite with an in-proc fake
+> store are green (the live part is user-run).
+
+---
+
 ## M3 — CI-Ready Replay (Days 21–30)
 
 **Languages:** Go, Python
@@ -174,6 +203,31 @@ is activated. The `plan` node switches to Opus 4.8 in full (not gated or stubbed
 
 ---
 
+## M4b — Observability (brain OTel + Prometheus Pushgateway)
+
+**Languages:** Python
+
+**Deliverable:**
+
+Distributed tracing + push metrics on top of the Go service layer (ADR-018). OTel in the brain
+(`brain/otel.py`): a `sentinel.run` run span + `plan.llm` / `heal.llm` LLM spans carrying
+**prompt_HASH, never prompt content**; exports to OTLP → Tempo only if `OTEL_EXPORTER_OTLP_ENDPOINT`
+is set, otherwise a no-op (zero overhead). A Prometheus Pushgateway (`PROM_PUSHGATEWAY`) for the batch
+`sentinel_*` metrics, since the agent is a CronJob; the `metrics.prom` textfile is still emitted. The
+Go report-service HTTP endpoint, TS/Go spans, and the Go-side budget ceiling are deferred (GAP-OBS-001).
+
+**Acceptance Criterion:**
+
+> **Given** `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` are unset (default)
+>
+> **When** a run completes
+>
+> **Then** spans are no-ops, there is no push, the offline tests are green, and no new failure modes
+> appear; **and** when the user sets the endpoint + gateway with a live collector, run traces appear in
+> Tempo and the `sentinel_*` metrics appear in the Pushgateway.
+
+---
+
 ## M5 — Visual Heal PoC + K3s/ArgoCD (Days 46–60+)
 
 **Languages:** Go, Python, TypeScript (PoC-gated)
@@ -209,3 +263,61 @@ targets.
 > comparison and logged to `healing-audit.jsonl`; if fewer than 15 scenarios pass, the
 > set-of-marks feature is recorded as deferred in `ARCHITECTURE.md` and the `pw-executor`
 > overlay tool is removed from the shipped binary until a subsequent PoC cycle.
+
+---
+
+## M6 — Provider-Agnostic LLM Backend (ADR-019)
+
+**Languages:** Python
+
+**Deliverable:**
+
+Removes the brain's lock-in to a single provider (Anthropic). The **planner** (explore) and **heal**
+(text re-grounding + set-of-marks vision) nodes call the LLM through a provider-neutral `LLMBackend`
+(`brain/llm.py`), so Sentinel runs on Anthropic OR any OpenAI-compatible endpoint (ChatGPT, DeepSeek,
+Qwen, Gemini-compat, OpenRouter, Ollama, vLLM), selected **per role** via env (precedence
+`LLM_<KEY>_<ROLE>` > `LLM_<KEY>` > default). `AnthropicBackend` + `OpenAICompatBackend` are
+implemented; `make_backend(role)` returns `None` when the key/SDK is absent ⇒ offline fallback
+(heuristic / L1–L6) and **never raises**. With zero env set the behaviour is byte-for-byte as before
+M6 (Anthropic, Opus planner / Sonnet heal). The LLM path is best-effort: model provenance is not
+stored, replay is LLM-free, golden baselines stay heuristic-only.
+
+**Acceptance Criterion:**
+
+> **Given** an exec-gated environment (no network/binaries), a `FakeBackend` in place of a live provider
+>
+> **When** the offline suite is run
+>
+> **Then** `test_b1_offline` (8) + `test_m5_offline` (4) are green, the `test_m3` / `test_m4` /
+> `test_m4b` regression is green, **and** the default path (zero env) reproduces byte-for-byte; the
+> real-provider smoke (Anthropic default and an OpenAI-compat router) is user-run, since the
+> environment blocks network.
+
+---
+
+## M7 — MCP-Server Exposure (Proposed, ADR-020)
+
+**Languages:** Python
+
+**Status:** **Proposed** — the contract is frozen (docs-first), implementation is the next milestone
+(needs a live MCP host, user-run).
+
+**Deliverable (planned):**
+
+The second direction of the user ask: Sentinel **is driven by** host agents (OpenCode, Kilocode,
+Claude Desktop) that supply the model themselves. The brain is exposed as an **MCP server** (distinct
+from pw-executor) with `explore` / `heal` / `replay` / `report` tools; the host drives it and supplies
+the model via MCP `sampling/createMessage`. Implemented as one more `LLMBackend` implementation —
+`SamplingBackend` (`supports_vision=False` ⇒ heal degrades to L1–L6; tokens 0), with no
+planner/healing changes. MCP `sampling` support is uneven across hosts (Claude Desktop — yes;
+OpenCode / Kilocode — VERIFY before coding).
+
+**Acceptance Criterion (when implemented):**
+
+> **Given** the Sentinel MCP server is running
+>
+> **When** `tools/list` is queried, and a real MCP host drives explore via sampling
+>
+> **Then** `tools/list` returns `explore`/`heal`/`replay`/`report`, the host supplies the model via
+> sampling, and the artifacts are identical to CLI mode; offline — a contract test for the tool
+> schemas + `SamplingBackend` via a fake sampling session (the `FakeBackend` pattern).

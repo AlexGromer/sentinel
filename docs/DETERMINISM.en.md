@@ -40,6 +40,13 @@ providers do not contractually guarantee bit-identical output even at
 explore-once contract accepts that non-determinism and quarantines it to a single
 human-reviewed event.
 
+> **M6 (ADR-019):** LLM planning is **best-effort**. Switching the provider or model
+> entirely (Anthropic ↔ any OpenAI-compatible, per-role via `LLM_BACKEND*`) is one more
+> source of non-determinism: a different model → a different plan → a different `plan_hash`;
+> and **model provenance is not stored**. The deterministic anchor remains `HeuristicPlanner`,
+> and golden baselines stay **heuristic-only** (LLM-free). The model of that non-determinism
+> is itself unchanged.
+
 ---
 
 ## Plan Freezing and the `plan.json` Schema
@@ -320,7 +327,7 @@ target container. Playwright tracing is started via `pw-executor`.
 `coverage_achieved = 0.0`. Since `coverage < target` and mode is explore,
 `ground → plan`.
 
-**plan.** Opus 4.8 (`temperature=0`) reads the `PageModel`, the episodic tail,
+**plan.** The default planner — Opus 4.8 (`temperature=0`) — reads the `PageModel`, the episodic tail,
 the nav frontier, and the remaining budget. It returns the next `PlannedAction`
 (e.g., click "Sign in"). The in-process token counter increments. The orchestrator
 reconciles the Go-side hard budget ceiling on the next `RunEvent`.
@@ -341,7 +348,7 @@ the new `page_model` to the store-gateway over gRPC.
 4. `HealedLocator` persisted to store-gateway (keyed to `dom_subtree_hash`);
    `healing_audit` row appended (append-only).
 
-The loop continues: each Opus decision expands coverage and the nav frontier
+The loop continues: each planner decision (Opus by default) expands coverage and the nav frontier
 shrinks.
 
 **Convergence.** When `coverage_achieved ≥ 0.85` AND `nav_frontier` is empty,
@@ -391,7 +398,7 @@ subtree. The cached healed locator is reused **instantly, zero LLM**
 (amortisation: LLM cost paid once at explore time, reused until structural drift).
 
 **Low-confidence step.** Another element is genuinely gone. L1–L6 rotation and one
-Sonnet attempt (hard 2-cap + per-step deadline) yield `confidence = 0.55`.
+heal-model attempt (Sonnet by default; hard 2-cap + per-step deadline) yield `confidence = 0.55`.
 In CI mode, `confidence < 0.60` → `SKIPPED_HEALING_FAILURE` recorded; the run
 continues without blocking.
 

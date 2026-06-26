@@ -90,11 +90,16 @@ forward to Step 7 (Verify-Before-Accept). No LLM tokens are consumed.
 
 ---
 
-## Step 5 — LLM Re-Grounding (Sonnet 4.6, structured output)
+## Step 5 — LLM Re-Grounding (default heal model Sonnet 4.6, structured output)
+
+> **M6 (ADR-019):** "Sonnet 4.6" here and below is the **default heal model**, routed through
+> the `LLMBackend` (`brain/llm.py`). Any OpenAI-compatible provider is wired via the `LLM_*_HEAL`
+> variables (`LLM_BACKEND_HEAL`, `LLM_BASE_URL_HEAL`, `LLM_MODEL_HEAL`, …). The LLM path is
+> best-effort; with no key, heal falls back to the deterministic L1–L6 rotation.
 
 Invoked **only if Steps 3–4 both fail** to produce a unique live match.
 
-**Budget pre-check:** verify remaining Sonnet token budget before calling the model. If budget
+**Budget pre-check:** verify remaining heal-model token budget (Sonnet by default) before calling the model. If budget
 is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
 
 **Prompt inputs:**
@@ -120,7 +125,7 @@ The discounted confidence is passed to Step 7.
 
 ---
 
-## Step 6 — Visual Set-of-Marks (Sonnet 4.6 vision) — GATED
+## Step 6 — Visual Set-of-Marks (default heal vision model Sonnet 4.6) — GATED
 
 This step is only reached and only executed when **all three gates pass**:
 
@@ -129,10 +134,15 @@ This step is only reached and only executed when **all three gates pass**:
 3. The M5 PoC has been validated with **> 70% accuracy** on at least 20 real broken-selector
    scenarios (gate is off by default until M5 delivers the measurement)
 
+> **M6 vision-gating (ADR-019, see M6_CONTRACT.md §Vision-gating):** this step (Tier-7 set-of-marks)
+> additionally requires a **vision-capable backend** — the effective gate is `use_visual AND backend.supports_vision`.
+> A text-only provider (e.g. DeepSeek-V3) **skips Tier-7** and degrades to the deterministic
+> L1–L6 rotation.
+
 **Mechanism:**
 - Numbered overlay marks are rendered on the screenshot captured in Step 2.
 - A `mark → DOM-element` map is built (mark numbers to semantic nodes in the a11y tree).
-- Sonnet 4.6 vision receives the annotated screenshot and returns a `mark_number`.
+- The default heal vision model (Sonnet 4.6) receives the annotated screenshot and returns a `mark_number`.
 - We extract a **real semantic locator** from the mapped DOM node — **not** a coordinate click.
   Coordinate clicks are fragile to viewport size, device-pixel-ratio, and scroll position.
 

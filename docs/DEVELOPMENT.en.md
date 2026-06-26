@@ -36,7 +36,8 @@ go build -o bin/store-gateway ./cmd/store-gateway   # M2b-1: gRPC persistence; a
 
 # Python — brain (LangGraph)
 uv venv                                    # creates .venv
-uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai
+#   openai is optional — only needed for OpenAI-compatible providers (M6); import-guarded
 ```
 `agentctl` auto-uses `./.venv/bin/python` to run the brain (override with `BRAIN_PYTHON`).
 
@@ -59,6 +60,35 @@ Artifacts land in `runs/<run_id>/` (`plan.json`, `llm-transcript.jsonl`, `trace.
 > Build steps (`npm`, `go build`, `uv pip`) run fine; execute `agentctl` yourself (e.g. via the `!` prefix)
 > and prefer local `file://` fixtures over external targets.
 
+### LLM backend (M6, provider-agnostic)
+By default (zero env) it is Anthropic, as before: `claude-opus-4-8` (planner) / `claude-sonnet-4-6`
+(heal), keyed off `ANTHROPIC_API_KEY`; without a key the planner falls back to the heuristic and heal
+to L1–L6. To run the **planner** and/or **heal** on any OpenAI-compatible endpoint (ChatGPT, DeepSeek,
+Qwen, Gemini-compat, OpenRouter, Ollama, vLLM), set env **per role**. Precedence:
+`LLM_<KEY>_<ROLE>` > `LLM_<KEY>` > default (roles: `PLANNER`, `HEAL`).
+
+| Key | Global | Per-role override | Default (as before M6) |
+|-----|--------|-------------------|------------------------|
+| `LLM_BACKEND` | yes | `LLM_BACKEND_PLANNER` / `_HEAL` | `anthropic` |
+| `LLM_MODEL` | yes | `LLM_MODEL_PLANNER` / `_HEAL` | `claude-opus-4-8` / `claude-sonnet-4-6` |
+| `LLM_BASE_URL` | yes | `LLM_BASE_URL_PLANNER` / `_HEAL` | — |
+| `LLM_API_KEY` | yes | `LLM_API_KEY_PLANNER` / `_HEAL` | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `LLM_VISION` | yes | `LLM_VISION_HEAL` | provider default (anthropic=on) |
+
+```bash
+# planner on OpenRouter/DeepSeek, heal stays on the Anthropic default
+LLM_BACKEND_PLANNER=openai LLM_BASE_URL_PLANNER=https://openrouter.ai/api/v1 \
+  LLM_API_KEY_PLANNER=… LLM_MODEL_PLANNER=deepseek/deepseek-chat \
+  ./bin/agentctl run --target "file://$PWD/testdata/site/index.html" --planner llm
+
+# vision-heal on a different provider (set-of-marks Tier-7 needs a vision model)
+LLM_BACKEND_HEAL=openai LLM_BASE_URL_HEAL=… LLM_MODEL_HEAL=… LLM_VISION_HEAL=1 \
+  ./bin/agentctl run --replay --plan runs/<id>/plan.json --target "file://…" --heal-llm
+```
+`make_backend(role)` (`brain/llm.py`) builds the backend from env or returns `None` ⇒ the offline
+fallback (heuristic / L1–L6) is kept; it **never raises**. A text-only provider skips Tier-7 (no
+vision) → deterministic L1–L6. Source of truth: `brain/llm.py` + `docs/M6_CONTRACT.md`.
+
 ## 4. Milestone gates (acceptance)
 - **M0** (`M0_CONTRACT.md`): a11y tree printed + `runs/<id>/trace.zip` size>0 + exit 0.
 - **M1** (`M1_CONTRACT.md`): `plan.json` with **≥5 steps**, `coverage_achieved` recorded, `plan_hash` present, `trace.zip` present; a second identical run yields the **same `plan_hash`** (determinism — heuristic planner).
@@ -67,6 +97,19 @@ Artifacts land in `runs/<run_id>/` (`plan.json`, `llm-transcript.jsonl`, `trace.
 # determinism check (M1)
 A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/null; jq -r .plan_hash runs/*/plan.json | tail -1)
 # run again, compare plan_hash — must match
+```
+
+- **M2** (`M2_CONTRACT.md`): a broken replay locator heals with confidence **≥ 0.85**, a `HealedLocator` `status=active` row is persisted, exit 0; a second run consumes **zero LLM tokens** for that semantic_id (cache hit).
+- **M2b** (`M2b_CONTRACT.md`): with `store-gateway` (Go gRPC over UDS) explore/baseline/replay/calibrate are identical; `grep -r sqlite3 brain/` is empty; pw-executor `tools/list` returns **7 tools**; the M0–M3 live gates pass over the MCP transport (live is user-run).
+- **M3** (`M3_CONTRACT.md`): 3 parallel `--ci` replays **< 2 min** each, exit 0; a replay against a tampered `plan_hash` **exits 3** in < 5 s (both hashes to stderr).
+- **M4** (`M4_CONTRACT.md`): `run_report.html` is non-empty and renders; the exported `.spec.ts` passes `tsc --noEmit`; `trace.zip` opens; `agent_cost_usd_total` **> 0** in `/metrics`.
+- **M4b** (`M4b_CONTRACT.md`): without `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` — spans are no-ops, no push, offline tests green; with endpoint+gateway (user-run) traces land in Tempo, metrics in the Pushgateway.
+- **M5** (`M5_CONTRACT.md`): set-of-marks visual heal — **≥ 15/20** scenarios match the human-verified locator (≥ 75% > 70% gate), otherwise the feature is deferred and the overlay is removed from the binary.
+- **M6** (`M6_CONTRACT.md`): offline `test_b1_offline` (8) + `test_m5_offline` (4) green, the `test_m3` / `test_m4` / `test_m4b` regression green, **default path byte-for-byte**; the real-provider smoke is user-run.
+
+```bash
+# offline suite (no network/binaries: M6 default-path + m3/m4/m4b regression)
+for t in m3 m4 m4b m5 b1; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Wire contracts (where the boundaries are defined)

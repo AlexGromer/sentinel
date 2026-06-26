@@ -105,8 +105,12 @@ pattern discarded from earlier proposals.
 
 | Budget | Model | Default |
 |---|---|---|
-| `plan_token_limit` | Opus 4.8 | 50 000 tokens/run |
-| `heal_token_limit` | Sonnet 4.6 | 20 000 tokens/run |
+| `plan_token_limit` | Opus 4.8 (default) | 50 000 tokens/run |
+| `heal_token_limit` | Sonnet 4.6 (default) | 20 000 tokens/run |
+
+> **M6 (ADR-019):** the models in this table are **defaults**, routed through the `LLMBackend`
+> (per-role `LLM_BACKEND*`). The `model` label/metric (`agent_tokens_total`, `agent_cost_usd_total`)
+> may now carry a non-Anthropic model id post-M6; the label itself stays generic.
 
 ### Layer 2 — Go-side hard ceiling (orchestrator)
 
@@ -121,8 +125,8 @@ Budget exhaustion does **not** hard-abort the run. Instead:
 
 - **Plan node:** stops issuing new exploration actions; the current plan is frozen as a
   partial plan (plan_hash still computed over available steps).
-- **Heal node:** falls back to L1–L6 deterministic strategy rotation only; no Sonnet or
-  Opus calls are made.
+- **Heal node:** falls back to L1–L6 deterministic strategy rotation only; no heal/plan
+  model calls (Sonnet/Opus by default) are made.
 
 At **80% utilisation** the brain emits a `BUDGET_WARNING` event (visible in the
 orchestrator log and surfaced in the run report).

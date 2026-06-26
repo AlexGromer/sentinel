@@ -50,8 +50,8 @@ independent single-writers of their respective databases. This is what makes the
 ### Episodic buffer and context bounding
 
 `RunState` contains an `episodic_buffer` — a bounded `deque` with a maximum of
-50 events. When the buffer is full, the oldest events are summarised by a Sonnet
-call into a ~200-token episode summary before eviction. This bounds the context
+50 events. When the buffer is full, the oldest events are summarised by a model
+call (Sonnet by default) into a ~200-token episode summary before eviction. This bounds the context
 window growth across long explore runs without losing the narrative continuity the
 plan node needs.
 
@@ -221,8 +221,8 @@ One row per run. The primary cost and trend data source for Grafana and
 | `status` | TEXT | `PENDING`, `RUNNING`, `HEALING`, `PAUSED`, `PARTIAL`, `DONE`, `FAILED`, `ABORTED` |
 | `aut_version` | TEXT | git SHA of the AUT at run start |
 | `token_cost_usd` | REAL | Total LLM spend across all nodes |
-| `plan_tokens` | INTEGER | Tokens consumed in the `plan` node (Opus 4.8) |
-| `heal_tokens` | INTEGER | Tokens consumed in the `heal` node (Sonnet 4.6) |
+| `plan_tokens` | INTEGER | Tokens consumed in the `plan` node (Opus 4.8 by default) |
+| `heal_tokens` | INTEGER | Tokens consumed in the `heal` node (Sonnet 4.6 by default) |
 | `duration_ms` | INTEGER | Total wall time of the run |
 | `steps_pass` | INTEGER | Count of steps that passed |
 | `steps_fail` | INTEGER | Count of steps that failed |
