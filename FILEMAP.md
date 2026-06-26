@@ -16,8 +16,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M4 + M2b-1 done; M2b-2 + M4b + M5 pending |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
-| docs/M0..M5_CONTRACT.md, M2b_CONTRACT.md, M6_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
-| docs/M7_CONTRACT.md | M7 contract (**Proposed**, ADR-020) | MCP-server exposure + SamplingBackend |
+| docs/M0..M5_CONTRACT.md, M2b/M6/M7/M8_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
+| docs/M7_CONTRACT.md | M7 (Delivered, ADR-020) | MCP-server exposure + SamplingBackend |
+| docs/M8_CONTRACT.md | M8 (in progress, ADR-021) | distributed tracing + budget ceiling + Go orchestrator/report-service |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -36,6 +37,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) |
 | brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + SamplingBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) + MCP sampling (ADR-020, M7) |
 | brain/server.py | Python | M7 brain MCP server (FastMCP): tools explore/heal/replay/report; SamplingBackend via host sampling; sync graph in worker-thread (ADR-020) |
+| brain/budget.py | Python | M8 BudgetTracker — per-role token accumulator + `exceeded()` guard; graceful degradation planner→heuristic / heal→L1–L6 (ADR-021) |
 | brain/healing.py | Python | HealingEngine (cache→L1–L6→verify→gate→audit) — store-agnostic |
 | brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
 | brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
@@ -44,7 +46,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService) |
 | brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
-| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server (fake executor/backend/session) |
+| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
@@ -77,7 +79,7 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
 - Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai grpcio grpcio-tools`
 - gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto` (+ go plugins for internal/store/pb)
-- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1; do .venv/bin/python tests/test_${t}_offline.py; done`
+- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8; do .venv/bin/python tests/test_${t}_offline.py; done`
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata

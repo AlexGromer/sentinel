@@ -62,3 +62,29 @@ def set_llm_tokens(sp, result) -> None:
         sp.set_attribute("llm.completion_tokens", int(getattr(result, "completion_tokens", 0) or 0))
     except Exception:
         pass
+
+
+def inject_context(carrier: dict) -> dict:
+    """Inject the current W3C trace context (`traceparent`) into a carrier dict so a downstream
+    process (pw-executor / store-gateway) can continue the trace (M8, ADR-021). No-op when tracing
+    isn't configured — the carrier is returned unchanged."""
+    if _tracer is None:
+        return carrier
+    try:
+        from opentelemetry.propagate import inject
+        inject(carrier)
+    except Exception:
+        pass
+    return carrier
+
+
+def extract_context(carrier: dict):
+    """Extract a W3C trace context from a carrier dict; returns an OpenTelemetry Context (use as the
+    parent of a child span) or None when tracing isn't configured / nothing is present."""
+    if _tracer is None:
+        return None
+    try:
+        from opentelemetry.propagate import extract
+        return extract(carrier or {})
+    except Exception:
+        return None

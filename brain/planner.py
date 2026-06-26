@@ -66,6 +66,10 @@ class LLMPlanner:
     def propose(self, state: dict, candidates: list) -> dict:
         if not self._backend:
             return self._fallback.propose(state, candidates)
+        from . import budget
+        if budget.tracker().exceeded("plan"):
+            log("LLMPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"),
                      "name": c.get("name"), "target": c.get("target")}
@@ -81,6 +85,7 @@ class LLMPlanner:
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
             result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+            budget.tracker().add("plan", result)
             text = result.text
             tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])

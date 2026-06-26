@@ -105,6 +105,10 @@ class HealingEngine:
 
     def _llm_reground(self, ctx: dict):
         """Text fallback: pick a CSS selector for the broken element. Returns (strategy,locator,conf)|None."""
+        from . import budget
+        if budget.tracker().exceeded("heal"):
+            log("heal: heal token budget exceeded -> L1-L6 only (M8, ADR-021)")
+            return None
         try:
             prompt = (
                 "A UI locator broke after a DOM change. Choose the current element matching the "
@@ -116,6 +120,7 @@ class HealingEngine:
             )
             with span("heal.llm", model=self._backend.model, prompt_hash=prompt_hash(prompt)) as _sp:
                 result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+                budget.tracker().add("heal", result)
                 set_llm_tokens(_sp, result)
             text = result.text
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
@@ -138,6 +143,9 @@ class HealingEngine:
         """Tier-7 (M5-2): overlay numbered marks, ask Sonnet vision to pick the element matching the
         intent, map the chosen mark to a real locator. Discounted to the FLAGGED band. Returns
         (strategy, locator, conf) | None. Gated by use_visual + a live vision LLM."""
+        from . import budget
+        if budget.tracker().exceeded("heal"):
+            return None
         import base64
         import os as _os
         import tempfile
@@ -158,6 +166,7 @@ class HealingEngine:
                 f"marks: {json.dumps(menu)}\n"
                 'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.')
             result = self._backend.complete_vision(prompt, b64, max_tokens=100, temperature=0)
+            budget.tracker().add("heal", result)
             text = result.text
             j = json.loads(text[text.find("{"): text.rfind("}") + 1])
             if j.get("none"):
