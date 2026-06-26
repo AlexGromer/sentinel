@@ -1,9 +1,11 @@
-# M7 Contract — "MCP-Server Exposure" (PROPOSED, frozen 2026-06-25)
+# M7 Contract — "MCP-Server Exposure" (DELIVERED 2026-06-26 — ADR-020 Accepted)
 
 > 🌐 [Русский](M7_CONTRACT.md) (основная версия) · **English**
 
-Status: **Proposed** (ADR-020). Docs-first — the contract is frozen now, implementation is the next
-milestone (needs a live MCP host to exercise, user-run).
+Status: **Delivered** (ADR-020 Accepted). Implemented: `brain/server.py` (FastMCP, tools
+explore/heal/replay/report) + `SamplingBackend` in `brain/llm.py`; `mcp` added to deps;
+**offline-verified** (`tests/test_m7_offline.py`, 5 tests + regression green). **Live MCP host is
+user-run** (needs a real host with `sampling`; see GAP-VERIFY-006).
 
 Goal: the second direction of the user ask — Sentinel **is driven by** host agents (OpenCode,
 Kilocode, Claude Desktop) that supply the model themselves. We expose the brain as an **MCP server**;

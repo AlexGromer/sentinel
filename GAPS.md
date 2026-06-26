@@ -26,7 +26,7 @@
 | GAP-VERIFY-003 | P2 | API checkpointer **LangGraph `SqliteSaver` / `AsyncPostgresSaver`** + использование отдельного DB-файла; семантика `interrupt`/pause для human gate. | M1 |
 | GAP-VERIFY-004 | P3 | Формат вызовов structured-output / tool-use **Anthropic SDK** для узлов plan + heal (ID моделей `claude-opus-4-8`, `claude-sonnet-4-6`). | M1 |
 | GAP-VERIFY-005 | P2 | **Реальный smoke провайдер-агностичного backend (M6/ADR-019).** Сеть в среде заблокирована → offline покрыт `FakeBackend`; реальное поведение OpenAI-compat (минимум один роутер: OpenRouter/DeepSeek/Qwen/Gemini-compat) — **user-run**: `temperature=0` принимается?; `max_tokens` vs `max_completion_tokens` (o-series); отсутствие `usage` (Ollama/vLLM); vision `image_url` data-URI. Инструкция в `docs/M6_CONTRACT.md`. | M6 (user-run) |
-| GAP-VERIFY-006 | P2 | **Поддержка MCP `sampling/createMessage` по хостам** для M7 `SamplingBackend` (ADR-020): Claude Desktop — да; **OpenCode / Kilocode — подтвердить наличие + API до кодирования** (anti-hallucination). Если host не даёт sampling → backend недоступен → fallback. | M7 |
+| GAP-VERIFY-006 | P2 | **Поддержка MCP `sampling/createMessage` по хостам** для M7 `SamplingBackend` (ADR-020): M7 реализован, offline-verified; серверный `create_message` API подтверждён на установленном `mcp`. Остаётся **user-run** — реальный хост (Claude Desktop — да; **OpenCode/Kilocode — подтвердить capability перед боевым использованием**). Нет sampling → backend недоступен → fallback на heuristic/L1–L6. | M7 (user-run) |
 
 ## Открытые вопросы дизайна (из синтеза)
 

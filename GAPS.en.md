@@ -26,7 +26,7 @@ Categories: ARCH (architecture), VERIFY (needs fact-check), RISK, AGENT (missing
 | GAP-VERIFY-003 | P2 | **LangGraph `SqliteSaver` / `AsyncPostgresSaver`** checkpointer API + separate-DB-file usage; `interrupt`/pause semantics for the human gate. | M1 |
 | GAP-VERIFY-004 | P3 | **Anthropic SDK** structured-output / tool-use call shape for plan + heal nodes (model IDs `claude-opus-4-8`, `claude-sonnet-4-6`). | M1 |
 | GAP-VERIFY-005 | P2 | **Real-provider smoke for the provider-agnostic backend (M6/ADR-019).** The environment blocks network → offline is covered by `FakeBackend`; real OpenAI-compat behaviour (at least one router: OpenRouter/DeepSeek/Qwen/Gemini-compat) is **user-run**: is `temperature=0` accepted?; `max_tokens` vs `max_completion_tokens` (o-series); missing `usage` (Ollama/vLLM); vision `image_url` data-URI. Instructions in `docs/M6_CONTRACT.md`. | M6 (user-run) |
-| GAP-VERIFY-006 | P2 | **MCP `sampling/createMessage` support across hosts** for the M7 `SamplingBackend` (ADR-020): Claude Desktop — yes; **OpenCode / Kilocode — confirm availability + API before coding** (anti-hallucination). If a host offers no sampling → the backend is unavailable → fallback. | M7 |
+| GAP-VERIFY-006 | P2 | **MCP `sampling/createMessage` support across hosts** for the M7 `SamplingBackend` (ADR-020): M7 implemented, offline-verified; the server `create_message` API is confirmed on the installed `mcp`. Remaining is **user-run** — a real host (Claude Desktop — yes; **OpenCode/Kilocode — confirm capability before production use**). No sampling → the backend is unavailable → fallback to heuristic/L1–L6. | M7 (user-run) |
 
 ## Design open questions (from synthesis)
 

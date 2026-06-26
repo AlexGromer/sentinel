@@ -12,6 +12,7 @@ dependencies = [
     "prometheus-client",
     "anthropic",
     "openai",
+    "mcp",
 ]
 
 [tool.uv]

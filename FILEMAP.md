@@ -34,7 +34,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
 | brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) |
-| brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) |
+| brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + SamplingBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) + MCP sampling (ADR-020, M7) |
+| brain/server.py | Python | M7 brain MCP server (FastMCP): tools explore/heal/replay/report; SamplingBackend via host sampling; sync graph in worker-thread (ADR-020) |
 | brain/healing.py | Python | HealingEngine (cache→L1–L6→verify→gate→audit) — store-agnostic |
 | brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
 | brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
@@ -43,7 +44,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService) |
 | brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
-| tests/test_*_offline.py (m3/m4/m4b/m5/b1) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend (fake executor/backend) |
+| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
@@ -81,4 +82,4 @@ M4:       brain.exporter / report / calibrate (pure generators)
 
 ## Metadata
 - Last updated: 2026-06-25
-- Phase: **M0–M5 + M2b + M4b done — gates green**. In progress: **M6** (provider-agnostic LLM backend, ADR-019). Next: M7 (MCP-server exposure, ADR-020, contract frozen).
+- Phase: **M0–M7 + M2b + M4b done — gates green** (M6 provider-agnostic backend ADR-019; M7 MCP-server exposure ADR-020, offline-verified, live host user-run). Next: GAP-OBS-001 (distributed tracing + budget) + GAP-RISK-009 (screenshot determinism).

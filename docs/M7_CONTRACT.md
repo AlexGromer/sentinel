@@ -1,9 +1,11 @@
-# M7 Contract — "MCP-Server Exposure" (PROPOSED, frozen 2026-06-25)
+# M7 Contract — "MCP-Server Exposure" (DELIVERED 2026-06-26 — ADR-020 Accepted)
 
 > 🌐 **Русский** (основная версия) · [English](M7_CONTRACT.en.md)
 
-Статус: **Proposed** (ADR-020). Docs-first — контракт заморожен сейчас, имплементация — следующий
-milestone (требует живого MCP-host для прогона, user-run).
+Статус: **Delivered** (ADR-020 Accepted). Реализовано: `brain/server.py` (FastMCP, tools
+explore/heal/replay/report) + `SamplingBackend` в `brain/llm.py`; `mcp` добавлен в deps;
+**offline-verified** (`tests/test_m7_offline.py`, 5 тестов + регресс зелёный). **Живой MCP-host —
+user-run** (требует реального хоста с `sampling`; см. GAP-VERIFY-006).
 
 Цель: второе направление запроса пользователя — Sentinel **вызывается из** агентов-хостов
 (OpenCode, Kilocode, Claude Desktop), которые сами поставляют модель. Экспонируем «мозг» как

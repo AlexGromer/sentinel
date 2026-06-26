@@ -1,6 +1,6 @@
 """Sentinel brain entrypoint — dispatches all modes.
 
-RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate.
+RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate | mcp-server.
 Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
@@ -227,6 +227,10 @@ def main() -> int:
     if not pw_cmd:
         log("FATAL: PW_EXECUTOR_CMD not set")
         return 2
+    if run_mode == "mcp-server":
+        # M7 (ADR-020): expose the brain as an MCP server; the host drives + supplies the model.
+        from .server import run_mcp_server
+        return run_mcp_server(out, run_id)
     if run_mode == "explore" and not target:
         log("FATAL: TARGET_URL not set")
         return 2

@@ -20,6 +20,8 @@ keyed off ANTHROPIC_API_KEY, falling back to heuristic / L1–L6 when the key is
 """
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import os
 from dataclasses import dataclass
 from typing import Optional, Protocol
@@ -130,6 +132,49 @@ class OpenAICompatBackend:
         return self._result(resp)
 
 
+# MCP sampling session, set by the brain MCP server (M7, ADR-020) for the duration of a tool call.
+# Holds (event_loop, mcp.ServerSession). `asyncio.to_thread` copies this contextvar into the worker
+# thread that runs the synchronous graph, so SamplingBackend can reach the host's sampling capability.
+_sampling_ctx: contextvars.ContextVar = contextvars.ContextVar("sentinel_sampling", default=None)
+
+
+def set_sampling_session(loop, session):
+    """Server entrypoint: bind the host sampling session for this context; returns a reset token."""
+    return _sampling_ctx.set((loop, session))
+
+
+def reset_sampling_session(token) -> None:
+    _sampling_ctx.reset(token)
+
+
+class SamplingBackend:
+    """LLMBackend backed by MCP `sampling/createMessage` — the HOST supplies the model (M7, ADR-020).
+
+    Used when the brain runs as an MCP server (`RUN_MODE=mcp-server`): each `complete()` is a
+    server→host request bridged onto the host's event loop (mirrors `executor.McpExecutor`). Text-only:
+    basic sampling has no vision, so `supports_vision=False` and heal degrades to deterministic L1–L6."""
+
+    name = "sampling"
+    supports_vision = False
+
+    def __init__(self, loop, session, model: str = "mcp-sampling", timeout: float = 120.0) -> None:
+        self._loop, self._session, self.model, self._timeout = loop, session, model, timeout
+
+    def complete(self, prompt: str, *, max_tokens: int, temperature: float) -> LLMResult:
+        from mcp.types import SamplingMessage, TextContent
+        coro = self._session.create_message(
+            messages=[SamplingMessage(role="user", content=TextContent(type="text", text=prompt))],
+            max_tokens=max_tokens, temperature=temperature)
+        res = asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=self._timeout)
+        c = getattr(res, "content", None)
+        text = c.text if c is not None and getattr(c, "type", "") == "text" else ""
+        return LLMResult(text.strip(), 0, 0, model=getattr(res, "model", None) or self.model)
+
+    def complete_vision(self, prompt: str, image_b64: str, *, max_tokens: int,
+                        temperature: float) -> LLMResult:
+        raise NotImplementedError("MCP sampling backend is text-only (supports_vision=False)")
+
+
 # Per-role defaults preserve today's behaviour (ADR-007): Opus explore, Sonnet heal.
 _DEFAULT_MODEL = {"planner": "claude-opus-4-8", "heal": "claude-sonnet-4-6"}
 
@@ -143,6 +188,14 @@ def make_backend(role: str) -> Optional[LLMBackend]:
     """Build the backend for a role ("planner"|"heal") from env, or `None` to keep the offline
     fallback (heuristic / L1–L6). Never raises: any import/config problem returns `None`."""
     provider = (_env(role, "BACKEND") or "anthropic").lower()
+    # MCP-server mode (M7): an active sampling session takes precedence — the host supplies the model.
+    sampling = _sampling_ctx.get()
+    if sampling is not None or provider == "sampling":
+        if sampling is None:
+            log(f"make_backend[{role}]: sampling requested but no MCP session -> fallback")
+            return None
+        loop, session = sampling
+        return SamplingBackend(loop, session)
     model = _env(role, "MODEL") or _DEFAULT_MODEL.get(role)
     base_url = _env(role, "BASE_URL")
     try:
