@@ -169,6 +169,7 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 | 2026-06-25 | M7 contract frozen (Proposed): MCP-server exposure + `SamplingBackend` on top of ADR-019; implementation next session (needs a live MCP host) | ADR-020 | @AlexGromer |
 | 2026-06-26 | M7 delivered: brain MCP server (`brain/server.py`, FastMCP — tools explore/heal/replay/report) + `SamplingBackend` (host supplies the model via sampling; sync graph in a worker thread); `mcp` added to deps; offline-verified (test_m7 5 + regression green); live MCP host is user-run (GAP-VERIFY-006) | ADR-020 | @AlexGromer |
 | 2026-06-26 | M8 started (Full GAP-OBS-001): contract + ADR-021 (amends ADR-018); Python budget accumulator + W3C propagation + per-node spans — offline; Go orchestrator/report-service + TS spans + proto/runcontrol — user-run build | ADR-021 | @AlexGromer |
+| 2026-06-26 | M8 delivered (Full GAP-OBS-001): distributed tracing (W3C brain→pw-executor→store-gateway: executor `_meta` + store.py gRPC interceptor + pw-executor `otel.ts` + store-gateway `otelgrpc.StatsHandler` + per-node spans) + budget ceiling (Python `BudgetTracker` + Go `orchestrator` RunControl + SIGTERM backstop) + Go `report-service` (HTTP). All three languages instrumented and **compile/test-verified** (Python 36 offline + go build/vet/test + tsc clean). Remaining to observe end-to-end: a live OTLP trace + the real budget-kill | ADR-021 | @AlexGromer |
 
 ---
 

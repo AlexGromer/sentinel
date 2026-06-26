@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -10,11 +11,38 @@ import (
 	"os/signal"
 	"syscall"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 
 	"github.com/AlexGromer/sentinel/internal/store"
 	pb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
+
+// setupTracing configures an OTLP tracer + W3C propagator iff OTEL_EXPORTER_OTLP_ENDPOINT is set
+// (M8, ADR-021); otherwise it is a no-op (zero overhead). Returns a shutdown func.
+func setupTracing(ctx context.Context) func() {
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" {
+		return func() {}
+	}
+	exp, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[store-gateway] otel exporter: %v (tracing off)\n", err)
+		return func() {}
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", "sentinel-store-gateway"))),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	return func() { _ = tp.Shutdown(context.Background()) }
+}
 
 func main() {
 	addr := flag.String("addr", "", "unix socket path to listen on (required)")
@@ -39,7 +67,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	g := grpc.NewServer()
+	shutdown := setupTracing(context.Background())
+	defer shutdown()
+
+	// otelgrpc StatsHandler: server spans + W3C extraction from incoming metadata (no-op if tracing off).
+	g := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	pb.RegisterPersistenceServiceServer(g, srv)
 
 	stop := make(chan os.Signal, 1)

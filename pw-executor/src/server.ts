@@ -14,6 +14,7 @@ import * as crypto from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { setupTracing, spanForTool } from './otel.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -72,6 +73,12 @@ async function ensureBrowser(): Promise<void> {
 
 /** Transport-agnostic tool dispatch. `method` is the dotted name (e.g. "browser.navigate"). */
 async function dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+  // M8: continue the brain's trace (W3C `traceparent` in params._meta) with a per-tool child span.
+  const meta = params._meta as Record<string, string> | undefined;
+  return spanForTool(method, meta, () => dispatchInner(method, params));
+}
+
+async function dispatchInner(method: string, params: Record<string, unknown>): Promise<unknown> {
   switch (method) {
     case 'initialize':
       await ensureBrowser();
@@ -204,6 +211,7 @@ const TOOL_METHODS = [
 
 // --- Transport 1: newline JSON-RPC 2.0 (default) ----------------------------
 async function mainJsonRpc(): Promise<void> {
+  await setupTracing();
   const rl = readline.createInterface({ input: process.stdin });
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -236,6 +244,7 @@ async function mainJsonRpc(): Promise<void> {
 
 // --- Transport 2: MCP SDK (opt-in) ------------------------------------------
 async function mainMcp(): Promise<void> {
+  await setupTracing();
   const server = new McpServer({ name: 'pw-executor', version: '0.0.0' });
   const locatorShape = { locator: z.record(z.string(), z.any()) };
   const schemas: Record<string, Record<string, z.ZodTypeAny>> = {

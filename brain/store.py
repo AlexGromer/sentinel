@@ -135,6 +135,31 @@ class LocalStore:
         self.db.close()
 
 
+def _trace_interceptor():
+    """gRPC client interceptor that injects the current W3C trace context into call metadata
+    (M8, ADR-021) so the Go store-gateway's server spans join the brain's trace. No-op when tracing
+    isn't configured (inject_context returns an empty carrier)."""
+    import collections
+    import grpc
+
+    from .otel import inject_context
+
+    class _Details(collections.namedtuple(
+            "_Details", ("method", "timeout", "metadata", "credentials", "wait_for_ready", "compression"))):
+        pass
+
+    class _Interceptor(grpc.UnaryUnaryClientInterceptor):
+        def intercept_unary_unary(self, continuation, details, request):
+            carrier = inject_context({})
+            if carrier:
+                md = list(details.metadata or []) + [(k.lower(), v) for k, v in carrier.items()]
+                details = _Details(details.method, details.timeout, md, details.credentials,
+                                   details.wait_for_ready, details.compression)
+            return continuation(details, request)
+
+    return _Interceptor()
+
+
 class GrpcStore:
     """Thin gRPC client to the Go store-gateway. Same method interface as LocalStore (ADR-015)."""
 
@@ -142,7 +167,8 @@ class GrpcStore:
         import grpc
         from .pb import persistence_pb2 as pbmsg, persistence_pb2_grpc as pbgrpc
         self._pb = pbmsg
-        self._ch = grpc.insecure_channel(f"unix:{addr}")
+        base = grpc.insecure_channel(f"unix:{addr}")
+        self._ch = grpc.intercept_channel(base, _trace_interceptor())  # M8: W3C trace propagation
         self._stub = pbgrpc.PersistenceServiceStub(self._ch)
 
     def lookup(self, page_path, semantic_id, dom_subtree_hash):

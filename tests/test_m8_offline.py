@@ -96,6 +96,30 @@ def test_runcontrol_stubs_import():
     assert ev.prompt_tokens == 7 and ev.node == "plan"
 
 
+def test_grpc_trace_interceptor_noop_without_tracing():
+    os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    from brain import otel, store
+    otel.setup_tracing()                        # tracing off -> no traceparent injected
+    interceptor = store._trace_interceptor()
+    seen = {}
+
+    class _Details:
+        method = "/svc/M"
+        timeout = None
+        metadata = None
+        credentials = None
+        wait_for_ready = None
+        compression = None
+
+    def cont(details, request):
+        seen["metadata"] = details.metadata
+        return "resp"
+
+    out = interceptor.intercept_unary_unary(cont, _Details(), "req")
+    assert out == "resp"
+    assert seen["metadata"] is None             # nothing injected when tracing is off
+
+
 def test_graph_builds_with_per_node_spans_and_runcontrol():
     os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
     os.environ.pop("ORCH_ADDR", None)

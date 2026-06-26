@@ -35,7 +35,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | internal/store/pb/ | Go | generated gRPC stubs (from proto/persistence.proto) |
 | proto/persistence.proto | proto3 | PersistenceService contract (mirrors store.py 1:1) |
 | proto/runcontrol.proto | proto3 | M8 RunControl contract (StartRun/ReportEvent→Control/Abort); brain↔orchestrator token-reconcile (ADR-021) |
-| go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite) |
+| go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite, opentelemetry-go + otelgrpc) |
 | brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
 | brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) |
@@ -50,8 +50,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService + RunControl) |
 | brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
-| pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop |
-| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C (fake executor/backend/session) |
+| pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/traceStop; M8 per-tool spans via otel.ts; screenshot determinism (GAP-RISK-009) |
+| pw-executor/src/otel.ts | TS | M8 gated OTel tracer (NodeSDK + OTLP-grpc) + spanForTool (extracts W3C `_meta`); no-op without OTEL endpoint (ADR-021) |
+| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 
@@ -88,5 +89,5 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
-- Last updated: 2026-06-25
-- Phase: **M0–M7 + M2b + M4b done — gates green** (M6 provider-agnostic backend ADR-019; M7 MCP-server exposure ADR-020, offline-verified, live host user-run). Next: GAP-OBS-001 (distributed tracing + budget) + GAP-RISK-009 (screenshot determinism).
+- Last updated: 2026-06-26
+- Phase: **M0–M8 + M2b + M4b done — gates green.** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021) — all compile/test-verified (Python 36 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key).
