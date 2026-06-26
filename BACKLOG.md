@@ -4,7 +4,6 @@
 
 ## Active
 
-- [ ] [M9.1] pw-executor `fill`/`type`/`press`/`select` tools + auth (storageState precondition + **login-as-test**) + validation/negative-input assertion layer. **Blocker** — unblocks forms/login/business processes. (P1) @web-developer — GAP-M9-01/04/10
 - [ ] [M9.2] `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore|goal|describe` switch + RunConfig YAML. (P1) @ml-engineer — GAP-M9-02/09
 - [ ] [M9.3] Chat-UX: non-MCP HTTP/gRPC control-API + OSS chat front in DH (plus the MCP path via M7) + CI templates (Jenkinsfile / .gitlab-ci.yml). (P2) @web-developer — GAP-M9-03/12
 - [ ] [M9.4] In-app tabs perception (`role=tab`/`tabpanel`) + browser multi-tab/context (multi-page in pw-executor). (P2) @web-developer — GAP-M9-05
@@ -16,6 +15,7 @@
 
 ## Completed Archive
 
+- [x] [M9.1] pw-executor `fill`/`type`/`press`/`select` + `expect`/`saveStorageState` (both transports) + storageState auth (login-as-test, `secretRef`, `PW_NO_TRACE` gate) + assert/negative layer + `brain/validation.py` (sketch); ADR-026. Offline-verified (test_m9 19 + regress m3..m9 green + tsc + go build + gitleaks); 4-dim adversarial review fixes. Live UI run pending «go». (P1) @web-developer — GAP-M9-01/04/10 ✓ 2026-06-26
 - [x] M8 Distributed Observability + Budget Ceiling (ADR-021): W3C tracing across Go/Python/TS + Python BudgetTracker + Go orchestrator (RunControl + SIGTERM hard-ceiling) + Go report-service (HTTP). Compile/test-verified (Py 36 + go build/vet/test + tsc). ✓ 2026-06-26
 - [x] M7 MCP-Server Exposure (ADR-020): brain/server.py FastMCP (explore/heal/replay/report) + SamplingBackend (host-supplied model). Offline-verified (test_m7). ✓ 2026-06-26
 - [x] M6 Provider-Agnostic Brain (ADR-019): LLMBackend (AnthropicBackend + OpenAICompatBackend) + per-role make_backend; local models via LLM_BASE_URL. Offline-verified (test_b1). ✓ 2026-06-25
