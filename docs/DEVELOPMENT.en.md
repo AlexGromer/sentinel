@@ -109,10 +109,11 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 - **M7** (`M7_CONTRACT.md`): brain MCP server — `tools/list` returns `explore`/`heal`/`replay`/`report`; offline `test_m7` (5) green + `SamplingBackend` via a fake sampling session; a live MCP host is user-run.
 - **M8** (`M8_CONTRACT.md`): W3C trace brain→pw-executor→store-gateway (gated, no-op without OTLP) + `BudgetTracker` flips `exceeded()` at the limit with degradation; offline `test_m8` (9) green + `go build`/`vet`/`test` + `tsc`; live OTLP / the real budget-kill are user-run.
 - **M9.1** (`M9.1_CONTRACT.md`): pw-executor `fill`/`type`/`press`/`select`/`expect`/`saveStorageState` (`tsc --noEmit` clean); offline `test_m9` (19) green — the secret never leaks into artifacts, `plan_hash` is stable, assert exit composition; gitleaks clean; the live UI run (forms/login) is on "go".
+- **M9.2a** (`M9.2_CONTRACT.md`): `GoalPlanner` grounded (index pick from real candidates, OOB→done — never fabricates a selector) + `make_planner` `--goal` auto-default + a RunConfig YAML (precedence flag>file>default via `SENTINEL_EXPLICIT`); offline `test_m9_2` (20) green + `go build`/`vet`; the live goal run is on "go".
 
 ```bash
 # offline suite (no network/binaries): the full M3..M9 regression
-for t in m3 m4 m4b m5 b1 m7 m8 m9; do .venv/bin/python tests/test_${t}_offline.py; done
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Wire contracts (where the boundaries are defined)

@@ -5,7 +5,8 @@
 Производный документ синтеза дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
 
 > **Статус доставки (на 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ доставлено; **M9** — дизайн заморожен
-> (Proposed, ADR-022..025); **M9.1** (формы/логин/валидация, ADR-026) — ✅ доставлено offline. Детальные
+> (Proposed, ADR-022..025); **M9.1** (формы/логин/валидация, ADR-026) — ✅ доставлено offline; **M9.2a**
+> (GoalPlanner NL→plan, ADR-027) — ✅ доставлено offline. Детальные
 > секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
 > `../BACKLOG.md`.
 
@@ -355,4 +356,14 @@ budget-kill — user-run.
 транспорта); storageState-auth (login-as-test) + секреты через `secretRef` (никогда не сериализуются) +
 `PW_NO_TRACE` tracing-gate; assert/негативный слой + `brain/validation.py` (набросок). Offline-verified
 (`test_m9` 19 + регресс m3..m9 + `tsc` + `go build` + gitleaks); 4-мерный adversarial review. Живой UI — по «go».
-**Следующее: M9.2** (`GoalPlanner` NL→plan + `--mode explore|goal|describe` + RunConfig YAML).
+
+### M9.2a — GoalPlanner (NL→plan, explore-first grounding) (Доставлено offline, ADR-027)
+
+**Языки:** Python + Go. `GoalPlanner` в шве `Planner` (ADR-011) — LLM выбирает **индекс** из реальных
+кандидатов живой карты ⇒ галлюцинация селектора невозможна (ADR-022); `make_planner` авто-дефолт по
+`--goal` (не через `--mode`, = RUN_MODE); минимальный RunConfig YAML (mode/goal/planner/budgets, приоритет
+флаг>файл>дефолт через agentctl `SENTINEL_EXPLICIT`/`fs.Visit`); goal-режим best-effort (replay
+детерминирован). agentctl `--goal`/`--run-config`. Offline-verified (`test_m9_2` 20 + регресс m3..m9_2 +
+`go build`/`vet` + `tsc` + gitleaks); 4-мерный adversarial review (grounding clean). Живой goal-прогон — по «go».
+**Следующее: M9.2b** (describe-first NL→draft→reconcile + двухфазный explore-then-scenario §L + богатый
+RunConfig: auth/scenarios/per-role).

@@ -109,10 +109,11 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 - **M7** (`M7_CONTRACT.md`): brain MCP-сервер — `tools/list` возвращает `explore`/`heal`/`replay`/`report`; offline `test_m7` (5) зелёный + `SamplingBackend` через fake sampling-session; живой MCP-host — user-run.
 - **M8** (`M8_CONTRACT.md`): W3C-трейс brain→pw-executor→store-gateway (gated, no-op без OTLP) + `BudgetTracker` флипает `exceeded()` на лимите с degradation; offline `test_m8` (9) зелёный + `go build`/`vet`/`test` + `tsc`; live OTLP / реальный budget-kill — user-run.
 - **M9.1** (`M9.1_CONTRACT.md`): pw-executor `fill`/`type`/`press`/`select`/`expect`/`saveStorageState` (`tsc --noEmit` clean); offline `test_m9` (19) зелёный — секрет не утекает в артефакты, `plan_hash` стабилен, exit-композиция assert'ов; gitleaks чисто; живой UI-прогон (формы/логин) — по «go».
+- **M9.2a** (`M9.2_CONTRACT.md`): `GoalPlanner` грауденный (выбор по индексу из реальных кандидатов, OOB→done — никогда не фабрикует селектор) + `make_planner` авто-дефолт по `--goal` + RunConfig YAML (приоритет флаг>файл>дефолт через `SENTINEL_EXPLICIT`); offline `test_m9_2` (20) зелёный + `go build`/`vet`; живой goal-прогон — по «go».
 
 ```bash
 # offline-набор (без сети/бинарей): весь регресс M3..M9
-for t in m3 m4 m4b m5 b1 m7 m8 m9; do .venv/bin/python tests/test_${t}_offline.py; done
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Проводные контракты (где определены границы)

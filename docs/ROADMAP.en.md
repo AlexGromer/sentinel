@@ -5,7 +5,8 @@
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
 
 > **Delivery status (as of 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
-> (Proposed, ADR-022..025); **M9.1** (forms/login/validation, ADR-026) — ✅ delivered offline. The
+> (Proposed, ADR-022..025); **M9.1** (forms/login/validation, ADR-026) — ✅ delivered offline; **M9.2a**
+> (GoalPlanner NL→plan, ADR-027) — ✅ delivered offline. The
 > detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
 > `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 
@@ -349,4 +350,15 @@ non-MCP** access, and universality via pluggable adapters. See `../docs/M9_CONTR
 transports); storageState auth (login-as-test) + secrets via `secretRef` (never serialized) + the
 `PW_NO_TRACE` tracing gate; an assert/negative layer + `brain/validation.py` (sketch). Offline-verified
 (`test_m9` 19 + the m3..m9 regression + `tsc` + `go build` + gitleaks); a 4-dimension adversarial review.
-Live UI run is on "go". **Next: M9.2** (`GoalPlanner` NL→plan + `--mode explore|goal|describe` + RunConfig YAML).
+Live UI run is on "go".
+
+### M9.2a — GoalPlanner (NL→plan, explore-first grounding) (Delivered offline, ADR-027)
+
+**Languages:** Python + Go. `GoalPlanner` in the `Planner` seam (ADR-011) — the LLM picks an **index**
+from the real live-map candidates ⇒ a selector hallucination is impossible (ADR-022); `make_planner`
+auto-defaults by `--goal` (not via `--mode`, = RUN_MODE); a minimal RunConfig YAML
+(mode/goal/planner/budgets, precedence flag>file>default via agentctl `SENTINEL_EXPLICIT`/`fs.Visit`);
+goal-mode is best-effort (replay stays deterministic). agentctl `--goal`/`--run-config`. Offline-verified
+(`test_m9_2` 20 + the m3..m9_2 regression + `go build`/`vet` + `tsc` + gitleaks); a 4-dimension adversarial
+review (grounding clean). The live goal run is on "go". **Next: M9.2b** (describe-first NL→draft→reconcile
++ the two-phase explore-then-scenario §L + a rich RunConfig: auth/scenarios/per-role).
