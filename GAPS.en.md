@@ -39,6 +39,19 @@ Categories: ARCH (architecture), VERIFY (needs fact-check), RISK, AGENT (missing
 | GAP-ARCH-007 | P2 | **Cross-browser scope:** Chromium-only @ MVP assumed; confirm Firefox/WebKit near-term need (affects golden-baseline portability — hashes differ per engine). |
 | GAP-ARCH-008 | P1 | **Auth/secret handling** for the AUT (storage-state/cookie injection): where do credentials live (home-lab Vault?) and how are they referenced in `RunConfig` without landing in traces/transcripts? |
 
+## M9 — capability gaps (design session 2026-06-26 → docs/M9_CONTRACT.md)
+
+| ID | Priority | Gap | Target |
+|----|----------|-----|--------|
+| GAP-M9-01 | P1 | No `fill`/`type`/`press`/`select` in pw-executor → no forms/search/**login** | M9.1 (blocker #1) |
+| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + auto-default | M9.2 |
+| GAP-M9-03 | P2 | Non-MCP HTTP/gRPC control API + OSS chat-UI in DH (plus the MCP path via M7) | M9.3 |
+| GAP-M9-04 | P2 | Auth adapter (storageState + Keycloak/OIDC), creds from Vault; **login as a test target** | M9.1/M9.7 |
+| GAP-M9-05 | P2 | In-app tabs (perception `role=tab`/`tabpanel`) + browser multi-tab/context (multi-page in pw-executor) | M9.4 |
+| GAP-M9-06 | P2 | Inject `traceparent` into all browser requests → correlate a UI action with the backend/Kafka trace in Tempo | M9.5 |
+| GAP-M9-07 | P2 | Browser modes: headed + CDP-attach to the user's browser (`connectOverCDP`) + co-pilot takeover/return | M9.6 / branch-2 |
+| GAP-M9-08 | P3 | Pluggable adapters (auth/deploy/model/backend) — universality beyond DH | M9.7 |
+
 ## Risks (full list; summary in ARCHITECTURE §8)
 
 | ID | Priority | Risk | Mitigation |

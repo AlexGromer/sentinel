@@ -39,6 +39,19 @@
 | GAP-ARCH-007 | P2 | **Охват браузеров:** для MVP предполагается только Chromium; подтвердить краткосрочную потребность в Firefox/WebKit (влияет на переносимость golden-baseline — хэши различаются для каждого движка). |
 | GAP-ARCH-008 | P1 | **Обработка auth/секретов** для AUT (внедрение storage-state/cookie): где хранятся учётные данные (home-lab Vault?) и как они указываются в `RunConfig` без попадания в traces/транскрипты? |
 
+## M9 — пробелы возможностей (дизайн-сессия 2026-06-26 → docs/M9_CONTRACT.md)
+
+| ID | Приоритет | Пробел | Цель |
+|----|-----------|--------|------|
+| GAP-M9-01 | P1 | `fill`/`type`/`press`/`select` в pw-executor отсутствуют → нет форм/поиска/**логина** | M9.1 (блокер №1) |
+| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + авто-дефолт | M9.2 |
+| GAP-M9-03 | P2 | Не-MCP HTTP/gRPC control-API + OSS чат-UI в DH (плюс MCP-путь через M7) | M9.3 |
+| GAP-M9-04 | P2 | Auth-adapter (storageState + Keycloak/OIDC), креды из Vault; **логин как тест-цель** | M9.1/M9.7 |
+| GAP-M9-05 | P2 | In-app tabs (perception `role=tab`/`tabpanel`) + browser multi-tab/context (multi-page в pw-executor) | M9.4 |
+| GAP-M9-06 | P2 | Инъекция `traceparent` во все запросы браузера → корреляция UI-теста с backend/Kafka-trace в Tempo | M9.5 |
+| GAP-M9-07 | P2 | Режимы браузера: headed + CDP-attach к браузеру пользователя (`connectOverCDP`) + co-pilot takeover/return | M9.6 / ветка-2 |
+| GAP-M9-08 | P3 | Pluggable adapters (auth/deploy/model/backend) — универсальность не-только-DH | M9.7 |
+
 ## Риски (полный список; итог в ARCHITECTURE §8)
 
 | ID | Приоритет | Риск | Снижение риска |

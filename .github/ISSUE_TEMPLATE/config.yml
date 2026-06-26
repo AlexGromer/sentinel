@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability (private)
+    url: https://github.com/AlexGromer/sentinel/security/advisories/new
+    about: Do not file public issues for vulnerabilities — report privately (see SECURITY.md).
+  - name: Roadmap & known gaps
+    url: https://github.com/AlexGromer/sentinel/blob/main/GAPS.md
+    about: Much of the roadmap is tracked as GAP-* and milestone contracts.

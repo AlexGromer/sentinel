@@ -18,7 +18,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
 | docs/M0..M5_CONTRACT.md, M2b/M6/M7/M8_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
 | docs/M7_CONTRACT.md | M7 (Delivered, ADR-020) | MCP-server exposure + SamplingBackend |
-| docs/M8_CONTRACT.md | M8 (in progress, ADR-021) | distributed tracing + budget ceiling + Go orchestrator/report-service |
+| docs/M8_CONTRACT.md | M8 (done, ADR-021) | distributed tracing + budget ceiling + Go orchestrator/report-service |
+| docs/M9_CONTRACT.md | M9 (**Proposed** design freeze, ADR-022..025) | conversational & goal-directed testing: fill/type+auth, GoalPlanner/NL, chat-UI (MCP+non-MCP), tabs, backend correlation, browser modes, pluggable adapters |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -55,6 +56,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
+| CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy, CoC, PR + issue templates, code owners |
 
 ## Directory Structure
 ```
