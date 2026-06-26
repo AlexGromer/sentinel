@@ -11,6 +11,7 @@
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import * as readline from 'node:readline';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -56,19 +57,63 @@ function buildLocator(page: Page, locator: LocatorSpec): Locator {
   );
 }
 
+/** M9.1 (browser.expect): poll an async predicate until true or the deadline — auto-retry that
+ * tolerates post-submit navigation/XHR without depending on @playwright/test (GAP-ARCH-001: thin). */
+async function pollUntil(fn: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if (await fn()) return true;
+    } catch {
+      /* transient (detached node mid-nav) — keep polling until the deadline */
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let page: Page | null = null;
+let tracingStarted = false;
 let tracingStopped = false;
 
 async function ensureBrowser(): Promise<void> {
   if (browser) return;
   browser = await chromium.launch({ headless: true });
+  // M9.1/ADR-026: pre-authenticated context from a saved storageState (produced by login-as-test).
+  // Parse the file HERE so a missing OR corrupt/empty state.json both fall back to a no-state context
+  // (don't crash the run) — passing a string path would make newContext throw on bad JSON, killing the
+  // whole run. Log only the PATH on failure, never the bytes (the file holds session tokens — §3).
+  const statePath = process.env.STORAGE_STATE;
+  let storageState: Awaited<ReturnType<BrowserContext['storageState']>> | undefined;
+  if (statePath && fs.existsSync(statePath)) {
+    try {
+      storageState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    } catch {
+      log('STORAGE_STATE present but corrupt/unreadable; continuing no-state:', statePath);
+    }
+  } else if (statePath) {
+    log('STORAGE_STATE set but missing; continuing no-state:', statePath);
+  }
   // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
-  context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
-  await context.tracing.start({ screenshots: true, snapshots: true });
+  context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+    ...(storageState ? { storageState } : {}),
+  });
+  if (storageState) log('storageState loaded from', statePath);
+  // M9.1/ADR-026 + GAP-RISK-010: an auth run sets PW_NO_TRACE=1 so a typed password never lands in
+  // trace.zip (the trace captures DOM input.value AND the submit POST body — Playwright has no mask API).
+  if (process.env.PW_NO_TRACE !== '1') {
+    await context.tracing.start({ screenshots: true, snapshots: true });
+    tracingStarted = true;
+    log('browser launched, tracing started');
+  } else {
+    log('browser launched, tracing DISABLED (PW_NO_TRACE=1)');
+  }
   page = await context.newPage();
-  log('browser launched, tracing started');
+  page.setDefaultTimeout(5000); // bound browser.expect's pollUntil inner waits to the intended 5s budget
 }
 
 /** Transport-agnostic tool dispatch. `method` is the dotted name (e.g. "browser.navigate"). */
@@ -111,6 +156,128 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
       await loc.click({ timeout: 5000 });
       return { clicked: true, url: page!.url() };
+    }
+    // --- M9.1 (ADR-026): form/login interaction verbs + assert + auth-state ------
+    case 'browser.fill': {
+      // Text entry. A SECRET is referenced by env-var NAME (secretRef), resolved here ONLY; the value
+      // is never returned/logged, and a failure is re-thrown sanitized so it can't leak via the message.
+      await ensureBrowser();
+      const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      const secretRef = params?.secretRef as string | undefined;
+      if (secretRef !== undefined) {
+        // Fail-closed (GAP-RISK-010): never enter a credential while tracing is active — the trace
+        // would capture it (DOM snapshot + submit POST). Guard BEFORE reading the env so the secret is
+        // never even loaded. No-op in login-as-test (PW_NO_TRACE=1) and prod (storageState, no secret step).
+        if (tracingStarted)
+          throw new Error('browser.fill: refusing to enter a secret while tracing is active (set PW_NO_TRACE=1)');
+        const v = process.env[secretRef];
+        if (v === undefined) throw new Error(`secret '${secretRef}' not set`);
+        log('fill', params?.locator, '= <redacted>');
+        try {
+          await loc.fill(v, { timeout: 5000 });
+        } catch {
+          throw new Error('browser.fill failed (secret redacted)');
+        }
+      } else {
+        await loc.fill((params?.value as string) ?? '', { timeout: 5000 });
+      }
+      return { filled: true };
+    }
+    case 'browser.type': {
+      // Keystroke-by-keystroke entry (pressSequentially; locator.type() is deprecated since PW 1.38).
+      // Does NOT clear by default (append); pass clear:true to fill('') first.
+      await ensureBrowser();
+      const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      if (params?.clear) await loc.fill('', { timeout: 5000 });
+      await loc.pressSequentially((params?.text as string) ?? '', { timeout: 5000 });
+      return { typed: true };
+    }
+    case 'browser.press': {
+      await ensureBrowser();
+      const key = params?.key as string | undefined;
+      if (!key) throw new Error('press: missing params.key');
+      if (params?.locator) {
+        await buildLocator(page!, params.locator as LocatorSpec).first().press(key, { timeout: 5000 });
+      } else {
+        await page!.keyboard.press(key); // page-level key needs prior focus
+      }
+      return { pressed: key };
+    }
+    case 'browser.select': {
+      await ensureBrowser();
+      const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      const selected = await loc.selectOption(
+        params?.value as Parameters<Locator['selectOption']>[0], { timeout: 5000 });
+      return { selected };
+    }
+    case 'browser.expect': {
+      // Non-throwing assert primitive for (negative) validation testing: the BRAIN decides pass/fail
+      // (step passes iff result.ok == expect_ok). Auto-waits so it doesn't race a post-submit nav.
+      // `actual` is restricted to counts/url/booleans — NEVER inputValue() (would echo a secret).
+      await ensureBrowser();
+      const condition = (params?.condition as string) ?? '';
+      const timeout = 5000;
+      const locSpec = params?.locator as LocatorSpec | undefined;
+      try {
+        switch (condition) {
+          case 'visible':
+            await buildLocator(page!, locSpec!).first().waitFor({ state: 'visible', timeout });
+            return { ok: true };
+          case 'hidden':
+            await buildLocator(page!, locSpec!).first().waitFor({ state: 'hidden', timeout });
+            return { ok: true };
+          case 'enabled': {
+            const loc = buildLocator(page!, locSpec!).first();
+            const ok = await pollUntil(() => loc.isEnabled(), timeout);
+            return { ok, actual: ok };
+          }
+          case 'disabled': {
+            const loc = buildLocator(page!, locSpec!).first();
+            const ok = await pollUntil(async () => !(await loc.isEnabled()), timeout);
+            return { ok };
+          }
+          case 'value_equals': {
+            const loc = buildLocator(page!, locSpec!).first();
+            const want = String(params?.expected ?? '');
+            const ok = await pollUntil(async () => (await loc.inputValue()) === want, timeout);
+            return { ok }; // deliberately no `actual` (never echo a field value)
+          }
+          case 'text_contains': {
+            const loc = buildLocator(page!, locSpec!).first();
+            const want = String(params?.expected ?? '');
+            const ok = await pollUntil(async () => ((await loc.textContent()) ?? '').includes(want), timeout);
+            return { ok };
+          }
+          case 'count_equals': {
+            const countLoc = buildLocator(page!, locSpec!);
+            const want = Number(params?.expected ?? 0);
+            const ok = await pollUntil(async () => (await countLoc.count()) === want, timeout);
+            return { ok, actual: await countLoc.count() };
+          }
+          case 'url_contains': {
+            const want = String(params?.expected ?? '');
+            try {
+              await page!.waitForURL((u) => u.href.includes(want), { timeout });
+              return { ok: true, actual: page!.url() };
+            } catch {
+              return { ok: false, actual: page!.url() };
+            }
+          }
+          default:
+            throw new Error(`expect: unknown condition '${condition}'`);
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('expect:')) throw e; // malformed plan -> real error
+        return { ok: false }; // assertion simply did not hold within the timeout
+      }
+    }
+    case 'browser.saveStorageState': {
+      // M9.1/ADR-026: persist cookies/localStorage after a successful login-as-test run.
+      await ensureBrowser();
+      const path = params?.path as string | undefined;
+      if (!path) throw new Error('saveStorageState: missing params.path');
+      await context!.storageState({ path });
+      return { path };
     }
     case 'browser.probe':
       await ensureBrowser();
@@ -182,11 +349,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.traceStop': {
       const path = params?.path as string | undefined;
       if (!path) throw new Error('traceStop: missing params.path');
-      if (context && !tracingStopped) {
+      if (context && tracingStarted && !tracingStopped) {
         await context.tracing.stop({ path });
         tracingStopped = true;
       }
-      return { path };
+      return { path }; // no-op when tracing was never started (PW_NO_TRACE=1 auth run)
     }
     case 'shutdown':
       return { ok: true };
@@ -202,6 +369,12 @@ const TOOL_METHODS = [
   'browser.currentUrl',
   'browser.links',
   'browser.click',
+  'browser.fill',
+  'browser.type',
+  'browser.press',
+  'browser.select',
+  'browser.expect',
+  'browser.saveStorageState',
   'browser.probe',
   'browser.interactives',
   'browser.screenshotHash',
@@ -233,7 +406,7 @@ async function mainJsonRpc(): Promise<void> {
     if (req.method === 'shutdown') break;
   }
   try {
-    if (context && !tracingStopped) await context.tracing.stop();
+    if (context && tracingStarted && !tracingStopped) await context.tracing.stop();
     await browser?.close();
   } catch (e) {
     log('cleanup error', e);
@@ -253,6 +426,12 @@ async function mainMcp(): Promise<void> {
     'browser.currentUrl': {},
     'browser.links': {},
     'browser.click': locatorShape,
+    'browser.fill': { locator: z.record(z.string(), z.any()), value: z.string().optional(), secretRef: z.string().optional() },
+    'browser.type': { locator: z.record(z.string(), z.any()), text: z.string(), clear: z.boolean().optional() },
+    'browser.press': { locator: z.record(z.string(), z.any()).optional(), key: z.string() },
+    'browser.select': { locator: z.record(z.string(), z.any()), value: z.any() },
+    'browser.expect': { locator: z.record(z.string(), z.any()).optional(), condition: z.string(), expected: z.any().optional() },
+    'browser.saveStorageState': { path: z.string() },
     'browser.probe': locatorShape,
     'browser.interactives': {},
     'browser.screenshotHash': {},

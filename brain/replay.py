@@ -37,6 +37,41 @@ def _write(report: dict, run_dir: str) -> None:
         json.dump(report, f, indent=2)
 
 
+# M9.1 (ADR-026): locator-bearing interaction verbs share the probe -> heal -> act path with click.
+LOCATOR_VERBS = ("click", "fill", "type", "select")
+
+
+def _act(ex, kind: str, locator: dict, s: dict) -> None:
+    """Apply the step's verb to `locator` via the matching pw-executor tool.
+
+    Secrets stay as `secretRef` (the env-var NAME) and are resolved ONLY inside pw-executor — the
+    literal value is never read, returned, or recorded here. `s` is read ONLY (plan_hash stability).
+    """
+    if kind == "click":
+        ex.call("browser.click", locator=locator)
+    elif kind == "fill":
+        if s.get("secretRef") is not None:
+            ex.call("browser.fill", locator=locator, secretRef=s["secretRef"])
+        else:
+            ex.call("browser.fill", locator=locator, value=s.get("value", ""))
+    elif kind == "type":
+        ex.call("browser.type", locator=locator, text=s.get("text", ""), clear=bool(s.get("clear", False)))
+    elif kind == "select":
+        ex.call("browser.select", locator=locator, value=s.get("value"))
+    else:
+        raise ValueError(f"_act: unsupported verb {kind!r}")
+
+
+def _expect_params(s: dict) -> dict:
+    """Build browser.expect kwargs from an assert step (read-only)."""
+    p = {"condition": s.get("condition")}
+    if s.get("locator") is not None:
+        p["locator"] = s["locator"]
+    if s.get("expected") is not None:
+        p["expected"] = s["expected"]
+    return p
+
+
 def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                baseline: bool = False, aut_version: str = "", ci: bool = False,
                force: bool = False) -> dict:
@@ -77,13 +112,40 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["outcome"], rec["url"] = "ok", tgt
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False
-        else:  # click
+        elif kind == "assert":
+            # M9.1: non-throwing assert; the step passes iff observed ok == expected polarity.
+            # No probe/heal — a zero-count locator may be the very point of the assertion.
+            expect_ok = bool(s.get("expect_ok", True))
+            try:
+                res = ex.call("browser.expect", **_expect_params(s))
+                ok = bool(res.get("ok", False))
+                passed = (ok == expect_ok)
+                rec["outcome"] = "ok" if passed else "failed"
+                rec["assert"] = {"condition": s.get("condition"), "expect_ok": expect_ok, "observed": ok}
+                if res.get("actual") is not None:
+                    rec["assert"]["actual"] = res["actual"]
+            except Exception as e:
+                rec["outcome"], rec["error"], passed = "failed", str(e), False
+        elif kind == "press":
+            # M9.1: key press; heal only applies to locator-bearing verbs, a global key has none.
+            try:
+                if s.get("locator"):
+                    ex.call("browser.press", locator=s["locator"], key=s.get("key"))
+                else:
+                    ex.call("browser.press", key=s.get("key"))
+                rec["outcome"], rec["key"] = "ok", s.get("key")
+            except Exception as e:
+                rec["outcome"], rec["error"], passed = "failed", str(e), False
+        elif kind in LOCATOR_VERBS:  # click/fill/type/select: probe -> heal -> act(verb)
             primary = s.get("locator") or {}
             page_path = normalize_url(ex.call("browser.currentUrl").get("url", ""))
             count = ex.call("browser.probe", locator=primary).get("count", 0) if primary else 0
             if count == 1:
-                ex.call("browser.click", locator=primary)
-                rec["outcome"], rec["locator"] = "ok", primary
+                try:
+                    _act(ex, kind, primary, s)
+                    rec["outcome"], rec["locator"] = "ok", primary
+                except Exception as e:
+                    rec["outcome"], rec["error"], passed = "failed", str(e), False
             else:
                 snap = ex.call("browser.snapshot")
                 inter = ex.call("browser.interactives").get("elements", [])
@@ -94,7 +156,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 h = heal.heal(ctx)
                 if h.get("outcome") in ("auto_healed", "flagged", "cache_hit") and h.get("locator"):
                     try:
-                        ex.call("browser.click", locator=h["locator"])
+                        _act(ex, kind, h["locator"], s)   # apply the step's VERB to the healed locator
                         rec["outcome"], rec["locator"] = "healed", h["locator"]
                         rec["heal"] = {k: h.get(k) for k in ("strategy", "confidence", "outcome")}
                         report["healed"] += 1
@@ -102,6 +164,8 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                         rec["outcome"], rec["error"], rec["heal"], passed = "failed", str(e), h, False
                 else:
                     rec["outcome"], rec["heal"], passed = "failed", h, False
+        else:
+            rec["outcome"], rec["error"], passed = "failed", f"unknown action_type: {kind}", False
 
         # --- flake quarantine accounting (suppresses exit-1 contribution) ------
         quarantined = store.record_step(plan_id, step_key, passed, aut_version)

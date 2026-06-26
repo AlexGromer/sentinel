@@ -107,6 +107,13 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
     if ci and force:
         log("FATAL: --force-replay is not allowed under --ci")
         return 3
+    # M9.1/GAP-RISK-010: fail closed — a secretRef fill must never run while tracing is on (it would
+    # leak the credential into trace.zip). The login-as-test workflow sets PW_NO_TRACE=1.
+    if os.environ.get("PW_NO_TRACE") != "1" and any(
+            s.get("secretRef") is not None for s in plan.get("steps", [])):
+        log("FATAL: plan has a secretRef fill but PW_NO_TRACE != '1' "
+            "(would leak the secret into trace.zip) -> exit 3")
+        return 3
     trace_path = str((out / "trace.zip").resolve())
     store = make_store(_STORE_PATH)
     log(f"store={'grpc@' + os.environ['STORE_ADDR'] if os.environ.get('STORE_ADDR') else 'local'}")
@@ -117,6 +124,15 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
     try:
         report = run_replay(ex, store, heal, plan, target, str(out),
                             baseline=baseline, aut_version=aut_version, ci=ci, force=force)
+        # M9.1 (ADR-026): persist auth after a successful login-as-test run (before traceStop/shutdown).
+        save_state = os.environ.get("STORAGE_STATE_SAVE")
+        if save_state and report.get("exit_code") == 0:
+            try:
+                pathlib.Path(save_state).parent.mkdir(parents=True, exist_ok=True)
+                ex.call("browser.saveStorageState", path=save_state)
+                log(f"storageState saved -> {save_state}")
+            except Exception as e:
+                log("saveStorageState error:", e)
         try:
             ex.call("browser.traceStop", path=trace_path)
             ex.call("shutdown")

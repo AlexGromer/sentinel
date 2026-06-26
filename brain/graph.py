@@ -153,8 +153,24 @@ def build_graph(ex, planner, tx_write):
         if not p:
             return {"_last_ok": False}
         try:
-            if p["action_type"] == "navigate":
+            at = p["action_type"]
+            if at == "navigate":
                 ex.call("browser.navigate", url=p["target"])
+            elif at == "click":
+                ex.call("browser.click", locator=p["locator"])
+            elif at in ("fill", "type", "select"):
+                # M9.1 forward-compat: the explorer emits only click/navigate today; frozen/authored
+                # plans run through act reuse replay's verb dispatch (single source of truth).
+                from .replay import _act
+                _act(ex, at, p.get("locator") or {}, p)
+            elif at == "press":
+                if p.get("locator"):
+                    ex.call("browser.press", locator=p["locator"], key=p.get("key"))
+                else:
+                    ex.call("browser.press", key=p.get("key"))
+            elif at == "assert":
+                from .replay import _expect_params
+                ex.call("browser.expect", **_expect_params(p))
             else:
                 ex.call("browser.click", locator=p["locator"])
         except Exception as e:

@@ -32,6 +32,24 @@ def _locator_expr(loc: dict):
     return None
 
 
+def _assert_expr(s: dict) -> str:
+    """M9.1: map an assert step to a Playwright web-first assertion (polarity via `.not`)."""
+    cond = s.get("condition")
+    neg = "" if s.get("expect_ok", True) else ".not"
+    expr = _locator_expr(s.get("locator")) or "page"
+    table = {
+        "visible": f"await expect({expr}){neg}.toBeVisible();",
+        "hidden": f"await expect({expr}){neg}.toBeHidden();",
+        "enabled": f"await expect({expr}){neg}.toBeEnabled();",
+        "disabled": f"await expect({expr}){neg}.toBeDisabled();",
+        "value_equals": f"await expect({expr}){neg}.toHaveValue('{_esc(s.get('expected'))}');",
+        "text_contains": f"await expect({expr}){neg}.toContainText('{_esc(s.get('expected'))}');",
+        "count_equals": f"await expect({expr}){neg}.toHaveCount({int(s.get('expected') or 0)});",
+        "url_contains": f"await expect(page){neg}.toHaveURL(/{_esc(s.get('expected'))}/);",
+    }
+    return table.get(cond, f"// unmapped assert condition {_esc(cond)}")
+
+
 def export_spec(plan: dict) -> str:
     """Render a deterministic Playwright test from the plan's steps."""
     plan_id = plan.get("plan_id", "plan")
@@ -40,13 +58,38 @@ def export_spec(plan: dict) -> str:
              f"test('sentinel: {_esc(plan_id)}', async ({{ page }}) => {{"]
     for s in plan.get("steps", []):
         sid = s.get("step_id")
-        if s.get("action_type") == "navigate":
+        kind = s.get("action_type")
+        intent = _esc(s.get("intent"))
+        if kind == "navigate":
             lines.append(f"  await page.goto('{_esc(s.get('target') or target)}');  // step {sid}")
-        else:
-            expr = _locator_expr(s.get("locator"))
-            if expr:
-                lines.append(f"  await {expr}.first().click();  // step {sid}: {_esc(s.get('intent'))}")
+            continue
+        if kind == "assert":
+            lines.append(f"  {_assert_expr(s)}  // step {sid}: {intent}")
+            continue
+        if kind == "press" and not s.get("locator"):
+            lines.append(f"  await page.keyboard.press('{_esc(s.get('key'))}');  // step {sid}: {intent}")
+            continue
+        expr = _locator_expr(s.get("locator"))
+        if not expr:
+            lines.append(f"  // step {sid}: unmapped locator ({intent})")
+            continue
+        loc = f"{expr}.first()"
+        if kind == "click":
+            lines.append(f"  await {loc}.click();  // step {sid}: {intent}")
+        elif kind == "fill":
+            if s.get("secretRef") is not None:        # secret -> env ref, never a literal
+                lines.append(f"  await {loc}.fill(process.env.{s['secretRef']}!);  // step {sid}: {intent} (secret)")
             else:
-                lines.append(f"  // step {sid}: unmapped locator ({_esc(s.get('intent'))})")
+                lines.append(f"  await {loc}.fill('{_esc(s.get('value'))}');  // step {sid}: {intent}")
+        elif kind == "type":
+            if s.get("clear"):
+                lines.append(f"  await {loc}.fill('');")
+            lines.append(f"  await {loc}.pressSequentially('{_esc(s.get('text'))}');  // step {sid}: {intent}")
+        elif kind == "select":
+            lines.append(f"  await {loc}.selectOption('{_esc(s.get('value'))}');  // step {sid}: {intent}")
+        elif kind == "press":
+            lines.append(f"  await {loc}.press('{_esc(s.get('key'))}');  // step {sid}: {intent}")
+        else:
+            lines.append(f"  // step {sid}: unmapped action {_esc(kind)} ({intent})")
     lines += ["});", ""]
     return "\n".join(lines)

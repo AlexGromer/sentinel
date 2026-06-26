@@ -48,6 +48,9 @@ def semantic_id(path: str, role: str, name: str) -> str:
 
 
 def canonical_plan_hash(steps: list) -> str:
-    """Deterministic hash of the ordered steps (excludes volatile fields)."""
+    """Deterministic SHA-256 over the ENTIRE ordered step dicts — every field is included (`sort_keys`
+    only makes key order irrelevant; nothing is excluded). So any field change, including the M9.1 step
+    fields (secretRef/value/text/clear/condition/expected/expect_ok/key), is tamper-detectable
+    (a plan_hash mismatch hard-aborts replay with exit 3)."""
     payload = json.dumps(steps, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()
