@@ -61,3 +61,6 @@ Read **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** — toolchain setup, per-c
 the milestone gates, and step-by-step recipes for extending (add a pw-executor tool, add a planner,
 add a LangGraph node). **Docs-first:** every milestone has a contract in `docs/` written before code;
 all code carries docstrings; no undocumented modules.
+
+## License
+[Apache-2.0](LICENSE) (+ [`NOTICE`](NOTICE)). Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md) · security: [`SECURITY.md`](SECURITY.md) · conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). The `main` branch is protected (PR + review + green CI).

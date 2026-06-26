@@ -65,3 +65,6 @@ go build -o bin/agentctl ./cmd/agentctl
 milestone gates, и пошаговые рецепты расширения (добавить инструмент pw-executor, добавить planner,
 добавить узел LangGraph). **Сначала документация:** каждый milestone имеет контракт в `docs/`, написанный до кода;
 весь код снабжён docstring; нет недокументированных модулей.
+
+## Лицензия
+[Apache-2.0](LICENSE) (+ [`NOTICE`](NOTICE)). Контрибьюция: [`CONTRIBUTING.md`](CONTRIBUTING.md) · безопасность: [`SECURITY.md`](SECURITY.md) · кодекс: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). Ветка `main` защищена (PR + ревью + зелёный CI).

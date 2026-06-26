@@ -57,6 +57,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 | CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy, CoC, PR + issue templates, code owners |
+| LICENSE · NOTICE | Legal | Apache-2.0 license text + NOTICE (Copyright 2026 AlexGromer) |
 
 ## Directory Structure
 ```
