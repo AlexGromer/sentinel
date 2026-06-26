@@ -1,8 +1,13 @@
-# Sentinel — MVP Roadmap (M0–M7)
+# Sentinel — MVP Roadmap (M0–M9.1)
 
 > 🌐 [Русский](ROADMAP.md) (основная версия) · **English**
 
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
+
+> **Delivery status (as of 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
+> (Proposed, ADR-022..025); **M9.1** (forms/login/validation, ADR-026) — ✅ delivered offline. The
+> detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
+> `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 
 ---
 
@@ -299,8 +304,8 @@ stored, replay is LLM-free, golden baselines stay heuristic-only.
 
 **Languages:** Python
 
-**Status:** **Proposed** — the contract is frozen (docs-first), implementation is the next milestone
-(needs a live MCP host, user-run).
+**Status:** ✅ **Delivered (ADR-020)** — brain MCP server (FastMCP) + `SamplingBackend`; offline-verified
+(`test_m7`). A live MCP host is user-run (GAP-VERIFY-006).
 
 **Deliverable (planned):**
 
@@ -321,3 +326,27 @@ OpenCode / Kilocode — VERIFY before coding).
 > **Then** `tools/list` returns `explore`/`heal`/`replay`/`report`, the host supplies the model via
 > sampling, and the artifacts are identical to CLI mode; offline — a contract test for the tool
 > schemas + `SamplingBackend` via a fake sampling session (the `FakeBackend` pattern).
+
+---
+
+## M8 — Distributed Observability + Budget Ceiling (Delivered, ADR-021)
+
+**Languages:** Go + Python + TS. W3C trace context across all three layers (brain→pw-executor→store-gateway,
+gated OTLP); a Python `BudgetTracker` (graceful degradation → heuristic / L1–L6) + a long-running Go
+`orchestrator` (gRPC `RunControl`, token reconcile, SIGTERM hard ceiling) + a Go `report-service` (HTTP).
+Compile/test-verified (Python 36 offline + `go build`/`vet`/`test` + `tsc`). Live OTLP + the real
+budget-kill are user-run.
+
+## M9 — Conversational & Goal-Directed Testing (Proposed, ADR-022..025)
+
+Design frozen — a roadmap epic with sub-milestones M9.1…M9.8. Evolution from "coverage-explore + CLI"
+to testing real business processes (forms/login), NL authoring (explore-first grounding), **MCP and
+non-MCP** access, and universality via pluggable adapters. See `../docs/M9_CONTRACT.md`.
+
+### M9.1 — Form/Login/Validation primitives (Delivered offline, ADR-026)
+
+**Languages:** TS + Python. pw-executor `fill`/`type`/`press`/`select`/`expect`/`saveStorageState` (both
+transports); storageState auth (login-as-test) + secrets via `secretRef` (never serialized) + the
+`PW_NO_TRACE` tracing gate; an assert/negative layer + `brain/validation.py` (sketch). Offline-verified
+(`test_m9` 19 + the m3..m9 regression + `tsc` + `go build` + gitleaks); a 4-dimension adversarial review.
+Live UI run is on "go". **Next: M9.2** (`GoalPlanner` NL→plan + `--mode explore|goal|describe` + RunConfig YAML).

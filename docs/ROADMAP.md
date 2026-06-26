@@ -1,8 +1,13 @@
-# Sentinel — MVP Roadmap (M0–M7)
+# Sentinel — MVP Roadmap (M0–M9.1)
 
 > 🌐 **Русский** (основная версия) · [English](ROADMAP.en.md)
 
 Производный документ синтеза дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
+
+> **Статус доставки (на 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ доставлено; **M9** — дизайн заморожен
+> (Proposed, ADR-022..025); **M9.1** (формы/логин/валидация, ADR-026) — ✅ доставлено offline. Детальные
+> секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
+> `../BACKLOG.md`.
 
 ---
 
@@ -305,8 +310,8 @@ replay LLM-free, golden baselines heuristic-only.
 
 **Языки:** Python
 
-**Статус:** **Proposed** — контракт заморожен (docs-first), имплементация — следующий milestone
-(требует живого MCP-host, user-run).
+**Статус:** ✅ **Доставлено (ADR-020)** — brain MCP-сервер (FastMCP) + `SamplingBackend`; offline-verified
+(`test_m7`). Живой MCP-host — user-run (GAP-VERIFY-006).
 
 **Поставляемый результат (план):**
 
@@ -327,3 +332,27 @@ OpenCode / Kilocode — VERIFY до кодирования).
 > **Тогда** `tools/list` возвращает `explore`/`heal`/`replay`/`report`, host поставляет модель через
 > sampling, а артефакты идентичны CLI-режиму; offline — contract-тест схем инструментов +
 > `SamplingBackend` через fake sampling-session (паттерн `FakeBackend`).
+
+---
+
+## M8 — Distributed Observability + Budget Ceiling (Доставлено, ADR-021)
+
+**Языки:** Go + Python + TS. W3C-трейс-контекст через все три слоя (brain→pw-executor→store-gateway,
+gated OTLP); Python `BudgetTracker` (graceful degradation → heuristic / L1–L6) + долгоживущий Go
+`orchestrator` (gRPC `RunControl`, token-reconcile, SIGTERM hard-ceiling) + Go `report-service` (HTTP).
+Compile/test-verified (Python 36 offline + `go build`/`vet`/`test` + `tsc`). Live OTLP + реальный
+budget-kill — user-run.
+
+## M9 — Conversational & Goal-Directed Testing (Proposed, ADR-022..025)
+
+Дизайн заморожен — roadmap-эпик с под-вехами M9.1…M9.8. Эволюция из «coverage-explore + CLI» в
+тестирование реальных бизнес-процессов (формы/логин), NL-авторинг (explore-first grounding), доступ
+**MCP И не-MCP**, универсальность через pluggable adapters. См. `../docs/M9_CONTRACT.md`.
+
+### M9.1 — Form/Login/Validation primitives (Доставлено offline, ADR-026)
+
+**Языки:** TS + Python. pw-executor `fill`/`type`/`press`/`select`/`expect`/`saveStorageState` (оба
+транспорта); storageState-auth (login-as-test) + секреты через `secretRef` (никогда не сериализуются) +
+`PW_NO_TRACE` tracing-gate; assert/негативный слой + `brain/validation.py` (набросок). Offline-verified
+(`test_m9` 19 + регресс m3..m9 + `tsc` + `go build` + gitleaks); 4-мерный adversarial review. Живой UI — по «go».
+**Следующее: M9.2** (`GoalPlanner` NL→plan + `--mode explore|goal|describe` + RunConfig YAML).

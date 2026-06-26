@@ -20,7 +20,10 @@ tests rather than only writing them.
 | **M4 + M4b — Reports + Observability** | ✅ done — HTML/JSON/Prometheus reports, `.spec.ts` export; brain OTel + Pushgateway |
 | **M5 — Deploy + Visual Heal** | ✅ done — Dockerfile + Helm CronJob + ArgoCD; set-of-marks Tier-7 (gated) |
 | **M6 — Provider-Agnostic Brain** | ✅ done — planner/heal on any provider (Anthropic / OpenAI-compat), ADR-019 |
-| **M7 — MCP-Server Exposure** | 📝 contract frozen (Proposed, ADR-020) — see [`docs/M7_CONTRACT.md`](docs/M7_CONTRACT.md) |
+| **M7 — MCP-Server Exposure** | ✅ done — brain as an MCP server (FastMCP) + `SamplingBackend` (host supplies the model), ADR-020 |
+| **M8 — Distributed Observability + Budget Ceiling** | ✅ done — W3C tracing across Go/Python/TS + Go orchestrator (budget ceiling, SIGTERM) + report-service, ADR-021 |
+| **M9 — Conversational & Goal-Directed Testing** | 📝 design frozen (Proposed, ADR-022..025) — see [`docs/M9_CONTRACT.md`](docs/M9_CONTRACT.md) |
+| **M9.1 — Form/Login/Validation primitives** | ✅ done (offline) — pw-executor `fill`/`type`/`press`/`select` + storageState auth (login-as-test) + assert/negative layer, ADR-026 |
 
 Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -33,7 +36,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (20 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (26 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Quickstart (M0)
 ```bash

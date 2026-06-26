@@ -24,7 +24,10 @@
 | **M4 + M4b — Reports + Observability** | ✅ готово — HTML/JSON/Prometheus отчёты, `.spec.ts` экспорт; brain OTel + Pushgateway |
 | **M5 — Deploy + Visual Heal** | ✅ готово — Dockerfile + Helm CronJob + ArgoCD; set-of-marks Tier-7 (gated) |
 | **M6 — Provider-Agnostic Brain** | ✅ готово — planner/heal на любом провайдере (Anthropic / OpenAI-compat), ADR-019 |
-| **M7 — MCP-Server Exposure** | 📝 контракт заморожен (Proposed, ADR-020) — см. [`docs/M7_CONTRACT.md`](docs/M7_CONTRACT.md) |
+| **M7 — MCP-Server Exposure** | ✅ готово — brain как MCP-сервер (FastMCP) + `SamplingBackend` (host поставляет модель), ADR-020 |
+| **M8 — Distributed Observability + Budget Ceiling** | ✅ готово — W3C-трейсинг Go/Python/TS + Go orchestrator (бюджет-потолок, SIGTERM) + report-service, ADR-021 |
+| **M9 — Conversational & Goal-Directed Testing** | 📝 дизайн заморожен (Proposed, ADR-022..025) — см. [`docs/M9_CONTRACT.md`](docs/M9_CONTRACT.md) |
+| **M9.1 — Form/Login/Validation primitives** | ✅ готово (offline) — pw-executor `fill`/`type`/`press`/`select` + storageState-auth (login-as-test) + assert/негативный слой, ADR-026 |
 
 Подробности по вехам: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -37,7 +40,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (20 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (26 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Быстрый старт (M0)
 ```bash

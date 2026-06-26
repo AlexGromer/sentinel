@@ -106,10 +106,13 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 - **M4b** (`M4b_CONTRACT.md`): без `OTEL_EXPORTER_OTLP_ENDPOINT` / `PROM_PUSHGATEWAY` — span'ы no-op, push нет, offline-тесты зелёные; с endpoint+gateway (user-run) трейсы в Tempo, метрики в Pushgateway.
 - **M5** (`M5_CONTRACT.md`): set-of-marks visual heal — **≥ 15/20** сценариев совпали с human-verified (≥ 75% > 70% порог), иначе функция отложена и overlay удалён из бинаря.
 - **M6** (`M6_CONTRACT.md`): offline `test_b1_offline` (8) + `test_m5_offline` (4) зелёные, регресс `test_m3` / `test_m4` / `test_m4b` зелёный, **default-path байт-в-байт**; реальный smoke провайдера — user-run.
+- **M7** (`M7_CONTRACT.md`): brain MCP-сервер — `tools/list` возвращает `explore`/`heal`/`replay`/`report`; offline `test_m7` (5) зелёный + `SamplingBackend` через fake sampling-session; живой MCP-host — user-run.
+- **M8** (`M8_CONTRACT.md`): W3C-трейс brain→pw-executor→store-gateway (gated, no-op без OTLP) + `BudgetTracker` флипает `exceeded()` на лимите с degradation; offline `test_m8` (9) зелёный + `go build`/`vet`/`test` + `tsc`; live OTLP / реальный budget-kill — user-run.
+- **M9.1** (`M9.1_CONTRACT.md`): pw-executor `fill`/`type`/`press`/`select`/`expect`/`saveStorageState` (`tsc --noEmit` clean); offline `test_m9` (19) зелёный — секрет не утекает в артефакты, `plan_hash` стабилен, exit-композиция assert'ов; gitleaks чисто; живой UI-прогон (формы/логин) — по «go».
 
 ```bash
-# offline-набор (без сети/бинарей: M6 default-path + регресс m3/m4/m4b)
-for t in m3 m4 m4b m5 b1; do .venv/bin/python tests/test_${t}_offline.py; done
+# offline-набор (без сети/бинарей): весь регресс M3..M9
+for t in m3 m4 m4b m5 b1 m7 m8 m9; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Проводные контракты (где определены границы)
