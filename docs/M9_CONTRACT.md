@@ -115,6 +115,12 @@ Sentinel = автономный агент, **реализованный в ко
 - **CI/коммиты:** Sentinel = CLI + exit-коды 0/1/2/3 → **любой CI** (Jenkins/GitLab/Drone/GH Actions) зовёт
   `agentctl run --replay --ci`. На коммит → CI-хук → build/deploy preview → прогон → гейт по exit. GitHub Actions
   уже есть; шаблоны Jenkinsfile/.gitlab-ci — M9.x.
+- **Подключение CI и работа БЕЗ CI (runner-agnostic):** Sentinel ни от какого CI не зависит — это CLI + exit-коды,
+  запускаемый **любым runner'ом.** (а) **CI** (Jenkins/GitLab/GH Actions/Drone): шаг зовёт `agentctl run --replay --ci`,
+  триггер on-commit/PR/schedule, гейт по exit-коду, отчёт как артефакт; подключение = build/deploy preview-URL →
+  `--replay --ci` → публикация HTML/JSON-отчёта. (б) **Без CI:** k8s **CronJob** (M5, по расписанию — это и есть
+  «no-CI» автоматизация), **cron / systemd-timer** (bare-metal), **git-hook** (pre-push), или просто **вручную**
+  `agentctl run …`. Триггер и runner — сменный adapter (GAP-M9-08); CI — лишь один из вариантов, не обязательный.
 - **Монорепо — правильно, не делить.** Полиглот-продукт (Go+Python+TS) с общими контрактами (proto/MCP) должен
   версионироваться **атомарно**; раздельные репо → version-skew по gRPC/MCP, тройной release-кошмар. Один источник
   proto, один CI, один релиз. Выделять компонент — только если станет самостоятельным продуктом; сейчас нет.

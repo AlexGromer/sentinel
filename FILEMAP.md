@@ -12,9 +12,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 16 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 25 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
-| BACKLOG.md | Task tracking | M0–M4 + M2b-1 done; M2b-2 + M4b + M5 pending |
+| BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
 | docs/M0..M5_CONTRACT.md, M2b/M6/M7/M8_CONTRACT.md | Frozen milestone contracts | per-milestone scope/wire/gate |
 | docs/M7_CONTRACT.md | M7 (Delivered, ADR-020) | MCP-server exposure + SamplingBackend |

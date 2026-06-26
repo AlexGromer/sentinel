@@ -116,6 +116,12 @@ Sentinel = an autonomous agent **implemented in code** (polyglot), not a Claude 
 - **CI/commits:** Sentinel = a CLI + exit codes 0/1/2/3 → **any CI** (Jenkins/GitLab/Drone/GH Actions) calls
   `agentctl run --replay --ci`. On commit → CI hook → build/deploy a preview → run → gate on the exit code. GitHub
   Actions already exists; Jenkinsfile/.gitlab-ci templates are M9.x.
+- **Connecting CI and running WITHOUT CI (runner-agnostic):** Sentinel depends on no CI — it is a CLI + exit codes
+  invoked by **any runner.** (a) **CI** (Jenkins/GitLab/GH Actions/Drone): a step calls `agentctl run --replay --ci`,
+  triggered on-commit/PR/schedule, gates on the exit code, publishes the report as an artifact; connecting = build/deploy
+  a preview URL → `--replay --ci` → publish the HTML/JSON report. (b) **Without CI:** a k8s **CronJob** (M5, scheduled —
+  this *is* the "no-CI" automation), **cron / systemd-timer** (bare metal), a **git-hook** (pre-push), or simply
+  **manually** `agentctl run …`. The trigger/runner is a swappable adapter (GAP-M9-08); CI is just one option, not required.
 - **Monorepo is correct — don't split.** A polyglot product (Go+Python+TS) with shared contracts (proto/MCP) must
   version **atomically**; separate repos → version skew across gRPC/MCP, a triple-release nightmare. One proto source,
   one CI, one release. Extract a component only if it becomes an independent product; not now.
