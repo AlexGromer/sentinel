@@ -16,7 +16,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from .executor import log, make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
-from .planner import HeuristicPlanner, LLMPlanner
+from .planner import make_planner
 from .state import normalize_url, semantic_id
 
 _STORE_PATH = str(pathlib.Path("state") / "locators.db")
@@ -37,12 +37,13 @@ def _checkpointer(ckpt_path: str):
             yield saver
 
 
-def _run_explore(ex, run_id, out, target, planner_name, coverage_target, max_steps) -> int:
+def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
     """M1 autonomous walk: explore the site, converge on coverage, freeze plan.json."""
     trace_path = str((out / "trace.zip").resolve())
     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
-    planner = LLMPlanner() if planner_name == "llm" else HeuristicPlanner()
-    log(f"explore: planner={planner.name} coverage_target={coverage_target} target={target}")
+    goal = os.environ.get("GOAL", "").strip()       # M9.2a: goal-mode when set (GoalPlanner)
+    planner = make_planner()                          # heuristic | llm | goal (--goal auto-default, ADR-027)
+    log(f"explore: planner={planner.name} goal={goal!r} coverage_target={coverage_target} target={target}")
     tx = open(out / "llm-transcript.jsonl", "w")
 
     def tx_write(rec: dict) -> None:
@@ -59,6 +60,7 @@ def _run_explore(ex, run_id, out, target, planner_name, coverage_target, max_ste
         init_state = {
             "run_id": run_id, "run_mode": "explore", "target_url": target, "base_origin": base_origin,
             "coverage_target": coverage_target, "max_steps": max_steps, "artifact_dir": str(out),
+            "goal": goal,
             "current_url": target, "page_model": {},
             "exploration_plan": [init], "plan_hash": "", "current_step": 1,
             "interactive_seen": [], "interactive_exercised": [], "visited_paths": [],
@@ -226,6 +228,16 @@ def main() -> int:
     out = pathlib.Path(os.environ.get("ARTIFACT_DIR", f"./runs/{run_id}"))
     out.mkdir(parents=True, exist_ok=True)
     setup_tracing()
+    # M9.2a (ADR-027): a RunConfig YAML may supply mode/goal/planner/budgets (precedence flag > file > default).
+    run_config = os.environ.get("RUN_CONFIG")
+    if run_config:
+        from .runconfig import load_run_config, apply_run_config
+        try:
+            apply_run_config(load_run_config(run_config))
+            log(f"run-config applied: {run_config}")
+        except Exception as e:
+            log(f"FATAL: bad --run-config {run_config}: {e}")
+            return 3
 
     # --- no-browser modes (M3/M4) --------------------------------------------
     if run_mode == "clear-quarantine":
@@ -270,7 +282,6 @@ def main() -> int:
                 force=os.environ.get("FORCE_REPLAY", "0") == "1")
         else:
             rc = _run_explore(ex, run_id, out, target,
-                              os.environ.get("PLANNER", "heuristic"),
                               float(os.environ.get("COVERAGE_TARGET", "0.85")),
                               int(os.environ.get("MAX_STEPS", "40")))
     except Exception:

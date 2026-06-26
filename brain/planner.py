@@ -99,3 +99,81 @@ class LLMPlanner:
         except Exception as e:
             log("LLMPlanner error -> heuristic:", e)
             return self._fallback.propose(state, candidates)
+
+
+class GoalPlanner:
+    """Goal-directed explorer (M9.2a, ADR-027): given an NL goal + the live candidate map, pick the next
+    REAL action that advances the goal, or stop when the goal is met / unreachable.
+
+    GROUNDING (ADR-022): the LLM picks an INDEX into `candidates` (the real elements the `plan` node
+    discovered), so it can never author a selector that isn't on the map. `propose` returns ONLY
+    `candidates[idx]` or `done` — an invalid/OOB index degrades to `done`, never a fabricated action.
+
+    Falls back to the heuristic when there's no goal / no backend (no key/SDK) or the plan budget is
+    exhausted. Best-effort — not plan_hash-stable (like LLMPlanner; replay stays deterministic)."""
+
+    name = "goal"
+
+    def __init__(self, goal: str = "", backend=None) -> None:
+        from .llm import make_backend
+        self.goal = (goal or "").strip()
+        self._backend = backend if backend is not None else make_backend("planner")
+        self.model = self._backend.model if self._backend else "claude-opus-4-8"
+        self._fallback = HeuristicPlanner()
+
+    def propose(self, state: dict, candidates: list) -> dict:
+        if not self.goal or not self._backend:
+            return self._fallback.propose(state, candidates)   # no goal/backend -> deterministic explore
+        from . import budget
+        if budget.tracker().exceeded("plan"):
+            log("GoalPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            return self._fallback.propose(state, candidates)
+        try:
+            menu = [{"i": i, "kind": c["kind"], "role": c.get("role"), "name": c.get("name"),
+                     "target": c.get("target"), "intent": c.get("intent")}
+                    for i, c in enumerate(candidates)]
+            prompt = (
+                "You are an autonomous UI agent pursuing a specific GOAL. Choose the single best next "
+                "action from the candidate list to advance the goal, or stop when the goal is achieved "
+                "or unreachable.\n"
+                f"goal: {self.goal}\n"
+                f"current_url: {state.get('current_url')}\n"
+                f"steps_taken: {state.get('current_step', 0)} of max {state.get('max_steps')}\n"
+                f"candidates: {json.dumps(menu)}\n"
+                'Reply with ONLY JSON: {"index": <int>} to take that candidate action, or '
+                '{"done": true, "reason": "<why the goal is met or unreachable>"}.'
+            )
+            result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+            budget.tracker().add("plan", result)
+            text = result.text
+            tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
+            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            if j.get("done"):
+                return {"action": None, "done": True,
+                        "reason": f"goal: {j.get('reason', 'done')}", "tokens": tokens}
+            idx = int(j["index"])
+            if 0 <= idx < len(candidates):
+                return {"action": candidates[idx], "done": False,
+                        "reason": f"goal -> #{idx}", "tokens": tokens}   # GROUNDED: a real candidate only
+            return {"action": None, "done": True, "reason": "goal: index OOB", "tokens": tokens}
+        except Exception as e:
+            log("GoalPlanner error -> heuristic:", e)
+            return self._fallback.propose(state, candidates)
+
+
+def make_planner(env=None):
+    """Select the planner per env (M9.2a, ADR-027). Authoring mode is chosen by `--goal` presence
+    (auto-default, M9_CONTRACT §C) or an explicit `PLANNER=goal|llm` — NOT via `--mode` (= RUN_MODE).
+
+    `GOAL` set (and PLANNER unset/default) -> GoalPlanner; `PLANNER=goal` -> GoalPlanner;
+    `PLANNER=llm` -> LLMPlanner; else HeuristicPlanner.
+    """
+    import os
+    env = os.environ if env is None else env
+    planner_name = (env.get("PLANNER") or "heuristic").strip().lower()
+    goal = (env.get("GOAL") or "").strip()
+    if planner_name == "goal" or (goal and planner_name in ("", "heuristic")):
+        return GoalPlanner(goal=goal)
+    if planner_name == "llm":
+        return LLMPlanner()
+    return HeuristicPlanner()

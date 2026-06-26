@@ -44,14 +44,14 @@ Categories: ARCH (architecture), VERIFY (needs fact-check), RISK, AGENT (missing
 | ID | Priority | Gap | Target |
 |----|----------|-----|--------|
 | GAP-M9-01 | P1 | No `fill`/`type`/`press`/`select` in pw-executor → no forms/search/**login** | M9.1 (blocker #1) — **DONE offline 2026-06-26 (ADR-026):** 6 tools (+`expect`/`saveStorageState`) in both transports; tsc+FakeEx green. Live UI — on "go" |
-| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + auto-default | M9.2 |
+| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + auto-default | M9.2a (GoalPlanner goal-mode + index-grounding + `--goal` auto-default, ADR-027) **PARTIAL — DONE offline**; describe-first + two-phase explore-then-scenario — M9.2b |
 | GAP-M9-03 | P2 | Non-MCP HTTP/gRPC control API + OSS chat-UI in DH (plus the MCP path via M7) | M9.3 |
 | GAP-M9-04 | P2 | Auth adapter (storageState + Keycloak/OIDC), creds from Vault; **login as a test target** | M9.1 (storageState load/save + login-as-test + `secretRef`) **DONE offline**; pluggable auth-adapter + Vault/Helm Secret — M9.7 |
 | GAP-M9-05 | P2 | In-app tabs (perception `role=tab`/`tabpanel`) + browser multi-tab/context (multi-page in pw-executor) | M9.4 |
 | GAP-M9-06 | P2 | Inject `traceparent` into all browser requests → correlate a UI action with the backend/Kafka trace in Tempo | M9.5 |
 | GAP-M9-07 | P2 | Browser modes: headed + CDP-attach to the user's browser (`connectOverCDP`) + co-pilot takeover/return | M9.6 / branch-2 |
 | GAP-M9-08 | P3 | Pluggable adapters (auth/deploy/model/backend) — universality beyond DH | M9.7 |
-| GAP-M9-09 | P2 | RunConfig file (YAML) + config surfaces: mode/goal/auth/budgets via flags · env · file · interactive (chat). Today flags+env only, per-run | M9.2/M9.3 |
+| GAP-M9-09 | P2 | RunConfig file (YAML) + config surfaces: mode/goal/auth/budgets via flags · env · file · interactive (chat). Today flags+env only, per-run | M9.2a (minimal RunConfig YAML: mode/goal/planner/budgets, precedence flag>file>default; `--run-config`) **PARTIAL — DONE offline**; auth/scenarios/per-role + chat surface — M9.2b/M9.3 |
 | GAP-M9-10 | P2 | Validation / negative testing: an invalid-input generator per field type/mask + an assertion layer ("UI rejected the input") | M9.1 (assert primitive `browser.expect` + `expect_ok` polarity + `brain/validation.py` **sketch**) **PARTIAL — DONE offline**; full generator (masks/bounds/schema) — M9.2 |
 | GAP-M9-11 | P3 | **Security module (M10, separate):** XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM on top of the explore map; **authorization-gated** | M10 |
 | GAP-M9-12 | P3 | CI templates: a Jenkinsfile + `.gitlab-ci.yml` (Sentinel = a CLI + exit codes → any CI on commit) | M9.3 |

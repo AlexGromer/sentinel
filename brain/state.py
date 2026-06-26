@@ -14,6 +14,7 @@ class RunState(TypedDict, total=False):
     coverage_target: float
     max_steps: int
     artifact_dir: str
+    goal: str                     # M9.2a: NL goal text for goal-mode (GoalPlanner); "" in explore-mode
     # perception
     current_url: str
     page_model: dict

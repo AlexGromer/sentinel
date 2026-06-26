@@ -21,6 +21,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/M8_CONTRACT.md | M8 (done, ADR-021) | distributed tracing + budget ceiling + Go orchestrator/report-service |
 | docs/M9_CONTRACT.md | M9 (**Proposed** design freeze, ADR-022..025) | conversational & goal-directed testing: fill/type+auth, GoalPlanner/NL, chat-UI (MCP+non-MCP), tabs, backend correlation, browser modes, pluggable adapters |
 | docs/M9.1_CONTRACT.md | M9.1 (**Delivered offline**, ADR-026) | form/login/validation primitives: pw-executor fill/type/press/select/expect/saveStorageState (both transports), storageState auth + login-as-test, secrets via `secretRef` + `PW_NO_TRACE` tracing gate, assert/negative semantics, new step kinds |
+| docs/M9.2_CONTRACT.md | M9.2a (**Delivered offline**, ADR-027) | GoalPlanner (NL→plan, explore-first grounding): goal-directed grounded planner in the Planner seam (index-only, never fabricates), `--goal` auto-default + `make_planner`, minimal RunConfig YAML; describe-first/two-phase/auth deferred to M9.2b |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -40,7 +41,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite, opentelemetry-go + otelgrpc) |
 | brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
 | brain/graph.py | Python | LangGraph StateGraph (9 nodes); explore captures L1–L6 alternatives |
-| brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) |
+| brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) + **M9.2a** GoalPlanner (goal-directed, grounded index-pick, ADR-027) + `make_planner(env)` factory (`--goal` auto-default) |
+| brain/runconfig.py | Python | **M9.2a** minimal RunConfig YAML (ADR-027): `load_run_config(path)` + `apply_run_config` (mode/goal/planner/budgets; precedence flag>file>default); pyyaml |
 | brain/llm.py | Python | LLMBackend: AnthropicBackend + OpenAICompatBackend + SamplingBackend + make_backend(role); provider-agnostic planner+heal (ADR-019, M6) + MCP sampling (ADR-020, M7) |
 | brain/server.py | Python | M7 brain MCP server (FastMCP): tools explore/heal/replay/report; SamplingBackend via host sampling; sync graph in worker-thread (ADR-020) |
 | brain/budget.py | Python | M8 BudgetTracker — per-role token accumulator + `exceeded()` guard; graceful degradation planner→heuristic / heal→L1–L6 (ADR-021) |
@@ -52,10 +54,10 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
 | brain/validation.py | Python | **M9.1** negative-input generator (sketch, ADR-026): `invalid_inputs_for(field)` by type + `fill`+`assert` step-pair helper; pure, no I/O (full engine M9.2) |
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService + RunControl) |
-| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools |
+| brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools, pyyaml (M9.2a RunConfig) |
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/setOfMarks/traceStop + **M9.1** fill/type/press/select/expect/saveStorageState; storageState load (`STORAGE_STATE`) + tracing gate (`PW_NO_TRACE`) + secret `secretRef` redaction (ADR-026); M8 per-tool spans via otel.ts; screenshot determinism (GAP-RISK-009) |
 | pw-executor/src/otel.ts | TS | M8 gated OTel tracer (NodeSDK + OTLP-grpc) + spanForTool (extracts W3C `_meta`); no-op without OTEL endpoint (ADR-021) |
-| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse (fake executor/backend/session) |
+| tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/done/fallback + make_planner routing + RunConfig (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build → replay matrix |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 | CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy, CoC, PR + issue templates, code owners |
@@ -90,9 +92,9 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
 - Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai grpcio grpcio-tools`
 - gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto proto/runcontrol.proto` — then patch the `_pb2_grpc.py` top-level import to `from . import` (package-relative); (+ go plugins for internal/store/pb, internal/orchestrator/pb)
-- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8 m9; do .venv/bin/python tests/test_${t}_offline.py; done`
+- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2; do .venv/bin/python tests/test_${t}_offline.py; done`
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
 - Last updated: 2026-06-26
-- Phase: **M0–M8 + M2b + M4b done — gates green; M9.1 delivered offline (ADR-026).** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021); **M9.1 form/login/validation primitives** (pw-executor fill/type/press/select/expect/saveStorageState + storageState auth + secrets-via-`secretRef` + `PW_NO_TRACE` gate) — all compile/test-verified (Python offline suite m3..m9 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key) + **M9.1 live UI run** (forms/Keycloak login, on "go").
+- Phase: **M0–M8 + M2b + M4b done — gates green; M9.1 (ADR-026) + M9.2a (ADR-027) delivered offline.** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021); **M9.1 form/login/validation primitives** (pw-executor fill/type/press/select/expect/saveStorageState + storageState auth + secrets-via-`secretRef` + `PW_NO_TRACE` gate) — all compile/test-verified (Python offline suite m3..m9 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key) + **M9.1 live UI run** (forms/Keycloak login, on "go").

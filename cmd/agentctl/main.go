@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -134,7 +135,9 @@ func cmdRun(repo string, args []string) int {
 	artifactDir := fs.String("artifact-dir", "", "artifact dir (default ./runs/<id>)")
 	mode := fs.String("mode", "explore", "run mode")
 	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
-	planner := fs.String("planner", "heuristic", "planner: heuristic|llm")
+	planner := fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
+	goal := fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
+	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets)")
 	coverageTarget := fs.String("coverage-target", "0.85", "coverage target in [0,1]")
 	maxSteps := fs.String("max-steps", "40", "max exploration steps (safety backstop)")
 	replay := fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
@@ -144,6 +147,17 @@ func cmdRun(repo string, args []string) int {
 	ci := fs.Bool("ci", false, "CI mode (forbids --force-replay)")
 	force := fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
 	_ = fs.Parse(args)
+
+	// M9.2a (ADR-027): record which flags the user actually set, so RunConfig precedence (flag > file)
+	// holds even when the explicit value equals the default. fs.Visit walks ONLY the flags that were set.
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	var explicit []string
+	for _, n := range []string{"planner", "coverage-target", "max-steps", "goal"} {
+		if setFlags[n] {
+			explicit = append(explicit, n)
+		}
+	}
 
 	if *target == "" {
 		fmt.Fprintln(os.Stderr, "error: --target is required")
@@ -168,6 +182,9 @@ func cmdRun(repo string, args []string) int {
 		"PLANNER=" + *planner,
 		"COVERAGE_TARGET=" + *coverageTarget,
 		"MAX_STEPS=" + *maxSteps,
+		"GOAL=" + *goal,
+		"RUN_CONFIG=" + *runConfig,
+		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,
 		"HEAL_LLM=" + boolEnv(*healLLM),
 		"AUT_VERSION=" + *autVersion,
