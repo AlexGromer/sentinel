@@ -27,6 +27,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 |------|------|---------|
 | cmd/agentctl/main.go | Go | CLI subcommands: run / baseline update / locators clear-quarantine / export-spec / report / calibrate; spawns store-gateway (`runWithStore`); exit 0/1/2/3 |
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
+| cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
+| cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
+| internal/orchestrator/pb/ | Go | generated gRPC stubs (from proto/runcontrol.proto) |
 | internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
 | internal/store/pb/ | Go | generated gRPC stubs (from proto/persistence.proto) |

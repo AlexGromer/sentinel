@@ -63,7 +63,8 @@ let tracingStopped = false;
 async function ensureBrowser(): Promise<void> {
   if (browser) return;
   browser = await chromium.launch({ headless: true });
-  context = await browser.newContext();
+  // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
+  context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
   await context.tracing.start({ screenshots: true, snapshots: true });
   page = await context.newPage();
   log('browser launched, tracing started');
@@ -124,7 +125,8 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
     }
     case 'browser.screenshotHash': {
       await ensureBrowser();
-      const buf = await page!.screenshot();
+      // GAP-RISK-009: disable animations + hide the caret + CSS-scale so the hash is byte-stable.
+      const buf = await page!.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
       return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
     case 'browser.setOfMarks': {
@@ -165,7 +167,7 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
           }
           document.body.appendChild(o);
         }, marks);
-        await page!.screenshot({ path: outPath });
+        await page!.screenshot({ path: outPath, animations: 'disabled', caret: 'hide', scale: 'css' });
         await page!.evaluate(() => document.getElementById('__som__')?.remove());
       }
       return { marks, path: outPath ?? null };
