@@ -12,6 +12,7 @@ All files work as `file://` targets. No CDN or external network requests.
 | `l3.html` | L3 — Validation | M9.1 negative/validation testing: per-field error messages, format/range/required/maxlength | `#f-email` (email format), `#f-number` (18–120), `#f-text` (required), `#f-bio` (max 80 chars + live counter), per-field `#err-*` divs |
 | `l4.html` → `l4-dashboard.html` → `l4-billing.html` | L4 — Multi-page flow | M9.2 cross-page goal scenarios: 3-step nav, sessionStorage handoff, modal confirm | Step 1: login form → Step 2: sidebar dashboard with stats + CTA → Step 3: plan upgrade + invoice table + confirmation modal |
 | `l5.html` | L5 — Tabs + Shadow DOM | RISK-005: ARIA tab keyboard nav, async content injection, shadow-DOM pierce locators | `role=tablist/tab/tabpanel`, dynamic slot (`#dynamic-slot`, injected 600ms after tab activation), `<x-color-picker>` custom element with `attachShadow({mode:'open'})` |
+| `l6-newtab.html` | L6 — Multi-tab | M9.4: browser multi-page tracking (A6) + in-app tab perception (A5) | `target=_blank` link + `window.open()` button (new browser tabs → `browser.tabs`/`browser.switchTab`); a `role=tablist/tab/tabpanel` widget (`[role=tab]` now surfaced by `browser.interactives`) |
 
 ## Demo Credentials
 
@@ -31,6 +32,7 @@ testdata/fixtures/
   l4-dashboard.html     L4 step 2 — dashboard
   l4-billing.html       L4 step 3 — billing + upgrade modal
   l5.html               L5 ARIA tabs + dynamic injection + shadow DOM
+  l6-newtab.html        L6 new browser tab (target=_blank / window.open) + in-app tabs
   README.md             this file
 ```
 
