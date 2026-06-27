@@ -4,7 +4,6 @@
 
 ## Active
 
-- [ ] [M9.2b] describe-first authoring (NL→draft→explore reconcile) + two-phase explore-then-scenario (M9_CONTRACT §L) + rich RunConfig (auth-adapter / scenarios / per-role budgets). (P2) @ml-engineer — GAP-M9-02/09
 - [ ] [M9.3] Chat-UX: non-MCP HTTP/gRPC control-API + OSS chat front in DH (plus the MCP path via M7) + CI templates (Jenkinsfile / .gitlab-ci.yml). (P2) @web-developer — GAP-M9-03/12
 - [ ] [M9.4] In-app tabs perception (`role=tab`/`tabpanel`) + browser multi-tab/context (multi-page in pw-executor). (P2) @web-developer — GAP-M9-05
 - [ ] [M9.5] Browser request trace-header injection — correlate a UI action with the backend/Kafka trace in Tempo. (P2) @observability-engineer — GAP-M9-06
@@ -15,6 +14,7 @@
 
 ## Completed Archive
 
+- [x] [M9.2b] two-phase goal (§L) + describe-first (§B) + rich RunConfig (ADR-028). Site map generalized beyond buttons (input/select/link); `brain/scenario.py` (`ground_scenario`/`reconcile` — bind to real elements only, cross-page navigate synth, conservative matcher); `GoalPlanner.build_scenario` (one-shot) + `DescribePlanner`; graph `scenario` node; `scenario.json`/`reconcile-report.json`; agentctl `--describe`/`--scenario`; declarative `auth:`/`scenarios:` RunConfig. Terminology «грауденный»→`grounding`. Offline-verified (test_m9_2b 20 + regress m3..m9_2b 95 green + go build/vet + tsc + gitleaks); 5-dim adversarial review fixes (cross-role-bind, unknown-scenario→exit3, verb-whitelist, pure-explore-invariant test). Live goal/describe run pending «go». (P2) @ml-engineer — GAP-M9-02/09 ✓ 2026-06-27
 - [x] [M9.2a] `GoalPlanner` (NL→plan, explore-first grounding — grounded index-pick, never fabricates a selector) + `make_planner` `--goal` auto-default + `brain/runconfig.py` (minimal RunConfig YAML; precedence flag>file>default via agentctl `SENTINEL_EXPLICIT`/`fs.Visit`; numeric validation; mode/planner alias) + agentctl `--goal`/`--run-config`; ADR-027. Offline-verified (test_m9_2 20 + regress m3..m9_2 green + go build/vet + tsc + gitleaks); 4-dim adversarial review fixes. Live goal-run pending «go». (P1) @ml-engineer — GAP-M9-02/09 ✓ 2026-06-26
 - [x] [M9.1] pw-executor `fill`/`type`/`press`/`select` + `expect`/`saveStorageState` (both transports) + storageState auth (login-as-test, `secretRef`, `PW_NO_TRACE` gate) + assert/negative layer + `brain/validation.py` (sketch); ADR-026. Offline-verified (test_m9 19 + regress m3..m9 green + tsc + go build + gitleaks); 4-dim adversarial review fixes. Live UI run pending «go». (P1) @web-developer — GAP-M9-01/04/10 ✓ 2026-06-26
 - [x] M8 Distributed Observability + Budget Ceiling (ADR-021): W3C tracing across Go/Python/TS + Python BudgetTracker + Go orchestrator (RunControl + SIGTERM hard-ceiling) + Go report-service (HTTP). Compile/test-verified (Py 36 + go build/vet/test + tsc). ✓ 2026-06-26

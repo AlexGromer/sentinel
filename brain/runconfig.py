@@ -20,6 +20,7 @@ import yaml
 # RunConfig key -> the brain env var the rest of the code already reads.
 _KEY_ENV = {
     "goal": "GOAL",
+    "describe": "DESCRIBE",       # M9.2b describe-mode
     "planner": "PLANNER",
     "coverage_target": "COVERAGE_TARGET",
     "max_steps": "MAX_STEPS",
@@ -27,14 +28,18 @@ _KEY_ENV = {
     "heal_budget": "HEAL_TOKEN_LIMIT",
     "total_budget": "TOTAL_TOKEN_LIMIT",
 }
-_ALLOWED = set(_KEY_ENV) | {"mode"}
+# M9.2b (ADR-028): structured keys handled specially (not a single env var).
+_ALLOWED = set(_KEY_ENV) | {"mode", "auth", "scenarios"}
+# RunConfig `auth:` sub-key -> the M9.1 env var it drives (declarative; NO new runtime).
+_AUTH_ENV = {"storage_state": "STORAGE_STATE", "storage_state_save": "STORAGE_STATE_SAVE",
+             "login_plan": "PLAN_FILE", "pw_no_trace": "PW_NO_TRACE"}
 # Numeric keys are validated/coerced at load so a bad scalar fails as a config error (exit 3).
 _NUMERIC = {"coverage_target": float, "max_steps": int,
             "plan_budget": int, "heal_budget": int, "total_budget": int}
 # agentctl emits these defaults for EVERY run; the file may override a still-default value.
 _AGENTCTL_DEFAULTS = {"PLANNER": "heuristic", "COVERAGE_TARGET": "0.85", "MAX_STEPS": "40"}
 # brain env var -> the agentctl flag that sets it (for the explicit-flag-wins check).
-_EXPLICIT_FLAG = {"GOAL": "goal", "PLANNER": "planner",
+_EXPLICIT_FLAG = {"GOAL": "goal", "DESCRIBE": "describe", "PLANNER": "planner",
                   "COVERAGE_TARGET": "coverage-target", "MAX_STEPS": "max-steps"}
 
 
@@ -59,6 +64,16 @@ def load_run_config(path: str) -> dict:
                 v = _NUMERIC[k](v)
             except (TypeError, ValueError):
                 raise ValueError(f"RunConfig {path!r}: key {k!r} must be {_NUMERIC[k].__name__}, got {v!r}")
+        elif k == "auth":                              # M9.2b: declarative auth -> M9.1 env (validated)
+            if not isinstance(v, dict):
+                raise ValueError(f"RunConfig {path!r}: 'auth' must be a mapping")
+            v = {sk: sv for sk, sv in v.items() if sk in _AUTH_ENV and sv is not None}
+        elif k == "scenarios":                         # M9.2b: a list of {name, goal XOR describe}
+            if not isinstance(v, list) or not all(
+                    isinstance(e, dict) and e.get("name")
+                    and (bool(e.get("goal")) != bool(e.get("describe"))) for e in v):
+                raise ValueError(f"RunConfig {path!r}: 'scenarios' must be a list of "
+                                 f"{{name, goal|describe}} (exactly one of goal/describe per entry)")
         cfg[k] = v
     return cfg
 
@@ -90,20 +105,53 @@ def _resolve_planner(cfg: dict):
     return planner if planner is not None else mode_planner
 
 
+def _apply_auth(auth: dict, env) -> None:
+    """M9.2b: declarative auth -> M9.1 env (STORAGE_STATE*/PLAN_FILE/PW_NO_TRACE); a pre-set env wins."""
+    for sk, sv in auth.items():
+        env_key = _AUTH_ENV.get(sk)
+        if not env_key or not _overridable(env, env_key):
+            continue
+        if sk == "pw_no_trace":                        # normalize common truthy forms -> "1"/"0"
+            env[env_key] = "1" if str(sv).strip().lower() in ("1", "true", "yes", "on") else "0"
+        else:
+            env[env_key] = str(sv)
+
+
+def _apply_scenarios(scenarios: list, env) -> None:
+    """M9.2b: `--scenario <name>` selects ONE entry; an empty selector -> the first (§C: one mode/run).
+    A non-empty selector matching no entry is a config error -> raise (caller maps it to exit 3)."""
+    if not scenarios:
+        return
+    selector = (env.get("SCENARIO") or "").strip()
+    if selector:
+        chosen = next((s for s in scenarios if s.get("name") == selector), None)
+        if chosen is None:
+            raise ValueError(f"RunConfig: --scenario {selector!r} not found; available "
+                             f"{[s.get('name') for s in scenarios]}")
+    else:
+        chosen = scenarios[0]
+    if chosen.get("goal") and _overridable(env, "GOAL"):
+        env["GOAL"] = str(chosen["goal"])
+    if chosen.get("describe") and _overridable(env, "DESCRIBE"):
+        env["DESCRIBE"] = str(chosen["describe"])
+
+
 def apply_run_config(cfg: dict, env=None) -> dict:
     """Merge `cfg` into `env` (default os.environ). Precedence: explicit flag/env > RunConfig > default.
 
-    Returns the env mapping (mutated in place when it is os.environ). Raises ValueError on a mode/planner
-    conflict (caller maps it to exit 3).
+    `auth:`/`scenarios:` are applied declaratively (M9.2b). Returns the env mapping (mutated in place when
+    it is os.environ). Raises ValueError on a mode/planner conflict (caller maps it to exit 3).
     """
     env = os.environ if env is None else env
     planner = _resolve_planner(cfg)                 # raises on mode/planner conflict
     if planner and _overridable(env, "PLANNER"):
         env["PLANNER"] = planner
     for key, value in cfg.items():
-        if key in ("mode", "planner"):
-            continue                                # handled by _resolve_planner above
+        if key in ("mode", "planner", "auth", "scenarios"):
+            continue                                # handled by _resolve_planner / _apply_auth / _apply_scenarios
         env_key = _KEY_ENV[key]
         if _overridable(env, env_key):
             env[env_key] = str(value)
+    _apply_auth(cfg.get("auth") or {}, env)         # M9.2b declarative auth + scenario selector
+    _apply_scenarios(cfg.get("scenarios") or [], env)
     return env

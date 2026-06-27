@@ -137,7 +137,9 @@ func cmdRun(repo string, args []string) int {
 	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
 	planner := fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
 	goal := fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
-	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets)")
+	describe := fs.String("describe", "", "NL flow description -> describe-mode (M9.2b); mutually exclusive with --goal")
+	scenario := fs.String("scenario", "", "RunConfig scenario name to select (M9.2b)")
+	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets/auth/scenarios)")
 	coverageTarget := fs.String("coverage-target", "0.85", "coverage target in [0,1]")
 	maxSteps := fs.String("max-steps", "40", "max exploration steps (safety backstop)")
 	replay := fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
@@ -153,7 +155,7 @@ func cmdRun(repo string, args []string) int {
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	var explicit []string
-	for _, n := range []string{"planner", "coverage-target", "max-steps", "goal"} {
+	for _, n := range []string{"planner", "coverage-target", "max-steps", "goal", "describe", "scenario"} {
 		if setFlags[n] {
 			explicit = append(explicit, n)
 		}
@@ -183,6 +185,8 @@ func cmdRun(repo string, args []string) int {
 		"COVERAGE_TARGET=" + *coverageTarget,
 		"MAX_STEPS=" + *maxSteps,
 		"GOAL=" + *goal,
+		"DESCRIBE=" + *describe,
+		"SCENARIO=" + *scenario,
 		"RUN_CONFIG=" + *runConfig,
 		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,

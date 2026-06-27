@@ -15,6 +15,13 @@ class RunState(TypedDict, total=False):
     max_steps: int
     artifact_dir: str
     goal: str                     # M9.2a: NL goal text for goal-mode (GoalPlanner); "" in explore-mode
+    describe: str                 # M9.2b: NL flow description for describe-mode (DescribePlanner); "" otherwise
+    # M9.2b two-phase authoring (ADR-028): a site-wide element map built during the explore walk, then
+    # a one-shot scenario head grounds the goal/describe into replayable steps.
+    site_map: dict                # page_path -> [element {semantic_id,role,name,testid,locator,alternatives,page}]
+    phase: str                    # "explore" | "scenario"
+    scenario_steps: list          # the grounded authored steps (appended to exploration_plan)
+    scenario_unmatched: list      # refs/draft-steps that could not be grounded to a real element
     # perception
     current_url: str
     page_model: dict

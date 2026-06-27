@@ -129,10 +129,10 @@ def _yaml(text):
 def test_load_run_config_parses_allowed_keys_ignores_unknown():
     cfg = load_run_config(_yaml(
         "mode: goal\ngoal: log in as admin\ncoverage_target: 0.9\nmax_steps: 10\n"
-        "plan_budget: 1234\nauth: {provider: keycloak}\n"))   # `auth` is M9.2b -> ignored now
+        "plan_budget: 1234\nfuture_unknown_key: whatever\n"))   # a genuinely unknown key
     assert cfg["mode"] == "goal" and cfg["goal"] == "log in as admin"
     assert cfg["coverage_target"] == 0.9 and cfg["max_steps"] == 10 and cfg["plan_budget"] == 1234
-    assert "auth" not in cfg, cfg                                     # forward-compat: unknown key ignored
+    assert "future_unknown_key" not in cfg, cfg                      # forward-compat: unknown key ignored
 
 
 def test_load_run_config_missing_returns_empty():

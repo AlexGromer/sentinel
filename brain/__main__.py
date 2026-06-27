@@ -37,13 +37,47 @@ def _checkpointer(ckpt_path: str):
             yield saver
 
 
+def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe) -> int:
+    """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
+    (describe). Exit: describe with any unmatched -> 1; zero grounded steps -> 1; else 0."""
+    from .state import canonical_plan_hash
+    sc = [{**s, "step_id": i + 1} for i, s in enumerate(scenario_steps)]
+    obj = {"plan_id": f"{run_id}-scenario", "plan_hash": canonical_plan_hash(sc), "target_url": target,
+           "run_mode": "scenario", "mode": ("describe" if is_describe else "goal"),
+           "unmatched": len(unmatched), "steps": sc}
+    with open(out / "scenario.json", "w") as f:
+        json.dump(obj, f, indent=2)
+    if is_describe:
+        with open(out / "reconcile-report.json", "w") as f:
+            json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
+    print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
+          + (" + reconcile-report.json" if is_describe else ""))
+    if is_describe and unmatched:
+        return 1
+    return 0 if sc else 1
+
+
 def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
-    """M1 autonomous walk: explore the site, converge on coverage, freeze plan.json."""
+    """M1 autonomous walk: explore the site, converge on coverage, freeze plan.json.
+
+    M9.2b (ADR-028): goal/describe modes run a deterministic heuristic walk (phase 1) + a one-shot
+    scenario head (phase 2) that authors a grounded scenario.json over the complete site map."""
     trace_path = str((out / "trace.zip").resolve())
     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
-    goal = os.environ.get("GOAL", "").strip()       # M9.2a: goal-mode when set (GoalPlanner)
-    planner = make_planner()                          # heuristic | llm | goal (--goal auto-default, ADR-027)
-    log(f"explore: planner={planner.name} goal={goal!r} coverage_target={coverage_target} target={target}")
+    goal = os.environ.get("GOAL", "").strip()            # M9.2a goal-mode
+    describe = os.environ.get("DESCRIBE", "").strip()    # M9.2b describe-mode
+    if goal and describe:
+        log("FATAL: GOAL and DESCRIBE are mutually exclusive -> exit 3")
+        return 3
+    from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
+    if goal:
+        planner, scenario_head = HeuristicPlanner(), GoalPlanner(goal)
+    elif describe:
+        planner, scenario_head = HeuristicPlanner(), DescribePlanner(describe)
+    else:
+        planner, scenario_head = make_planner(), None    # pure explore (heuristic|llm)
+    log(f"explore: planner={planner.name} scenario={getattr(scenario_head, 'name', None)} "
+        f"goal={goal!r} describe={describe!r} coverage_target={coverage_target} target={target}")
     tx = open(out / "llm-transcript.jsonl", "w")
 
     def tx_write(rec: dict) -> None:
@@ -60,7 +94,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         init_state = {
             "run_id": run_id, "run_mode": "explore", "target_url": target, "base_origin": base_origin,
             "coverage_target": coverage_target, "max_steps": max_steps, "artifact_dir": str(out),
-            "goal": goal,
+            "goal": goal, "describe": describe,
+            "site_map": {}, "phase": "explore", "scenario_steps": [], "scenario_unmatched": [],
             "current_url": target, "page_model": {},
             "exploration_plan": [init], "plan_hash": "", "current_step": 1,
             "interactive_seen": [], "interactive_exercised": [], "visited_paths": [],
@@ -69,7 +104,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         }
         ckpt = str((out / "checkpoint.db").resolve())
         with _checkpointer(ckpt) as saver:
-            app = build_graph(ex, planner, tx_write).compile(checkpointer=saver)
+            app = build_graph(ex, planner, tx_write, scenario_head=scenario_head).compile(checkpointer=saver)
             final = app.invoke(init_state,
                                config={"recursion_limit": max(60, max_steps * 8),
                                        "configurable": {"thread_id": run_id}})
@@ -77,11 +112,15 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         ex.call("shutdown")
         steps = final.get("exploration_plan", [])
         cov, ph = final.get("coverage_achieved", 0.0), final.get("plan_hash", "")
+        scenario_steps = final.get("scenario_steps", [])
+        scenario_unmatched = final.get("scenario_unmatched", [])
         print("=" * 60)
         print(f"EXPLORE COMPLETE — {len(steps)} steps, coverage={cov:.2f}, plan_hash={ph[:16]}")
         for s in steps:
             print(f"  #{s['step_id']:>2} {s['action_type']:<9} {s['intent']}")
         print("=" * 60)
+        if scenario_head is not None:    # M9.2b: goal/describe -> scenario.json is the deliverable
+            return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe))
         plan_file = out / "plan.json"
         trace = pathlib.Path(trace_path)
         ok = plan_file.exists() and len(steps) >= 5 and trace.exists() and trace.stat().st_size > 0

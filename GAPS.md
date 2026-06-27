@@ -44,14 +44,14 @@
 | ID | Приоритет | Пробел | Цель |
 |----|-----------|--------|------|
 | GAP-M9-01 | P1 | `fill`/`type`/`press`/`select` в pw-executor отсутствуют → нет форм/поиска/**логина** | M9.1 (блокер №1) — **DONE offline 2026-06-26 (ADR-026):** 6 tools (+`expect`/`saveStorageState`) в обоих транспортах; tsc+FakeEx green. Живой UI — по «go» |
-| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + авто-дефолт | M9.2a (GoalPlanner goal-режим + грауденность по индексу + авто-дефолт по `--goal`, ADR-027) **PARTIAL — DONE offline**; describe-first + двухфазный explore-then-scenario — M9.2b |
+| GAP-M9-02 | P1 | `GoalPlanner` (NL→plan, explore-first grounding) + `--mode explore\|goal\|describe` + авто-дефолт | M9.2a (goal-режим + `grounding` по индексу, ADR-027) + M9.2b (двухфазный explore-then-scenario §L + describe-first §B + one-shot `build_scenario`/`reconcile`, ADR-028) **DONE offline**. Живой goal/describe-прогон — по «go» |
 | GAP-M9-03 | P2 | Не-MCP HTTP/gRPC control-API + OSS чат-UI в DH (плюс MCP-путь через M7) | M9.3 |
 | GAP-M9-04 | P2 | Auth-adapter (storageState + Keycloak/OIDC), креды из Vault; **логин как тест-цель** | M9.1 (storageState load/save + login-as-test + `secretRef`) **DONE offline**; pluggable auth-adapter + Vault/Helm Secret — M9.7 |
 | GAP-M9-05 | P2 | In-app tabs (perception `role=tab`/`tabpanel`) + browser multi-tab/context (multi-page в pw-executor) | M9.4 |
 | GAP-M9-06 | P2 | Инъекция `traceparent` во все запросы браузера → корреляция UI-теста с backend/Kafka-trace в Tempo | M9.5 |
 | GAP-M9-07 | P2 | Режимы браузера: headed + CDP-attach к браузеру пользователя (`connectOverCDP`) + co-pilot takeover/return | M9.6 / ветка-2 |
 | GAP-M9-08 | P3 | Pluggable adapters (auth/deploy/model/backend) — универсальность не-только-DH | M9.7 |
-| GAP-M9-09 | P2 | RunConfig-файл (YAML) + config-surfaces: режим/goal/auth/бюджеты через флаги · env · файл · интерактивно (чат). Сейчас только флаги+env, per-run | M9.2a (минимальный RunConfig YAML: mode/goal/planner/budgets, приоритет флаг>файл>дефолт; `--run-config`) **PARTIAL — DONE offline**; auth/scenarios/per-role + chat-surface — M9.2b/M9.3 |
+| GAP-M9-09 | P2 | RunConfig-файл (YAML) + config-surfaces: режим/goal/auth/бюджеты через флаги · env · файл · интерактивно (чат). Сейчас только флаги+env, per-run | M9.2a (минимальный RunConfig: mode/goal/planner/budgets) + M9.2b (богатый: декларативные `auth:`→STORAGE_STATE*/PW_NO_TRACE + именованные `scenarios:` + `--scenario`-селектор, ADR-028) **DONE offline**; per-role model-endpoints — M9.7; chat-surface — M9.3 |
 | GAP-M9-10 | P2 | Validation / негативное тестирование: генератор невалидных вводов по типу/маске поля + assert-слой («UI отверг ввод») | M9.1 (assert-примитив `browser.expect` + `expect_ok`-полярность + `brain/validation.py` **набросок**) **PARTIAL — DONE offline**; полный генератор (маски/границы/схема) — M9.2 |
 | GAP-M9-11 | P3 | **Security-модуль (M10, отдельный):** XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM поверх explore-карты; **authorization-gated** | M10 |
 | GAP-M9-12 | P3 | CI-шаблоны: Jenkinsfile + `.gitlab-ci.yml` (Sentinel = CLI + exit-коды → любой CI на коммит) | M9.3 |

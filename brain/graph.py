@@ -28,18 +28,35 @@ def log(*a: object) -> None:
     print("[brain]", *a, file=sys.stderr, flush=True)
 
 
-def _buttons_from_interactives(elements: list, path: str) -> list:
-    """Build button descriptors (semantic_id + primary locator + L1–L6 alternatives) from
+def _elements_from_interactives(elements: list, path: str) -> list:
+    """Build element descriptors (semantic_id + primary locator + L1–L6 alternatives + role + page) from
     pw-executor `browser.interactives`.
 
-    semantic_id anchors on testid (stable across DOM drift) when present, else the accessible
-    name — so the same logical element keeps its id even if its name changes. The primary
-    locator is role+name (the human-natural, drift-fragile locator); the stabler testid/text are
-    kept as healing alternatives, ordered by strategy prior (testid 0.95 > role_name 0.90 > text).
+    M9.2b (ADR-028): generalized beyond buttons to **input/select/link** so a login/form/billing scenario
+    can ground. Coverage still uses the button subset (`role == "button"`) so pure-explore convergence and
+    `plan_hash` are unchanged — button `semantic_id`s are identical to the old button-only cataloguer.
+
+    semantic_id anchors on testid (stable across DOM drift) when present, else the accessible name. The
+    primary locator is role+name (human-natural, drift-fragile); stabler testid/label/text are healing
+    alternatives ordered by strategy prior (testid 0.95 > role_name 0.90 > label 0.88 > text 0.80).
     """
     out = []
     for e in elements:
-        if e.get("tag") != "button" and e.get("role") != "button":
+        tag = (e.get("tag") or "").lower()
+        erole = (e.get("role") or "").lower()
+        if tag == "button" or erole == "button":
+            role = "button"
+        elif tag == "a" or erole == "link":
+            role = "link"
+        elif tag == "select" or erole in ("combobox", "listbox"):
+            role = "combobox"
+        elif erole in ("checkbox", "radio", "switch"):
+            role = erole
+        elif tag in ("input", "textarea") or erole == "textbox":
+            role = "textbox"
+        elif erole:
+            role = erole
+        else:
             continue
         name = (e.get("name") or "").strip()
         testid = e.get("testid")
@@ -51,17 +68,23 @@ def _buttons_from_interactives(elements: list, path: str) -> list:
         if testid:
             alts.append({"strategy": "testid", "locator": {"testid": testid}, "prior": 0.95})
         if name:
-            alts.append({"strategy": "role_name", "locator": {"role": "button", "name": name}, "prior": 0.90})
+            alts.append({"strategy": "role_name", "locator": {"role": role, "name": name}, "prior": 0.90})
+        if role != "button" and e.get("label"):    # buttons stay byte-identical to the old cataloguer (plan_hash)
+            alts.append({"strategy": "label", "locator": {"label": e["label"]}, "prior": 0.88})
         if text and text != name:
             alts.append({"strategy": "text_role", "locator": {"text": text}, "prior": 0.80})
-        primary = {"role": "button", "name": name} if name else (alts[0]["locator"] if alts else None)
-        out.append({"semantic_id": semantic_id(path, "button", anchor), "name": name,
-                    "testid": testid, "locator": primary, "alternatives": alts})
+        primary = {"role": role, "name": name} if name else (alts[0]["locator"] if alts else None)
+        out.append({"semantic_id": semantic_id(path, role, anchor), "role": role, "name": name,
+                    "testid": testid, "locator": primary, "alternatives": alts, "page": path})
     return out
 
 
-def build_graph(ex, planner, tx_write):
-    """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer."""
+def build_graph(ex, planner, tx_write, scenario_head=None):
+    """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
+
+    M9.2b (ADR-028): when `scenario_head` (a GoalPlanner or DescribePlanner) is wired, a `scenario` node
+    runs once after the explore converges — it authors a grounded scenario over the COMPLETE site map.
+    Pure explore (scenario_head=None) routes straight through scenario as a no-op to report."""
     rc = runcontrol.make_client()  # M8: report token deltas to the Go orchestrator (no-op if ORCH_ADDR unset)
 
     def perceive(state: RunState) -> dict:
@@ -77,10 +100,14 @@ def build_graph(ex, planner, tx_write):
         """Catalogue buttons (with healing alternatives), grow the frontier, recompute coverage."""
         pm = dict(state.get("page_model") or {})
         path = normalize_url(pm.get("url", ""))
-        buttons = _buttons_from_interactives(
-            ex.call("browser.interactives").get("elements", []), path)
+        elements = _elements_from_interactives(ex.call("browser.interactives").get("elements", []), path)
+        buttons = [e for e in elements if e["role"] == "button"]   # coverage/candidates: button subset (unchanged)
         seen = list(dict.fromkeys(list(state.get("interactive_seen", []))
                                   + [b["semantic_id"] for b in buttons]))
+        # M9.2b (ADR-028): accumulate the site-wide element map (superset of buttons) for the scenario head.
+        site_map = dict(state.get("site_map") or {})
+        have = {el["semantic_id"] for el in site_map.get(path, [])}
+        site_map[path] = list(site_map.get(path, [])) + [el for el in elements if el["semantic_id"] not in have]
         links = ex.call("browser.links").get("links", [])
         origin = state.get("base_origin", "")
         visited = set(state.get("visited_paths", []))
@@ -97,7 +124,7 @@ def build_graph(ex, planner, tx_write):
         coverage = (done_n / total) if total else 0.0
         pm["buttons"] = buttons
         return {"interactive_seen": seen, "nav_frontier": frontier, "visited_paths": visited_paths,
-                "coverage_achieved": coverage, "page_model": pm}
+                "coverage_achieved": coverage, "page_model": pm, "site_map": site_map}
 
     def plan(state: RunState) -> dict:
         """Assemble candidates, enforce convergence, ask the planner for the next action."""
@@ -197,6 +224,29 @@ def build_graph(ex, planner, tx_write):
         """LangGraph's checkpointer persists at each superstep boundary; nothing explicit here."""
         return {}
 
+    def scenario(state: RunState) -> dict:
+        """M9.2b (ADR-028): ONE-SHOT phase-2 head — author a grounded scenario over the COMPLETE site map.
+        No-op unless `scenario_head` is wired (goal/describe mode). Appends grounded steps to the plan;
+        records `scenario_unmatched` (refs/draft steps that couldn't bind to a real element)."""
+        if scenario_head is None:
+            return {}
+        from .scenario import flatten_site_map, ground_scenario, reconcile
+        site_map = state.get("site_map") or {}
+        base_id = len(state.get("exploration_plan", []))
+        if scenario_head.name == "goal":
+            out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"))
+            steps, unmatched = ground_scenario(out.get("refs", []), site_map, start_id=base_id + 1)
+        else:  # describe: LLM draft -> deterministic reconcile against the real map
+            out = scenario_head.draft()
+            steps, unmatched = reconcile(out.get("draft", []), site_map, start_id=base_id + 1)
+        tok = out.get("tokens") or {}
+        tx_write({"step": "scenario", "planner": scenario_head.name, "model": scenario_head.model,
+                  "decision": "scenario", "reason": f"{len(steps)} grounded, {len(unmatched)} unmatched",
+                  "prompt_tokens": tok.get("prompt"), "completion_tokens": tok.get("completion")})
+        rc.report(state.get("run_id", ""), "plan", tok.get("prompt"), tok.get("completion"))
+        return {"exploration_plan": list(state.get("exploration_plan", [])) + steps,
+                "scenario_steps": steps, "scenario_unmatched": unmatched, "phase": "scenario"}
+
     def report(state: RunState) -> dict:
         """Freeze plan.json with a deterministic plan_hash over the ordered steps."""
         steps = list(state.get("exploration_plan", []))
@@ -213,13 +263,13 @@ def build_graph(ex, planner, tx_write):
         return {"plan_hash": ph}
 
     def route_plan(state: RunState) -> str:
-        return "report" if state.get("exploration_complete") else "act"
+        return "scenario" if state.get("exploration_complete") else "act"
 
     def route_verify(state: RunState) -> str:
         return "checkpoint" if state.get("_verify_ok", True) else "heal"
 
     def route_checkpoint(state: RunState) -> str:
-        return "report" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
+        return "scenario" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
 
     def _traced(node_name, fn):
         """Wrap a node in a per-node OTel span (M8, ADR-021); no-op when tracing isn't configured."""
@@ -231,15 +281,16 @@ def build_graph(ex, planner, tx_write):
     b = StateGraph(RunState)
     for name, fn in [("perceive", perceive), ("ground", ground), ("plan", plan),
                      ("act", act), ("verify", verify), ("heal", heal),
-                     ("checkpoint", checkpoint), ("report", report)]:
+                     ("checkpoint", checkpoint), ("scenario", scenario), ("report", report)]:
         b.add_node(name, _traced(name, fn))
     b.add_edge(START, "perceive")
     b.add_edge("perceive", "ground")
     b.add_edge("ground", "plan")
-    b.add_conditional_edges("plan", route_plan, {"act": "act", "report": "report"})
+    b.add_conditional_edges("plan", route_plan, {"act": "act", "scenario": "scenario"})
     b.add_edge("act", "verify")
     b.add_conditional_edges("verify", route_verify, {"checkpoint": "checkpoint", "heal": "heal"})
     b.add_edge("heal", "checkpoint")
-    b.add_conditional_edges("checkpoint", route_checkpoint, {"perceive": "perceive", "report": "report"})
+    b.add_conditional_edges("checkpoint", route_checkpoint, {"perceive": "perceive", "scenario": "scenario"})
+    b.add_edge("scenario", "report")  # M9.2b: scenario node (no-op in pure explore) -> report
     b.add_edge("report", END)
     return b
