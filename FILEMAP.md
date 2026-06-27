@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 25 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 28 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |

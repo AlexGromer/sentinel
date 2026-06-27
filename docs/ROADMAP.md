@@ -1,4 +1,4 @@
-# Sentinel — MVP Roadmap (M0–M9.1)
+# Sentinel — MVP Roadmap (M0–M9.2)
 
 > 🌐 **Русский** (основная версия) · [English](ROADMAP.en.md)
 
@@ -6,7 +6,8 @@
 
 > **Статус доставки (на 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ доставлено; **M9** — дизайн заморожен
 > (Proposed, ADR-022..025); **M9.1** (формы/логин/валидация, ADR-026) — ✅ доставлено offline; **M9.2a**
-> (GoalPlanner NL→plan, ADR-027) — ✅ доставлено offline. Детальные
+> (GoalPlanner NL→plan, ADR-027) + **M9.2b** (two-phase + describe-first + rich RunConfig, ADR-028) —
+> ✅ доставлено offline. Детальные
 > секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
 > `../BACKLOG.md`.
 
@@ -365,5 +366,17 @@ budget-kill — user-run.
 флаг>файл>дефолт через agentctl `SENTINEL_EXPLICIT`/`fs.Visit`); goal-режим best-effort (replay
 детерминирован). agentctl `--goal`/`--run-config`. Offline-verified (`test_m9_2` 20 + регресс m3..m9_2 +
 `go build`/`vet` + `tsc` + gitleaks); 4-мерный adversarial review (grounding clean). Живой goal-прогон — по «go».
-**Следующее: M9.2b** (describe-first NL→draft→reconcile + двухфазный explore-then-scenario §L + богатый
-RunConfig: auth/scenarios/per-role).
+
+### M9.2b — Two-phase + describe-first + rich RunConfig (Доставлено offline, ADR-028)
+
+**Языки:** Python + Go. Завершает conversational-авторинг M9. goal/describe → полный детерминированный
+heuristic-explore → **карта сайта** (обобщена за пределы кнопок на input/select/link) → **one-shot**
+голова фазы-2: `GoalPlanner.build_scenario` (привязка refs к реальным элементам по индексу) ИЛИ
+`DescribePlanner.draft` + детерминированный `reconcile`. Кросс-страничные `navigate` синтезируются в коде;
+авторские шаги несут полный привязанный locator+alternatives → `scenario.json` replay'ится LLM-free
+детерминированно. Богатый RunConfig: декларативные `auth:`→`STORAGE_STATE*` + именованные `scenarios:` +
+`--scenario`. Коды выхода: describe-unmatched→1, `GOAL`⊕`DESCRIBE`→3. Offline-verified (`test_m9_2b` 20 +
+регресс m3..m9_2b 95 + `go build`/`vet` + `tsc` + gitleaks); 5-мерный adversarial review (grounding
+выстоял, детерминизм чист). Живой goal/describe-прогон — по «go».
+**Следующее: M9.3** (не-MCP control-API + чат-UI) · M9.4 (in-app/browser tabs + live per-step grounding) ·
+M9.7 (pluggable adapters).

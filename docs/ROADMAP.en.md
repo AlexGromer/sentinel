@@ -1,4 +1,4 @@
-# Sentinel — MVP Roadmap (M0–M9.1)
+# Sentinel — MVP Roadmap (M0–M9.2)
 
 > 🌐 [Русский](ROADMAP.md) (основная версия) · **English**
 
@@ -6,7 +6,8 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 
 > **Delivery status (as of 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
 > (Proposed, ADR-022..025); **M9.1** (forms/login/validation, ADR-026) — ✅ delivered offline; **M9.2a**
-> (GoalPlanner NL→plan, ADR-027) — ✅ delivered offline. The
+> (GoalPlanner NL→plan, ADR-027) + **M9.2b** (two-phase + describe-first + rich RunConfig, ADR-028) —
+> ✅ delivered offline. The
 > detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
 > `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 
@@ -360,5 +361,18 @@ auto-defaults by `--goal` (not via `--mode`, = RUN_MODE); a minimal RunConfig YA
 (mode/goal/planner/budgets, precedence flag>file>default via agentctl `SENTINEL_EXPLICIT`/`fs.Visit`);
 goal-mode is best-effort (replay stays deterministic). agentctl `--goal`/`--run-config`. Offline-verified
 (`test_m9_2` 20 + the m3..m9_2 regression + `go build`/`vet` + `tsc` + gitleaks); a 4-dimension adversarial
-review (grounding clean). The live goal run is on "go". **Next: M9.2b** (describe-first NL→draft→reconcile
-+ the two-phase explore-then-scenario §L + a rich RunConfig: auth/scenarios/per-role).
+review (grounding clean). The live goal run is on "go".
+
+### M9.2b — Two-phase + describe-first + rich RunConfig (Delivered offline, ADR-028)
+
+**Languages:** Python + Go. Completes M9 conversational authoring. goal/describe → a full deterministic
+heuristic explore → a **site map** (generalized beyond buttons to input/select/link) → a **one-shot**
+phase-2 head: `GoalPlanner.build_scenario` (bind refs to real elements by index) OR `DescribePlanner.draft`
++ a deterministic `reconcile`. Cross-page `navigate` steps are synthesized in code; authored steps carry the
+full grounded locator+alternatives → `scenario.json` replays LLM-free and deterministically. A rich
+RunConfig: declarative `auth:`→`STORAGE_STATE*` + named `scenarios:` + `--scenario`. Exit codes:
+describe-unmatched→1, `GOAL`⊕`DESCRIBE`→3. Offline-verified (`test_m9_2b` 20 + the m3..m9_2b regression 95 +
+`go build`/`vet` + `tsc` + gitleaks); a 5-dimension adversarial review (grounding held, determinism clean).
+The live goal/describe run is on "go".
+**Next: M9.3** (non-MCP control-API + chat-UI) · M9.4 (in-app/browser tabs + live per-step grounding) ·
+M9.7 (pluggable adapters).
