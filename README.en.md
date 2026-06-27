@@ -38,7 +38,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (28 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (31 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Quickstart (M0)
 ```bash
@@ -50,6 +50,29 @@ go build -o bin/agentctl ./cmd/agentctl
 ./bin/agentctl run --target "file://$PWD/testdata/m0.html"
 # → prints the accessibility tree and writes runs/<id>/trace.zip
 ```
+
+## Quickstart via Docker (one command)
+```bash
+docker compose build
+# zero-dependency demo: heuristic planner + bundled file:// fixture, no network, no API key
+docker compose --profile demo up
+# …or against your own target (goal mode; needs a key or a local model):
+docker compose run --rm sentinel run --target "https://your-app.example" --goal "log in and open billing"
+```
+**Local model** (no cloud): uncomment the `LLM_*` block in [`docker-compose.yml`](docker-compose.yml) and
+start an endpoint — `docker compose --profile ollama up -d ollama`. Model/hardware sizing lives in
+[`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) and the interactive calculators on
+[GitHub Pages](https://alexgromer.github.io/sentinel/). Full run & verification guide:
+[`docs/TESTING.md`](docs/TESTING.md).
+
+## Documentation
+| Doc | About |
+|-----|-------|
+| [`docs/TESTING.md`](docs/TESTING.md) | offline gates, local models, live run, zero-level docker-compose |
+| [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM methodology + token-cost methodology + verified model & runtime catalog |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite over the trust boundaries (→ [`SECURITY.md`](SECURITY.md)) |
+| [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) | distribution/onboarding epic: Release · compose · Helm/Flux · setup-WebUI · air-gapped |
+| [GitHub Pages](https://alexgromer.github.io/sentinel/) | docs hub + 3 calculators (VRAM · token-cost · model-selector) |
 
 ## Project map
 | Path | What |

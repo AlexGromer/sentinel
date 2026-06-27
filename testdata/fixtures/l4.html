@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L4 — Login (Step 1 of 3)</title>
+  <!--
+    Multi-page flow:
+      l4.html          — Step 1: Login  (demo creds: username=admin  password=secret)
+      l4-dashboard.html — Step 2: Dashboard
+      l4-billing.html   — Step 3: Billing
+    Exercises cross-page goal scenarios.
+  -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.4);
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 360px;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #60a5fa;
+      margin-bottom: 0.25rem;
+    }
+    .logo span { color: #e2e8f0; }
+    h1 { font-size: 1.1rem; color: #94a3b8; margin-bottom: 1.75rem; }
+
+    label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.3rem; }
+    .field { margin-bottom: 1rem; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 0.55rem 0.8rem;
+      background: #0f172a;
+      border: 1.5px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 0.95rem;
+      transition: border-color 0.15s;
+    }
+    input:focus { outline: none; border-color: #60a5fa; }
+
+    button[type="submit"] {
+      width: 100%;
+      padding: 0.65rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      transition: background 0.15s;
+    }
+    button[type="submit"]:hover { background: #2563eb; }
+
+    .alert {
+      font-size: 0.8rem;
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .alert-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+    .alert.visible { display: block; }
+
+    .step-indicator {
+      display: flex; gap: 0.5rem; justify-content: center; margin-top: 1.5rem;
+    }
+    .step { width: 8px; height: 8px; border-radius: 50%; background: #334155; }
+    .step.active { background: #60a5fa; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Acme<span>Corp</span></div>
+  <h1>Sign in to your account</h1>
+
+  <div id="alert-error" class="alert alert-error" role="alert">
+    Incorrect credentials. Try admin / secret.
+  </div>
+
+  <form id="login-form" novalidate>
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username"
+             autocomplete="username" placeholder="admin">
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password"
+             autocomplete="current-password" placeholder="••••••">
+    </div>
+    <button type="submit" id="btn-signin">Sign in</button>
+  </form>
+
+  <div class="step-indicator">
+    <div class="step active" title="Step 1: Login"></div>
+    <div class="step" title="Step 2: Dashboard"></div>
+    <div class="step" title="Step 3: Billing"></div>
+  </div>
+</div>
+
+<script>
+  // Demo credentials for L4 multi-page flow
+  var VALID_USER = 'admin';
+  var VALID_PASS = 'secret';
+
+  document.getElementById('login-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var u = document.getElementById('username').value.trim();
+    var p = document.getElementById('password').value;
+    var err = document.getElementById('alert-error');
+    err.classList.remove('visible');
+    if (u === VALID_USER && p === VALID_PASS) {
+      // Store session flag and navigate
+      sessionStorage.setItem('l4_user', u);
+      window.location.href = 'l4-dashboard.html';
+    } else {
+      err.classList.add('visible');
+      document.getElementById('password').value = '';
+      document.getElementById('password').focus();
+    }
+  });
+</script>
+</body>
+</html>

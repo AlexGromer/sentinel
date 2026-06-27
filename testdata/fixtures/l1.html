@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L1 — Trivial Affordances</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8f9fa;
+      color: #212529;
+      padding: 2rem;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p.subtitle { color: #6c757d; font-size: 0.9rem; margin-bottom: 2rem; }
+    section { margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #495057; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    button {
+      padding: 0.5rem 1.25rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    .btn-primary   { background: #0d6efd; color: #fff; }
+    .btn-secondary { background: #6c757d; color: #fff; }
+    .btn-danger    { background: #dc3545; color: #fff; }
+    .btn-success   { background: #198754; color: #fff; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Links */
+    .link-list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+    .link-list a {
+      color: #0d6efd;
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+    .link-list a:hover { text-decoration: underline; }
+
+    /* Output area */
+    #output {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      background: #e9ecef;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      min-height: 2.5rem;
+      color: #495057;
+    }
+
+    /* Nav bar */
+    nav {
+      display: flex;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      background: #fff;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 0.9rem;
+    }
+    nav a { color: #0d6efd; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <strong>Sentinel Fixtures</strong>
+  <a href="l1.html">L1</a>
+  <a href="l2.html">L2 Login</a>
+  <a href="l3.html">L3 Form</a>
+  <a href="l4.html">L4 Flow</a>
+  <a href="l5.html">L5 Tabs+Shadow</a>
+</nav>
+
+<h1>L1 — Trivial Affordances</h1>
+<p class="subtitle">Static buttons and links. No validation. Exercises explore + basic click actions.</p>
+
+<!-- SECTION: buttons -->
+<section id="buttons">
+  <h2>Buttons</h2>
+  <div class="btn-row">
+    <button id="btn-primary" class="btn-primary" data-action="primary">Primary action</button>
+    <button id="btn-secondary" class="btn-secondary" data-action="secondary">Secondary</button>
+    <button id="btn-danger" class="btn-danger" data-action="danger">Danger</button>
+    <button id="btn-success" class="btn-success" data-action="success">Success</button>
+    <button id="btn-disabled" class="btn-primary" disabled>Disabled</button>
+  </div>
+  <div id="output">Click a button to see output.</div>
+</section>
+
+<!-- SECTION: anchor links within page -->
+<section id="links">
+  <h2>In-page anchor links</h2>
+  <ul class="link-list">
+    <li><a href="#section-alpha" id="link-alpha">Jump to Alpha section</a></li>
+    <li><a href="#section-beta"  id="link-beta">Jump to Beta section</a></li>
+    <li><a href="#section-gamma" id="link-gamma">Jump to Gamma section</a></li>
+    <li><a href="#top"           id="link-top">Back to top</a></li>
+  </ul>
+</section>
+
+<!-- SECTION: cross-fixture links -->
+<section id="cross-links">
+  <h2>Cross-fixture navigation</h2>
+  <ul class="link-list">
+    <li><a href="l2.html" id="nav-l2">Go to L2 (Login)</a></li>
+    <li><a href="l3.html" id="nav-l3">Go to L3 (Validation form)</a></li>
+    <li><a href="l4.html" id="nav-l4">Go to L4 (Multi-page flow)</a></li>
+    <li><a href="l5.html" id="nav-l5">Go to L5 (Tabs + Shadow DOM)</a></li>
+  </ul>
+</section>
+
+<section id="section-alpha">
+  <h2>Alpha section</h2>
+  <p>This is the Alpha section. You navigated here via an anchor link.</p>
+</section>
+
+<section id="section-beta">
+  <h2>Beta section</h2>
+  <p>This is the Beta section. You navigated here via an anchor link.</p>
+</section>
+
+<section id="section-gamma">
+  <h2>Gamma section</h2>
+  <p>This is the Gamma section. You navigated here via an anchor link.</p>
+  <p><a href="#top">↑ Back to top</a></p>
+</section>
+
+<script>
+  // Button click handler — updates #output with action name
+  document.querySelectorAll('button[data-action]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.getElementById('output').textContent =
+        'Clicked: ' + btn.dataset.action + ' (id=' + btn.id + ')';
+    });
+  });
+</script>
+</body>
+</html>

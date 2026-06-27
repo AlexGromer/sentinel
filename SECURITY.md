@@ -19,6 +19,10 @@ Sentinel is a UI-testing agent. Of particular interest:
 - The `pw-executor` browser boundary and any code that runs against an app-under-test.
 - The gRPC / MCP transport surfaces.
 
+For the full trust-boundary analysis (STRIDE-lite over agentctl → brain → pw-executor → Chromium →
+AUT-cert → LLM-endpoint → store-gateway, with assets, current mitigations, residual risk and the
+owning milestone for each open item), see [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+
 > Note: **active security testing of an app-under-test** (XSS/CSRF/IDOR scanning) is a *separate*,
 > authorization-gated module (planned, not in the functional core) — see `docs/M9_CONTRACT.md` §L.
 

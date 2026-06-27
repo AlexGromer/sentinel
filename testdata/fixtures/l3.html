@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L3 — Validation Form</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8f9fa;
+      color: #212529;
+      padding: 2rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    nav {
+      display: flex; gap: 1rem;
+      background: #fff; padding: 0.6rem 1rem;
+      border-radius: 8px; margin-bottom: 2rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 0.875rem;
+    }
+    nav a { color: #0d6efd; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    p.subtitle { color: #6c757d; font-size: 0.875rem; margin-bottom: 2rem; }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      padding: 2rem;
+    }
+
+    .field { margin-bottom: 1.25rem; }
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 0.35rem;
+    }
+    label .hint {
+      font-weight: 400;
+      color: #6c757d;
+      font-size: 0.8rem;
+    }
+    input[type="text"],
+    input[type="email"],
+    input[type="number"] {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1.5px solid #ced4da;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      transition: border-color 0.15s;
+    }
+    input:focus { outline: none; border-color: #0d6efd; }
+    input.invalid { border-color: #dc3545; background: #fff8f8; }
+    input.valid   { border-color: #198754; }
+
+    .field-error {
+      font-size: 0.8rem;
+      color: #dc3545;
+      margin-top: 0.3rem;
+      display: none;
+    }
+    .field-error.visible { display: block; }
+
+    .char-counter {
+      font-size: 0.78rem;
+      color: #6c757d;
+      margin-top: 0.25rem;
+      text-align: right;
+    }
+    .char-counter.warn { color: #dc3545; font-weight: 600; }
+
+    button[type="submit"] {
+      padding: 0.6rem 2rem;
+      background: #0d6efd;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button[type="submit"]:hover { background: #0b5ed7; }
+
+    .success-banner {
+      display: none;
+      background: #d1e7dd;
+      color: #0f5132;
+      border: 1px solid #badbcc;
+      border-radius: 6px;
+      padding: 1rem;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+    }
+    .success-banner.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="l1.html">L1</a>
+  <a href="l2.html">L2</a>
+  <strong>L3</strong>
+  <a href="l4.html">L4</a>
+  <a href="l5.html">L5</a>
+</nav>
+
+<h1>L3 — Validation Form</h1>
+<p class="subtitle">
+  Multi-field form with client-side validation. Exercises M9.1 negative / validation testing.
+</p>
+
+<div class="card">
+  <form id="val-form" novalidate>
+
+    <!-- Field 1: Email -->
+    <div class="field">
+      <label for="f-email">
+        Email address
+        <span class="hint">(required, valid format)</span>
+      </label>
+      <input type="email" id="f-email" name="email"
+             autocomplete="email" placeholder="you@example.com">
+      <div class="field-error" id="err-email" role="alert">
+        Please enter a valid email address.
+      </div>
+    </div>
+
+    <!-- Field 2: Number with min/max -->
+    <div class="field">
+      <label for="f-number">
+        Age
+        <span class="hint">(required, 18 – 120)</span>
+      </label>
+      <input type="number" id="f-number" name="age"
+             min="18" max="120" placeholder="e.g. 25">
+      <div class="field-error" id="err-number" role="alert">
+        Age must be a whole number between 18 and 120.
+      </div>
+    </div>
+
+    <!-- Field 3: Required text -->
+    <div class="field">
+      <label for="f-text">
+        Full name
+        <span class="hint">(required)</span>
+      </label>
+      <input type="text" id="f-text" name="fullname"
+             autocomplete="name" placeholder="Jane Doe">
+      <div class="field-error" id="err-text" role="alert">
+        Full name is required.
+      </div>
+    </div>
+
+    <!-- Field 4: Maxlength text -->
+    <div class="field">
+      <label for="f-bio">
+        Short bio
+        <span class="hint">(optional, max 80 characters)</span>
+      </label>
+      <input type="text" id="f-bio" name="bio"
+             maxlength="80" placeholder="A sentence about yourself…">
+      <div class="char-counter" id="bio-counter">0 / 80</div>
+      <div class="field-error" id="err-bio" role="alert">
+        Bio must be 80 characters or fewer.
+      </div>
+    </div>
+
+    <button type="submit" id="btn-submit">Submit</button>
+
+    <div class="success-banner" id="success-banner" role="status">
+      Form submitted successfully. All fields passed validation.
+    </div>
+  </form>
+</div>
+
+<script>
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  function setValidity(inputEl, errEl, valid) {
+    if (valid) {
+      inputEl.classList.remove('invalid');
+      inputEl.classList.add('valid');
+      errEl.classList.remove('visible');
+    } else {
+      inputEl.classList.add('invalid');
+      inputEl.classList.remove('valid');
+      errEl.classList.add('visible');
+    }
+    return valid;
+  }
+
+  function validateAll() {
+    var ok = true;
+
+    // Email
+    var email = document.getElementById('f-email');
+    ok = setValidity(email, document.getElementById('err-email'),
+                     EMAIL_RE.test(email.value.trim())) && ok;
+
+    // Number
+    var num = document.getElementById('f-number');
+    var n = parseInt(num.value, 10);
+    ok = setValidity(num, document.getElementById('err-number'),
+                     !isNaN(n) && n >= 18 && n <= 120) && ok;
+
+    // Required text
+    var txt = document.getElementById('f-text');
+    ok = setValidity(txt, document.getElementById('err-text'),
+                     txt.value.trim().length > 0) && ok;
+
+    // Maxlength
+    var bio = document.getElementById('f-bio');
+    ok = setValidity(bio, document.getElementById('err-bio'),
+                     bio.value.length <= 80) && ok;
+
+    return ok;
+  }
+
+  // Live char counter
+  document.getElementById('f-bio').addEventListener('input', function() {
+    var len = this.value.length;
+    var counter = document.getElementById('bio-counter');
+    counter.textContent = len + ' / 80';
+    counter.classList.toggle('warn', len >= 72);
+  });
+
+  // Inline validation on blur per field
+  ['f-email','f-number','f-text','f-bio'].forEach(function(id) {
+    document.getElementById(id).addEventListener('blur', function() {
+      validateAll();
+    });
+  });
+
+  // Submit
+  document.getElementById('val-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var banner = document.getElementById('success-banner');
+    banner.classList.remove('visible');
+    if (validateAll()) {
+      banner.classList.add('visible');
+      this.reset();
+      document.getElementById('bio-counter').textContent = '0 / 80';
+      ['f-email','f-number','f-text','f-bio'].forEach(function(id) {
+        var el = document.getElementById(id);
+        el.classList.remove('valid','invalid');
+      });
+    }
+  });
+</script>
+</body>
+</html>

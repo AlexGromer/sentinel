@@ -26,9 +26,13 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
  && rm -rf /var/lib/apt/lists/*
+# Deps mirror brain/pyproject.toml. `openai` (OpenAI-compat backend, ADR-019: local models /
+# routers) and `pyyaml` (RunConfig YAML, ADR-027/028) are REQUIRED at runtime — without them
+# local-model runs and `--run-config` break inside the container.
 RUN python3 -m venv /app/.venv \
  && /app/.venv/bin/pip install --no-cache-dir \
-      langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres anthropic grpcio grpcio-tools mcp \
+      langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres anthropic openai pyyaml \
+      grpcio grpcio-tools mcp \
       opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
 COPY --from=go-build /out/agentctl /out/store-gateway /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist

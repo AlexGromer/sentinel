@@ -11,6 +11,12 @@
 - [ ] [M9.7] Pluggable adapters (auth/deploy/model/backend) — universality beyond DH. (P3) @system-architect — GAP-M9-08
 - [ ] [M9.8] (branch 2) Browser extension + co-pilot takeover/return. (P3) @desktop-developer — GAP-M9-07
 - [ ] [M10] Security module (separate, **authorization-gated**): XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM over the explore map. (P3) @appsec-engineer — GAP-M9-11
+- [ ] [M11.1] Release pipeline — GitHub Releases (multi-OS/arch binaries + Docker publish + checksums + Cosign/GPG signing + SBOM) + committed dependency lockfile. Closes GAP-SEC-002 remainder. (P2) @ci-cd-engineer — ADR-030
+- [ ] [M11.2] setup-WebUI — static client-side config generator MVP (vanilla, air-gapped → RunConfig YAML/env) then control-API-backed via M9.3. (P2) @web-developer — ADR-031
+- [ ] [M11.3] Helm/Flux expansion — env-allowlist (agentctl) + Secret/secretKeyRef plumbing (closes GAP-SEC-001) + Flux HelmRelease/Kustomization + expanded values. (P2) @k8s-engineer — ADR-030 / GAP-SEC-001
+- [ ] [M11.4] Air-gapped bundle — offline image bundle + local-model preload + vendored deps + no-network verify. (P3) @deployer — ADR-030 / GAP-SEC-002
+- [ ] [M11.5] Zero-level onboarding — installer + quickstart + setup-WebUI + docs path for a non-DevOps user. (P3) @tech-writer — ADR-030
+- [ ] [M9-LIVE] Live verification — GAP-VERIFY-005/006 (provider + MCP-host smoke) + live M9.1 login-as-test + M9.2 goal/describe run + GAP-RISK-009 flip (byte-stable goldens) + GAP-ARCH-003..006 live-measure. (P2) @sre-engineer — needs «go» + API key
 
 ## Completed Archive
 

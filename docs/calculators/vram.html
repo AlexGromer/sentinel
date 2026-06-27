@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel — VRAM / hardware calculator</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --acc:#2563eb; --ok:#15803d; --no:#b91c1c; --br:#d4d4d8; --card:#f6f6f7; }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#0d1117; --fg:#e6edf3; --mut:#9aa7b4; --acc:#5b9dff; --ok:#3fb950; --no:#f85149; --br:#30363d; --card:#161b22; } }
+  *{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:1rem;max-width:860px;margin:0 auto}
+  h1{font-size:1.3rem;margin:.2rem 0} .sub{color:var(--mut);margin:.2rem 0 1rem}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem} @media(max-width:640px){.grid{grid-template-columns:1fr}}
+  fieldset{border:1px solid var(--br);border-radius:8px;padding:.8rem;margin:0 0 1rem} legend{color:var(--mut);padding:0 .4rem;font-size:.85rem}
+  label{display:block;margin:.5rem 0 .15rem;font-size:.9rem} input,select{width:100%;padding:.4rem;border:1px solid var(--br);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
+  .out{background:var(--card);border:1px solid var(--br);border-radius:8px;padding:1rem;margin-bottom:1rem}
+  .big{font-size:1.8rem;font-weight:700} .ok{color:var(--ok)} .no{color:var(--no)} .mut{color:var(--mut)}
+  table{border-collapse:collapse;width:100%;font-size:.85rem;margin-top:.5rem} th,td{border:1px solid var(--br);padding:.3rem .5rem;text-align:right} th:first-child,td:first-child{text-align:left}
+  details{margin-top:1rem;font-size:.85rem;color:var(--mut)} code{background:var(--card);padding:.1rem .3rem;border-radius:4px} a{color:var(--acc)}
+</style>
+</head>
+<body>
+<h1>VRAM / hardware calculator</h1>
+<p class="sub">Sentinel · локальные LLM. Авторитетная формула: <a href="../LOCAL_MODELS.md">docs/LOCAL_MODELS.md §5</a>. Полностью клиентский — работает offline.</p>
+
+<div class="grid">
+  <fieldset><legend>Модель</legend>
+    <label>Параметры (млрд, B)</label><input id="params" type="number" value="14" min="0.1" step="0.1">
+    <label>Квантизация</label>
+    <select id="quant">
+      <option value="2">FP16 (2.0 B/param)</option>
+      <option value="1.0625">Q8_0 (1.0625)</option>
+      <option value="0.8203">Q6_K (0.8203)</option>
+      <option value="0.7129">Q5_K_M (0.7129)</option>
+      <option value="0.6016" selected>Q4_K_M (0.6016)</option>
+      <option value="0.5625">Q4_0 (0.5625)</option>
+      <option value="0.4258">Q3_K_M (0.4258)</option>
+    </select>
+    <label>GPU VRAM (ГБ) — для вердикта</label><input id="gpu" type="number" value="12" min="1" step="1">
+  </fieldset>
+  <fieldset><legend>KV-cache + overhead (advanced)</legend>
+    <label>Контекст (токены)</label><input id="ctx" type="number" value="8000" min="0" step="512">
+    <label>Слои (n_layers)</label><input id="layers" type="number" value="40" min="1" step="1">
+    <label>KV dim (n_kv_heads × head_dim, GQA ≈ 1024)</label><input id="kvdim" type="number" value="1024" min="64" step="64">
+    <label>KV quant (байт/элемент)</label>
+    <select id="kvb"><option value="2" selected>FP16 (2)</option><option value="1">int8 (1)</option><option value="0.5">int4 (0.5)</option></select>
+    <label>Overhead (ГБ)</label><input id="oh" type="number" value="1.5" min="0" step="0.1">
+  </fieldset>
+</div>
+
+<div class="out">
+  <div>Оценка VRAM: <span class="big" id="total">—</span> <span class="mut">ГБ</span></div>
+  <div class="mut" id="breakdown"></div>
+  <div id="verdict" style="margin-top:.6rem;font-weight:600"></div>
+</div>
+
+<div class="out">
+  <strong>Обратный вид:</strong> при GPU <span id="gpu2"></span> ГБ — макс. параметров (B) по квантам
+  <table id="rev"><thead><tr><th>Quant</th><th>B/param</th><th>max params (B)</th></tr></thead><tbody></tbody></table>
+</div>
+
+<details><summary>Формула</summary>
+<p><code>VRAM ≈ params·bytes(quant) + KV + overhead</code>;
+<code>KV = 2·n_layers·kv_dim·ctx·bytes_per_elt / 1e9</code>. Оценки ±10–15%. Для нагрузки Sentinel
+(вход ≤2000 tok) KV пренебрежимо. Сверяйте <code>ollama show</code> / <code>llama.cpp --info</code>.</p></details>
+
+<script>
+const Q = [["FP16",2],["Q8_0",1.0625],["Q6_K",0.8203],["Q5_K_M",0.7129],["Q4_K_M",0.6016],["Q4_0",0.5625],["Q3_K_M",0.4258]];
+const $ = id => document.getElementById(id);
+function calc(){
+  const p=+$("params").value||0, bpp=+$("quant").value, ctx=+$("ctx").value||0, L=+$("layers").value||0,
+        kvdim=+$("kvdim").value||0, kvb=+$("kvb").value, oh=+$("oh").value||0, gpu=+$("gpu").value||0;
+  const weights = p*bpp;
+  const kv = 2*L*kvdim*ctx*kvb/1e9;
+  const total = weights+kv+oh;
+  $("total").textContent = total.toFixed(2);
+  $("breakdown").textContent = `веса ${weights.toFixed(2)} + KV ${kv.toFixed(3)} + overhead ${oh.toFixed(1)} ГБ`;
+  const v=$("verdict");
+  if(gpu>0){ const fits=total<=gpu; v.innerHTML = fits
+    ? `<span class="ok">✓ влезает в ${gpu} ГБ</span> <span class="mut">(запас ${(gpu-total).toFixed(2)} ГБ)</span>`
+    : `<span class="no">✗ не влезает в ${gpu} ГБ</span> <span class="mut">(не хватает ${(total-gpu).toFixed(2)} ГБ)</span>`; }
+  else v.textContent="";
+  $("gpu2").textContent=gpu;
+  const tb=$("rev").querySelector("tbody"); tb.innerHTML="";
+  const avail = gpu-oh-kv;
+  for(const [n,b] of Q){ const mp = avail>0 ? avail/b : 0;
+    tb.insertAdjacentHTML("beforeend", `<tr><td>${n}</td><td>${b}</td><td>${mp>0?mp.toFixed(1):"—"}</td></tr>`); }
+}
+document.querySelectorAll("input,select").forEach(e=>e.addEventListener("input",calc));
+calc();
+</script>
+</body>
+</html>

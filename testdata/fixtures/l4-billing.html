@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L4 — Billing (Step 3 of 3)</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* Sidebar (same as dashboard) */
+    .sidebar {
+      position: fixed; top: 0; left: 0; width: 220px; height: 100vh;
+      background: #1e293b;
+      padding: 1.5rem 1rem;
+      display: flex; flex-direction: column; gap: 0.5rem;
+      border-right: 1px solid #334155;
+    }
+    .sidebar .logo { font-size: 1.2rem; font-weight: 700; color: #60a5fa; margin-bottom: 1rem; }
+    .sidebar .logo span { color: #e2e8f0; }
+    .sidebar a {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: 6px;
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar a:hover { background: #0f172a; color: #e2e8f0; }
+    .sidebar a.active { background: #1d4ed8; color: #fff; }
+
+    .main { margin-left: 220px; padding: 2rem 2.5rem; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; }
+    .topbar h1 { font-size: 1.4rem; }
+    .user-chip { font-size: 0.85rem; color: #94a3b8; display: flex; align-items: center; gap: 0.5rem; }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; background: #3b82f6; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; color: #fff; }
+
+    /* Plan cards */
+    .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1.25rem; margin-bottom: 2rem; }
+    .plan-card {
+      background: #1e293b;
+      border: 1.5px solid #334155;
+      border-radius: 12px;
+      padding: 1.5rem;
+      position: relative;
+      transition: border-color 0.15s;
+    }
+    .plan-card.current  { border-color: #3b82f6; }
+    .plan-card.featured { border-color: #a78bfa; }
+    .plan-badge {
+      position: absolute; top: -12px; left: 1rem;
+      font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.6rem;
+      border-radius: 20px; text-transform: uppercase;
+    }
+    .badge-current  { background: #1d4ed8; color: #fff; }
+    .badge-popular  { background: #7c3aed; color: #fff; }
+    .plan-name  { font-size: 1rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .plan-price { font-size: 2rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .plan-price span { font-size: 0.9rem; font-weight: 400; color: #94a3b8; }
+    .plan-desc  { font-size: 0.8rem; color: #94a3b8; margin-bottom: 1rem; }
+    .plan-features { list-style: none; font-size: 0.83rem; color: #cbd5e1; }
+    .plan-features li { margin-bottom: 0.35rem; }
+    .plan-features li::before { content: '✓ '; color: #4ade80; }
+    .btn-upgrade {
+      display: block; width: 100%; margin-top: 1rem;
+      padding: 0.5rem;
+      border: 1.5px solid #60a5fa;
+      background: transparent;
+      color: #60a5fa;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .btn-upgrade:hover { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .btn-upgrade:disabled { opacity: 0.4; cursor: default; }
+
+    /* Invoice table */
+    .section-title { font-size: 0.9rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.75rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; color: #64748b; font-weight: 500; padding: 0.5rem 0.75rem; border-bottom: 1px solid #334155; }
+    td { padding: 0.6rem 0.75rem; border-bottom: 1px solid #1e293b; }
+    tr:hover td { background: #1e293b; }
+
+    .badge-paid { background: #052e16; color: #4ade80; font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 4px; }
+
+    /* Confirm modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed; inset: 0; background: rgba(0,0,0,.7);
+      align-items: center; justify-content: center;
+      z-index: 100;
+    }
+    .modal-backdrop.visible { display: flex; }
+    .modal {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%; max-width: 380px;
+    }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+    .modal p { font-size: 0.875rem; color: #94a3b8; margin-bottom: 1.25rem; }
+    .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+    .btn-cancel { padding: 0.5rem 1rem; background: #334155; color: #e2e8f0; border: none; border-radius: 6px; cursor: pointer; }
+    .btn-confirm { padding: 0.5rem 1rem; background: #7c3aed; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+
+    .step-indicator { display: flex; gap: 0.5rem; margin-top: 2rem; }
+    .step { width: 8px; height: 8px; border-radius: 50%; background: #334155; }
+    .step.done { background: #4ade80; }
+    .step.active { background: #60a5fa; }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo">Acme<span>Corp</span></div>
+  <a href="l4-dashboard.html" id="nav-dashboard">Dashboard</a>
+  <a href="l4-billing.html"   id="nav-billing" class="active">Billing</a>
+  <a href="l4.html"           id="nav-logout">Sign out</a>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <h1>Billing</h1>
+    <div class="user-chip">
+      <div class="avatar" id="avatar-initials">A</div>
+      <span id="username-display">admin</span>
+    </div>
+  </div>
+
+  <div class="section-title">Current plan &amp; upgrade</div>
+  <div class="plan-grid">
+    <div class="plan-card current">
+      <span class="plan-badge badge-current">Current</span>
+      <div class="plan-name">Starter</div>
+      <div class="plan-price">$0<span>/mo</span></div>
+      <div class="plan-desc">For individuals and small projects.</div>
+      <ul class="plan-features">
+        <li>Up to 50 runs/month</li>
+        <li>1 browser worker</li>
+        <li>7-day history</li>
+      </ul>
+      <button class="btn-upgrade" disabled>Current plan</button>
+    </div>
+    <div class="plan-card featured">
+      <span class="plan-badge badge-popular">Popular</span>
+      <div class="plan-name">Pro</div>
+      <div class="plan-price">$49<span>/mo</span></div>
+      <div class="plan-desc">For growing teams and CI pipelines.</div>
+      <ul class="plan-features">
+        <li>Unlimited runs</li>
+        <li>5 browser workers</li>
+        <li>90-day history</li>
+        <li>Priority heal queue</li>
+      </ul>
+      <button class="btn-upgrade" id="btn-upgrade-pro">Upgrade to Pro</button>
+    </div>
+    <div class="plan-card">
+      <div class="plan-name">Enterprise</div>
+      <div class="plan-price">$199<span>/mo</span></div>
+      <div class="plan-desc">For large orgs with custom SLAs.</div>
+      <ul class="plan-features">
+        <li>Everything in Pro</li>
+        <li>Dedicated workers</li>
+        <li>SSO + audit log</li>
+        <li>SLA guarantee</li>
+      </ul>
+      <button class="btn-upgrade" id="btn-upgrade-ent">Upgrade to Enterprise</button>
+    </div>
+  </div>
+
+  <div class="section-title">Invoice history</div>
+  <table id="invoice-table">
+    <thead>
+      <tr>
+        <th>Invoice</th>
+        <th>Date</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Download</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>#INV-2024-003</td>
+        <td>2024-03-01</td>
+        <td>$0.00</td>
+        <td><span class="badge-paid">Paid</span></td>
+        <td><a href="#" id="dl-inv3" style="color:#60a5fa; font-size:0.8rem;">PDF</a></td>
+      </tr>
+      <tr>
+        <td>#INV-2024-002</td>
+        <td>2024-02-01</td>
+        <td>$0.00</td>
+        <td><span class="badge-paid">Paid</span></td>
+        <td><a href="#" id="dl-inv2" style="color:#60a5fa; font-size:0.8rem;">PDF</a></td>
+      </tr>
+      <tr>
+        <td>#INV-2024-001</td>
+        <td>2024-01-01</td>
+        <td>$0.00</td>
+        <td><span class="badge-paid">Paid</span></td>
+        <td><a href="#" id="dl-inv1" style="color:#60a5fa; font-size:0.8rem;">PDF</a></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="step-indicator">
+    <div class="step done"   title="Step 1: Login"></div>
+    <div class="step done"   title="Step 2: Dashboard"></div>
+    <div class="step active" title="Step 3: Billing (current)"></div>
+  </div>
+
+  <p style="margin-top:1.5rem; font-size:0.875rem; color:#64748b;">
+    ← <a href="l4-dashboard.html" id="back-to-dashboard" style="color:#60a5fa;">Back to Dashboard</a>
+    &nbsp;&nbsp;
+    <a href="l4.html" id="go-logout" style="color:#94a3b8;">Sign out</a>
+  </p>
+</main>
+
+<!-- Upgrade confirmation modal -->
+<div class="modal-backdrop" id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal">
+    <h2 id="modal-title">Confirm upgrade</h2>
+    <p id="modal-body">You are about to upgrade to <strong id="plan-name-target"></strong>. This will update your billing immediately.</p>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modal-cancel">Cancel</button>
+      <button class="btn-confirm" id="modal-confirm">Confirm upgrade</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Restore username
+  var user = sessionStorage.getItem('l4_user') || 'admin';
+  document.getElementById('username-display').textContent = user;
+  document.getElementById('avatar-initials').textContent = user.charAt(0).toUpperCase();
+
+  // Upgrade modal
+  var pendingPlan = null;
+  var modal = document.getElementById('modal-backdrop');
+
+  function openModal(planName) {
+    pendingPlan = planName;
+    document.getElementById('plan-name-target').textContent = planName;
+    modal.classList.add('visible');
+  }
+
+  document.getElementById('btn-upgrade-pro').addEventListener('click', function() { openModal('Pro'); });
+  document.getElementById('btn-upgrade-ent').addEventListener('click', function() { openModal('Enterprise'); });
+
+  document.getElementById('modal-cancel').addEventListener('click', function() {
+    modal.classList.remove('visible');
+    pendingPlan = null;
+  });
+
+  document.getElementById('modal-confirm').addEventListener('click', function() {
+    modal.classList.remove('visible');
+    // Show simple confirmation in place of the plan cards area
+    var planGrid = document.querySelector('.plan-grid');
+    planGrid.innerHTML = '<p id="upgrade-success" style="color:#4ade80; font-size:0.95rem; padding:1rem 0;">Successfully upgraded to ' + pendingPlan + '. Your plan has been updated.</p>';
+    pendingPlan = null;
+  });
+
+  // Prevent PDF link default
+  ['dl-inv1','dl-inv2','dl-inv3'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('click', function(e) { e.preventDefault(); });
+  });
+</script>
+</body>
+</html>

@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 28 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 31 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -23,6 +23,11 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/M9.1_CONTRACT.md | M9.1 (**Delivered offline**, ADR-026) | form/login/validation primitives: pw-executor fill/type/press/select/expect/saveStorageState (both transports), storageState auth + login-as-test, secrets via `secretRef` + `PW_NO_TRACE` tracing gate, assert/negative semantics, new step kinds |
 | docs/M9.2_CONTRACT.md | M9.2a (**Delivered offline**, ADR-027) | GoalPlanner (NL→plan, explore-first grounding): goal-directed grounded planner in the Planner seam (index-only, never fabricates), `--goal` auto-default + `make_planner`, minimal RunConfig YAML; describe-first/two-phase/auth deferred to M9.2b |
 | docs/M9.2b_CONTRACT.md | M9.2b (**Delivered offline**, ADR-028) | two-phase goal (§L) + describe-first (§B) + rich RunConfig: full heuristic explore→site map (generalized to input/select/link)→one-shot grounded scenario (`build_scenario`/`reconcile`, cross-page navigate synth); plan.json+scenario.json+reconcile-report.json; declarative auth/scenarios + `--scenario`/`--describe` |
+| docs/LOCAL_MODELS.md | Local-model methodology (ADR-029) | platform-agnostic: VRAM-sizing + token-cost-per-phase math + verified model/runtime catalog + benchmark links; authoritative formula source for the Pages calculators |
+| docs/THREAT_MODEL.md | Security model (→ SECURITY.md) | STRIDE-lite over the trust boundaries; assets, current/planned mitigations, residual risk, owner-milestone |
+| docs/TESTING.md | Testing + onboarding guide | offline gates + local-model setup + live run (M9.1/M9.2 interpret artifacts/exit-codes) + zero-level docker-compose path |
+| docs/DISTRIBUTION.md | Distribution & onboarding epic (ADR-030/031) | Release/compose/Helm-Flux/setup-WebUI/air-gapped milestones + integration model (black-box + W3C traceparent M9.5, NO backend connector) |
+| docs/index.md · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub | front-mattered landing + minimal Jekyll (theme cayman) + 3 vanilla-JS calculators (vram · token-cost · model-selector; air-gapped, mirror LOCAL_MODELS §5) |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -60,16 +65,35 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | pw-executor/src/server.ts | TS | OUR Playwright server: navigate/snapshot/click/links/currentUrl/probe/interactives/screenshotHash/setOfMarks/traceStop + **M9.1** fill/type/press/select/expect/saveStorageState; storageState load (`STORAGE_STATE`) + tracing gate (`PW_NO_TRACE`) + secret `secretRef` redaction (ADR-026); M8 per-tool spans via otel.ts; screenshot determinism (GAP-RISK-009) |
 | pw-executor/src/otel.ts | TS | M8 gated OTel tracer (NodeSDK + OTLP-grpc) + spanForTool (extracts W3C `_meta`); no-op without OTEL endpoint (ADR-021) |
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2/m9_2b) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/routing/RunConfig, **m9_2b** site-map + two-phase scenario grounding/cross-page-navigate + describe reconcile + rich RunConfig (fake executor/backend/session) |
-| .github/workflows/ci.yml | CI | build → replay matrix |
+| .github/workflows/ci.yml | CI | build (+`go vet`/`go test` + offline suite m3..m9_2b) → **security** (gitleaks/govulncheck/pip-audit/npm audit) → replay matrix → explore (manual) |
+| .github/workflows/pages.yml | CI | GitHub Pages deploy (actions/deploy-pages) from docs/ on push to main |
+| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) profiles |
+| Dockerfile | Container | multi-stage runtime image (Go bins + TS pw-executor + Playwright + Python brain); pip deps mirror pyproject (incl. `openai`+`pyyaml`) |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
-| CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy, CoC, PR + issue templates, code owners |
+| testdata/fixtures/l1..l5.html + README.md | fixtures | graded difficulty (file://): L1 trivial · L2 login · L3 validation · L4 multi-page · L5 tabs+shadow-DOM |
+| CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy (+threat-model link), CoC, PR + issue templates, code owners |
 | LICENSE · NOTICE | Legal | Apache-2.0 license text + NOTICE (Copyright 2026 AlexGromer) |
 
+| testdata/fixtures/l1.html | Web page | — |
+| testdata/fixtures/l2.html | Web page | — |
+| testdata/fixtures/l3.html | Web page | — |
+| testdata/fixtures/l4.html | Web page | — |
+| testdata/fixtures/l4-dashboard.html | Web page | — |
+| testdata/fixtures/l4-billing.html | Web page | — |
+| testdata/fixtures/l5.html | Web page | — |
+| testdata/fixtures/README.md | Project documentation | — |
+| docs/calculators/vram.html | Web page | — |
+| docs/calculators/token-cost.html | Web page | — |
+| docs/calculators/model-selector.html | Web page | — |
+| docs/THREAT_MODEL.en.md | Documentation | — |
+| docs/LOCAL_MODELS.en.md | Documentation | — |
+| docs/TESTING.en.md | Tests | — |
+| docs/DISTRIBUTION.en.md | Documentation | — |
 ## Directory Structure
 ```
 agent_development/
-├── README.md ARCHITECTURE.md GAPS.md BACKLOG.md FILEMAP.md
-├── docs/        memory/        testdata/       tests/        .github/workflows/
+├── README.md ARCHITECTURE.md GAPS.md BACKLOG.md FILEMAP.md  Dockerfile docker-compose.yml
+├── docs/ (+calculators/ +_config.yml +index.md)  memory/  testdata/ (+fixtures/)  tests/  .github/workflows/ (ci.yml pages.yml)
 ├── cmd/agentctl/   cmd/store-gateway/        # Go binaries
 ├── internal/store/  internal/store/pb/       # Go store-gateway + gRPC stubs
 ├── proto/                                    # protobuf3 contract
@@ -98,5 +122,5 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
-- Last updated: 2026-06-26
-- Phase: **M0–M8 + M2b + M4b done — gates green; M9.1 (ADR-026) + M9.2a (ADR-027) + M9.2b (ADR-028) delivered offline.** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021); **M9.1 form/login/validation primitives** (pw-executor fill/type/press/select/expect/saveStorageState + storageState auth + secrets-via-`secretRef` + `PW_NO_TRACE` gate) — all compile/test-verified (Python offline suite m3..m9 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key) + **M9.1 live UI run** (forms/Keycloak login, on "go").
+- Last updated: 2026-06-27
+- Phase: **M0–M8 + M2b + M4b done — gates green; M9.1 (ADR-026) + M9.2a (ADR-027) + M9.2b (ADR-028) delivered offline; Foundation cycle (ADR-029/030/031) delivered: security CI gates + docker-compose quickstart + GitHub Pages + calculators + LOCAL_MODELS/THREAT_MODEL/TESTING/DISTRIBUTION docs + L1–L5 fixtures.** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021); **M9.1 form/login/validation primitives** (pw-executor fill/type/press/select/expect/saveStorageState + storageState auth + secrets-via-`secretRef` + `PW_NO_TRACE` gate) — all compile/test-verified (Python offline suite m3..m9 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key) + **M9.1 live UI run** (forms/Keycloak login, on "go").
