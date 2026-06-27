@@ -39,6 +39,9 @@ COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
 COPY brain/ /app/brain/
 COPY testdata/ /app/testdata/
+# Static web assets (setup-WebUI + calculators) for the `webui` compose profile — air-gapped, served
+# locally via `python -m http.server` (no network). .dockerignore keeps this to the web subset only.
+COPY docs/ /app/docs/
 ENV PYTHONPATH=/app BRAIN_PYTHON=/app/.venv/bin/python
 ENTRYPOINT ["/app/bin/agentctl"]
 CMD ["--help"]

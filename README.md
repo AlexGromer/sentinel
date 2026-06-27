@@ -63,6 +63,9 @@ docker compose --profile demo up
 # …или против своей цели (goal-режим, нужен ключ или локальная модель):
 docker compose run --rm sentinel run --target "https://your-app.example" --goal "залогиниться и открыть биллинг"
 ```
+**Setup-WebUI локально (air-gapped, в составе бандла):** `docker compose --profile webui up` → открой
+`http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
+
 **Локальная модель** (без облака): раскомментируйте блок `LLM_*` в [`docker-compose.yml`](docker-compose.yml) и
 поднимите endpoint — `docker compose --profile ollama up -d ollama`. Подбор модели/железа — в
 [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) и интерактивных калькуляторах на

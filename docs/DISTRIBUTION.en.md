@@ -53,6 +53,7 @@ docker compose run --rm sentinel run \
     --target "https://your-app.example.com"              # explore against a real AUT
 docker compose --profile demo up                          # zero-dep demo (fixture file://)
 docker compose --profile ollama up -d ollama             # local model (OpenAI-compat)
+docker compose --profile webui up                        # setup-WebUI + calculators locally → localhost:8088/setup/
 ```
 
 ### Services
@@ -61,6 +62,7 @@ docker compose --profile ollama up -d ollama             # local model (OpenAI-c
 |---|---|---|
 | `sentinel` | (always) | Main entry point — `agentctl` CLI. Prints `--help` by default. Mounts `./runs`, `./state`, `./config`. |
 | `demo` | `demo` | Zero-external-dependency explore against `testdata/site/index.html` (fixture file://); heuristic planner (no LLM, no API key). Output: `./runs/demo/plan.json`. |
+| `webui` | `webui` | Local air-gapped **setup-WebUI + calculators** (bundled into the image under `/app/docs`); `python -m http.server` on :8088. Open `http://localhost:8088/setup/`. ADR-031 phase-1. |
 | `ollama` | `ollama` | OpenAI-compatible endpoint `http://ollama:11434/v1`. Start with: `docker compose --profile ollama up -d ollama`, then `docker compose exec ollama ollama pull <model>`. |
 
 ### Environment variables

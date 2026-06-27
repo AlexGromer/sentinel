@@ -158,9 +158,9 @@ Boundary points ❶–❼ correspond to rows in the table below.
 | GAP ID | Status | STRIDE | Severity | Short description | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Leak-in-trace: tracing disabled (`PW_NO_TRACE`) on auth runs; secrets referenced by env-var NAME via secretRef; brain redacts logs; fail-closed on active tracing; prod uses storageState. | — |
-| **GAP-SEC-001** | **OPEN** | I | HIGH | Full env inherit (`main.go:68`) + Helm plaintext secrets (`cronjob.yaml:39–46`). | M11.3 (env allowlist) |
+| **GAP-SEC-001** | **PARTIAL** | I | HIGH | Full env inherit (`main.go:68`) — **opt-in allowlist added** (`SENTINEL_ENV_ALLOWLIST=1`, default OFF); Helm plaintext secrets (`cronjob.yaml:39–46`) — remaining. | M11.3 (default-on + secretKeyRef) |
 | **GAP-SEC-002** | **PARTIALLY OPEN** | T, E | HIGH | Python no lockfile, no SBOM, no image signing. | M11.1 |
-| **GAP-OPS-002** | **OPEN** | D | MEDIUM | AUT cert error not classified — no actionable diagnostic in heal-report. | M9.4 |
+| **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert classification (`ERR_CERT*`) in `browser.navigate` (this cycle); strict by default. Richer diagnostic in heal-report — M9.4. | M9.4 |
 
 ---
 

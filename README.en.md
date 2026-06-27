@@ -59,6 +59,9 @@ docker compose --profile demo up
 # …or against your own target (goal mode; needs a key or a local model):
 docker compose run --rm sentinel run --target "https://your-app.example" --goal "log in and open billing"
 ```
+**setup-WebUI locally (air-gapped, part of the bundle):** `docker compose --profile webui up` → open
+`http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.
+
 **Local model** (no cloud): uncomment the `LLM_*` block in [`docker-compose.yml`](docker-compose.yml) and
 start an endpoint — `docker compose --profile ollama up -d ollama`. Model/hardware sizing lives in
 [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) and the interactive calculators on

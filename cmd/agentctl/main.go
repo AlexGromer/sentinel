@@ -1,9 +1,10 @@
 // Command agentctl is the Sentinel control-plane CLI.
 //
 // Subcommands:
-//   agentctl run --target <URL> [--planner h|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]
-//   agentctl baseline update --plan <plan.json> [--target <URL>]   (the only golden-baseline mutation path)
-//   agentctl locators clear-quarantine
+//
+//	agentctl run --target <URL> [--planner h|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]
+//	agentctl baseline update --plan <plan.json> [--target <URL>]   (the only golden-baseline mutation path)
+//	agentctl locators clear-quarantine
 //
 // It spawns the Python brain (venv) via subprocess + env (no gRPC yet; M2b) and propagates the
 // brain's structured exit code (0 pass / 1 step-fail / 2 golden regression / 3 plan-integrity).
@@ -53,6 +54,49 @@ func mkArtifactDir(repo, runID, override string) string {
 	return dir
 }
 
+// filteredEnv narrows the inherited environment to a security allowlist (GAP-SEC-001) so unrelated
+// host secrets (SSH keys, cloud creds, unrelated tokens) don't leak into the brain and its children.
+// OPT-IN via SENTINEL_ENV_ALLOWLIST=1; default is unchanged full inheritance (zero behaviour change).
+// When enabled: runtime essentials + the Sentinel/LLM/OTel/Playwright families pass, plus any names
+// the user explicitly lists in SENTINEL_ENV_ALLOW (comma-separated) — required for secretRef secret
+// vars (e.g. AUT_PASSWORD). M11.3 makes the allowlist the default after container-integration tests.
+func filteredEnv() []string {
+	if os.Getenv("SENTINEL_ENV_ALLOWLIST") != "1" {
+		return os.Environ()
+	}
+	exact := map[string]bool{
+		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "PWD": true,
+		"LANG": true, "LC_ALL": true, "TERM": true, "TMPDIR": true, "TZ": true,
+		"ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true, "CHECKPOINT_DSN": true,
+		"STORAGE_STATE": true, "STORAGE_STATE_SAVE": true, "MCP_TRANSPORT": true,
+		"ORCH_ADDR": true, "STORE_ADDR": true, "BRAIN_PYTHON": true, "PYTHONPATH": true,
+	}
+	for _, n := range strings.Split(os.Getenv("SENTINEL_ENV_ALLOW"), ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			exact[n] = true
+		}
+	}
+	prefixes := []string{"LLM_", "OTEL_", "PW_", "PLAYWRIGHT_", "SENTINEL_", "NODE_", "GIT_"}
+	var out []string
+	for _, kv := range os.Environ() {
+		k := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			k = kv[:i]
+		}
+		if exact[k] {
+			out = append(out, kv)
+			continue
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(k, p) {
+				out = append(out, kv)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // spawnBrain runs the brain with the common env + extra vars, streams I/O, returns its exit code.
 func spawnBrain(repo, runID string, extra []string) int {
 	pwExec := "node " + filepath.Join(repo, "pw-executor", "dist", "server.js")
@@ -65,7 +109,7 @@ func spawnBrain(repo, runID string, extra []string) int {
 	}
 	cmd := exec.Command(brainPython, "-m", "brain")
 	cmd.Dir = repo
-	cmd.Env = append(os.Environ(), append([]string{
+	cmd.Env = append(filteredEnv(), append([]string{
 		"RUN_ID=" + runID,
 		"PW_EXECUTOR_CMD=" + pwExec,
 		"PYTHONPATH=" + repo,
