@@ -28,6 +28,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/TESTING.md | Testing + onboarding guide | offline gates + local-model setup + live run (M9.1/M9.2 interpret artifacts/exit-codes) + zero-level docker-compose path |
 | docs/DISTRIBUTION.md | Distribution & onboarding epic (ADR-030/031) | Release/compose/Helm-Flux/setup-WebUI/air-gapped milestones + integration model (black-box + W3C traceparent M9.5, NO backend connector) |
 | docs/index.md · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub | front-mattered landing + minimal Jekyll (theme cayman) + 3 vanilla-JS calculators (vram · token-cost · model-selector; air-gapped, mirror LOCAL_MODELS §5) |
+| docs/setup/index.html | setup-WebUI (ADR-031 phase-1) | static client-side config generator (vanilla JS, air-gapped): RunConfig YAML + env-block + run command; on Pages + bundled in Docker (`webui` profile, :8088) |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -67,28 +68,13 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2/m9_2b) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/routing/RunConfig, **m9_2b** site-map + two-phase scenario grounding/cross-page-navigate + describe reconcile + rich RunConfig (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build (+`go vet`/`go test` + offline suite m3..m9_2b) → **security** (gitleaks/govulncheck/pip-audit/npm audit) → replay matrix → explore (manual) |
 | .github/workflows/pages.yml | CI | GitHub Pages deploy (actions/deploy-pages) from docs/ on push to main |
-| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) profiles |
+| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `webui` (bundled setup-WebUI/calculators on :8088) profiles |
 | Dockerfile | Container | multi-stage runtime image (Go bins + TS pw-executor + Playwright + Python brain); pip deps mirror pyproject (incl. `openai`+`pyyaml`) |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 | testdata/fixtures/l1..l5.html + README.md | fixtures | graded difficulty (file://): L1 trivial · L2 login · L3 validation · L4 multi-page · L5 tabs+shadow-DOM |
 | CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy (+threat-model link), CoC, PR + issue templates, code owners |
 | LICENSE · NOTICE | Legal | Apache-2.0 license text + NOTICE (Copyright 2026 AlexGromer) |
 
-| testdata/fixtures/l1.html | Web page | — |
-| testdata/fixtures/l2.html | Web page | — |
-| testdata/fixtures/l3.html | Web page | — |
-| testdata/fixtures/l4.html | Web page | — |
-| testdata/fixtures/l4-dashboard.html | Web page | — |
-| testdata/fixtures/l4-billing.html | Web page | — |
-| testdata/fixtures/l5.html | Web page | — |
-| testdata/fixtures/README.md | Project documentation | — |
-| docs/calculators/vram.html | Web page | — |
-| docs/calculators/token-cost.html | Web page | — |
-| docs/calculators/model-selector.html | Web page | — |
-| docs/THREAT_MODEL.en.md | Documentation | — |
-| docs/LOCAL_MODELS.en.md | Documentation | — |
-| docs/TESTING.en.md | Tests | — |
-| docs/DISTRIBUTION.en.md | Documentation | — |
 ## Directory Structure
 ```
 agent_development/

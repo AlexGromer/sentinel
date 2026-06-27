@@ -25,6 +25,7 @@ title: Sentinel — docs hub & calculators
 | [VRAM / hardware](calculators/vram.html) | `VRAM ≈ params·bytes(quant) + KV-cache + overhead` → влезает ли модель в N ГБ; по VRAM GPU — какие классы моделей подходят |
 | [Token-cost per test phase](calculators/token-cost.html) | токены по фазам (explore-plan · goal/describe-scenario · heal-text · heal-vision; replay = 0) → cloud-$ или local-время, с бюджетами PLAN 50k / HEAL 20k |
 | [Model selector](calculators/model-selector.html) | масштаб AUT × роль (plan/heal/vision) × железо → рекомендованная модель + quant + runtime |
+| [⚙ Setup / config generator](setup/) | без DevOps собрать `RunConfig YAML` + env-блок + команду запуска (режим·модель·эндпоинт·бюджеты·auth) — ADR-031 |
 
 ## 📚 Документация / Documentation
 

@@ -53,6 +53,7 @@ docker compose run --rm sentinel run \
     --target "https://your-app.example.com"              # explore против реального AUT
 docker compose --profile demo up                          # zero-dep демо (fixture file://)
 docker compose --profile ollama up -d ollama             # локальная модель (OpenAI-compat)
+docker compose --profile webui up                        # setup-WebUI + калькуляторы локально → localhost:8088/setup/
 ```
 
 ### Сервисы
@@ -61,6 +62,7 @@ docker compose --profile ollama up -d ollama             # локальная м
 |---|---|---|
 | `sentinel` | (всегда) | Основная точка входа — `agentctl` CLI. По умолчанию печатает `--help`. Монтирует `./runs`, `./state`, `./config`. |
 | `demo` | `demo` | Zero-external-dependency explore против `testdata/site/index.html` (fixture file://); heuristic planner (без LLM, без API-ключа). Результат: `./runs/demo/plan.json`. |
+| `webui` | `webui` | Локальный air-gapped **setup-WebUI + калькуляторы** (забандлены в образ под `/app/docs`); `python -m http.server` на :8088. Открыть `http://localhost:8088/setup/`. ADR-031 фаза-1. |
 | `ollama` | `ollama` | OpenAI-compatible endpoint `http://ollama:11434/v1`. Запустить: `docker compose --profile ollama up -d ollama`, затем `docker compose exec ollama ollama pull <model>`. |
 
 ### Переменные окружения

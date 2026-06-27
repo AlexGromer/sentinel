@@ -100,6 +100,10 @@ async function ensureBrowser(): Promise<void> {
   context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor: 1,
+    // GAP-OPS-002: AUT TLS handling. Strict by DEFAULT (cert errors surface). Opt-in bypass only for
+    // testing a self-signed/expired AUT cert — NEVER for prod auth runs. When strict, browser.navigate
+    // re-throws cert failures as a classified, actionable diagnostic instead of an opaque error.
+    ...(process.env.PW_IGNORE_HTTPS_ERRORS === '1' ? { ignoreHTTPSErrors: true } : {}),
     ...(storageState ? { storageState } : {}),
   });
   if (storageState) log('storageState loaded from', statePath);
@@ -132,7 +136,21 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
       const url = params?.url as string | undefined;
       if (!url) throw new Error('navigate: missing params.url');
-      const resp = await page!.goto(url, { waitUntil: 'domcontentloaded' });
+      let resp;
+      try {
+        resp = await page!.goto(url, { waitUntil: 'domcontentloaded' });
+      } catch (e) {
+        // GAP-OPS-002: classify TLS cert failures into an actionable message (default-strict path).
+        const msg = e instanceof Error ? e.message : String(e);
+        const cert = msg.match(/ERR_CERT[_A-Z]*|ERR_SSL[_A-Z]*|SSL_ERROR[_A-Z]*/);
+        if (cert) {
+          throw new Error(
+            `navigate: TLS certificate error for ${url} (${cert[0]}). ` +
+              `Set PW_IGNORE_HTTPS_ERRORS=1 to bypass for testing a self-signed/expired cert (never for prod auth).`,
+          );
+        }
+        throw e;
+      }
       return { url: page!.url(), title: await page!.title(), status: resp?.status() ?? null };
     }
     case 'browser.snapshot': {

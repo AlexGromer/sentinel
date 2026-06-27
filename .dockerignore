@@ -7,6 +7,13 @@ pw-executor/node_modules
 pw-executor/dist
 .claude
 deploy
-docs
+# Bundle only the static web assets (setup-WebUI + calculators + their authoritative doc) into the
+# image for local/air-gapped use (docker compose --profile webui); exclude the heavy prose docs.
+docs/**
+!docs/setup/**
+!docs/calculators/**
+!docs/index.md
+!docs/_config.yml
+!docs/LOCAL_MODELS.md
 memory
 **/__pycache__

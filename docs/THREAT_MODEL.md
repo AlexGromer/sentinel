@@ -158,9 +158,9 @@
 | GAP ID | Статус | STRIDE | Severity | Краткое описание | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Утечка-в-трейс: трейсинг отключён (`PW_NO_TRACE`) на auth-прогонах; секреты по env-var NAME через secretRef; brain redacts logs; fail-closed при активном трейсинге; prod использует storageState. | — |
-| **GAP-SEC-001** | **OPEN** | I | HIGH | Full env inherit (`main.go:68`) + Helm plaintext secrets (`cronjob.yaml:39–46`). | M11.3 (env allowlist) |
+| **GAP-SEC-001** | **PARTIAL** | I | HIGH | Full env inherit (`main.go:68`) — **opt-in allowlist добавлен** (`SENTINEL_ENV_ALLOWLIST=1`, default OFF); Helm plaintext secrets (`cronjob.yaml:39–46`) — остаётся. | M11.3 (default-on + secretKeyRef) |
 | **GAP-SEC-002** | **PARTIALLY OPEN** | T, E | HIGH | Python no lockfile, no SBOM, no image signing. | M11.1 |
-| **GAP-OPS-002** | **OPEN** | D | MEDIUM | AUT cert error не классифицируется — нет actionable diagnostic в heal-report. | M9.4 |
+| **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert-классификация (`ERR_CERT*`) в `browser.navigate` (этот цикл); строго по умолчанию. Расширенный diagnostic в heal-report — M9.4. | M9.4 |
 
 ---
 

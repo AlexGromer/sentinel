@@ -63,5 +63,15 @@ services:
     ports:
       - "11434:11434"
 
+  # Local, air-gapped setup-WebUI + calculators (bundled into the image under /app/docs).
+  #   docker compose --profile webui up   →   open http://localhost:8088/setup/  (and /calculators/)
+  # Static files only; no network, no API key — the config generator runs entirely in your browser.
+  webui:
+    <<: *sentinel-base
+    profiles: ["webui"]
+    entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
+    ports:
+      - "8088:8088"
+
 volumes:
   ollama:
