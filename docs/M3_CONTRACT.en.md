@@ -64,8 +64,8 @@ test robustness; golden-diff = change detection. Both are reported per step.
 - store gains `golden_snapshots` + `step_failures` tables (interim, brain-local; → store-gateway @ M2b).
 
 ## GitHub Actions (`.github/workflows/ci.yml`)
-`build` (Go + TS `npm ci`/build + `uv` deps + `playwright install`) → `replay` matrix (per-job SQLite);
-the `explore` job is manual/`workflow_dispatch`. Asserts exit codes. Documented, not runtime-tested locally.
+`build` (Go + TS `npm ci`/build + `uv` deps + `playwright install` + `go vet`/`go test ./...` + offline suite m3..m9_2b) → `replay` matrix (per-job SQLite);
+a parallel `security` job (gitleaks/govulncheck/pip-audit/npm audit); the `explore` job is manual/`workflow_dispatch`. Asserts exit codes. As of #4 these steps are actually executed in CI.
 
 ## Acceptance gate (Given/When/Then)
 1. **GIVEN** a plan explored on `site/`, **WHEN** `agentctl baseline update --plan <p>`, **THEN** goldens exist for index/page-a/b/c.

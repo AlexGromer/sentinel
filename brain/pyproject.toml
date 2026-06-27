@@ -14,6 +14,11 @@ dependencies = [
     "openai",
     "mcp",
     "pyyaml",
+    # gRPC + protobuf for brain.pb (RunControl/persistence stubs, M8). protobuf is upper-bounded
+    # to the committed *_pb2 gencode version (brain/pb/runcontrol_pb2.py validates it at import).
+    "grpcio",
+    "grpcio-tools",
+    "protobuf>=6.33.5,<7",
 ]
 
 [tool.uv]
