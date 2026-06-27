@@ -1,0 +1,57 @@
+# GitHub Pages — docs hub + interactive calculators (built from /docs).
+#
+# One-time repo setting (NOT automatable here): Settings → Pages → Build and deployment →
+# Source: "GitHub Actions". After that, every push to main publishes to
+# https://alexgromer.github.io/sentinel/ (the calculators at .../calculators/*.html).
+#
+# Jekyll renders only docs/index.md (the front-mattered hub); the calculators are plain HTML
+# served verbatim. Prose docs are linked to the repo (rich GitHub markdown rendering).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Allow GITHUB_TOKEN to deploy to Pages + mint the OIDC token deploy-pages needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One concurrent deploy; don't cancel an in-flight publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build with Jekyll (source ./docs)
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

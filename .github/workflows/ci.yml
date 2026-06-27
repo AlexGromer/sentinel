@@ -1,14 +1,19 @@
 # Sentinel CI — M3 "CI-Ready Replay / Trust Layer" (see docs/M3_CONTRACT.md §GitHub Actions).
 #
 # Pipeline shape:
-#   build  -> compiles all three components (Go agentctl, TS pw-executor, Python brain
-#             deps) and publishes a reusable build artifact.
-#   replay -> matrix over the two fixtures; explores `testdata/site` to produce a plan,
-#             freezes goldens from it, then replays against each matrix target with --ci
-#             and ASSERTS the structured exit code (site -> 0, site-v2 -> 2 per the contract).
-#   explore-> manual (workflow_dispatch) only; produces a downloadable plan.json artifact.
+#   build   -> compiles all three components (Go agentctl, TS pw-executor, Python brain deps),
+#              runs `go vet` + `go test ./...` + the Python offline suite (m3..m9_2b), and
+#              publishes a reusable build artifact.
+#   security-> secrets + supply-chain gates: gitleaks (HARD) + govulncheck (HARD, Go reachable
+#              vulns) + pip-audit (advisory, Python) + npm audit (HARD on critical, pw-executor).
+#   replay  -> matrix over the two fixtures; explores `testdata/site` to produce a plan,
+#              freezes goldens from it, then replays against each matrix target with --ci
+#              and ASSERTS the structured exit code (site -> 0, site-v2 -> 2 per the contract).
+#   explore -> manual (workflow_dispatch) only; produces a downloadable plan.json artifact.
 #
-# NOTE: this workflow is documented, not runtime-tested locally (M3_CONTRACT §GitHub Actions).
+# The `security` job closes the docs-vs-reality gap (gitleaks was documented but absent from CI)
+# and partially closes GAP-SEC-002 (supply-chain). The offline-suite + go test steps were run
+# locally before this workflow was committed.
 name: ci
 
 on:
@@ -16,6 +21,11 @@ on:
   pull_request:
   # Manual trigger drives the `explore` job (gated below on event_name).
   workflow_dispatch:
+
+# Least-privilege default token: no job needs more than read — artifact up/download use the
+# Actions runtime token, and gitleaks only reads. Override per-job if a step ever needs write.
+permissions:
+  contents: read
 
 # One in-flight run per ref; newer pushes cancel stale CI.
 concurrency:
@@ -58,10 +68,27 @@ jobs:
       - name: Build agentctl (Go)
         run: go build -o bin/agentctl ./cmd/agentctl
 
-      - name: Provision brain venv (LangGraph + checkpointer + Anthropic SDK)
+      - name: Vet + unit test (Go)
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Provision brain venv (full runtime deps — mirrors brain/pyproject.toml)
         run: |
           uv venv
-          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+          uv pip install langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres \
+            anthropic openai pyyaml mcp grpcio grpcio-tools \
+            opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
+
+      - name: Python offline suite (m3..m9_2b — FakeBackend/FakeExecutor, no network)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -e
+          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do
+            echo "== test_${t}_offline =="
+            .venv/bin/python tests/test_${t}_offline.py
+          done
 
       # Ship only compiled outputs; node_modules / browsers / .venv are reinstalled
       # by downstream jobs (cheaper than dragging them through artifact storage).
@@ -228,3 +255,59 @@ jobs:
           name: plan
           path: runs/explore/plan.json
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # security: secrets + supply-chain gates. gitleaks + govulncheck HARD-fail;
+  # pip-audit advisory (Python deps unpinned — emits a freeze artifact); npm audit
+  # fails only on CRITICAL. Runs in parallel with build (independent signal).
+  # ---------------------------------------------------------------------------
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks scans the full history, not just the tip
+
+      - name: gitleaks (secrets scan — HARD fail)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: govulncheck (Go reachable vulnerabilities — HARD fail)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: Set up Node 24 (pw-executor SCA)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: npm audit (pw-executor — HARD fail on CRITICAL only)
+        run: cd pw-executor && npm audit --audit-level=critical
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: pip-audit (Python deps — advisory; emits requirements.lock)
+        continue-on-error: true   # deps are unpinned; transitive advisories are soft until a lockfile lands (GAP-SEC-002)
+        run: |
+          uv venv
+          uv pip install langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres \
+            anthropic openai pyyaml mcp grpcio grpcio-tools \
+            opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
+          uv pip freeze > requirements.lock
+          uvx pip-audit -r requirements.lock
+
+      - name: Upload Python dependency freeze (advisory artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-requirements-lock
+          path: requirements.lock
+          if-no-files-found: warn
