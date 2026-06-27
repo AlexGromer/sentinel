@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 31 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 32 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -41,6 +41,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
 | cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
 | cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
+| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; 5 httptest + live curl smoke |
 | internal/orchestrator/pb/ | Go | generated gRPC stubs (from proto/runcontrol.proto) |
 | internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
@@ -70,7 +71,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2/m9_2b) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/routing/RunConfig, **m9_2b** site-map + two-phase scenario grounding/cross-page-navigate + describe reconcile + rich RunConfig (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build (+`go vet`/`go test` + offline suite m3..m9_2b) → **security** (gitleaks/govulncheck/pip-audit/npm audit) → replay matrix → explore (manual) |
 | .github/workflows/pages.yml | CI | GitHub Pages deploy (actions/deploy-pages) from docs/ on push to main |
-| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `webui` (bundled setup-WebUI/calculators on :8088) profiles |
+| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `webui` (setup-WebUI/calculators :8088) + `control-api` (HTTP control-plane :8090) profiles |
 | Dockerfile | Container | multi-stage runtime image (Go bins + TS pw-executor + Playwright + Python brain); pip deps mirror pyproject (incl. `openai`+`pyyaml`) |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 | testdata/fixtures/l1..l6.html + README.md | fixtures | graded difficulty (file://): L1 trivial · L2 login · L3 validation · L4 multi-page · L5 tabs+shadow-DOM · L6 new-tab/multi-page |

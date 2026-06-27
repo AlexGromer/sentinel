@@ -42,7 +42,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (31 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (32 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Быстрый старт (M0)
 ```bash

@@ -10,7 +10,8 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -o /out/agentctl ./cmd/agentctl \
- && CGO_ENABLED=0 go build -o /out/store-gateway ./cmd/store-gateway
+ && CGO_ENABLED=0 go build -o /out/store-gateway ./cmd/store-gateway \
+ && CGO_ENABLED=0 go build -o /out/control-api ./cmd/control-api
 
 # --- stage 2: TypeScript pw-executor ----------------------------------------
 FROM node:24-bookworm AS ts-build
@@ -34,7 +35,7 @@ RUN python3 -m venv /app/.venv \
       langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres anthropic openai pyyaml \
       grpcio grpcio-tools mcp \
       opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
-COPY --from=go-build /out/agentctl /out/store-gateway /app/bin/
+COPY --from=go-build /out/agentctl /out/store-gateway /out/control-api /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
 COPY brain/ /app/brain/

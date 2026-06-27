@@ -73,5 +73,22 @@ services:
     ports:
       - "8088:8088"
 
+  # Non-MCP HTTP control-API (M9.3, ADR-032) — start a run / poll status over HTTP; drives the live
+  # setup-WebUI. Published ONLY to host localhost (127.0.0.1:8090); inside the container it binds
+  # 0.0.0.0 so the port map works. Set CONTROL_API_TOKEN to enable POST /v1/runs (else read-only).
+  #   CONTROL_API_TOKEN=secret docker compose --profile control-api up control-api
+  control-api:
+    <<: *sentinel-base
+    profiles: ["control-api"]
+    entrypoint: ["/app/bin/control-api"]
+    environment:
+      CONTROL_API_ADDR: "0.0.0.0:8090"
+      CONTROL_API_AGENTCTL: /app/bin/agentctl
+      CONTROL_API_TOKEN: ${CONTROL_API_TOKEN:-}
+      CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS:-http://localhost:8088,https://alexgromer.github.io}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "127.0.0.1:8090:8090"
+
 volumes:
   ollama:
