@@ -22,6 +22,16 @@ export async function setupTracing(): Promise<void> {
   }
 }
 
+/** Serialize the active OTel context to a W3C `traceparent` string (M9.5 / M9_CONTRACT §I) for
+ * injection into browser requests, so each UI action maps onto the AUT's end-to-end backend trace.
+ * Returns undefined when tracing is off (no collector) — callers then skip header injection. */
+export function currentTraceparent(): string | undefined {
+  if (!tracer) return undefined;
+  const carrier: Record<string, string> = {};
+  propagation.inject(context.active(), carrier);
+  return carrier.traceparent;
+}
+
 /** Run `fn` inside a child span parented on the W3C context carried in `meta` (no-op if tracing off). */
 export async function spanForTool(
   method: string,
