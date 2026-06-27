@@ -30,7 +30,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/TESTING.md | Testing + onboarding guide | offline gates + local-model setup + live run (M9.1/M9.2 interpret artifacts/exit-codes) + zero-level docker-compose path |
 | docs/DISTRIBUTION.md | Distribution & onboarding epic (ADR-030/031) | Release/compose/Helm-Flux/setup-WebUI/air-gapped milestones + integration model (black-box + W3C traceparent M9.5, NO backend connector) |
 | docs/index.md · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub | front-mattered landing + minimal Jekyll (theme cayman) + 3 vanilla-JS calculators (vram · token-cost · model-selector; air-gapped, mirror LOCAL_MODELS §5) |
-| docs/setup/index.html | setup-WebUI (ADR-031 phase-1) | static client-side config generator (vanilla JS, air-gapped): RunConfig YAML + env-block + run command; on Pages + bundled in Docker (`webui` profile, :8088) |
+| docs/setup/index.html | setup-WebUI (ADR-031; M9.3 live) | static config generator (RunConfig YAML + env + command) + **download** buttons (full Pages generation) + **live mode** (control-API URL+token → /healthz → ▶Run POST /v1/runs → poll, M9.3 p2); vanilla JS, air-gapped; on Pages + Docker `webui` :8088 |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 

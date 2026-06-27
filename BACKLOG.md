@@ -14,6 +14,7 @@
 - [ ] [M11.3] Helm/Flux expansion — env-allowlist (agentctl) + Secret/secretKeyRef plumbing (closes GAP-SEC-001) + Flux HelmRelease/Kustomization + expanded values. (P2) @k8s-engineer — ADR-030 / GAP-SEC-001
 - [ ] [M11.4] Air-gapped bundle — offline image bundle + local-model preload + vendored deps + no-network verify. (P3) @deployer — ADR-030 / GAP-SEC-002
 - [ ] [M11.5] Zero-level onboarding — installer + quickstart + setup-WebUI + docs path for a non-DevOps user. (P3) @tech-writer — ADR-030
+- [ ] [M11.6] Pages cost-explorer UX — beginner-friendly cost estimate **embedded on the landing** (no extra hops): tokens + $/run across models/plans + budget input ("does it fit / how many runs"); built on LOCAL_MODELS §6, editable pricing (cutoff-noted), static/air-gapped. (P2) @web-developer — issue #12
 - [ ] [M9-LIVE] Live verification — GAP-VERIFY-005/006 (provider + MCP-host smoke) + live M9.1 login-as-test + M9.2 goal/describe run + GAP-RISK-009 flip (byte-stable goldens) + GAP-ARCH-003..006 live-measure. (P2) @sre-engineer — needs «go» + API key
 
 ## Completed Archive
