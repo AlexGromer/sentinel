@@ -5,8 +5,6 @@
 ## Active
 
 - [ ] [M9.3] Chat-UX: non-MCP HTTP/gRPC control-API + OSS chat front in DH (plus the MCP path via M7) + CI templates (Jenkinsfile / .gitlab-ci.yml). (P2) @web-developer — GAP-M9-03/12
-- [ ] [M9.4] In-app tabs perception (`role=tab`/`tabpanel`) + browser multi-tab/context (multi-page in pw-executor). (P2) @web-developer — GAP-M9-05
-- [ ] [M9.5] Browser request trace-header injection — correlate a UI action with the backend/Kafka trace in Tempo. (P2) @observability-engineer — GAP-M9-06
 - [ ] [M9.6] Browser modes: headed + CDP-attach to the user's browser (`connectOverCDP`). (P2) @desktop-developer — GAP-M9-07
 - [ ] [M9.7] Pluggable adapters (auth/deploy/model/backend) — universality beyond DH. (P3) @system-architect — GAP-M9-08
 - [ ] [M9.8] (branch 2) Browser extension + co-pilot takeover/return. (P3) @desktop-developer — GAP-M9-07
@@ -19,6 +17,8 @@
 - [ ] [M9-LIVE] Live verification — GAP-VERIFY-005/006 (provider + MCP-host smoke) + live M9.1 login-as-test + M9.2 goal/describe run + GAP-RISK-009 flip (byte-stable goldens) + GAP-ARCH-003..006 live-measure. (P2) @sre-engineer — needs «go» + API key
 
 ## Completed Archive
+
+- [x] [M9.4+M9.5] (Wave A, offline) M9.4 in-app tab perception (`[role=tab]` in interactives/setOfMarks, A5) + browser multi-page (`browser.tabs`/`browser.switchTab` + `context.on('page')`, A6); M9.5 `traceparent` injection into all browser requests (`context.route`, gated on OTLP, §I). pw-executor tsc clean; fixture l6-newtab.html; `docs/M9.4_CONTRACT.md`. Live multi-tab + backend-correlation pending «go». Stacked PR (on #3). (P2) @web-developer — GAP-M9-05/06 ✓ 2026-06-27
 
 - [x] [M9.2b] two-phase goal (§L) + describe-first (§B) + rich RunConfig (ADR-028). Site map generalized beyond buttons (input/select/link); `brain/scenario.py` (`ground_scenario`/`reconcile` — bind to real elements only, cross-page navigate synth, conservative matcher); `GoalPlanner.build_scenario` (one-shot) + `DescribePlanner`; graph `scenario` node; `scenario.json`/`reconcile-report.json`; agentctl `--describe`/`--scenario`; declarative `auth:`/`scenarios:` RunConfig. Terminology «грауденный»→`grounding`. Offline-verified (test_m9_2b 20 + regress m3..m9_2b 95 green + go build/vet + tsc + gitleaks); 5-dim adversarial review fixes (cross-role-bind, unknown-scenario→exit3, verb-whitelist, pure-explore-invariant test). Live goal/describe run pending «go». (P2) @ml-engineer — GAP-M9-02/09 ✓ 2026-06-27
 - [x] [M9.2a] `GoalPlanner` (NL→plan, explore-first grounding — grounded index-pick, never fabricates a selector) + `make_planner` `--goal` auto-default + `brain/runconfig.py` (minimal RunConfig YAML; precedence flag>file>default via agentctl `SENTINEL_EXPLICIT`/`fs.Visit`; numeric validation; mode/planner alias) + agentctl `--goal`/`--run-config`; ADR-027. Offline-verified (test_m9_2 20 + regress m3..m9_2 green + go build/vet + tsc + gitleaks); 4-dim adversarial review fixes. Live goal-run pending «go». (P1) @ml-engineer — GAP-M9-02/09 ✓ 2026-06-26

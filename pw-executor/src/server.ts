@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { setupTracing, spanForTool } from './otel.js';
+import { setupTracing, spanForTool, currentTraceparent } from './otel.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -75,6 +75,9 @@ async function pollUntil(fn: () => Promise<boolean>, timeoutMs: number): Promise
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
 let page: Page | null = null;
+// M9.4 (A6): every page in the context (initial + popups/new tabs). `page` is the ACTIVE one;
+// browser.switchTab just re-points `page`, so all existing tools operate on the active tab unchanged.
+let pages: Page[] = [];
 let tracingStarted = false;
 let tracingStopped = false;
 
@@ -107,6 +110,15 @@ async function ensureBrowser(): Promise<void> {
     ...(storageState ? { storageState } : {}),
   });
   if (storageState) log('storageState loaded from', statePath);
+  // M9.5 / §I: inject the active span's W3C traceparent into EVERY browser request so each UI action
+  // maps onto the AUT's end-to-end backend trace (when its services are OTel-instrumented). Gated on a
+  // configured collector — no route-interception overhead otherwise.
+  if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    await context.route('**/*', async (route) => {
+      const tp = currentTraceparent();
+      await route.continue(tp ? { headers: { ...route.request().headers(), traceparent: tp } } : {});
+    });
+  }
   // M9.1/ADR-026 + GAP-RISK-010: an auth run sets PW_NO_TRACE=1 so a typed password never lands in
   // trace.zip (the trace captures DOM input.value AND the submit POST body — Playwright has no mask API).
   if (process.env.PW_NO_TRACE !== '1') {
@@ -118,6 +130,16 @@ async function ensureBrowser(): Promise<void> {
   }
   page = await context.newPage();
   page.setDefaultTimeout(5000); // bound browser.expect's pollUntil inner waits to the intended 5s budget
+  // M9.4 (A6): track the initial page + any popups/new tabs the AUT opens (window.open / target=_blank).
+  // The 'page' event fires only for pages created AFTER this handler, so the initial page is added once.
+  pages = [page];
+  context.on('page', (p) => {
+    if (!pages.includes(p)) {
+      p.setDefaultTimeout(5000);
+      pages.push(p);
+      log('new browser tab/page tracked: index', pages.length - 1);
+    }
+  });
 }
 
 /** Transport-agnostic tool dispatch. `method` is the dotted name (e.g. "browser.navigate"). */
@@ -303,7 +325,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.interactives': {
       await ensureBrowser();
       const elements = await page!.$$eval(
-        'button, a[href], input, select, textarea, [role=button]',
+        'button, a[href], input, select, textarea, [role=button], [role=tab]',
         (els) =>
           els.map((e) => ({
             role: e.getAttribute('role') || e.tagName.toLowerCase(),
@@ -327,7 +349,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
       const outPath = params?.path as string | undefined;
       const marks = await page!.$$eval(
-        'button, a[href], input, select, textarea, [role=button]',
+        'button, a[href], input, select, textarea, [role=button], [role=tab]',
         (els) =>
           els
             .map((e, i) => {
@@ -373,6 +395,31 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       }
       return { path }; // no-op when tracing was never started (PW_NO_TRACE=1 auth run)
     }
+    case 'browser.tabs': {
+      // M9.4 (A6): list tracked browser tabs/pages (drop any that closed). Indices match switchTab.
+      await ensureBrowser();
+      pages = pages.filter((p) => !p.isClosed());
+      const tabs = await Promise.all(
+        pages.map(async (p, i) => ({
+          index: i,
+          url: p.url(),
+          title: await p.title().catch(() => ''),
+          active: p === page,
+        })),
+      );
+      return { tabs };
+    }
+    case 'browser.switchTab': {
+      // M9.4 (A6): make tab `index` the active page; every existing tool then operates on it unchanged.
+      await ensureBrowser();
+      pages = pages.filter((p) => !p.isClosed());
+      const idx = Number(params?.index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= pages.length)
+        throw new Error(`switchTab: index ${String(params?.index)} out of range (0..${pages.length - 1})`);
+      page = pages[idx];
+      await page.bringToFront();
+      return { index: idx, url: page.url(), title: await page.title().catch(() => '') };
+    }
     case 'shutdown':
       return { ok: true };
     default:
@@ -398,6 +445,8 @@ const TOOL_METHODS = [
   'browser.screenshotHash',
   'browser.setOfMarks',
   'browser.traceStop',
+  'browser.tabs',
+  'browser.switchTab',
 ];
 
 // --- Transport 1: newline JSON-RPC 2.0 (default) ----------------------------

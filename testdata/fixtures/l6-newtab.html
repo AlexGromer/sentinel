@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L6 — new tab / multi-page (M9.4 A6)</title>
+<style>
+  body{font:15px/1.5 system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem}
+  a,button{display:inline-block;margin:.3rem .4rem .3rem 0;padding:.4rem .7rem;border:1px solid #888;border-radius:6px;background:#f4f4f5;color:#111;cursor:pointer;text-decoration:none;font:inherit}
+  [role=tablist]{display:flex;gap:.25rem;border-bottom:1px solid #ccc;margin-top:1.5rem}
+  [role=tab]{border:1px solid #ccc;border-bottom:none;background:#eee;padding:.3rem .7rem;cursor:pointer}
+  [role=tab][aria-selected=true]{background:#fff;font-weight:600}
+  [role=tabpanel]{border:1px solid #ccc;border-top:none;padding:.8rem}
+</style>
+</head>
+<body>
+<h1>L6 — multi-page + in-app tabs</h1>
+<p>Exercises M9.4: browser multi-tab tracking (A6) + in-app tab perception (A5).</p>
+
+<h2>New browser tabs (A6 — multi-page)</h2>
+<!-- target=_blank → a new browser tab/page; pw-executor tracks it via context.on('page'). -->
+<a id="ext" href="l1.html" target="_blank" rel="noopener">Open L1 in a new tab (target=_blank)</a>
+<!-- window.open → also a new page; switch with browser.switchTab, perceive, act, switch back. -->
+<button id="popup" onclick="window.open('l2.html', '_blank')">Open L2 via window.open()</button>
+<p id="status" role="status">no new tab yet</p>
+
+<h2>In-app tabs (A5 — role=tab perception)</h2>
+<div role="tablist" aria-label="Sections">
+  <button role="tab" id="t1" aria-selected="true" aria-controls="p1">Overview</button>
+  <button role="tab" id="t2" aria-selected="false" aria-controls="p2">Details</button>
+</div>
+<div role="tabpanel" id="p1">Overview panel content.</div>
+<div role="tabpanel" id="p2" hidden>Details panel content (revealed on tab switch).</div>
+
+<script>
+  document.getElementById('popup').addEventListener('click', () => {
+    document.getElementById('status').textContent = 'opened a new tab via window.open';
+  });
+  const tabs = [...document.querySelectorAll('[role=tab]')];
+  tabs.forEach((t) => t.addEventListener('click', () => {
+    tabs.forEach((x) => {
+      const sel = x === t;
+      x.setAttribute('aria-selected', String(sel));
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !sel;
+    });
+  }));
+</script>
+</body>
+</html>
