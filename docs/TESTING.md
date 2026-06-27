@@ -91,11 +91,15 @@ npm audit
 cd ..
 ```
 
-`govulncheck` ставится один раз: `go install golang.org/x/vuln/cmd/govulncheck@latest`.
+`govulncheck` ставится один раз: `go install golang.org/x/vuln/cmd/govulncheck@latest` (локально;
+в CI версия запинена — `@v1.1.4` — ради воспроизводимости сканера).
 `pip-audit` ставится в venv: `uv pip install pip-audit` или `pip install pip-audit`.
 
-В CI: ненулевой exit code любого из трёх сканеров требует ревью (CRITICAL/HIGH — блокер;
-MODERATE/LOW — решение по контексту).
+В CI (#8): на push/PR гоняются только **детерминированные** гейты — `gitleaks` (job `security`,
+HARD) + `pip-audit` (advisory). Сканеры по **live advisory-БД** (`govulncheck` + `npm audit`)
+вынесены в отдельный scheduled workflow `.github/workflows/security-nightly.yml` (ежедневно +
+`workflow_dispatch`): красный nightly-прогон может быть свежим upstream-CVE, а не регрессией PR.
+Ненулевой exit любого сканера требует ревью (CRITICAL/HIGH — блокер; MODERATE/LOW — по контексту).
 
 ---
 

@@ -1,0 +1,15 @@
+# Keep GitHub Actions pinned-and-current: weekly PRs that bump action refs (incl. the
+# SHA-pinned third-party actions in ci.yml — gitleaks-action, setup-uv) so the pins don't
+# go stale. Covers every workflow under .github/workflows/ (#7).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"

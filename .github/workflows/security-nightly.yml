@@ -1,0 +1,47 @@
+# Sentinel — nightly supply-chain scan (split out of the push/PR `security` job, #8).
+#
+# Why nightly instead of on push/PR: govulncheck + npm audit query LIVE advisory databases, so a
+# freshly published upstream CVE in a reachable dependency would redden every push/PR with zero
+# code change. Keeping them on a schedule (+ manual workflow_dispatch) means PR/push greenness only
+# depends on deterministic gates (build/test/gitleaks/offline-suite in ci.yml), while supply-chain
+# drift is still caught daily. govulncheck is pinned (not @latest) for a reproducible scanner.
+name: security-nightly
+
+on:
+  schedule:
+    - cron: '23 3 * * *'   # 03:23 UTC daily (off the top-of-hour thundering herd)
+  workflow_dispatch:
+
+# Least-privilege: scanners only read the checked-out tree.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-nightly
+  cancel-in-progress: false
+
+jobs:
+  # Live-advisory-DB supply-chain gates. HARD-fail here (a red nightly run = a reachable
+  # vulnerability to triage), but isolated from PR gating so it can't block unrelated merges.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: govulncheck (Go reachable vulnerabilities — HARD fail; pinned scanner)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: Set up Node 24 (pw-executor SCA)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: npm audit (pw-executor — HARD fail on CRITICAL only)
+        run: cd pw-executor && npm audit --audit-level=critical
