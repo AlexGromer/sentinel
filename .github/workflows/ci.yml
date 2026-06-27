@@ -22,6 +22,11 @@ on:
   # Manual trigger drives the `explore` job (gated below on event_name).
   workflow_dispatch:
 
+# Least-privilege default token: no job needs more than read — artifact up/download use the
+# Actions runtime token, and gitleaks only reads. Override per-job if a step ever needs write.
+permissions:
+  contents: read
+
 # One in-flight run per ref; newer pushes cancel stale CI.
 concurrency:
   group: ci-${{ github.ref }}
