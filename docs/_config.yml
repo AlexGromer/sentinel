@@ -9,3 +9,9 @@
 title: Sentinel
 description: Автономный self-healing агент для UI-тестирования — хаб документации + интерактивные калькуляторы
 theme: jekyll-theme-cayman
+
+# Project page lives at https://alexgromer.github.io/sentinel/ — baseurl makes the cayman
+# layout's relative_url asset links (its CSS/JS) resolve under /sentinel/ instead of 404-ing
+# at the domain root once a layout is applied.
+baseurl: "/sentinel"
+url: "https://alexgromer.github.io"
