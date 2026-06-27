@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L5 — Tabs + Shadow DOM</title>
+  <!--
+    Exercises:
+    - ARIA role=tablist / role=tab / role=tabpanel keyboard navigation
+    - Dynamically injected content (rendered after 600ms delay)
+    - Shadow DOM custom element <x-color-picker> with interactive controls
+      inside the shadow root (not accessible via normal DOM queries)
+    RISK-005: a11y blind spots — shadow DOM is invisible to standard locators.
+  -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8f9fa;
+      color: #212529;
+      padding: 2rem;
+      max-width: 780px;
+      margin: 0 auto;
+    }
+    nav {
+      display: flex; gap: 1rem;
+      background: #fff; padding: 0.6rem 1rem;
+      border-radius: 8px; margin-bottom: 2rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      font-size: 0.875rem;
+    }
+    nav a { color: #0d6efd; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    p.subtitle { color: #6c757d; font-size: 0.875rem; margin-bottom: 2rem; }
+
+    /* ============================================================
+       ARIA TAB COMPONENT
+       ============================================================ */
+    .tab-container {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+
+    [role="tablist"] {
+      display: flex;
+      border-bottom: 2px solid #dee2e6;
+      background: #f8f9fa;
+    }
+
+    [role="tab"] {
+      padding: 0.75rem 1.25rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: #6c757d;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.15s, border-color 0.15s;
+      position: relative;
+    }
+    [role="tab"]:hover { color: #0d6efd; }
+    [role="tab"][aria-selected="true"] {
+      color: #0d6efd;
+      border-bottom-color: #0d6efd;
+      background: #fff;
+    }
+    [role="tab"]:focus-visible {
+      outline: 2px solid #0d6efd;
+      outline-offset: -2px;
+    }
+
+    [role="tabpanel"] {
+      padding: 1.5rem;
+      display: none;
+    }
+    [role="tabpanel"].active { display: block; }
+
+    /* Panel content styles */
+    .panel-inner h2 { font-size: 1rem; margin-bottom: 0.75rem; }
+    .panel-inner p  { font-size: 0.9rem; color: #495057; margin-bottom: 0.75rem; }
+
+    /* Dynamic content placeholder */
+    .dynamic-placeholder {
+      background: #f1f3f5;
+      border: 1.5px dashed #ced4da;
+      border-radius: 8px;
+      padding: 1.25rem;
+      font-size: 0.875rem;
+      color: #6c757d;
+      text-align: center;
+      min-height: 80px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dynamic-content {
+      background: #e8f5e9;
+      border: 1.5px solid #a5d6a7;
+      border-radius: 8px;
+      padding: 1.25rem;
+      font-size: 0.875rem;
+      color: #1b5e20;
+    }
+    .dynamic-content strong { display: block; margin-bottom: 0.4rem; }
+
+    /* Table in tab 3 */
+    table.data-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    .data-table th { text-align: left; color: #6c757d; font-weight: 500; padding: 0.5rem 0.75rem; border-bottom: 1px solid #dee2e6; }
+    .data-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid #f1f3f5; }
+    .data-table tr:last-child td { border-bottom: none; }
+
+    /* ============================================================
+       SHADOW DOM SECTION
+       ============================================================ */
+    .shadow-section {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      padding: 1.5rem;
+    }
+    .shadow-section h2 { font-size: 1.05rem; margin-bottom: 0.4rem; }
+    .shadow-section > p { font-size: 0.875rem; color: #6c757d; margin-bottom: 1rem; }
+
+    x-color-picker {
+      display: block;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="l1.html">L1</a>
+  <a href="l2.html">L2</a>
+  <a href="l3.html">L3</a>
+  <a href="l4.html">L4</a>
+  <strong>L5</strong>
+</nav>
+
+<h1>L5 — Tabs + Shadow DOM</h1>
+<p class="subtitle">
+  ARIA tab panel with dynamic content injection and a Shadow DOM custom element.
+  Exercises RISK-005 a11y blind spots + Sentinel tab/shadow perception.
+</p>
+
+<!-- ======================================================
+     ARIA TAB WIDGET
+     ====================================================== -->
+<div class="tab-container">
+  <div role="tablist" aria-label="Content sections" id="tablist">
+    <button role="tab"
+            id="tab-overview"
+            aria-controls="panel-overview"
+            aria-selected="true"
+            tabindex="0">Overview</button>
+    <button role="tab"
+            id="tab-dynamic"
+            aria-controls="panel-dynamic"
+            aria-selected="false"
+            tabindex="-1">Dynamic content</button>
+    <button role="tab"
+            id="tab-data"
+            aria-controls="panel-data"
+            aria-selected="false"
+            tabindex="-1">Data table</button>
+    <button role="tab"
+            id="tab-settings"
+            aria-controls="panel-settings"
+            aria-selected="false"
+            tabindex="-1">Settings</button>
+  </div>
+
+  <!-- Panel: Overview -->
+  <div role="tabpanel"
+       id="panel-overview"
+       aria-labelledby="tab-overview"
+       class="active">
+    <div class="panel-inner">
+      <h2>Overview panel</h2>
+      <p>
+        This is the always-visible overview. It is rendered synchronously on page load.
+        Sentinel explore should discover this panel immediately.
+      </p>
+      <p>
+        Use the tabs above to navigate. Keyboard: <kbd>←</kbd> / <kbd>→</kbd> arrow keys
+        move between tabs; <kbd>Enter</kbd> / <kbd>Space</kbd> activates the focused tab.
+      </p>
+      <p id="overview-static-note" style="font-size:0.8rem; color:#868e96;">
+        Static note: loaded at <span id="overview-ts"></span>
+      </p>
+    </div>
+  </div>
+
+  <!-- Panel: Dynamic content (injected after delay) -->
+  <div role="tabpanel"
+       id="panel-dynamic"
+       aria-labelledby="tab-dynamic">
+    <div class="panel-inner">
+      <h2>Dynamic content</h2>
+      <p>
+        The content block below is <strong>injected 600ms after this panel becomes visible</strong>
+        (simulates an async data fetch). Sentinel must wait for it or heal when the locator resolves later.
+      </p>
+      <div id="dynamic-slot" class="dynamic-placeholder" aria-live="polite" aria-busy="true">
+        Loading&hellip;
+      </div>
+    </div>
+  </div>
+
+  <!-- Panel: Data table -->
+  <div role="tabpanel"
+       id="panel-data"
+       aria-labelledby="tab-data">
+    <div class="panel-inner">
+      <h2>Data table</h2>
+      <p>A static data table with sortable headers (UI only, no real sort).</p>
+      <table class="data-table" id="data-table">
+        <thead>
+          <tr>
+            <th><button id="sort-id"    style="background:none;border:none;cursor:pointer;font-weight:500;color:#6c757d;font-size:0.875rem;">ID ↕</button></th>
+            <th><button id="sort-name"  style="background:none;border:none;cursor:pointer;font-weight:500;color:#6c757d;font-size:0.875rem;">Name ↕</button></th>
+            <th><button id="sort-score" style="background:none;border:none;cursor:pointer;font-weight:500;color:#6c757d;font-size:0.875rem;">Score ↕</button></th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <tr><td>1</td><td>Alpha</td><td>92</td><td>Active</td></tr>
+          <tr><td>2</td><td>Beta</td><td>78</td><td>Active</td></tr>
+          <tr><td>3</td><td>Gamma</td><td>55</td><td>Inactive</td></tr>
+          <tr><td>4</td><td>Delta</td><td>88</td><td>Active</td></tr>
+          <tr><td>5</td><td>Epsilon</td><td>40</td><td>Inactive</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Panel: Settings -->
+  <div role="tabpanel"
+       id="panel-settings"
+       aria-labelledby="tab-settings">
+    <div class="panel-inner">
+      <h2>Settings</h2>
+      <p>Sample toggle controls for Sentinel to interact with.</p>
+      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+        <label style="display:flex; align-items:center; gap:0.75rem; font-size:0.9rem;">
+          <input type="checkbox" id="chk-notifications" checked> Enable notifications
+        </label>
+        <label style="display:flex; align-items:center; gap:0.75rem; font-size:0.9rem;">
+          <input type="checkbox" id="chk-dark-mode"> Dark mode
+        </label>
+        <label style="display:flex; align-items:center; gap:0.75rem; font-size:0.9rem; margin-top:0.5rem;">
+          <span>Theme:</span>
+          <select id="sel-theme" style="padding:0.3rem 0.5rem; border-radius:4px; border:1px solid #ced4da; font-size:0.875rem;">
+            <option value="system">System default</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <button id="btn-save-settings"
+                style="margin-top:0.5rem; width:fit-content; padding:0.45rem 1.25rem; background:#0d6efd; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:0.875rem;">
+          Save settings
+        </button>
+        <div id="settings-saved"
+             style="display:none; font-size:0.8rem; color:#198754;">
+          Settings saved.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================================================
+     SHADOW DOM CUSTOM ELEMENT
+     ====================================================== -->
+<div class="shadow-section">
+  <h2>Shadow DOM Widget — <code>&lt;x-color-picker&gt;</code></h2>
+  <p>
+    This custom element uses <code>attachShadow({mode:'open'})</code>.
+    Its internal controls (color swatches, hex input, apply button) live inside
+    the shadow root and are invisible to standard <code>document.querySelector</code>.
+    Sentinel must use pierce-locators or evaluate-in-shadow to reach them.
+  </p>
+  <!-- Custom element host -->
+  <x-color-picker id="color-picker-widget" data-testid="shadow-color-picker"></x-color-picker>
+
+  <!-- Mirror: shows color chosen inside shadow DOM -->
+  <div style="margin-top:1rem; font-size:0.875rem; color:#495057;">
+    Selected color (reflected from shadow):
+    <span id="color-reflection"
+          style="display:inline-block; padding:0.2rem 0.75rem; border-radius:4px; border:1px solid #dee2e6; margin-left:0.5rem; background:#ffffff; font-family:monospace;">
+      #ffffff
+    </span>
+  </div>
+</div>
+
+<script>
+  /* ============================================================
+     TAB WIDGET LOGIC — ARIA keyboard navigation
+     ============================================================ */
+  (function() {
+    var tablist  = document.getElementById('tablist');
+    var tabs     = Array.from(tablist.querySelectorAll('[role="tab"]'));
+    var panels   = tabs.map(function(t) {
+      return document.getElementById(t.getAttribute('aria-controls'));
+    });
+
+    // Set overview timestamp
+    document.getElementById('overview-ts').textContent = new Date().toLocaleTimeString();
+
+    // Activate tab by index
+    function activateTab(index) {
+      tabs.forEach(function(t, i) {
+        var isActive = (i === index);
+        t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        t.setAttribute('tabindex',      isActive ? '0' : '-1');
+        panels[i].classList.toggle('active', isActive);
+      });
+      tabs[index].focus();
+
+      // Trigger dynamic injection when Dynamic tab is activated
+      if (tabs[index].id === 'tab-dynamic') {
+        injectDynamic();
+      }
+    }
+
+    tabs.forEach(function(tab, idx) {
+      tab.addEventListener('click', function() { activateTab(idx); });
+      tab.addEventListener('keydown', function(e) {
+        var count = tabs.length;
+        var newIdx;
+        if (e.key === 'ArrowRight') { newIdx = (idx + 1) % count; }
+        else if (e.key === 'ArrowLeft') { newIdx = (idx - 1 + count) % count; }
+        else if (e.key === 'Home') { newIdx = 0; }
+        else if (e.key === 'End')  { newIdx = count - 1; }
+        else { return; }
+        e.preventDefault();
+        activateTab(newIdx);
+      });
+    });
+
+    // Settings save
+    document.getElementById('btn-save-settings').addEventListener('click', function() {
+      var el = document.getElementById('settings-saved');
+      el.style.display = 'block';
+      setTimeout(function() { el.style.display = 'none'; }, 2000);
+    });
+
+    // Sort buttons (visual toggle only)
+    ['sort-id','sort-name','sort-score'].forEach(function(id) {
+      var btn = document.getElementById(id);
+      btn.addEventListener('click', function() {
+        var text = btn.textContent;
+        if (text.endsWith('↕'))      btn.textContent = text.replace('↕','↑');
+        else if (text.endsWith('↑')) btn.textContent = text.replace('↑','↓');
+        else                          btn.textContent = text.replace('↓','↕');
+      });
+    });
+  }());
+
+  /* ============================================================
+     DYNAMIC CONTENT INJECTION (600ms delay)
+     ============================================================ */
+  var dynamicInjected = false;
+  function injectDynamic() {
+    if (dynamicInjected) return;
+    var slot = document.getElementById('dynamic-slot');
+    slot.setAttribute('aria-busy', 'true');
+    slot.textContent = 'Fetching data…';
+
+    setTimeout(function() {
+      dynamicInjected = true;
+      slot.removeAttribute('aria-busy');
+      slot.className = 'dynamic-content';
+      slot.innerHTML =
+        '<strong id="dynamic-heading">Data loaded successfully</strong>' +
+        '<p>This content was injected 600ms after the tab became active. ' +
+        'The element <code id="dynamic-marker">#dynamic-slot</code> transitioned ' +
+        'from a placeholder to rich content.</p>' +
+        '<ul style="margin-top:0.5rem;padding-left:1.25rem;font-size:0.85rem;">' +
+          '<li id="dyn-item-1">Record A — score 91</li>' +
+          '<li id="dyn-item-2">Record B — score 74</li>' +
+          '<li id="dyn-item-3">Record C — score 66</li>' +
+        '</ul>';
+    }, 600);
+  }
+
+  /* ============================================================
+     SHADOW DOM CUSTOM ELEMENT — <x-color-picker>
+     ============================================================ */
+  customElements.define('x-color-picker', class extends HTMLElement {
+    connectedCallback() {
+      var shadow = this.attachShadow({ mode: 'open' });
+
+      var SWATCHES = [
+        { id: 'sw-red',    hex: '#ef4444', label: 'Red' },
+        { id: 'sw-green',  hex: '#22c55e', label: 'Green' },
+        { id: 'sw-blue',   hex: '#3b82f6', label: 'Blue' },
+        { id: 'sw-yellow', hex: '#eab308', label: 'Yellow' },
+        { id: 'sw-purple', hex: '#a855f7', label: 'Purple' },
+        { id: 'sw-white',  hex: '#ffffff', label: 'White' }
+      ];
+
+      var style = document.createElement('style');
+      style.textContent = [
+        ':host { display: block; font-family: system-ui, sans-serif; }',
+        '.widget { border: 1.5px solid #dee2e6; border-radius: 10px; padding: 1.25rem; background: #fff; max-width: 340px; }',
+        '.widget-title { font-size: 0.85rem; font-weight: 600; color: #495057; margin-bottom: 0.75rem; }',
+        '.swatch-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }',
+        '.swatch { width: 36px; height: 36px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; transition: transform 0.1s, border-color 0.15s; }',
+        '.swatch:hover { transform: scale(1.12); }',
+        '.swatch.selected { border-color: #0d6efd; box-shadow: 0 0 0 2px #bfdbfe; }',
+        '.hex-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }',
+        '.hex-label { font-size: 0.8rem; color: #6c757d; }',
+        '.hex-input { flex: 1; padding: 0.35rem 0.6rem; border: 1.5px solid #ced4da; border-radius: 6px; font-family: monospace; font-size: 0.875rem; }',
+        '.hex-input:focus { outline: none; border-color: #0d6efd; }',
+        '.preview-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }',
+        '.preview-swatch { width: 48px; height: 48px; border-radius: 8px; border: 1px solid #dee2e6; transition: background 0.2s; }',
+        '.preview-label { font-size: 0.8rem; color: #6c757d; }',
+        '.apply-btn { padding: 0.45rem 1.25rem; background: #0d6efd; color: #fff; border: none; border-radius: 6px; font-size: 0.875rem; cursor: pointer; transition: background 0.15s; }',
+        '.apply-btn:hover { background: #0b5ed7; }',
+        '.result-msg { margin-top: 0.5rem; font-size: 0.8rem; color: #198754; display: none; }'
+      ].join('\n');
+
+      var widget = document.createElement('div');
+      widget.className = 'widget';
+
+      var title = document.createElement('div');
+      title.className = 'widget-title';
+      title.textContent = 'Color picker (Shadow DOM)';
+      widget.appendChild(title);
+
+      // Swatches
+      var swatchRow = document.createElement('div');
+      swatchRow.className = 'swatch-row';
+      var selectedHex = '#3b82f6';
+
+      SWATCHES.forEach(function(s) {
+        var sw = document.createElement('button');
+        sw.className = 'swatch';
+        sw.id = s.id;
+        sw.setAttribute('aria-label', s.label);
+        sw.style.background = s.hex;
+        if (s.hex === selectedHex) sw.classList.add('selected');
+        sw.addEventListener('click', function() {
+          selectColor(s.hex);
+        });
+        swatchRow.appendChild(sw);
+      });
+      widget.appendChild(swatchRow);
+
+      // Hex input
+      var hexRow = document.createElement('div');
+      hexRow.className = 'hex-row';
+      var hexLabel = document.createElement('span');
+      hexLabel.className = 'hex-label';
+      hexLabel.textContent = 'Hex:';
+      var hexInput = document.createElement('input');
+      hexInput.type = 'text';
+      hexInput.className = 'hex-input';
+      hexInput.id = 'hex-input';
+      hexInput.value = selectedHex;
+      hexInput.maxLength = 7;
+      hexInput.setAttribute('aria-label', 'Hex color value');
+      hexInput.addEventListener('input', function() {
+        var v = hexInput.value.trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+          previewSwatch.style.background = v;
+          selectedHex = v;
+          updateSwatchSelection(null);
+        }
+      });
+      hexRow.appendChild(hexLabel);
+      hexRow.appendChild(hexInput);
+      widget.appendChild(hexRow);
+
+      // Preview
+      var previewRow = document.createElement('div');
+      previewRow.className = 'preview-row';
+      var previewSwatch = document.createElement('div');
+      previewSwatch.className = 'preview-swatch';
+      previewSwatch.id = 'preview-swatch';
+      previewSwatch.style.background = selectedHex;
+      var previewLbl = document.createElement('span');
+      previewLbl.className = 'preview-label';
+      previewLbl.textContent = 'Preview';
+      previewRow.appendChild(previewSwatch);
+      previewRow.appendChild(previewLbl);
+      widget.appendChild(previewRow);
+
+      // Apply button
+      var applyBtn = document.createElement('button');
+      applyBtn.className = 'apply-btn';
+      applyBtn.id = 'apply-btn';
+      applyBtn.textContent = 'Apply color';
+      widget.appendChild(applyBtn);
+
+      // Result message
+      var resultMsg = document.createElement('div');
+      resultMsg.className = 'result-msg';
+      resultMsg.id = 'result-msg';
+      widget.appendChild(resultMsg);
+
+      function updateSwatchSelection(hex) {
+        shadow.querySelectorAll('.swatch').forEach(function(sw) {
+          var isMatch = hex && sw.style.background === hexToRGB(hex);
+          sw.classList.toggle('selected', isMatch);
+        });
+      }
+
+      function hexToRGB(hex) {
+        // Browser normalises hex background to rgb() string — compare differently
+        return hex; // handled by direct id match
+      }
+
+      function selectColor(hex) {
+        selectedHex = hex;
+        hexInput.value = hex;
+        previewSwatch.style.background = hex;
+        shadow.querySelectorAll('.swatch').forEach(function(sw) {
+          sw.classList.toggle('selected', sw.style.background === hex ||
+            rgbToHex(sw.style.background) === hex);
+        });
+      }
+
+      function rgbToHex(rgb) {
+        var m = rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+        if (!m) return rgb;
+        return '#' + [m[1],m[2],m[3]].map(function(v) {
+          return parseInt(v,10).toString(16).padStart(2,'0');
+        }).join('');
+      }
+
+      applyBtn.addEventListener('click', function() {
+        // Dispatch custom event crossing shadow boundary
+        var event = new CustomEvent('color-applied', {
+          detail: { hex: selectedHex },
+          bubbles: true,
+          composed: true   // crosses shadow boundary
+        });
+        widget.dispatchEvent(event);
+
+        resultMsg.textContent = 'Applied: ' + selectedHex;
+        resultMsg.style.display = 'block';
+        setTimeout(function() { resultMsg.style.display = 'none'; }, 2500);
+      });
+
+      shadow.appendChild(style);
+      shadow.appendChild(widget);
+    }
+  });
+
+  // Listen for cross-shadow event and update reflection display
+  document.getElementById('color-picker-widget').addEventListener('color-applied', function(e) {
+    var reflection = document.getElementById('color-reflection');
+    reflection.textContent = e.detail.hex;
+    reflection.style.background = e.detail.hex;
+    reflection.style.color = isLight(e.detail.hex) ? '#212529' : '#fff';
+  });
+
+  function isLight(hex) {
+    var r = parseInt(hex.slice(1,3),16);
+    var g = parseInt(hex.slice(3,5),16);
+    var b = parseInt(hex.slice(5,7),16);
+    return (0.299*r + 0.587*g + 0.114*b) > 160;
+  }
+</script>
+</body>
+</html>

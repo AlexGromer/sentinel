@@ -42,7 +42,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (28 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (31 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 ## Быстрый старт (M0)
 ```bash
@@ -54,6 +54,29 @@ go build -o bin/agentctl ./cmd/agentctl
 ./bin/agentctl run --target "file://$PWD/testdata/m0.html"
 # → prints the accessibility tree and writes runs/<id>/trace.zip
 ```
+
+## Быстрый старт через Docker (one-command)
+```bash
+docker compose build
+# zero-dependency demo: эвристический планировщик + встроенная file://-фикстура, без сети и API-ключа
+docker compose --profile demo up
+# …или против своей цели (goal-режим, нужен ключ или локальная модель):
+docker compose run --rm sentinel run --target "https://your-app.example" --goal "залогиниться и открыть биллинг"
+```
+**Локальная модель** (без облака): раскомментируйте блок `LLM_*` в [`docker-compose.yml`](docker-compose.yml) и
+поднимите endpoint — `docker compose --profile ollama up -d ollama`. Подбор модели/железа — в
+[`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) и интерактивных калькуляторах на
+[GitHub Pages](https://alexgromer.github.io/sentinel/). Полное руководство по запуску и проверке —
+[`docs/TESTING.md`](docs/TESTING.md).
+
+## Документация
+| Документ | О чём |
+|----------|-------|
+| [`docs/TESTING.md`](docs/TESTING.md) | offline-гейты, локальные модели, live-прогон, zero-level docker-compose |
+| [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM-методика + token-cost-методика + каталог моделей и runtime (verified) |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite по границам доверия (→ [`SECURITY.md`](SECURITY.md)) |
+| [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) | эпик дистрибуции/онбординга: Release · compose · Helm/Flux · setup-WebUI · air-gapped |
+| [GitHub Pages](https://alexgromer.github.io/sentinel/) | хаб документации + 3 калькулятора (VRAM · token-cost · model-selector) |
 
 ## Карта проекта
 | Путь | Назначение |

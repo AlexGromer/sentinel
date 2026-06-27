@@ -1,0 +1,67 @@
+# Sentinel — one-command quickstart (Foundation cycle).
+#
+# Build once, then drive the agent. The `demo` profile proves ZERO-external-dependency
+# operation: heuristic planner (no LLM / no API key) + a bundled file:// fixture (no network).
+#
+#   docker compose build
+#   docker compose run --rm sentinel run --target "file:///app/testdata/site/index.html"
+#   docker compose --profile demo up            # bundled zero-dep explore -> runs/demo/plan.json
+#   docker compose --profile ollama up -d ollama # optional local-model endpoint (OpenAI-compat /v1)
+#
+# Model selection is config-only (ADR-019): set the LLM_* env block below or per-run. With no key
+# set, the run falls back to the deterministic heuristic planner / L1–L6 heal (still useful offline).
+# See docs/LOCAL_MODELS.md for the model/runtime catalog and docs/TESTING.md for the full guide.
+
+# Shared base for the agent image (DRY via YAML anchor).
+x-sentinel-base: &sentinel-base
+  build:
+    context: .
+  image: sentinel:local
+  volumes:
+    - ./runs:/app/runs       # plan.json / transcript / heal-report / scenario.json / trace.zip
+    - ./state:/app/state     # locator/golden/quarantine SQLite + store-gateway socket
+    - ./config:/config       # mount a RunConfig YAML or plan.json (e.g. --run-config /config/run.yaml)
+  environment:
+    # Cloud default (Anthropic) — optional; absent key -> offline heuristic/L1–L6 fallback.
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # --- Local model via the optional `ollama` service (uncomment to enable) -------------------
+    # LLM_BACKEND: openai
+    # LLM_BASE_URL: http://ollama:11434/v1
+    # LLM_MODEL: ${LLM_MODEL:-}          # pick one from docs/LOCAL_MODELS.md §5c
+    # LLM_API_KEY: noauth                # Ollama ignores the key; the SDK requires a non-empty value
+    # LLM_VISION: ${LLM_VISION:-0}       # set 1 only for a vision-capable heal model
+
+services:
+  # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name:
+  #   docker compose run --rm sentinel run --target <URL> [--goal "..."] [--planner heuristic|llm|goal]
+  #   docker compose run --rm sentinel run --target <URL> --run-config /config/run.yaml
+  sentinel:
+    <<: *sentinel-base
+    command: ["--help"]
+
+  # Zero-external-dependency demo: deterministic explore against a bundled fixture.
+  # Swap the target for testdata/fixtures/l1..l5.html to exercise login/validation/tabs/shadow-DOM.
+  demo:
+    <<: *sentinel-base
+    profiles: ["demo"]
+    command:
+      - "run"
+      - "--target"
+      - "file:///app/testdata/site/index.html"
+      - "--planner"
+      - "heuristic"
+      - "--artifact-dir"
+      - "/app/runs/demo"
+
+  # Optional local-model endpoint (OpenAI-compatible at http://ollama:11434/v1).
+  # `docker compose --profile ollama up -d ollama`, then `docker compose exec ollama ollama pull <model>`.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+
+volumes:
+  ollama:

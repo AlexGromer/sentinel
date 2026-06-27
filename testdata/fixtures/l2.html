@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L2 — Login Form</title>
+  <!-- Demo credentials: username=demo  password=demo -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f8f9fa;
+      color: #212529;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.1);
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    p.subtitle { color: #6c757d; font-size: 0.875rem; margin-bottom: 1.75rem; }
+
+    label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.3rem; }
+    .field { margin-bottom: 1rem; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1.5px solid #ced4da;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      transition: border-color 0.15s;
+    }
+    input:focus { outline: none; border-color: #0d6efd; }
+
+    button[type="submit"] {
+      width: 100%;
+      padding: 0.6rem;
+      background: #0d6efd;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      transition: background 0.15s;
+    }
+    button[type="submit"]:hover { background: #0b5ed7; }
+
+    /* Error / success messages */
+    .alert {
+      padding: 0.65rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .alert-error   { background: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
+    .alert-success { background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
+    .alert.visible { display: block; }
+
+    /* Logged-in panel (hidden until success) */
+    #panel-logged-in {
+      display: none;
+      text-align: center;
+    }
+    #panel-logged-in.visible { display: block; }
+    #panel-logged-in .welcome {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    #panel-logged-in .role-badge {
+      display: inline-block;
+      padding: 0.2rem 0.75rem;
+      background: #0d6efd;
+      color: #fff;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      margin-bottom: 1rem;
+    }
+    #btn-logout {
+      padding: 0.45rem 1rem;
+      background: #6c757d;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+    }
+    #btn-logout:hover { background: #5c636a; }
+
+    nav {
+      position: fixed;
+      top: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 1rem;
+      background: #fff;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.1);
+      font-size: 0.85rem;
+    }
+    nav a { color: #0d6efd; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="l1.html">L1</a>
+  <strong>L2</strong>
+  <a href="l3.html">L3</a>
+  <a href="l4.html">L4</a>
+  <a href="l5.html">L5</a>
+</nav>
+
+<div class="card">
+  <!-- LOGIN FORM -->
+  <div id="panel-login">
+    <h1>Sign in</h1>
+    <p class="subtitle">Demo credentials: <code>demo</code> / <code>demo</code></p>
+
+    <div id="alert-error" class="alert alert-error" role="alert" aria-live="polite">
+      Invalid username or password.
+    </div>
+
+    <form id="login-form" novalidate>
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username"
+               autocomplete="username" placeholder="Enter username" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" placeholder="Enter password" required>
+      </div>
+      <button type="submit" id="btn-login">Sign in</button>
+    </form>
+  </div>
+
+  <!-- LOGGED-IN PANEL (revealed on correct creds) -->
+  <div id="panel-logged-in">
+    <div class="welcome" id="welcome-msg">Welcome, demo!</div>
+    <span class="role-badge">role: user</span>
+    <p style="color:#6c757d; font-size:0.875rem; margin-bottom:1rem;">
+      You are now authenticated. This panel is only visible after a successful login.
+    </p>
+    <div id="alert-success" class="alert alert-success visible" role="status">
+      Login successful.
+    </div>
+    <button id="btn-logout">Sign out</button>
+  </div>
+</div>
+
+<script>
+  // Demo credentials
+  var DEMO_USER = 'demo';
+  var DEMO_PASS = 'demo';
+
+  var form        = document.getElementById('login-form');
+  var alertError  = document.getElementById('alert-error');
+  var panelLogin  = document.getElementById('panel-login');
+  var panelIn     = document.getElementById('panel-logged-in');
+  var btnLogout   = document.getElementById('btn-logout');
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var u = document.getElementById('username').value.trim();
+    var p = document.getElementById('password').value;
+
+    alertError.classList.remove('visible');
+
+    if (u === DEMO_USER && p === DEMO_PASS) {
+      panelLogin.style.display = 'none';
+      panelIn.classList.add('visible');
+    } else {
+      alertError.classList.add('visible');
+      document.getElementById('password').value = '';
+      document.getElementById('password').focus();
+    }
+  });
+
+  btnLogout.addEventListener('click', function() {
+    panelIn.classList.remove('visible');
+    panelLogin.style.display = '';
+    document.getElementById('username').value = '';
+    document.getElementById('password').value = '';
+    alertError.classList.remove('visible');
+    document.getElementById('username').focus();
+  });
+</script>
+</body>
+</html>

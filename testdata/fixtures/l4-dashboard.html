@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>L4 — Dashboard (Step 2 of 3)</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      position: fixed; top: 0; left: 0; width: 220px; height: 100vh;
+      background: #1e293b;
+      padding: 1.5rem 1rem;
+      display: flex; flex-direction: column; gap: 0.5rem;
+      border-right: 1px solid #334155;
+    }
+    .sidebar .logo { font-size: 1.2rem; font-weight: 700; color: #60a5fa; margin-bottom: 1rem; }
+    .sidebar .logo span { color: #e2e8f0; }
+    .sidebar a {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.55rem 0.75rem;
+      border-radius: 6px;
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: background 0.15s, color 0.15s;
+    }
+    .sidebar a:hover { background: #0f172a; color: #e2e8f0; }
+    .sidebar a.active { background: #1d4ed8; color: #fff; }
+
+    /* Main content */
+    .main {
+      margin-left: 220px;
+      padding: 2rem 2.5rem;
+    }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 2rem;
+    }
+    .topbar h1 { font-size: 1.4rem; }
+    .user-chip {
+      font-size: 0.85rem;
+      color: #94a3b8;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 50%;
+      background: #3b82f6;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.85rem; color: #fff;
+    }
+
+    /* Stat cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .stat-card .label { font-size: 0.78rem; color: #94a3b8; margin-bottom: 0.25rem; }
+    .stat-card .value { font-size: 1.75rem; font-weight: 700; }
+    .stat-card .delta { font-size: 0.78rem; color: #4ade80; margin-top: 0.25rem; }
+
+    /* Recent activity */
+    .section-title { font-size: 0.9rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.75rem; }
+    .activity-list { display: flex; flex-direction: column; gap: 0.5rem; }
+    .activity-item {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      display: flex; justify-content: space-between;
+      font-size: 0.875rem;
+    }
+    .activity-item .ts { color: #64748b; font-size: 0.78rem; }
+
+    /* CTA button */
+    .btn-primary {
+      padding: 0.55rem 1.25rem;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: #2563eb; }
+
+    /* Step indicator */
+    .step-indicator { display: flex; gap: 0.5rem; margin-top: 2rem; }
+    .step { width: 8px; height: 8px; border-radius: 50%; background: #334155; }
+    .step.done { background: #4ade80; }
+    .step.active { background: #60a5fa; }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="logo">Acme<span>Corp</span></div>
+  <a href="l4-dashboard.html" class="active" id="nav-dashboard">Dashboard</a>
+  <a href="l4-billing.html"   id="nav-billing">Billing</a>
+  <a href="l4.html"           id="nav-logout">Sign out</a>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <h1>Dashboard</h1>
+    <div class="user-chip">
+      <div class="avatar" id="avatar-initials">A</div>
+      <span id="username-display">admin</span>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="label">Total runs</div>
+      <div class="value" id="stat-runs">142</div>
+      <div class="delta">+12 this week</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Pass rate</div>
+      <div class="value" id="stat-pass">94%</div>
+      <div class="delta">+2% vs last week</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Active scenarios</div>
+      <div class="value" id="stat-scenarios">27</div>
+      <div class="delta">3 added recently</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Avg heal time</div>
+      <div class="value" id="stat-heal">1.2s</div>
+      <div class="delta">stable</div>
+    </div>
+  </div>
+
+  <div class="section-title">Recent activity</div>
+  <div class="activity-list" id="activity-list">
+    <div class="activity-item">
+      <span>Run #142 — checkout flow</span>
+      <span class="ts">2 min ago</span>
+    </div>
+    <div class="activity-item">
+      <span>Run #141 — login smoke</span>
+      <span class="ts">18 min ago</span>
+    </div>
+    <div class="activity-item">
+      <span>Run #140 — billing update</span>
+      <span class="ts">1 hr ago</span>
+    </div>
+    <div class="activity-item">
+      <span>Scenario authored: shadow-widget</span>
+      <span class="ts">3 hr ago</span>
+    </div>
+  </div>
+
+  <div class="step-indicator" style="margin-top:2rem;">
+    <div class="step done"   title="Step 1: Login"></div>
+    <div class="step active" title="Step 2: Dashboard"></div>
+    <div class="step"        title="Step 3: Billing"></div>
+  </div>
+
+  <p style="margin-top:1.5rem; font-size:0.875rem; color:#64748b;">
+    Proceed to billing details:
+    <a href="l4-billing.html" class="btn-primary" id="btn-go-billing" style="margin-left:0.75rem;">Go to Billing →</a>
+  </p>
+</main>
+
+<script>
+  // Restore username from sessionStorage (set by l4.html login)
+  var user = sessionStorage.getItem('l4_user') || 'admin';
+  document.getElementById('username-display').textContent = user;
+  document.getElementById('avatar-initials').textContent = user.charAt(0).toUpperCase();
+</script>
+</body>
+</html>

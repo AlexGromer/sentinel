@@ -1,0 +1,11 @@
+# Minimal Jekyll config for GitHub Pages (built from /docs by .github/workflows/pages.yml).
+#
+# Design choice: only index.md carries front matter and is themed/rendered. The bilingual
+# contract docs (M*_CONTRACT.md, ARCHITECTURE references, etc.) contain Helm `{{ }}` snippets
+# that would trip Liquid, so optional-front-matter is intentionally NOT enabled — they stay as
+# static files and are linked to the repo (GitHub renders the markdown richly + bilingually).
+# The interactive calculators under calculators/ are plain vanilla HTML served verbatim
+# (no build step, no network — they also open straight from file:// for air-gapped use).
+title: Sentinel
+description: Автономный self-healing агент для UI-тестирования — хаб документации + интерактивные калькуляторы
+theme: jekyll-theme-cayman
