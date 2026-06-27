@@ -17,6 +17,7 @@
   .out{position:relative;background:var(--card);border:1px solid var(--br);border-radius:8px;padding:.8rem;margin-bottom:1rem}
   pre{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.45 ui-monospace,monospace}
   .copy{position:absolute;top:.5rem;right:.5rem;font-size:.75rem;padding:.2rem .5rem;border:1px solid var(--br);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
+  .dl{position:absolute;top:.5rem;right:3.6rem;font-size:.75rem;padding:.2rem .5rem;border:1px solid var(--acc);border-radius:6px;background:var(--bg);color:var(--acc);cursor:pointer}
   .warn{color:var(--warn)} .mut{color:var(--mut)} a{color:var(--acc)} code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
   details{margin-top:1rem;font-size:.85rem;color:var(--mut)}
 </style>
@@ -27,7 +28,10 @@
 <code>RunConfig YAML</code> + env-блок + команду запуска из проверенной поверхности конфигурации
 (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code> · <code>brain/llm.py</code>). Модели и эндпоинты — в
 <a href="../LOCAL_MODELS.md">LOCAL_MODELS.md</a>. <strong>ADR-031 фаза-1.</strong>
-Локально / air-gapped (часть Docker-бандла): <code>docker compose --profile webui up</code> → открой <code>http://localhost:8088/setup/</code>.</p>
+Полностью работает на GitHub Pages: сгенерируй и <strong>скачай</strong> <code>run.yaml</code>/<code>sentinel.env</code>,
+подложи в свой локальный инстанс. Локально / air-gapped (часть Docker-бандла):
+<code>docker compose --profile webui up</code> → <code>http://localhost:8088/setup/</code>.
+«Живой» режим (запуск/смена на лету через локальный control-API) — M9.3.</p>
 
 <div class="grid">
   <fieldset><legend>Сценарий</legend>
@@ -74,10 +78,10 @@
 </div>
 
 <h2>1) RunConfig YAML</h2>
-<div class="out"><button class="copy" data-t="yaml">copy</button><pre id="yaml"></pre></div>
+<div class="out"><button class="dl" data-t="yaml" data-f="run.yaml">⬇ run.yaml</button><button class="copy" data-t="yaml">copy</button><pre id="yaml"></pre></div>
 
 <h2>2) Env-блок (модель + ключ)</h2>
-<div class="out"><button class="copy" data-t="env">copy</button><pre id="env"></pre></div>
+<div class="out"><button class="dl" data-t="env" data-f="sentinel.env">⬇ sentinel.env</button><button class="copy" data-t="env">copy</button><pre id="env"></pre></div>
 <p class="mut">⚠️ <span class="warn">Ключ не попадает в YAML</span> — он только в env (резолвится в pw-executor, никогда в plan/transcript/trace). Не коммить env с реальным ключом.</p>
 
 <h2>3) Команда запуска</h2>
@@ -157,6 +161,12 @@ document.querySelectorAll("input,select,textarea").forEach(e=>e.addEventListener
 document.querySelectorAll(".copy").forEach(b=>b.addEventListener("click",()=>{
   const t=$(b.dataset.t).textContent; navigator.clipboard&&navigator.clipboard.writeText(t);
   const o=b.textContent; b.textContent="copied"; setTimeout(()=>b.textContent=o,1000);
+}));
+// Download the generated artifact as a file (fully client-side — works on GitHub Pages, no server).
+document.querySelectorAll(".dl").forEach(b=>b.addEventListener("click",()=>{
+  const blob=new Blob([$(b.dataset.t).textContent],{type:"text/plain;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=b.dataset.f;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),0);
 }));
 sync();
 </script>
