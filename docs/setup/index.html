@@ -87,6 +87,21 @@
 <h2>3) Команда запуска</h2>
 <div class="out"><button class="copy" data-t="cmd">copy</button><pre id="cmd"></pre></div>
 
+<h2>4) Живой запуск (опц. — через локальный control-API, M9.3)</h2>
+<div class="grid">
+  <div><label>control-API URL</label><input id="capi" placeholder="http://localhost:8090"></div>
+  <div><label>Bearer token (CONTROL_API_TOKEN)</label><input id="capitok" type="password" placeholder="нужен для запуска"></div>
+</div>
+<div class="row" style="margin-top:.6rem">
+  <button id="check" type="button">Проверить</button>
+  <button id="run" type="button" disabled>▶ Запустить</button>
+  <span id="capistatus" class="mut"></span>
+</div>
+<div class="out" id="runout" style="display:none;margin-top:.6rem"><pre id="runlog"></pre></div>
+<p class="mut">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (исключение mixed-content);
+control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла
+(<code>docker compose --profile control-api up</code>, порт 8090) ограничения нет. Токен хранится только в этой вкладке.</p>
+
 <details><summary>Соответствие коду</summary>
 <p>YAML-ключи = <code>brain/runconfig.py</code> (<code>_KEY_ENV</code> + <code>_AUTH_ENV</code>); приоритет: явный флаг/env &gt; файл &gt; дефолт.
 Флаги = <code>cmd/agentctl</code> (<code>run --target/--run-config/--goal/--describe/--planner/...</code>).
@@ -168,6 +183,59 @@ document.querySelectorAll(".dl").forEach(b=>b.addEventListener("click",()=>{
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=b.dataset.f;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),0);
 }));
+
+// --- M9.3 phase-2: live run via the control-API (health -> run -> poll). Pure fetch, no deps. ---
+const capiBase = () => $("capi").value.trim().replace(/\/+$/, "");
+const setCapiStatus = (t) => { $("capistatus").textContent = t; };
+const runLog = (t) => { $("runout").style.display = "block"; $("runlog").textContent = t; };
+$("check").addEventListener("click", async () => {
+  const base = capiBase();
+  if (!base) { setCapiStatus("укажите URL"); return; }
+  setCapiStatus("проверяю…");
+  try {
+    const r = await fetch(base + "/healthz");
+    if (!r.ok) { setCapiStatus("✗ HTTP " + r.status); $("run").disabled = true; return; }
+    const j = await r.json();
+    setCapiStatus("✓ ok v" + (j.version || "?") + " (runs=" + (j.runs ?? 0) + ")");
+    $("run").disabled = false;
+  } catch (e) { setCapiStatus("✗ недоступен (CORS/выключен): " + e.message); $("run").disabled = true; }
+});
+$("run").addEventListener("click", async () => {
+  const base = capiBase(), tok = $("capitok").value.trim(), target = $("target").value.trim(), mode = $("mode").value;
+  if (!target) { runLog("укажите target URL в секции «Сценарий»"); return; }
+  const body = {
+    target, mode, planner: $("planner").value,
+    goal: mode === "goal" ? $("goal").value.trim() : "",
+    describe: mode === "describe" ? $("describe").value.trim() : "",
+    coverage_target: $("coverage").value, max_steps: $("maxsteps").value,
+  };
+  runLog("POST /v1/runs …");
+  try {
+    const r = await fetch(base + "/v1/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(tok ? { Authorization: "Bearer " + tok } : {}) },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status !== 202) { runLog("✗ HTTP " + r.status + ": " + (j.error || JSON.stringify(j))); return; }
+    runLog("✓ запущен run_id=" + j.run_id + "\nартефакты: " + j.artifact_dir + "\nопрашиваю статус…");
+    pollRun(base, j.run_id, tok);
+  } catch (e) { runLog("✗ " + e.message); }
+});
+function pollRun(base, id, tok) {
+  let n = 0;
+  const timer = setInterval(async () => {
+    if (++n > 150) { clearInterval(timer); runLog($("runlog").textContent + "\n(опрос остановлен — таймаут)"); return; }
+    try {
+      const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id), { headers: tok ? { Authorization: "Bearer " + tok } : {} });
+      const j = await r.json();
+      if (j.state && j.state !== "running") {
+        clearInterval(timer);
+        runLog("● " + j.state + " · exit_code=" + j.exit_code + (j.error ? (" · err=" + j.error) : "") + "\nартефакты: " + j.artifact_dir);
+      } else { runLog("… running (" + n + ")  run_id=" + id); }
+    } catch (e) { /* transient — keep polling */ }
+  }, 2000);
+}
 sync();
 </script>
 </body>
