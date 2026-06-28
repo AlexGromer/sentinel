@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 44 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 45 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -73,7 +73,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2/m9_2b) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/routing/RunConfig, **m9_2b** site-map + two-phase scenario grounding/cross-page-navigate + describe reconcile + rich RunConfig (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build (+`go vet`/`go test` + offline suite m3..m9_2b) → **security** (gitleaks/govulncheck/pip-audit/npm audit) → replay matrix → explore (manual) |
 | .github/workflows/pages.yml | CI | GitHub Pages deploy (actions/deploy-pages) from docs/ on push to main |
-| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `webui` (setup-WebUI/calculators :8088) + `control-api` (HTTP control-plane :8090) profiles |
+| docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `litellm` (opt. model-router :4000, ADR-045) + `webui` (setup-WebUI/calculators :8088) + `control-api` (HTTP control-plane :8090) profiles |
 | Dockerfile | Container | multi-stage runtime image (Go bins + TS pw-executor + Playwright + Python brain); pip deps mirror pyproject (incl. `openai`+`pyyaml`) |
 | testdata/m0.html · site/*.html · site-v2/*.html | fixtures | M0 page · M1 clean · M2/M3 drifted |
 | testdata/fixtures/l1..l6.html + README.md | fixtures | graded difficulty (file://): L1 trivial · L2 login · L3 validation · L4 multi-page · L5 tabs+shadow-DOM · L6 new-tab/multi-page |
@@ -101,6 +101,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/ws.go | Go | **M9.8-prep / ADR-043** hand-rolled RFC6455 WebSocket `GET /v1/stream` (client→server recorder ingest, closes GAP-M9-14): `Hijacker` upgrade + `wsAccept`/frame codec; token via `Sec-WebSocket-Protocol` (`bearer.<token>`, echoes only `sentinel.recorder.v1`); NDJSON events → `runs/record-<session>/events.ndjson`; ping/pong + idle/cap; reuse `s.authed`/Origin-allowlist (ADR-032). stdlib only |
 | cmd/control-api/ws_test.go | Go | **M9.8-prep** httptest for `/v1/stream` (race-clean): RFC6455 handshake/accept, token-via-subprotocol 403, bad-handshake 400, Origin reject, full 101 + masked-frame ingest |
 | frontend/ | TS (Next.js) | **M9.8-prep / ADR-044** AG-UI/CopilotKit rich co-pilot scaffold (`package.json` + `app/page.tsx` CopilotChat + `app/api/copilotkit/route.ts` Runtime→`createOpenAI({baseURL})`→shim + README). **DEV-only: not air-gapped, not in CI** (in `check_bilingual.py` SKIP_DIRS; node_modules gitignored). Versions verified 2026-06-28 |
+| deploy/litellm/config.yaml | YAML | **ADR-045** example LiteLLM proxy config: `model_list` routing to DeepSeek/Mistral/Anthropic/Ollama; provider keys via `os.environ/<VAR>` (no literals); mounted by the compose `litellm` profile |
+| docs/ADAPTERS.md / .en.md | Docs | **ADR-045** umbrella for pluggable adapters (M9.7/GAP-M9-08): §LiteLLM optional router (behind `LLM_BASE_URL`, compose `litellm` profile) + §MCP-Inspector M7-debug recipe (stdio → `tools/list`+sampling, GAP-VERIFY-006) |
 ## Directory Structure
 ```
 agent_development/

@@ -43,8 +43,12 @@ def build_app(out, run_id: str) -> FastMCP:
         def work():
             from .__main__ import _run_explore
             ex = make_executor(os.environ["PW_EXECUTOR_CMD"])
+            # MCP explore drives the LLM planner via host sampling (make_planner reads PLANNER; default
+            # is heuristic). setdefault keeps an explicit operator override. `_run_explore` takes 6 args
+            # (planner is env-selected, not positional) — passing a 7th raised TypeError before this fix.
+            os.environ.setdefault("PLANNER", "llm")
             try:
-                return _run_explore(ex, run_id, out, target_url, "llm", coverage_target, max_steps)
+                return _run_explore(ex, run_id, out, target_url, coverage_target, max_steps)
             finally:
                 ex.close()
         return await _drive(ctx, True, work)
