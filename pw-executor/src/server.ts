@@ -16,6 +16,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { setupTracing, spanForTool, currentTraceparent } from './otel.js';
+import { resolveLaunchPlan } from './launch.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -80,10 +81,13 @@ let page: Page | null = null;
 let pages: Page[] = [];
 let tracingStarted = false;
 let tracingStopped = false;
+// M9.6/ADR-037: true when we attached to the user's browser over CDP — teardown must NOT close it.
+let attachedOverCDP = false;
 
 async function ensureBrowser(): Promise<void> {
   if (browser) return;
-  browser = await chromium.launch({ headless: true });
+  // M9.6/ADR-037: resolve launch mode (headless default / headed / CDP-attach) from env (pure, tested).
+  const plan = resolveLaunchPlan(process.env);
   // M9.1/ADR-026: pre-authenticated context from a saved storageState (produced by login-as-test).
   // Parse the file HERE so a missing OR corrupt/empty state.json both fall back to a no-state context
   // (don't crash the run) — passing a string path would make newContext throw on bad JSON, killing the
@@ -99,17 +103,36 @@ async function ensureBrowser(): Promise<void> {
   } else if (statePath) {
     log('STORAGE_STATE set but missing; continuing no-state:', statePath);
   }
-  // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
-  context = await browser.newContext({
-    viewport: { width: 1280, height: 720 },
-    deviceScaleFactor: 1,
-    // GAP-OPS-002: AUT TLS handling. Strict by DEFAULT (cert errors surface). Opt-in bypass only for
-    // testing a self-signed/expired AUT cert — NEVER for prod auth runs. When strict, browser.navigate
-    // re-throws cert failures as a classified, actionable diagnostic instead of an opaque error.
-    ...(process.env.PW_IGNORE_HTTPS_ERRORS === '1' ? { ignoreHTTPSErrors: true } : {}),
-    ...(storageState ? { storageState } : {}),
-  });
-  if (storageState) log('storageState loaded from', statePath);
+
+  if (plan.kind === 'cdp') {
+    // M9.6/ADR-037: attach to the user's EXISTING Chromium over CDP (`--remote-debugging-port`) and
+    // reuse THEIR context+session. We do not own this browser, so teardown must never close it (see the
+    // `attachedOverCDP` guards). Our viewport/DSR/ignoreHTTPSErrors/storageState overrides do NOT apply
+    // to an adopted context — screenshots are NOT byte-stable here (observation mode, docs/DETERMINISM.md).
+    // NOTE: the shared setup below STILL applies to the adopted context when env-enabled — traceparent
+    // route-injection (OTEL_*) and tracing (unless PW_NO_TRACE=1) touch the user's LIVE session; set
+    // PW_NO_TRACE=1 to avoid recording their session into trace.zip.
+    attachedOverCDP = true;
+    browser = await chromium.connectOverCDP(plan.cdpEndpoint!);
+    context = browser.contexts()[0] ?? (await browser.newContext());
+    log('attached over CDP:', plan.cdpEndpoint);
+    if (storageState) log('STORAGE_STATE ignored in CDP-attach mode (reusing the user session)');
+  } else {
+    // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
+    browser = await chromium.launch({ headless: plan.headless });
+    context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      deviceScaleFactor: 1,
+      // GAP-OPS-002: AUT TLS handling. Strict by DEFAULT (cert errors surface). Opt-in bypass only for
+      // testing a self-signed/expired AUT cert — NEVER for prod auth runs. When strict, browser.navigate
+      // re-throws cert failures as a classified, actionable diagnostic instead of an opaque error.
+      ...(process.env.PW_IGNORE_HTTPS_ERRORS === '1' ? { ignoreHTTPSErrors: true } : {}),
+      ...(storageState ? { storageState } : {}),
+    });
+    log(plan.headless ? 'browser launched (headless)' : 'browser launched (headed)');
+    if (storageState) log('storageState loaded from', statePath);
+  }
+
   // M9.5 / §I: inject the active span's W3C traceparent into EVERY browser request so each UI action
   // maps onto the AUT's end-to-end backend trace (when its services are OTel-instrumented). Gated on a
   // configured collector — no route-interception overhead otherwise.
@@ -124,15 +147,17 @@ async function ensureBrowser(): Promise<void> {
   if (process.env.PW_NO_TRACE !== '1') {
     await context.tracing.start({ screenshots: true, snapshots: true });
     tracingStarted = true;
-    log('browser launched, tracing started');
+    log('tracing started');
   } else {
-    log('browser launched, tracing DISABLED (PW_NO_TRACE=1)');
+    log('tracing DISABLED (PW_NO_TRACE=1)');
   }
-  page = await context.newPage();
+  // M9.4 (A6): the active page is the first EXISTING page (CDP: the user's open tab; launch: a fresh
+  // page we create), and we track every page in the context (initial + popups/new tabs).
+  const existing = context.pages();
+  page = existing.length ? existing[0] : await context.newPage();
   page.setDefaultTimeout(5000); // bound browser.expect's pollUntil inner waits to the intended 5s budget
-  // M9.4 (A6): track the initial page + any popups/new tabs the AUT opens (window.open / target=_blank).
-  // The 'page' event fires only for pages created AFTER this handler, so the initial page is added once.
-  pages = [page];
+  pages = existing.length ? [...existing] : [page];
+  // The 'page' event fires only for pages created AFTER this handler is attached.
   context.on('page', (p) => {
     if (!pages.includes(p)) {
       p.setDefaultTimeout(5000);
@@ -474,7 +499,7 @@ async function mainJsonRpc(): Promise<void> {
   }
   try {
     if (context && tracingStarted && !tracingStopped) await context.tracing.stop();
-    await browser?.close();
+    if (!attachedOverCDP) await browser?.close(); // M9.6: never close the user's CDP-attached browser
   } catch (e) {
     log('cleanup error', e);
   }
@@ -517,6 +542,8 @@ async function mainMcp(): Promise<void> {
     );
   }
   process.on('SIGTERM', () => {
+    // M9.6: in CDP-attach we don't own the browser — just exit (drops the CDP connection), leave it open.
+    if (attachedOverCDP) { process.exit(0); return; }
     void browser?.close().finally(() => process.exit(0));
   });
   await server.connect(new StdioServerTransport());

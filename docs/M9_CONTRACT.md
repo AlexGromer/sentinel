@@ -60,6 +60,8 @@
 4. **co-pilot takeover/return:** агент ведёт → отдаёт управление человеку → забирает. Human-in-the-loop
    авторинг/правка вживую. Вторая ветка (после чат-UI).
 
+**Статус (M9.6, Волна D, 2026-06-28):** F2 (headed) + F3 (CDP-attach) **доставлены offline** — env `PW_HEADLESS=0` / `PW_CDP_ENDPOINT` (`pw-executor/src/launch.ts` + `server.ts`; контракт `M9.6_CONTRACT.md`; ADR-037). F4 — отдельная веха **M9.8**. Движок — **Chromium-only by design** (ADR-036): `connectOverCDP` — только Chromium, голден-хэши различаются per-engine → Firefox/WebKit отложены в **GAP-OPS-001**. Детерминированный голден-replay — **только headless** (headed/CDP = режимы наблюдения).
+
 ## G. Поверхности доступа — MCP И не-MCP (обе)
 - **MCP-режим:** brain как MCP-сервер (M7, ADR-020) — любой MCP-хост (Open WebUI/Claude Desktop/…) рулит.
 - **Не-MCP режим:** тонкий **HTTP/gRPC control-API** к brain (reuse/расширение RunControl) — для чат-UI,
