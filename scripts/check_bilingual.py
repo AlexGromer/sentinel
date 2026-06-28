@@ -52,8 +52,12 @@ SINGLE_LANGUAGE: set[str] = {
     "testdata/fixtures/README.md",
 }
 
-# Directories to skip entirely during the walk.
-SKIP_DIRS: frozenset[str] = frozenset({"node_modules", "dist", ".git", "bin"})
+# Directories to skip entirely during the walk. Includes gitignored runtime/scratch dirs
+# (state/, .claude/, runs/, .venv/, __pycache__) so the gate only sees source-tracked docs —
+# matching what CI checks out (a fresh tree has none of these).
+SKIP_DIRS: frozenset[str] = frozenset(
+    {"node_modules", "dist", ".git", "bin", "state", ".claude", "runs", ".venv", "__pycache__", "memory"}
+)
 
 
 # ---------------------------------------------------------------------------

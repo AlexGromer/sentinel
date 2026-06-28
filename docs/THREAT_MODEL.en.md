@@ -93,6 +93,8 @@ Artifacts → runs/<id>/ : plan.json, transcript, heal-report.json,
 
 Boundary points ❶–❼ correspond to rows in the table below.
 
+> **New surfaces (M9.6/M9.8), not shown in the diagram above (optional/future):** ❽ **CDP-attach** to the user's browser (M9.6, opt-in `PW_CDP_ENDPOINT`) and ❾ **browser extension** (M9.8, planned) — see §4.8 / §4.9.
+
 ---
 
 ## 4. STRIDE-lite: Threat Table
@@ -151,6 +153,25 @@ Boundary points ❶–❼ correspond to rows in the table below.
 | **plan.json tampering before replay.** If an attacker modifies `plan.json` on disk between authoring and replay, brain will execute the altered steps. | FS → brain replay | **T** (Tampering) | Prob: L / Impact: M | `plan_hash` is verified before replay; mismatch → exit code 3. In K8s the plan is mounted from a ConfigMap. `--ci` disallows `--force-replay`. | `plan_hash` is a hash of `plan.json` itself, not an HMAC with a key: if the file is replaced, the hash is replaced along with it. Protects against accidental corruption but not deliberate substitution. | dev / low priority |
 | **No audit trail for the run initiator.** Brain logs contain `prompt_hash` (not content) and step outcomes, but there is no record of who initiated the run, with which plan, in which environment. | brain → runs/transcript | **R** (Repudiation) | Prob: M / Impact: L | `run_id` is present in all artifacts; the `healing_audit` table in SQLite stores the full heal history. | No signed audit log. `run_id` is random hex, not linked to user identity in K8s (CronJob is not bound to a human identity). | ops / post-M10 |
 
+### 4.8 Boundary ❽ — CDP-attach to the user's browser (M9.6)
+
+> A new surface (M9.6, ADR-037). Active ONLY with `PW_CDP_ENDPOINT` — Sentinel connects to the user's **existing** Chrome (`--remote-debugging-port`) and drives their live session (their cookies/login), not its own headless instance.
+
+| Threat | Boundary | STRIDE | Prob / Impact | Existing control | Residual risk | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **Recording the user's live session into trace.zip.** In CDP mode the env-gated tracing + traceparent route apply to the user's adopted context → their DOM/screenshots/requests may land in `runs/<id>/trace.zip`. | user browser → runs/ | **I** | Prob: M / Impact: M | `PW_NO_TRACE=1` disables tracing; disclosed in `M9.6_CONTRACT` + code comments; CDP mode is opt-in. | Tracing is on by default (unless `PW_NO_TRACE`); the user may not expect a recording. See issue #26. | M9.8 / docs |
+| **Access to someone else's session via an unprotected CDP port.** A CDP endpoint without authentication = any local process can drive the browser; Sentinel reuses the user's login. | local → CDP `:9222` | **E/I** | Prob: L / Impact: H | The user brings up the CDP port deliberately (opt-in); localhost-only. | The DevTools protocol has no authN — exposing the port = full browser control. **Do not expose the port externally.** | user / docs |
+
+### 4.9 Boundary ❾ — browser extension (M9.8, PLANNED)
+
+> **Not yet implemented** — modeled ahead of time (design-first, `M9.8_CONTRACT`). The project's largest surface expansion: an MV3 extension living in the user's browser.
+
+| Threat | Boundary | STRIDE | Prob / Impact | Planned control | Residual risk | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **Reading all of the user's pages.** A content-script recorder sees DOM/input on EVERY in-scope page (`host_permissions`); recorded events go to the brain. | all pages → brain | **I** | Prob: H / Impact: H | Minimal `host_permissions` (`activeTab` / on request); recorder only on explicit start; local transport (control-API localhost+token / native-messaging). | An extension inherently sees everything in the active tab; trusting the extension = trusting its code + review. | M9.8 |
+| **`chrome.debugger` = full CDP.** Takeover via the debugger API gives full page control and bypasses web restrictions. | extension → page | **E** | Prob: M / Impact: H | Debugger-attach only on an explicit takeover signal; Chrome's visible indicator; auto-detach on return. | Broad powers, albeit with a banner. | M9.8 / ADR-039 |
+| **extension↔brain transport.** The streaming channel (WS on the control-API / native-messaging) is an injection/interception point. | extension → control-API | **S/T** | Prob: M / Impact: M | Reuse ADR-032: localhost-bind + bearer-token + CORS-allowlist; native-messaging is stdio (no network port). | Token in the browser; WS port on localhost. | M9.8 / GAP-M9-14 |
+
 ---
 
 ## 5. GAP Tracking Summary Table
@@ -158,7 +179,10 @@ Boundary points ❶–❼ correspond to rows in the table below.
 | GAP ID | Status | STRIDE | Severity | Short description | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Leak-in-trace: tracing disabled (`PW_NO_TRACE`) on auth runs; secrets referenced by env-var NAME via secretRef; brain redacts logs; fail-closed on active tracing; prod uses storageState. | — |
-| **GAP-SEC-001** | **PARTIAL** | I | HIGH | Full env inherit (`main.go:68`) — **opt-in allowlist added** (`SENTINEL_ENV_ALLOWLIST=1`, default OFF); Helm plaintext secrets (`cronjob.yaml:39–46`) — remaining. | M11.3 (default-on + secretKeyRef) |
+| **GAP-SEC-001** | **CLOSED — Helm half (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **Remainder:** `NODE_`/`GIT_` prefixes → `NODE_AUTH_TOKEN`/`GIT_ASKPASS` (issue #25). | done; #25 → 0xCoDSnet |
+| **#23 store-gateway authN** | OPEN | E | MEDIUM | store-gateway gRPC socket has no authN (boundary ❷) — any same-UID process mutates the golden/locator store. | issue #23 → 0xCoDSnet |
+| **#24 golden integrity** | OPEN | T | MEDIUM | `golden_snapshots` have no MAC/signature; a full SQLite swap bypasses `plan_hash` (boundary ❷). | issue #24 → 0xCoDSnet |
+| **#26 trace.zip PII** | OPEN | I | MEDIUM | explore/replay write AUT DOM+screenshots to `runs/` with no encryption-at-rest/retention (boundaries ❹/❼/❽). | issue #26 → 0xCoDSnet |
 | **GAP-SEC-002** | **PARTIALLY OPEN** | T, E | HIGH | Python no lockfile, no SBOM, no image signing. | M11.1 |
 | **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert classification (`ERR_CERT*`) in `browser.navigate` (this cycle); strict by default. Richer diagnostic in heal-report — M9.4. | M9.4 |
 
@@ -168,13 +192,15 @@ Boundary points ❶–❼ correspond to rows in the table below.
 
 The following controls are **not yet implemented** in the current codebase. Listed as planned/milestone items.
 
-1. **GAP-SEC-001 — env allowlist**: in `agentctl/main.go::spawnBrain` replace `os.Environ()` with an explicit allowlist of variables needed by brain (`TARGET_URL`, `RUN_MODE`, `LLM_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CHECKPOINT_DSN`, `STORE_ADDR`, `PYTHONPATH`, `PATH`, …). All others — strip.
-2. **GAP-SEC-001 — Helm secretKeyRef**: rewrite the env block in `cronjob.yaml` for sensitive variables using `valueFrom.secretKeyRef`. Remove `checkpointDsn` and secrets from `values-prod.yaml`, extract them into a separate K8s Secret.
+1. ~~**GAP-SEC-001 — env allowlist**~~ — **DONE (M11.3 / ADR-035):** `filteredEnv()` flipped to default-on (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + a curated list. **Remainder:** `NODE_`/`GIT_` prefixes pass `NODE_AUTH_TOKEN`/`GIT_ASKPASS` → issue **#25**.
+2. ~~**GAP-SEC-001 — Helm secretKeyRef**~~ — **DONE (M11.3):** `secrets.*` → `valueFrom.secretKeyRef` when `secrets.enabled` (plaintext fallback in dev); the `sentinel.envAllow` helper; `deploy/flux/`.
 3. **GAP-SEC-002 — Python lockfile**: add `uv lock` to CI, commit `uv.lock` to the repo, use `uv sync --frozen` or pip with `--require-hashes` in the Dockerfile.
 4. **GAP-SEC-002 — SCA + SBOM + image signing**: add a Trivy/Grype SCA scan to the CI pipeline; `syft` for SBOM generation; `cosign` for image signing.
-5. **GAP-OPS-002 — cert diagnostic**: in `browser.navigate` / `dispatchInner`, handle the net-error class and return a classified error (`cert_expired`, `cert_invalid`) in `heal-report.json`.
+5. ~~**GAP-OPS-002 — cert diagnostic**~~ — **DONE:** cert classification (`ERR_CERT*`/`ERR_SSL*`) in `browser.navigate` + opt-in `PW_IGNORE_HTTPS_ERRORS` (strict by default).
 6. **Prompt sanitization**: strip control characters and limit the length of element names/intent before including them in LLM prompts (`healing.py:_llm_reground`, `planner.py:propose`).
-7. **`runs/` access control**: restrict read permissions on the `runs/` directory to the Sentinel process UID; document the retention policy for `trace.zip`.
+7. **`runs/` access control**: restrict read permissions on the `runs/` directory to the Sentinel process UID; document the retention policy for `trace.zip` (→ issue **#26**; also relevant to CDP mode ❽).
+8. **store-gateway integrity** (boundary ❷): authN on the gRPC socket (SO_PEERCRED / per-run token) + integrity of `golden_snapshots` (MAC/digest) → issues **#23**, **#24**.
+9. **extension (M9.8, ❾):** on implementation — minimal `host_permissions`, debugger-attach only on a takeover signal, local transport (control-API token / native-messaging) — see `M9.8_CONTRACT` + ADR-038/039.
 
 ---
 
