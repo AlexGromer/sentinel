@@ -78,13 +78,20 @@ func filteredEnv() []string {
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 		"http_proxy": true, "https_proxy": true, "no_proxy": true,
+		// #25 (GAP-SEC-001 remainder): the broad NODE_/GIT_ prefixes used to carry these legitimate
+		// runtime/TLS vars but ALSO leaked NODE_AUTH_TOKEN (npm registry auth) and GIT_ASKPASS (a
+		// program git runs to obtain credentials). Allowlist the specific names instead of the family.
+		"NODE_OPTIONS": true, "NODE_EXTRA_CA_CERTS": true,
+		"GIT_SSL_CAINFO": true, "GIT_SSL_CAPATH": true,
 	}
 	for _, n := range strings.Split(os.Getenv("SENTINEL_ENV_ALLOW"), ",") {
 		if n = strings.TrimSpace(n); n != "" {
 			exact[n] = true
 		}
 	}
-	prefixes := []string{"LLM_", "OTEL_", "PW_", "PLAYWRIGHT_", "SENTINEL_", "NODE_", "GIT_"}
+	// NODE_/GIT_ are deliberately NOT prefixes (#25): the family is too broad and leaks credential
+	// vars (NODE_AUTH_TOKEN, GIT_ASKPASS). The legitimate runtime/TLS members are exact-allowlisted above.
+	prefixes := []string{"LLM_", "OTEL_", "PW_", "PLAYWRIGHT_", "SENTINEL_"}
 	var out []string
 	for _, kv := range os.Environ() {
 		k := kv
