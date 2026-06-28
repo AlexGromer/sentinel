@@ -93,6 +93,8 @@
 
 Граничные точки ❶–❼ соответствуют строкам таблицы ниже.
 
+> **Новые поверхности (M9.6/M9.8), не показанные на диаграмме выше (опциональны/будущее):** ❽ **CDP-attach** к браузеру пользователя (M9.6, opt-in `PW_CDP_ENDPOINT`) и ❾ **браузерное расширение** (M9.8, планируется) — см. §4.8 / §4.9.
+
 ---
 
 ## 4. STRIDE-lite: таблица угроз
@@ -151,6 +153,25 @@
 | **plan.json tampering перед replay.** Если злоумышленник модифицирует `plan.json` на диске между authoring и replay, brain выполнит изменённые шаги. | FS → brain replay | **T** (Tampering) | Вер: L / Влияние: M | `plan_hash` верифицируется перед replay; несоответствие → exit code 3. В K8s план монтируется из ConfigMap. `--ci` запрещает `--force-replay`. | `plan_hash` — хэш самого `plan.json`, не HMAC с ключом: при замене файла хэш обновляется вместе с ним. Защита от случайного повреждения, но не от умышленной подмены. | dev / low priority |
 | **Отсутствие audit trail для инициатора run.** Brain logs содержат `prompt_hash` (не content) и step outcomes, но нет записи кто инициировал run, с каким plan, в каком окружении. | brain → runs/transcript | **R** (Repudiation) | Вер: M / Влияние: L | `run_id` присутствует во всех артефактах; `healing_audit` таблица в SQLite хранит полную историю heal. | Нет подписанного audit log. `run_id` — random hex, не связан с user identity в K8s (CronJob не привязан к human identity). | ops / post-M10 |
 
+### 4.8 Граница ❽ — CDP-attach к браузеру пользователя (M9.6)
+
+> Новая поверхность (M9.6, ADR-037). Активна ТОЛЬКО при `PW_CDP_ENDPOINT` — Sentinel подключается к **существующему** Chrome пользователя (`--remote-debugging-port`) и драйвит его живую сессию (его cookies/логин), а не свой headless-инстанс.
+
+| Угроза | Граница | STRIDE | Вер / Влияние | Существующая мера | Остаточный риск | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **Запись живой сессии пользователя в trace.zip.** В CDP-режиме env-gated tracing + traceparent-route применяются к adopted-контексту пользователя → его DOM/скриншоты/запросы могут попасть в `runs/<id>/trace.zip`. | user browser → runs/ | **I** | Вер: M / Влияние: M | `PW_NO_TRACE=1` отключает tracing; раскрыто в `M9.6_CONTRACT` + комментариях кода; CDP-режим — opt-in. | Tracing включён по умолчанию (если не `PW_NO_TRACE`); пользователь может не ожидать записи. См. issue #26. | M9.8 / docs |
+| **Доступ к чужой сессии через незащищённый CDP-порт.** CDP-endpoint без аутентификации = любой локальный процесс может драйвить браузер; Sentinel переиспользует логин пользователя. | local → CDP `:9222` | **E/I** | Вер: L / Влияние: H | CDP-порт поднимает сам пользователь осознанно (opt-in); localhost-only. | DevTools-протокол не имеет authN — экспозиция порта = полный контроль браузера. **Не экспонировать порт вовне.** | user / docs |
+
+### 4.9 Граница ❾ — браузерное расширение (M9.8, ПЛАНИРУЕТСЯ)
+
+> **Ещё не реализовано** — границу моделируем заранее (design-first, `M9.8_CONTRACT`). Крупнейшее расширение surface проекта: MV3-расширение, живущее в браузере пользователя.
+
+| Угроза | Граница | STRIDE | Вер / Влияние | Планируемая мера | Остаточный риск | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **Чтение всех страниц пользователя.** Content-script рекордер видит DOM/ввод на КАЖДОЙ странице в scope (`host_permissions`); записанные события уходят на brain. | all pages → brain | **I** | Вер: H / Влияние: H | Минимальные `host_permissions` (`activeTab` / по запросу); рекордер только при явном старте; локальный транспорт (control-API localhost+token / native-messaging). | Расширение по природе видит всё в активной вкладке; доверие к расширению = доверие к его коду + ревью. | M9.8 |
+| **`chrome.debugger` = полный CDP.** Takeover через debugger-API даёт полный контроль страницы и обход web-ограничений. | extension → page | **E** | Вер: M / Влияние: H | Debugger-attach только по явному takeover-сигналу; видимый индикатор Chrome; auto-detach при return. | Полномочия широкие, хоть и с баннером. | M9.8 / ADR-039 |
+| **Транспорт extension↔brain.** Стриминговый канал (WS на control-API / native-messaging) — точка инъекции/перехвата. | extension → control-API | **S/T** | Вер: M / Влияние: M | Reuse ADR-032: localhost-bind + bearer-token + CORS-allowlist; native-messaging — stdio (без сетевого порта). | Токен в браузере; WS-порт на localhost. | M9.8 / GAP-M9-14 |
+
 ---
 
 ## 5. Сводная таблица GAP-трекинга
@@ -158,7 +179,10 @@
 | GAP ID | Статус | STRIDE | Severity | Краткое описание | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Утечка-в-трейс: трейсинг отключён (`PW_NO_TRACE`) на auth-прогонах; секреты по env-var NAME через secretRef; brain redacts logs; fail-closed при активном трейсинге; prod использует storageState. | — |
-| **GAP-SEC-001** | **PARTIAL** | I | HIGH | Full env inherit (`main.go:68`) — **opt-in allowlist добавлен** (`SENTINEL_ENV_ALLOWLIST=1`, default OFF); Helm plaintext secrets (`cronjob.yaml:39–46`) — остаётся. | M11.3 (default-on + secretKeyRef) |
+| **GAP-SEC-001** | **CLOSED — Helm-половина (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **Остаток:** `NODE_`/`GIT_` префиксы → `NODE_AUTH_TOKEN`/`GIT_ASKPASS` (issue #25). | done; #25 → 0xCoDSnet |
+| **#23 store-gateway authN** | OPEN | E | MEDIUM | gRPC-сокет store-gateway без аутентификации (граница ❷) — любой same-UID процесс мутирует golden/locator-store. | issue #23 → 0xCoDSnet |
+| **#24 golden integrity** | OPEN | T | MEDIUM | `golden_snapshots` без MAC/подписи; полная подмена SQLite обходит `plan_hash` (граница ❷). | issue #24 → 0xCoDSnet |
+| **#26 trace.zip PII** | OPEN | I | MEDIUM | explore/replay пишут DOM+скриншоты AUT в `runs/` без encryption-at-rest/retention (границы ❹/❼/❽). | issue #26 → 0xCoDSnet |
 | **GAP-SEC-002** | **PARTIALLY OPEN** | T, E | HIGH | Python no lockfile, no SBOM, no image signing. | M11.1 |
 | **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert-классификация (`ERR_CERT*`) в `browser.navigate` (этот цикл); строго по умолчанию. Расширенный diagnostic в heal-report — M9.4. | M9.4 |
 
@@ -168,13 +192,15 @@
 
 Следующие меры **не реализованы** в текущей кодовой базе. Указаны как planned/milestone.
 
-1. **GAP-SEC-001 — env allowlist**: в `agentctl/main.go::spawnBrain` заменить `os.Environ()` на explicit allowlist переменных, нужных brain (`TARGET_URL`, `RUN_MODE`, `LLM_*`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CHECKPOINT_DSN`, `STORE_ADDR`, `PYTHONPATH`, `PATH`, …). Всё прочее — отрезать.
-2. **GAP-SEC-001 — Helm secretKeyRef**: переписать env-блок `cronjob.yaml` для чувствительных переменных через `valueFrom.secretKeyRef`. Удалить `checkpointDsn` и секреты из `values-prod.yaml`, вынести в отдельный K8s Secret.
+1. ~~**GAP-SEC-001 — env allowlist**~~ — **DONE (M11.3 / ADR-035):** `filteredEnv()` переведён в default-on (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + curated-список. **Остаток:** префиксы `NODE_`/`GIT_` пропускают `NODE_AUTH_TOKEN`/`GIT_ASKPASS` → issue **#25**.
+2. ~~**GAP-SEC-001 — Helm secretKeyRef**~~ — **DONE (M11.3):** `secrets.*` → `valueFrom.secretKeyRef` при `secrets.enabled` (plaintext-fallback в dev); helper `sentinel.envAllow`; `deploy/flux/`.
 3. **GAP-SEC-002 — Python lockfile**: добавить `uv lock` в CI, зафиксировать `uv.lock` в repo, в Dockerfile использовать `uv sync --frozen` или pip с `--require-hashes`.
 4. **GAP-SEC-002 — SCA + SBOM + image signing**: добавить Trivy/Grype SCA scan в CI pipeline; `syft` для генерации SBOM; `cosign` для подписи образа.
-5. **GAP-OPS-002 — cert diagnostic**: в `browser.navigate` / `dispatchInner` обработать net-error class и вернуть классифицированную ошибку (`cert_expired`, `cert_invalid`) в `heal-report.json`.
+5. ~~**GAP-OPS-002 — cert diagnostic**~~ — **DONE:** cert-классификация (`ERR_CERT*`/`ERR_SSL*`) в `browser.navigate` + opt-in `PW_IGNORE_HTTPS_ERRORS` (строго по умолчанию).
 6. **Prompt sanitization**: strip управляющих символов и ограничение длины element names/intent перед включением в LLM-промпты (`healing.py:_llm_reground`, `planner.py:propose`).
-7. **`runs/` access control**: ограничить права чтения директории `runs/` до UID Sentinel-процесса; задокументировать retention policy для `trace.zip`.
+7. **`runs/` access control**: ограничить права чтения директории `runs/` до UID Sentinel-процесса; задокументировать retention policy для `trace.zip` (→ issue **#26**; актуально и для CDP-режима ❽).
+8. **store-gateway integrity** (граница ❷): authN на gRPC-сокете (SO_PEERCRED / per-run token) + целостность `golden_snapshots` (MAC/дайджест) → issues **#23**, **#24**.
+9. **расширение (M9.8, ❾):** при реализации — минимальные `host_permissions`, debugger-attach только по takeover-сигналу, локальный транспорт (control-API token / native-messaging) — см. `M9.8_CONTRACT` + ADR-038/039.
 
 ---
 

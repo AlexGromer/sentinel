@@ -57,6 +57,9 @@
 | GAP-M9-10 | P2 | Validation / негативное тестирование: генератор невалидных вводов по типу/маске поля + assert-слой («UI отверг ввод») | M9.1 (assert-примитив `browser.expect` + `expect_ok`-полярность + `brain/validation.py` **набросок**) **PARTIAL — DONE offline**; полный генератор (маски/границы/схема) — M9.2 |
 | GAP-M9-11 | P3 | **Security-модуль (M10, отдельный):** XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM поверх explore-карты; **authorization-gated** | M10 |
 | GAP-M9-12 | P3 | CI-шаблоны: Jenkinsfile + `.gitlab-ci.yml` (Sentinel = CLI + exit-коды → любой CI на коммит) | M9.3 |
+| GAP-M9-13 | P2 | **Рекордер действий (расширение M9.8):** content-script захват click/input → события → grounding в шаги (reuse M9.2b `reconcile`). Сейчас нет (есть describe-mode NL→сценарий, но не event-capture). Блокер реализации M9.8 | M9.8 (контракт design-first готов — ADR-038); реализация после M9.3-канала |
+| GAP-M9-14 | P2 | **Стриминг-транспорт extension↔brain (M9.8):** control-API (M9.3) только request/response (нет WS/SSE). Нужен стриминг-эндпоинт (или native-messaging host). Блокер M9.8 | M9.8 / расширить control-API (ADR-038), reuse ADR-032 security |
+| GAP-M9-15 | P2 | **Takeover/return протокол (M9.8):** передача управления агент↔человек на одной CDP-сессии (поверх M9.6). Не определён. Блокер co-pilot | M9.8 (ADR-039, design-first); реализация после рекордера+транспорта |
 
 ## Риски (полный список; итог в ARCHITECTURE §8)
 
