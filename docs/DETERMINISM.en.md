@@ -165,6 +165,8 @@ Every milestone step records two hashes at explore time:
 | `a11y_hash` | SHA-256 of the normalised accessibility tree after the step | Structural DOM change — new/removed elements, role/label drift |
 | `screenshot_hash` | Perceptual hash of the post-action screenshot | Visual-only regression — CSS layout, colour, hidden elements |
 
+> **Hash stability (M9.6 / ADR-037):** `screenshot_hash` is byte-stable **in headless Chromium only** — the mode in which golden replay is validated. **headed** and **CDP-attach** (and non-Chromium engines, deferred in GAP-OPS-001) are observation modes: a different render path / the user's viewport make bytes non-reproducible, so golden replay is not run there.
+
 Golden baselines are **never auto-updated by a CI run**. The only mutation path is
 an explicit operator command:
 

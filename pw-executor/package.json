@@ -6,7 +6,8 @@
   "description": "Sentinel M0 — Playwright execution server (JSON-RPC 2.0 over stdio). BUILD, not buy.",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "tsc && node --test dist/launch.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
