@@ -2,7 +2,7 @@
 
 > 🌐 **Русский** (основная версия) · [English](M12_CONTRACT.en.md)
 
-> **Статус**: Фаза-1 (shim) — ✅ **DELIVERED**; Фаза-2 (единая страница) — дизайн · **Дата**: 2026-06-28
+> **Статус**: Фаза-1 (shim) — ✅ **DELIVERED**; Фаза-2 (единая страница) — ✅ **DELIVERED** · **Дата**: 2026-06-28
 > вводит **ADR-041** (OpenAI-compat shim) · опирается на ADR-032 (control-API security) + ADR-040 (SSE-машинерия)
 
 ---
@@ -45,7 +45,9 @@ DeepSeek/Mistral-клиенты, SDK, наша страница) драйвит 
 (`parseChatInstruction` unit · 403 без токена · non-stream · stream · no-target) + live curl smoke (stream +
 non-stream + 403).
 
-## Фаза-2 — единая `docs/index.html` (дизайн, следующий PR)
+## Фаза-2 — единая `docs/index.html` (✅ DELIVERED)
+
+**Реализовано** (`docs/index.html` 905→1469; калькуляторы нетронуты): 3 секции на neon-хаб — **#connect** (control-API URL+token, memory-only), **#build** (RunConfig-builder: YAML/env/cmd + download + ▶Run), **#chat** (describe/goal/explore → SSE-via-fetch → вердикт + скачать `scenario.json`); общий SSE/poll-драйвер; bilingual (`data-lang`/`setLang`/`sentinel_lang`); air-gapped; `setup`/`chat` — standalone advanced deep-links; заметка про OpenAI-shim (`/v1/chat/completions`) в чат-секции; `node --check` clean.
 
 Эволюция neon-хаба (`docs/index.html`): добавить две секции, драйвящие control-API — **(a) RunConfig-builder**
 (порт `docs/setup` `render()` → YAML/env/cmd + download) и **(b) chat-панель** (порт `docs/chat`
