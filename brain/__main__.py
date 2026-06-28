@@ -266,6 +266,13 @@ def main() -> int:
     run_id = os.environ.get("RUN_ID", "local")
     out = pathlib.Path(os.environ.get("ARTIFACT_DIR", f"./runs/{run_id}"))
     out.mkdir(parents=True, exist_ok=True)
+    # #26 (THREAT_MODEL ❹): trace.zip under the run dir captures AUT DOM/screenshots (possible PII).
+    # Restrict the dir to the owner so other local users can't read it. agentctl also sets 0700 up
+    # front; this covers brain-direct runs (MCP server / tests) where agentctl isn't in the path.
+    try:
+        os.chmod(out, 0o700)
+    except OSError:
+        pass
     setup_tracing()
     # M9.2a (ADR-027): a RunConfig YAML may supply mode/goal/planner/budgets (precedence flag > file > default).
     run_config = os.environ.get("RUN_CONFIG")

@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,8 +62,69 @@ func mkArtifactDir(repo, runID, override string) string {
 	if dir == "" {
 		dir = filepath.Join(repo, "runs", runID)
 	}
-	_ = os.MkdirAll(dir, 0o755)
+	// #26 (THREAT_MODEL ❹): the run dir holds trace.zip — AUT DOM snapshots + screenshots, which
+	// may contain PII. Restrict it to the owner (0700) so other local users can't read it. Chmod
+	// after MkdirAll to enforce 0700 even when a permissive umask would have widened the create mode.
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.Chmod(dir, 0o700)
+	if override == "" { // only manage the default runs/ tree, never a user-supplied --artifact-dir
+		runsRoot := filepath.Join(repo, "runs")
+		_ = os.Chmod(runsRoot, 0o700)
+		sweepTraces(runsRoot)
+	}
 	return dir
+}
+
+// envInt reads an int env var, falling back to def when unset or unparsable.
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// sweepTraces enforces trace.zip retention (#26, THREAT_MODEL ❹). It keeps the newest
+// SENTINEL_TRACE_KEEP traces (default 10; <0 disables count-pruning) and deletes trace.zip from
+// older runs, plus any trace older than SENTINEL_TRACE_TTL_HOURS (default 0 = TTL off). Only the
+// trace.zip is removed — plan.json / reports stay for the audit trail. Best-effort: every error is
+// ignored, retention must never fail a run. The just-created run has no trace.zip yet, so it is safe.
+func sweepTraces(runsRoot string) {
+	keep := envInt("SENTINEL_TRACE_KEEP", 10)
+	ttlHours := envInt("SENTINEL_TRACE_TTL_HOURS", 0)
+	if keep < 0 && ttlHours <= 0 {
+		return // both knobs disabled
+	}
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil {
+		return
+	}
+	type trace struct {
+		path string
+		mod  time.Time
+	}
+	var traces []trace
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(runsRoot, e.Name(), "trace.zip")
+		info, err := os.Stat(p)
+		if err != nil {
+			continue // no trace in this run
+		}
+		traces = append(traces, trace{p, info.ModTime()})
+	}
+	sort.Slice(traces, func(i, j int) bool { return traces[i].mod.After(traces[j].mod) }) // newest first
+	now := time.Now()
+	for i, tr := range traces {
+		tooMany := keep >= 0 && i >= keep
+		tooOld := ttlHours > 0 && now.Sub(tr.mod) > time.Duration(ttlHours)*time.Hour
+		if tooMany || tooOld {
+			_ = os.Remove(tr.path)
+		}
+	}
 }
 
 // filteredEnv narrows the inherited environment to a security allowlist (GAP-SEC-001) so unrelated
