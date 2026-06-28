@@ -1173,6 +1173,11 @@ captures/
 local.md
 LOCAL_*.md
 PRIVATE_*.md
+# Exception: LOCAL_MODELS.md is a deliberate PUBLIC doc (formula source-of-truth for the
+# Pages hub + calculators; linked from index.html/FILEMAP). Un-ignore it (the LOCAL_*.md
+# rule above is for personal local notes, not this).
+!docs/LOCAL_MODELS.md
+!docs/LOCAL_MODELS.en.md
 
 # Experimental/draft content
 experimental/
