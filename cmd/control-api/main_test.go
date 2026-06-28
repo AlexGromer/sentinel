@@ -205,3 +205,100 @@ func TestRunArtifact(t *testing.T) {
 		t.Fatalf("artifact missing file: got %d want 404", rec.Code)
 	}
 }
+
+func TestParseChatInstruction(t *testing.T) {
+	one := func(content string) []chatMessage { return []chatMessage{{Role: "user", Content: content}} }
+	cases := []struct {
+		name, model                    string
+		msgs                           []chatMessage
+		wantMode, wantTarget, wantText string
+	}{
+		{"describe default", "sentinel", one("describe: open login\ntarget: https://a"), "describe", "https://a", "open login"},
+		{"model goal suffix", "sentinel-goal", one("log in\ntarget: file:///x.html"), "goal", "file:///x.html", "log in"},
+		{"content prefix wins over model", "sentinel-goal", one("describe: do thing\ntarget: https://b"), "describe", "https://b", "do thing"},
+		{"explore prefix", "sentinel", one("explore:\ntarget: https://c"), "explore", "https://c", ""},
+		{"no target", "sentinel", one("describe: x"), "describe", "", "x"},
+		{"bare url anywhere", "sentinel", one("test https://d/login please"), "describe", "https://d/login", "test https://d/login please"},
+		{"multi-message: most-recent target + last instruction", "sentinel", []chatMessage{
+			{Role: "user", Content: "describe: open A\ntarget: https://a"},
+			{Role: "assistant", Content: "ok"},
+			{Role: "user", Content: "describe: open B\ntarget: https://b"},
+		}, "describe", "https://b", "open B"},
+	}
+	for _, c := range cases {
+		mode, target, text := parseChatInstruction(c.model, c.msgs)
+		if mode != c.wantMode || target != c.wantTarget || text != c.wantText {
+			t.Errorf("%s: got (%q,%q,%q) want (%q,%q,%q)", c.name, mode, target, text, c.wantMode, c.wantTarget, c.wantText)
+		}
+	}
+}
+
+func chatBody(model, content string, stream bool) string {
+	b, _ := json.Marshal(chatRequest{Model: model, Messages: []chatMessage{{Role: "user", Content: content}}, Stream: stream})
+	return string(b)
+}
+
+func TestChatCompletionsRequiresToken(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "describe: x\ntarget: file:///x.html", false)))
+	s.mux().ServeHTTP(rec, req) // no token
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("chat without token: got %d want 403", rec.Code)
+	}
+}
+
+func TestChatCompletionsNonStream(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "describe: open login\ntarget: file:///x.html", false)))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat: got %d want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("chat body: %v", err)
+	}
+	if resp["object"] != "chat.completion" {
+		t.Fatalf("object: %v", resp["object"])
+	}
+	content := resp["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["content"].(string)
+	for _, want := range []string{"planning step 1", "walking page", "the test found a problem (exit 1)"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestChatCompletionsStream(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "describe: open login\ntarget: file:///x.html", true)))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("chat stream: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"chat.completion.chunk", "planning step 1", "the test found a problem (exit 1)", `"finish_reason":"stop"`, "data: [DONE]"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("stream body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestChatCompletionsNoTarget(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "describe: open login", false)))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no-target: got %d want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Set a target") {
+		t.Fatalf("no-target should ask for a target:\n%s", rec.Body.String())
+	}
+}
