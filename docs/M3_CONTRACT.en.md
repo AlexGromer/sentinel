@@ -17,7 +17,7 @@ regression detection; **AUT-SHA-gated flake quarantine**; **GitHub Actions** CI.
 | 0 | all non-quarantined steps passed, no golden regression |
 | 1 | a step failed (locator unhealable / action error) on a non-quarantined step |
 | 2 | golden-diff regression (a11y-hash or screenshot-hash differs from golden) on a non-quarantined page |
-| 3 | **plan integrity** (plan_hash mismatch) or budget — hard-abort, highest priority, nothing executed |
+| 3 | **integrity hard-abort** (highest priority): `plan_hash` mismatch (nothing executed) OR golden HMAC mismatch (#24 — a tampered/forged golden row at replay) OR budget |
 
 ## plan_hash HARD-ABORT (ADR-006)
 At replay start: recompute `canonical_plan_hash(plan["steps"])`, compare to `plan["plan_hash"]`.

@@ -17,7 +17,7 @@
 | 0 | все неизолированные шаги прошли, нет golden-регрессии |
 | 1 | шаг завершился неудачей (локатор неизлечим / ошибка действия) на неизолированном шаге |
 | 2 | golden-diff регрессия (a11y-hash или screenshot-hash отличается от golden) на неизолированной странице |
-| 3 | **plan integrity** (несовпадение plan_hash) или бюджет — hard-abort, наивысший приоритет, ничего не выполнено |
+| 3 | **integrity hard-abort** (наивысший приоритет): несовпадение `plan_hash` (ничего не выполнено) ИЛИ golden HMAC mismatch (#24 — подменённая/подделанная golden-запись при replay) ИЛИ бюджет |
 
 ## plan_hash HARD-ABORT (ADR-006)
 В начале replay: пересчитать `canonical_plan_hash(plan["steps"])`, сравнить с `plan["plan_hash"]`.
