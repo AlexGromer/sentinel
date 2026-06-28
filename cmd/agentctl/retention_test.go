@@ -70,6 +70,30 @@ func TestSweepTracesKeepsNewest(t *testing.T) {
 	}
 }
 
+// TestSweepTracesKeepZero (#34 pt3 / GAP doc): KEEP=0 is NOT the same as KEEP=-1. -1 disables
+// count-pruning; 0 keeps zero newest, so the sweep deletes EVERY trace.zip each run (dirs + other
+// artifacts remain). Guards the documented OUTPUTS.md semantics for the boundary value.
+func TestSweepTracesKeepZero(t *testing.T) {
+	t.Setenv("SENTINEL_TRACE_KEEP", "0")
+	t.Setenv("SENTINEL_TRACE_TTL_HOURS", "0")
+	runsRoot := filepath.Join(t.TempDir(), "runs")
+	now := time.Now()
+	for i, name := range []string{"runA", "runB", "runC"} {
+		writeTrace(t, runsRoot, name, now.Add(time.Duration(i)*time.Hour))
+	}
+
+	sweepTraces(runsRoot)
+
+	for _, name := range []string{"runA", "runB", "runC"} {
+		if _, err := os.Stat(filepath.Join(runsRoot, name, "trace.zip")); err == nil {
+			t.Errorf("%s/trace.zip must be pruned with KEEP=0 (keep zero newest)", name)
+		}
+		if _, err := os.Stat(filepath.Join(runsRoot, name)); err != nil {
+			t.Errorf("%s dir must remain (only trace.zip is pruned): %v", name, err)
+		}
+	}
+}
+
 // TestSweepTracesTTL (#26): with count-pruning disabled (KEEP=-1) a trace older than the TTL is
 // removed while a fresh one is kept.
 func TestSweepTracesTTL(t *testing.T) {

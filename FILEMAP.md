@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 41 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 42 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -95,6 +95,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | scripts/check_bilingual.py | Python | bilingual docs-parity CI gate — every primary `.md` must have a paired `.en.md` (+ SINGLE_LANGUAGE allowlist); run by the `bilingual` job in ci.yml |
 | docs/M9.8_CONTRACT.md / .en.md | Docs | **M9.8** (design-first, ADR-038/039) browser-extension contract: MV3 recorder + control-API WS transport (native-messaging alt) + record→scenario reuse (M9.2b) + co-pilot takeover/return; threat-model ❾; implementation deferred (blockers GAP-M9-03/13/14/15) |
 | docs/M12_CONTRACT.md / .en.md | Docs | **M12** (ADR-041) unified config+chat console + OpenAI-compat shim (variant i): ph1 shim `POST /v1/chat/completions` (DELIVERED — 1 chat turn→1 run, Open WebUI/DeepSeek/Mistral compatible) + ph2 unified `docs/index.html` (design). (i) now / (iii) AG-UI later; chat v1 one-shot |
+| pw-executor/src/determinism.ts | TS | **GAP-RISK-009 / ADR-042** screenshot determinism anchors (single source of truth): `DETERMINISM_VIEWPORT` 1280×720 + `DETERMINISM_DEVICE_SCALE_FACTOR`=1 + `SCREENSHOT_DETERMINISM_OPTS` (`animations:'disabled'`/`caret:'hide'`/`scale:'css'`); consumed by `server.ts` |
+| pw-executor/src/determinism.test.ts | TS | **GAP-RISK-009** `node --test` locking the determinism anchors (regression guard, offline, no browser) |
+| tests/test_determinism_offline.py | Python | **GAP-RISK-009 / ADR-042** offline test for the opt-in visual-authoritative flip (`SENTINEL_VISUAL_AUTHORITATIVE`): advisory default → exit 0 vs authoritative → exit 2; FakeEx, no browser. In CI offline loop |
 ## Directory Structure
 ```
 agent_development/

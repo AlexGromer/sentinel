@@ -17,6 +17,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { setupTracing, spanForTool, currentTraceparent } from './otel.js';
 import { resolveLaunchPlan } from './launch.js';
+import {
+  DETERMINISM_VIEWPORT,
+  DETERMINISM_DEVICE_SCALE_FACTOR,
+  SCREENSHOT_DETERMINISM_OPTS,
+} from './determinism.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -119,10 +124,11 @@ async function ensureBrowser(): Promise<void> {
     if (storageState) log('STORAGE_STATE ignored in CDP-attach mode (reusing the user session)');
   } else {
     // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
+    // The anchors live in determinism.ts (single source of truth, asserted by determinism.test.ts).
     browser = await chromium.launch({ headless: plan.headless });
     context = await browser.newContext({
-      viewport: { width: 1280, height: 720 },
-      deviceScaleFactor: 1,
+      viewport: DETERMINISM_VIEWPORT,
+      deviceScaleFactor: DETERMINISM_DEVICE_SCALE_FACTOR,
       // GAP-OPS-002: AUT TLS handling. Strict by DEFAULT (cert errors surface). Opt-in bypass only for
       // testing a self-signed/expired AUT cert — NEVER for prod auth runs. When strict, browser.navigate
       // re-throws cert failures as a classified, actionable diagnostic instead of an opaque error.
@@ -364,8 +370,9 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     }
     case 'browser.screenshotHash': {
       await ensureBrowser();
-      // GAP-RISK-009: disable animations + hide the caret + CSS-scale so the hash is byte-stable.
-      const buf = await page!.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' });
+      // GAP-RISK-009: disable animations + hide the caret + CSS-scale so the hash is byte-stable
+      // (anchors in determinism.ts, asserted by determinism.test.ts).
+      const buf = await page!.screenshot(SCREENSHOT_DETERMINISM_OPTS);
       return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
     case 'browser.setOfMarks': {
@@ -406,7 +413,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
           }
           document.body.appendChild(o);
         }, marks);
-        await page!.screenshot({ path: outPath, animations: 'disabled', caret: 'hide', scale: 'css' });
+        await page!.screenshot({ path: outPath, ...SCREENSHOT_DETERMINISM_OPTS });
         await page!.evaluate(() => document.getElementById('__som__')?.remove());
       }
       return { marks, path: outPath ?? null };
