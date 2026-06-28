@@ -467,7 +467,7 @@ function grp(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '
 function money(x){ if (x === 0) return '$0.00'; if (x > 0 && x < 0.01) return '<$0.01'; return '$' + x.toFixed(2); }
 function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
 function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
-function esc(s){ return String(s).replace(/[&<>]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]; }); }
+function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
 
 /* ----------------------------- i18n ----------------------------- */
@@ -573,6 +573,7 @@ function renderTiers(st){
 
 function renderRec(st){
   var tCur = estimateTokens(st.P, st.S, st.R, st.V, st.mode);
+  var modeName = st.mode === 'goal' ? 'goal' : (st.mode === 'replay' ? 'replay' : 'explore'); // whitelist — never put raw DOM .value into HTML
   var tE = estimateTokens(st.P, st.S, st.R, st.V, 'explore');
   var tG = estimateTokens(st.P, st.S, st.R, st.V, 'goal');
   var saving = tE.total > 0 ? Math.max(0, Math.round((1 - tG.total / tE.total) * 100)) : 0;
@@ -598,9 +599,9 @@ function renderRec(st){
     '“' + tlEN + '” (P=' + st.P + ', S=' + st.S + ', R=' + Math.round(st.R*100) + '%, ' + (st.V ? 'vision' : 'no vision') + ')');
 
   var depth = '<li>' + bi(
-    'Глубина: режим <b>' + st.mode + '</b> ≈ <b>' + grp(tCur.total) + '</b> токенов/прогон. ' +
+    'Глубина: режим <b>' + modeName + '</b> ≈ <b>' + grp(tCur.total) + '</b> токенов/прогон. ' +
       'Режим <b>goal</b> ≈ ' + grp(tG.total) + savRu + ', если флоу известен; <b>replay</b> — 0 токенов.',
-    'Depth: mode <b>' + st.mode + '</b> ≈ <b>' + grp(tCur.total) + '</b> tokens/run. ' +
+    'Depth: mode <b>' + modeName + '</b> ≈ <b>' + grp(tCur.total) + '</b> tokens/run. ' +
       'Mode <b>goal</b> ≈ ' + grp(tG.total) + savEn + ' if the flow is known; <b>replay</b> — 0 tokens.') + '</li>';
 
   var cloudLi = '<li>' + bi(
