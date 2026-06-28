@@ -22,8 +22,8 @@
 Основной вывод запуска `--explore` и основной вход для всех последующих запусков
 `--replay` или `--ci`.
 
-Схема: `{plan_id (UUID), plan_hash (SHA-256 канонического JSON с сортированными ключами и числами
-с плавающей точкой, нормализованными до 6 знаков после запятой), target_url, aut_version (git SHA),
+Схема: `{plan_id (UUID), plan_hash (SHA-256 канонического JSON с сортированными ключами; числа
+сериализуются как есть, без округления, ни одно поле не исключается), target_url, aut_version (git SHA),
 exploration_seed, coverage_achieved, steps[], golden_snapshots{step_id: {a11y_hash, screenshot_hash}}}`.
 
 `plan.json` коммитится в репозиторий приложения и управляет всеми запусками replay. Он является
@@ -90,7 +90,8 @@ playwright show-trace trace.zip
 **Доступ и retention (#26, THREAT_MODEL ❹).** `runs/` и каждый `runs/<id>/` создаются с правами
 `0700` (только владелец): `trace.zip` может содержать DOM/скриншоты AUT (PII), поэтому недоступен
 другим локальным пользователям. Retention: `agentctl` при каждом запуске оставляет `trace.zip` лишь
-у `SENTINEL_TRACE_KEEP` свежайших прогонов (по умолчанию 10; значение `<0` отключает count-prune) и
+у `SENTINEL_TRACE_KEEP` свежайших прогонов (по умолчанию 10; значение `<0` отключает count-prune;
+значение `0` оставляет ноль свежайших = удаляет **все** `trace.zip` при каждом прогоне) и
 удаляет любой `trace.zip` старше `SENTINEL_TRACE_TTL_HOURS` (по умолчанию `0` = TTL выкл.). Удаляется
 **только** `trace.zip` — `plan.json` и отчёты остаются для audit trail. Авто-применяется только к
 дефолтному `runs/`, не к пользовательскому `--artifact-dir`.

@@ -6,7 +6,7 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 
 > **Type:** Explanation
 > **Audience:** CI engineers, QA leads, operators
-> **Last updated:** 2026-06-23
+> **Last updated:** 2026-06-28
 > **Related:** [MEMORY_PERSISTENCE.md](./MEMORY_PERSISTENCE.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ## Overview
@@ -99,10 +99,12 @@ definition.
 }
 ```
 
-**Hash canonicalisation:** `plan_hash` is SHA-256 of the JSON serialisation of
-`steps[]` with all object keys sorted lexicographically and floats normalised to
-6 decimal places. This is computed in the brain at freeze time and re-computed at
-replay start for integrity verification.
+**Hash canonicalisation:** `plan_hash` is SHA-256 of the compact JSON serialisation of the **entire**
+`steps[]` array (`json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)`): object keys
+are sorted lexicographically (key order is irrelevant), **no field is excluded**, and numbers are
+serialised as-is — with **no** additional rounding. It is computed only in the Python brain, so the
+float representation is deterministic within the interpreter. Computed at freeze time and re-computed
+at replay start; any field change → mismatch → exit 3.
 
 ---
 
@@ -182,8 +184,16 @@ This command:
 
 This design makes "the tests rewrote their own baseline" structurally impossible.
 Dual hashing catches visual-only (CSS/layout) regressions that pure a11y diffing
-is blind to, surfaced as a `VISUAL_WARN` event rather than a hard failure
-(configurable).
+is blind to. By default a visual regression is **advisory** (`VISUAL_WARN`, no effect
+on the exit code; cross-process screenshot byte-stability is not yet proven —
+GAP-RISK-009). A deployment that has proven byte-stability can gate exit 2 on a visual
+diff (like a11y) with **`SENTINEL_VISUAL_AUTHORITATIVE=1`** (ADR-042); gating on by
+default awaits the real-browser byte-stability proof (M9-LIVE).
+
+> **Golden integrity (HMAC, #24):** `golden_snapshots` rows are signed with HMAC-SHA256
+> (key `state/golden.key`, kept out of the DB). The `created_at` field is **excluded** from
+> the signature so Go/Python float-formatting divergence can't break verification. A tampered
+> row → mismatch on read → exit 3 (a forged baseline is never trusted).
 
 ---
 
@@ -251,7 +261,7 @@ the provider cannot give (see ADR-006 in `../ARCHITECTURE.md`).
 |------|---------|--------------|
 | **0** | All non-quarantined steps passed | Clean CI run |
 | **1** | One or more step failures, no golden-diff regression | Functional test failure; no baseline impact |
-| **2** | Golden-diff regression on a non-quarantined step | `diff_ratio` above threshold **or** `screenshot_hash` divergence on a milestone step |
+| **2** | Golden-diff regression on a non-quarantined step | `a11y_hash` divergence on a milestone step (**always** gates); `screenshot_hash` divergence only when `SENTINEL_VISUAL_AUTHORITATIVE=1` (advisory by default) |
 | **3** | Plan-integrity violation **or** budget exhausted | Hash mismatch on load, explicit budget cap hit, or `--force-replay` used in CI mode |
 
 Quarantined steps are **excluded** from exit-code computation: a quarantined step

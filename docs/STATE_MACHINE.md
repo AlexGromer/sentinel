@@ -54,7 +54,7 @@
 | Поле | Тип | Описание |
 |---|---|---|
 | `exploration_plan` | `list[PlannedAction]` | Упорядоченная последовательность запланированных шагов. Каждый `PlannedAction`: `{step_id, intent, semantic_id, action_type, locator, locator_alternatives[L1..L6], value?, expected_outcome, assertion, is_critical, is_milestone, healed: bool}` |
-| `plan_hash` | `str` | SHA-256 канонического JSON всех шагов (ключи отсортированы, числа с плавающей точкой нормализованы до 6 знаков). Жёсткий аварийный останов при несоответствии в режиме replay/ci |
+| `plan_hash` | `str` | SHA-256 канонического JSON всех шагов (ключи отсортированы; числа сериализуются как есть, без округления). Жёсткий аварийный останов при несоответствии в режиме replay/ci |
 | `current_step` | `int` | Индекс в `exploration_plan` |
 
 ### 2.4 Покрытие / Сходимость

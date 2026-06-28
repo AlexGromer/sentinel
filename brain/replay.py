@@ -27,6 +27,11 @@ def _a11y_hash(aria: str) -> str:
     return hashlib.sha256((aria or "").encode()).hexdigest()
 
 
+def _env_flag(name: str) -> bool:
+    """Truthy-string env flag (1/true/yes/on, case-insensitive). Unset/empty -> False."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _basename(url: str) -> str:
     p = normalize_url(url)
     return p.rsplit("/", 1)[-1] or p
@@ -94,6 +99,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     old_base = normalize_url(plan.get("target_url", "")).rsplit("/", 1)[0] + "/"
     new_base = normalize_url(new_target).rsplit("/", 1)[0] + "/"
     report["old_base"], report["new_base"] = old_base, new_base
+
+    # GAP-RISK-009: visual (screenshot) golden regressions are ADVISORY by default. A deployment
+    # that has PROVEN screenshot bytes are stable across browser processes can opt the visual diff
+    # into gating exit 2 (like a11y) via SENTINEL_VISUAL_AUTHORITATIVE=1. Default-on awaits the
+    # real-browser byte-stability proof (M9-LIVE). Read once per run so tests can toggle per-call.
+    visual_authoritative = _env_flag("SENTINEL_VISUAL_AUTHORITATIVE")
 
     ex.call("initialize")
     checked = set()
@@ -178,9 +189,10 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
 
         # --- golden capture / diff: once per page, at FIRST landing -------------
         # Symmetry: baseline AND replay both snapshot a page on first arrival, so the compared
-        # states match (a button clicked later must not shift the golden). a11y-hash drives exit 2
-        # (deterministic); screenshot-hash regression is ADVISORY in M3 (cross-process byte-stable
-        # screenshots aren't guaranteed — GAP-RISK-009).
+        # states match (a button clicked later must not shift the golden). a11y-hash always drives
+        # exit 2 (deterministic). screenshot-hash regression is ADVISORY by default (cross-process
+        # byte-stable screenshots aren't guaranteed — GAP-RISK-009); it gates exit 2 only when
+        # SENTINEL_VISUAL_AUTHORITATIVE=1 (visual_authoritative).
         pkey = _basename(ex.call("browser.currentUrl").get("url", ""))
         if pkey not in checked:
             checked.add(pkey)
@@ -203,11 +215,13 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                     a_diff = g["a11y_hash"] != a11y
                     s_diff = g["screenshot_hash"] != shot
                     if a_diff or s_diff:
-                        kinds = (["a11y"] if a_diff else []) + (["visual(advisory)"] if s_diff else [])
-                        report["regressions"].append({"page": pkey, "kinds": kinds, "exit2": a_diff})
+                        visual_label = "visual" if visual_authoritative else "visual(advisory)"
+                        kinds = (["a11y"] if a_diff else []) + ([visual_label] if s_diff else [])
+                        gate = a_diff or (s_diff and visual_authoritative)
+                        report["regressions"].append({"page": pkey, "kinds": kinds, "exit2": gate})
                         rec["regression"] = kinds
-                        if a_diff:
-                            regressions += 1   # only a11y regressions gate exit 2 in M3
+                        if gate:
+                            regressions += 1   # a11y always; visual only when authoritative (GAP-RISK-009)
 
         report["steps"].append(rec)
 

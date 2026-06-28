@@ -54,7 +54,7 @@ All fields are checkpointed at each `checkpoint` node invocation.
 | Field | Type | Description |
 |---|---|---|
 | `exploration_plan` | `list[PlannedAction]` | Ordered sequence of planned steps. Each `PlannedAction`: `{step_id, intent, semantic_id, action_type, locator, locator_alternatives[L1..L6], value?, expected_outcome, assertion, is_critical, is_milestone, healed: bool}` |
-| `plan_hash` | `str` | SHA-256 of canonical JSON of all steps (sorted keys, floats normalized to 6 dp). Hard-abort on mismatch in replay/ci mode |
+| `plan_hash` | `str` | SHA-256 of canonical JSON of all steps (sorted keys; numbers serialised as-is, no rounding). Hard-abort on mismatch in replay/ci mode |
 | `current_step` | `int` | Index into `exploration_plan` |
 
 ### 2.4 Coverage / Convergence

@@ -23,8 +23,11 @@ def _metrics(rep: dict) -> str:
             by_strat[st] = by_strat.get(st, 0) + 1
     for st, n in sorted(by_strat.items()):
         lines.append(f'sentinel_heal_by_strategy_total{{strategy="{st}"}} {n}')
-    a11y = sum(1 for g in rep.get("regressions", []) if g.get("exit2"))
-    visual = sum(1 for g in rep.get("regressions", []) if "visual(advisory)" in g.get("kinds", []))
+    # GAP-RISK-009/ADR-042: count by the kind label, not by exit2 — in authoritative mode a visual
+    # regression has exit2=True too, so an exit2-based a11y count would misattribute it. "visual*"
+    # covers both the advisory ("visual(advisory)") and authoritative ("visual") labels.
+    a11y = sum(1 for g in rep.get("regressions", []) if "a11y" in g.get("kinds", []))
+    visual = sum(1 for g in rep.get("regressions", []) if any(k.startswith("visual") for k in g.get("kinds", [])))
     lines.append(f'sentinel_regression_total{{kind="a11y"}} {a11y}')
     lines.append(f'sentinel_regression_total{{kind="visual"}} {visual}')
     lines.append(f"sentinel_quarantined_total {sum(1 for s in rep.get('steps', []) if s.get('quarantined'))}")
