@@ -1,0 +1,49 @@
+# Sentinel — example LiteLLM proxy config (ADR-045, OPTIONAL model-router). See docs/ADAPTERS.md.
+#
+# LiteLLM is an OpenAI-compatible gateway in front of many providers. Sentinel does NOT depend on it:
+# the brain already speaks OpenAI-compat (brain/llm.py OpenAICompatBackend), so you point Sentinel at
+# this proxy with ONE env var and never change code:
+#
+#   docker compose --profile litellm up -d litellm           # bring the router up (mirrors the ollama profile)
+#   LLM_BACKEND=openai LLM_BASE_URL=http://litellm:4000/v1 \  # then drive Sentinel through it, per role if wanted
+#   LLM_MODEL=deepseek-chat LLM_API_KEY=$LITELLM_MASTER_KEY ./bin/agentctl run --target ...
+#
+# SECURITY: provider keys are read from the environment at startup via `os.environ/<VAR>` — NEVER write a
+# literal key in this file (it would be committed and flagged by gitleaks). Set the vars in your shell,
+# a .env file, or the compose `environment:` block. Model ids below match Sentinel's defaults (verify
+# provider model names against the provider's current catalog before live use).
+
+model_list:
+  # DeepSeek — OpenAI-compatible endpoint.
+  - model_name: deepseek-chat
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com/v1
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # Mistral — native LiteLLM provider.
+  - model_name: mistral-large
+    litellm_params:
+      model: mistral/mistral-large-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+  # Anthropic — direct (Sentinel's default planner/heal models).
+  - model_name: claude-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Local model served by the `ollama` compose profile (keyless, same compose network).
+  - model_name: local-mistral
+    litellm_params:
+      model: ollama/mistral
+      api_base: http://ollama:11434
+      api_key: none
+
+# The proxy's own bearer key — clients (Sentinel) send it as the OpenAI api_key. Read from the env, no literal.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

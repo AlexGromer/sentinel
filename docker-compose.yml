@@ -30,6 +30,11 @@ x-sentinel-base: &sentinel-base
     # LLM_MODEL: ${LLM_MODEL:-}          # pick one from docs/LOCAL_MODELS.md §5c
     # LLM_API_KEY: noauth                # Ollama ignores the key; the SDK requires a non-empty value
     # LLM_VISION: ${LLM_VISION:-0}       # set 1 only for a vision-capable heal model
+    # --- or via the optional `litellm` multi-provider router (ADR-045; see docs/ADAPTERS.md) ----
+    # LLM_BACKEND: openai
+    # LLM_BASE_URL: http://litellm:4000/v1
+    # LLM_MODEL: deepseek-chat           # a model_name from deploy/litellm/config.yaml
+    # LLM_API_KEY: ${LITELLM_MASTER_KEY:-}  # the proxy's master_key
 
 services:
   # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name:
@@ -62,6 +67,24 @@ services:
       - ollama:/root/.ollama
     ports:
       - "11434:11434"
+
+  # Optional model-router (OpenAI-compatible at http://litellm:4000/v1) over many providers — ADR-045.
+  # `docker compose --profile litellm up -d litellm`; routing + provider keys in deploy/litellm/config.yaml.
+  # Then drive Sentinel with LLM_BACKEND=openai LLM_BASE_URL=http://litellm:4000/v1 (see docs/ADAPTERS.md).
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:latest
+    profiles: ["litellm"]
+    volumes:
+      - ./deploy/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      # config.yaml reads these via os.environ/<VAR> — passthrough from the host, never a literal key.
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    ports:
+      - "4000:4000"
 
   # Local, air-gapped setup-WebUI + chat-front + calculators (bundled into the image under /app/docs).
   #   docker compose --profile webui up   →   open http://localhost:8088/setup/  (also /chat/ and /calculators/)

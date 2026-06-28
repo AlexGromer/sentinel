@@ -107,6 +107,15 @@ def test_mcp_server_exposes_tools():
     assert "target_url" in props, props
 
 
+def test_explore_tool_calls_run_explore_with_correct_arity():
+    """Regression: the `explore` MCP tool must call `_run_explore` with its real arity. A stray 7th
+    positional ('llm') once raised TypeError before any sampling ran (the planner is env-selected, not
+    positional). Bind the exact 6 args server.py's explore() passes — drift here re-raises TypeError."""
+    import inspect
+    from brain.__main__ import _run_explore
+    inspect.signature(_run_explore).bind(object(), "rid", object(), "http://x", 0.85, 40)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
