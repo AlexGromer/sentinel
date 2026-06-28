@@ -61,6 +61,8 @@ now**, **browser extension later**.
 4. **co-pilot takeover/return:** the agent drives → hands control to the human → takes it back.
    Human-in-the-loop live authoring/editing. The second branch (after chat-UI).
 
+**Status (M9.6, Wave D, 2026-06-28):** F2 (headed) + F3 (CDP-attach) **delivered offline** — env `PW_HEADLESS=0` / `PW_CDP_ENDPOINT` (`pw-executor/src/launch.ts` + `server.ts`; contract `M9.6_CONTRACT.md`; ADR-037). F4 is a separate milestone **M9.8**. Engine is **Chromium-only by design** (ADR-036): `connectOverCDP` is Chromium-only, golden hashes differ per engine → Firefox/WebKit deferred to **GAP-OPS-001**. Deterministic golden replay is **headless-only** (headed/CDP = observation modes).
+
 ## G. Access surfaces — MCP AND non-MCP (both)
 - **MCP mode:** the brain as an MCP server (M7, ADR-020) — any MCP host (Open WebUI/Claude Desktop/…) drives it.
 - **Non-MCP mode:** a thin **HTTP/gRPC control API** to the brain (reuse/extend RunControl) — for a chat-UI
