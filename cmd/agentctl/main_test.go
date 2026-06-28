@@ -56,6 +56,48 @@ func TestFilteredEnvDefaultOn(t *testing.T) {
 	}
 }
 
+// unsetAllowlist forces SENTINEL_ENV_ALLOWLIST *absent* (t.Setenv cannot unset) so a test exercises
+// the genuine default-on path. Restores the original value on cleanup.
+func unsetAllowlist(t *testing.T) {
+	t.Helper()
+	if orig, ok := os.LookupEnv("SENTINEL_ENV_ALLOWLIST"); ok {
+		if err := os.Unsetenv("SENTINEL_ENV_ALLOWLIST"); err != nil {
+			t.Fatalf("unset SENTINEL_ENV_ALLOWLIST: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Setenv("SENTINEL_ENV_ALLOWLIST", orig) })
+	}
+}
+
+// TestFilteredEnvPrefixNarrowing locks issue #25 (GAP-SEC-001 remainder): the broad NODE_/GIT_
+// prefixes leaked host secrets (NODE_AUTH_TOKEN = npm registry auth, GIT_ASKPASS = a program git
+// runs to obtain credentials). Default-on, those two MUST now be dropped, while the legitimate
+// corporate-TLS runtime vars they were meant to carry (NODE_OPTIONS / NODE_EXTRA_CA_CERTS /
+// GIT_SSL_CAINFO), now exact-allowlisted, MUST still pass.
+func TestFilteredEnvPrefixNarrowing(t *testing.T) {
+	unsetAllowlist(t)
+
+	// Leaky secrets that the old NODE_/GIT_ prefixes let through — MUST be dropped now.
+	t.Setenv("NODE_AUTH_TOKEN", "npm_sekret") // npm registry auth token
+	t.Setenv("GIT_ASKPASS", "/usr/bin/leak")  // git credential-prompt program (exfil vector)
+	// Legitimate runtime/TLS vars — MUST still pass via the exact allowlist.
+	t.Setenv("NODE_OPTIONS", "--max-old-space-size=512")
+	t.Setenv("NODE_EXTRA_CA_CERTS", "/etc/ssl/extra-ca.pem")
+	t.Setenv("GIT_SSL_CAINFO", "/etc/ssl/git-ca.pem")
+
+	got := envMap(filteredEnv())
+
+	for _, name := range []string{"NODE_AUTH_TOKEN", "GIT_ASKPASS"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("#25: %q leaked to brain — broad NODE_/GIT_ prefix must be narrowed", name)
+		}
+	}
+	for _, name := range []string{"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("#25: %q should pass via the exact allowlist but was dropped", name)
+		}
+	}
+}
+
 // TestFilteredEnvOptOut verifies the escape hatch: SENTINEL_ENV_ALLOWLIST=0 → full passthrough,
 // so even an unrelated secret survives (for debugging / unusual local setups).
 func TestFilteredEnvOptOut(t *testing.T) {
