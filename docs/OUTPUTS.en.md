@@ -86,6 +86,13 @@ playwright show-trace trace.zip
 This is the primary artifact for debugging CI failures. No custom trace infrastructure
 is required; the Playwright trace format is the source of truth.
 
+**Access & retention (#26, THREAT_MODEL ❹).** `runs/` and each `runs/<id>/` are created `0700`
+(owner-only): `trace.zip` may hold AUT DOM/screenshots (PII), so other local users can't read it.
+Retention: on every run `agentctl` keeps `trace.zip` only for the newest `SENTINEL_TRACE_KEEP` runs
+(default 10; a value `<0` disables count-pruning) and deletes any `trace.zip` older than
+`SENTINEL_TRACE_TTL_HOURS` (default `0` = TTL off). **Only** `trace.zip` is removed — `plan.json` and
+reports stay for the audit trail. Applied only to the default `runs/`, never a user `--artifact-dir`.
+
 ---
 
 ### 5. Regression Golden Baselines
