@@ -487,6 +487,11 @@ cost (§6) · VRAM (§5) · model selector (§3.3) · legend · documentation.
   rendered only via Jekyll). The old `docs/calculators/*.html` stay on disk as "advanced".
 - Replaces `docs/index.md` (Jekyll cayman) → static `index.html` (**ADR-033**). §5/§6 formulas verbatim;
   embedded self-tests reproduce the worked examples (cost A–E; VRAM); `node --check` clean.
+- **M11.6b (cost-explorer follow-up, ADR-034):** popular-model catalog (Claude/GPT/Grok/GLM/DeepSeek/Qwen
+  + local) + **blended $/1M** by default (in/out under advanced) + **per-model token multiplier** (reasoning
+  think-tokens) + fit/reasoning/vision badges; **air-gapped live pricing**: embedded seeds → `prices.json`
+  (CI `prices-refresh.yml` via OpenRouter → PR) → "Refresh from OpenRouter" button (network on click only).
+  Price source LOCAL_MODELS §3.4.
 
 ### Acceptance criteria M11.6
 

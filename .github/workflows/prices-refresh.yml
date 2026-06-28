@@ -1,0 +1,55 @@
+# Weekly refresh of docs/prices.json from OpenRouter's public model catalog (M11.6b).
+#
+# The Pages cost-explorer ships embedded seed prices (air-gapped); this job keeps a committed
+# docs/prices.json current so Pages/bundle visitors see fresher numbers without any per-load
+# network. It opens a PR (main is protected) — prices stay illustrative ("verify"); a human
+# reviews/merges. Runtime "Refresh from OpenRouter" button covers on-demand live prices.
+name: prices-refresh
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+# Least privilege: write contents to push the branch, PRs to open the refresh PR.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prices-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Refresh docs/prices.json from OpenRouter
+        run: node scripts/refresh-prices.mjs
+
+      - name: Open a PR if prices changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- docs/prices.json; then
+            echo "prices.json unchanged — nothing to do."
+            exit 0
+          fi
+          branch="prices-refresh/$(date -u +%Y%m%d-%H%M)"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs/prices.json
+          git commit -m "chore(prices): refresh OpenRouter pricing ($(date -u +%Y-%m-%d))"
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "chore(prices): weekly OpenRouter price refresh" \
+            --body "Automated refresh of \`docs/prices.json\` from OpenRouter \`/api/v1/models\`. Prices remain **illustrative** — verify before relying on them. Unmatched models keep their seed." \
+            || echo "PR creation skipped (one may already be open for this branch)."

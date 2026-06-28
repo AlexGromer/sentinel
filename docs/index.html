@@ -6,13 +6,19 @@
 <title>Sentinel — стоимость, модели, железо · cost / models / hardware</title>
 <meta name="description" content="Sentinel: подбор модели, оценка токенов/стоимости/времени и VRAM — на одной странице, офлайн. Model picker, token/cost/time estimate and VRAM sizing — one page, offline.">
 <!--
-  Sentinel docs hub — single self-contained page (no network, no CDN, no fonts, no build).
+  Sentinel docs hub — single self-contained page (no CDN, no fonts, no build).
   Works on GitHub Pages, file:// and the webui Docker bundle identically.
-  ALL math mirrors docs/LOCAL_MODELS.md  §5 (VRAM) and §6 (token-cost) — the single source of
-  truth. If §5/§6 change, update the COST / BPW constants below AND re-verify the worked-example
-  self-tests (cost vectors A-E; VRAM examples). See the assert block at the end of the script.
-  Pricing and tok/s are ILLUSTRATIVE, editable defaults — never asserted as current real prices
-  (cloud pricing drifts; assistant knowledge cutoff Jan-2026). Verify via the provider links.
+  ALL token/VRAM math mirrors docs/LOCAL_MODELS.md §5 (VRAM) and §6 (token-cost) — the single
+  source of truth. If §5/§6 change, update the COST / BPW constants below AND re-verify the
+  worked-example self-tests (cost vectors A-E; VRAM examples). See the assert block at the end.
+
+  PRICING (M11.6b): seed prices live in the MODELS array below — ILLUSTRATIVE, EDITABLE, and
+  marked "verify" (cloud pricing drifts; assistant cutoff Jan-2026). Provenance: Claude from the
+  claude-api skill (2026-06-04); others researched 2026-06-28 from provider pages (see links).
+  Three layers, air-gapped-safe: (1) embedded seeds always load with ZERO network (file://-safe);
+  (2) best-effort fetch('prices.json') overrides seeds on Pages/bundle (silently skipped on file://);
+  (3) a manual "Refresh from OpenRouter" button fetches live prices ON CLICK only.
+  "fit"/reasoning/vision flags are documented OPINION, not benchmarks.
 -->
 <style>
 :root{
@@ -71,6 +77,16 @@ input:disabled{opacity:.4}
   color:#0b0b10;font-weight:700;box-shadow:var(--glow)}
 details{margin:.6rem 0;border:1px solid var(--line);border-radius:8px;padding:.2rem .6rem;background:var(--bg3)}
 summary{cursor:pointer;color:var(--acc2);font-size:.9rem;padding:.35rem 0}
+.btn{background:var(--bg3);border:1px solid var(--acc);color:var(--acc2);border-radius:8px;
+  padding:.4rem .7rem;cursor:pointer;font:inherit}
+.btn:hover{box-shadow:var(--glow)}
+.ctl-row{display:flex;gap:.7rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
+.asof{font-size:.74rem;color:var(--mut);margin:.3rem 0}
+.prow{border:1px solid var(--line);border-radius:8px;padding:.5rem;background:var(--bg2)}
+.prow-row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.3rem}
+.prow .io{display:none;gap:.5rem;flex-wrap:wrap;margin-top:.3rem}
+#price-edit.io-on .prow .io{display:flex}
+.prow .col{flex:1;min-width:90px}
 /* tables */
 .scroll{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:.92rem;margin-top:.4rem}
@@ -83,6 +99,12 @@ tr.mut td{color:var(--mut)}
 .yes{color:var(--ok);font-weight:600}
 .no{color:var(--no);font-weight:600}
 .v-ok{color:var(--ok)}.v-warn{color:var(--warn)}
+.bdg{display:inline-block;font-size:.66rem;border:1px solid var(--line);border-radius:5px;
+  padding:0 .3rem;margin-left:.22rem;color:var(--mut)}
+.bdg.h{color:var(--ok);border-color:var(--ok)}
+.bdg.m{color:var(--warn);border-color:var(--warn)}
+.bdg.l{color:var(--no);border-color:var(--no)}
+.bdg.vf{color:var(--warn);border-color:var(--warn)}
 /* recommendation */
 .rec{font-size:1.0rem;line-height:1.62}
 .rec p{margin:.2rem 0 .5rem}
@@ -250,14 +272,18 @@ body.lang-en [data-lang="ru"]{display:none !important}
   <section class="card" id="cost">
     <h2><span class="n">2</span><span data-lang="ru">Стоимость прогона по моделям</span><span data-lang="en">Cost per run across models</span></h2>
     <p class="sub">
-      <span data-lang="ru">Токены и $/прогон для вашей задачи на разных моделях/планах + сколько прогонов влезает в бюджет. Локально — бесплатно; replay — 0 токенов.</span>
-      <span data-lang="en">Tokens and $/run for your task across models/plans + how many runs fit your budget. Local is free; replay is 0 tokens.</span>
+      <span data-lang="ru">Токены и $/прогон для вашей задачи по популярным моделям (облако + локально) + сколько
+        прогонов влезает в бюджет. Цена считается по <b>среднему $/1M</b> (вход/выход раздельно — в «цены»).
+        Каждая модель имеет <b>токен-множитель</b> (reasoning-модели шлют лишние think-токены). Локально — бесплатно; replay — 0 токенов.</span>
+      <span data-lang="en">Tokens and $/run for your task across popular models (cloud + local) + how many runs fit your
+        budget. Cost uses a <b>blended $/1M</b> (separate in/out under "prices"). Each model has a
+        <b>token multiplier</b> (reasoning models emit extra think-tokens). Local is free; replay is 0 tokens.</span>
     </p>
     <div class="scroll">
       <table>
-        <caption>⚠ <span data-lang="ru">цены ориентировочные — cutoff Jan-2026</span><span data-lang="en">illustrative pricing — cutoff Jan-2026</span></caption>
+        <caption>⚠ <span data-lang="ru">цены ориентировочные, редактируемые — cutoff Jan-2026; H/M/L = пригодность для Sentinel (мнение), 🧠 reasoning, 👁 vision</span><span data-lang="en">illustrative, editable pricing — cutoff Jan-2026; H/M/L = fit for Sentinel (opinion), 🧠 reasoning, 👁 vision</span></caption>
         <thead><tr>
-          <th scope="col"><span data-lang="ru">Модель · план</span><span data-lang="en">Model · plan</span></th>
+          <th scope="col"><span data-lang="ru">Модель</span><span data-lang="en">Model</span></th>
           <th scope="col"><span data-lang="ru">Токенов/прогон</span><span data-lang="en">Tokens/run</span></th>
           <th scope="col">$/<span data-lang="ru">прогон</span><span data-lang="en">run</span></th>
           <th scope="col"><span data-lang="ru">Прогонов в бюджет</span><span data-lang="en">Runs in budget</span></th>
@@ -267,11 +293,19 @@ body.lang-en [data-lang="ru"]{display:none !important}
       </table>
     </div>
     <details>
-      <summary><span data-lang="ru">💲 Редактировать цены (за 1M токенов) — ⚠ проверьте по ссылкам</span><span data-lang="en">💲 Edit prices (per 1M tokens) — ⚠ verify via the links</span></summary>
+      <summary><span data-lang="ru">💲 Цены и токен-множители (за 1M токенов) — ⚠ проверьте по ссылкам</span><span data-lang="en">💲 Prices & token multipliers (per 1M tokens) — ⚠ verify via the links</span></summary>
       <div class="warnbox">
-        <span data-lang="ru">Цены — ориентировочные и редактируемые, НЕ утверждение об актуальной стоимости. Облачные цены меняются; knowledge cutoff — январь 2026. Проверьте по ссылкам провайдеров.</span>
-        <span data-lang="en">Prices are illustrative & editable, NOT a claim of current cost. Cloud pricing drifts; knowledge cutoff Jan-2026. Verify via the provider links.</span>
+        <span data-lang="ru">Цены — ориентировочные и редактируемые, НЕ утверждение об актуальной стоимости. Облачные цены меняются; knowledge cutoff — январь 2026. Claude — из claude-api skill (2026-06-04); остальные — исследование 2026-06-28. Проверьте по ссылкам провайдеров. Кнопка ниже тянет живые цены из OpenRouter (сеть, только по клику).</span>
+        <span data-lang="en">Prices are illustrative & editable, NOT a claim of current cost. Cloud pricing drifts; knowledge cutoff Jan-2026. Claude is from the claude-api skill (2026-06-04); others researched 2026-06-28. Verify via the provider links. The button below pulls live prices from OpenRouter (network, on click only).</span>
       </div>
+      <div class="ctl-row">
+        <label style="display:inline-flex;align-items:center;gap:.35rem;margin:0">
+          <input type="checkbox" id="split-mode" style="width:auto">
+          <span data-lang="ru">раздельно вход/выход</span><span data-lang="en">separate in/out</span>
+        </label>
+        <button type="button" class="btn" id="or-btn">⟳ <span data-lang="ru">Обновить из OpenRouter</span><span data-lang="en">Refresh from OpenRouter</span></button>
+      </div>
+      <div class="asof" id="price-asof"></div>
       <div class="grid g2" id="price-edit"></div>
     </details>
   </section>
@@ -323,7 +357,7 @@ body.lang-en [data-lang="ru"]{display:none !important}
 
   <!-- ============================ MODEL SELECTOR ============================ -->
   <section class="card" id="models">
-    <h2><span class="n">4</span><span data-lang="ru">Подбор модели по железу</span><span data-lang="en">Model picker by hardware</span></h2>
+    <h2><span class="n">4</span><span data-lang="ru">Подбор локальной модели по железу</span><span data-lang="en">Local model picker by hardware</span></h2>
     <p class="sub">
       <span data-lang="ru">Что брать на ваш тир VRAM (§3.3). Имена/размеры — из LOCAL_MODELS §3: <span class="v-ok">✅</span> проверено · <span class="v-warn">⚠</span> verify-before-use.</span>
       <span data-lang="en">What to pick for your VRAM tier (§3.3). Names/sizes from LOCAL_MODELS §3: <span class="v-ok">✅</span> verified · <span class="v-warn">⚠</span> verify-before-use.</span>
@@ -349,9 +383,11 @@ body.lang-en [data-lang="ru"]{display:none !important}
       <dt>V</dt><dd><span data-lang="ru">Vision: чинить локаторы по скриншоту (VLM). Дороже.</span><span data-lang="en">Vision: heal locators from a screenshot (VLM). More expensive.</span></dd>
       <dt><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></dt><dd><span data-lang="ru"><b class="mono">explore</b> — карта всего сайта; <b class="mono">goal</b> — по NL-цели поверх explore (−~85% планирования); <b class="mono">replay</b> — детерминированный повтор, 0 токенов.</span><span data-lang="en"><b class="mono">explore</b> — map the whole site; <b class="mono">goal</b> — from an NL goal on top of explore (−~85% planning); <b class="mono">replay</b> — deterministic re-run, 0 tokens.</span></dd>
       <dt>PLAN / HEAL / VISION</dt><dd><span data-lang="ru">Роли LLM: планирование сценариев / повторная привязка локатора / чтение скриншота.</span><span data-lang="en">LLM roles: scenario planning / locator re-grounding / screenshot reading.</span></dd>
-      <dt><span data-lang="ru">Токены</span><span data-lang="en">Tokens</span></dt><dd><span data-lang="ru">Единицы работы LLM. Бюджеты: PLAN ≤ 50k, HEAL ≤ 20k на прогон (превышение → детерминированный fallback).</span><span data-lang="en">LLM work units. Budgets: PLAN ≤ 50k, HEAL ≤ 20k per run (overflow → deterministic fallback).</span></dd>
+      <dt><span data-lang="ru">Токены</span><span data-lang="en">Tokens</span></dt><dd><span data-lang="ru">Единицы работы LLM = объём задачи (P·S·хилы), ~одинаков между моделями. Бюджеты: PLAN ≤ 50k, HEAL ≤ 20k на прогон.</span><span data-lang="en">LLM work units = the workload (P·S·heals), ~same across models. Budgets: PLAN ≤ 50k, HEAL ≤ 20k per run.</span></dd>
+      <dt><span data-lang="ru">Среднее $/1M</span><span data-lang="en">Blended $/1M</span></dt><dd><span data-lang="ru">Цена за 1M токенов, усреднённая вход/выход (по сплиту ~80/20). «раздельно» открывает вход/выход.</span><span data-lang="en">Price per 1M tokens, averaged over in/out (~80/20 split). "separate" reveals in/out.</span></dd>
+      <dt><span data-lang="ru">токен ×</span><span data-lang="en">token ×</span></dt><dd><span data-lang="ru">Множитель токенов на модель: токенайзер + reasoning «think»-токены (R1/o-серия). Ориентир, редактируемый.</span><span data-lang="en">Per-model token multiplier: tokenizer + reasoning "think" tokens (R1/o-series). Illustrative, editable.</span></dd>
+      <dt>H / M / L · 🧠 · 👁</dt><dd><span data-lang="ru">Пригодность для structured-JSON Sentinel (мнение, не бенчмарк) · reasoning-модель · поддержка vision.</span><span data-lang="en">Fit for Sentinel's structured-JSON role (opinion, not a benchmark) · reasoning model · vision support.</span></dd>
       <dt>Quant</dt><dd><span data-lang="ru">Квантизация весов (Q4_K_M и т.п.): меньше бит → меньше VRAM, чуть ниже качество.</span><span data-lang="en">Weight quantization (Q4_K_M etc.): fewer bits → less VRAM, slightly lower quality.</span></dd>
-      <dt>VRAM</dt><dd><span data-lang="ru">Видеопамять GPU, нужная под модель.</span><span data-lang="en">GPU memory the model needs.</span></dd>
       <dt>tok/s</dt><dd><span data-lang="ru">Скорость генерации (токенов/сек) — задаёт время прогона локально.</span><span data-lang="en">Generation speed (tokens/sec) — sets local run time.</span></dd>
       <dt><span data-lang="ru">Прогонов</span><span data-lang="en">Runs</span></dt><dd><span data-lang="ru">Сколько прогонов покупает бюджет = бюджет ÷ цена прогона.</span><span data-lang="en">Runs the budget buys = budget ÷ cost per run.</span></dd>
     </dl>
@@ -362,7 +398,7 @@ body.lang-en [data-lang="ru"]{display:none !important}
     <h2><span class="n">6</span><span data-lang="ru">Документация</span><span data-lang="en">Documentation</span></h2>
     <div class="links">
       <a href="https://github.com/AlexGromer/sentinel/blob/main/README.md">README — <span data-lang="ru">обзор + быстрый старт</span><span data-lang="en">overview + quick start</span></a>
-      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/LOCAL_MODELS.md">LOCAL_MODELS — <span data-lang="ru">модели, VRAM, токены (источник формул)</span><span data-lang="en">models, VRAM, tokens (formula source)</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/LOCAL_MODELS.md">LOCAL_MODELS — <span data-lang="ru">модели, VRAM, токены, цены (§3.4)</span><span data-lang="en">models, VRAM, tokens, pricing (§3.4)</span></a>
       <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/TESTING.md">TESTING — <span data-lang="ru">офлайн-гейты, локальные модели, live-прогон</span><span data-lang="en">offline gates, local models, live run</span></a>
       <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/DEVELOPMENT.md">DEVELOPMENT — <span data-lang="ru">сборка, milestone-гейты</span><span data-lang="en">build, milestone gates</span></a>
       <a href="https://github.com/AlexGromer/sentinel/blob/main/ARCHITECTURE.md">ARCHITECTURE — <span data-lang="ru">компоненты + ADR</span><span data-lang="en">components + ADR</span></a>
@@ -374,8 +410,8 @@ body.lang-en [data-lang="ru"]{display:none !important}
 
   <footer>
     <p>Sentinel — Apache-2.0.
-      <span data-lang="ru">Все расчёты выполняются в браузере (офлайн, без сети). Математика — из проверенных формул кода (LOCAL_MODELS §5/§6). Имена моделей и цены, помеченные «verify», относятся к post-cutoff (январь 2026) — проверяйте перед боевым использованием.</span>
-      <span data-lang="en">All calculations run in your browser (offline, no network). Math derives from verified code formulas (LOCAL_MODELS §5/§6). Model names and prices marked “verify” are post-cutoff (Jan-2026) — verify before production use.</span>
+      <span data-lang="ru">Все расчёты выполняются в браузере (офлайн на загрузке). Математика токенов/VRAM — из проверенных формул кода (LOCAL_MODELS §5/§6). Имена моделей, цены и пригодность, помеченные «verify», относятся к post-cutoff (январь 2026) — проверяйте перед боевым использованием.</span>
+      <span data-lang="en">All calculations run in your browser (offline on load). Token/VRAM math derives from verified code formulas (LOCAL_MODELS §5/§6). Model names, prices and fit marked “verify” are post-cutoff (Jan-2026) — verify before production use.</span>
     </p>
   </footer>
 </main>
@@ -383,8 +419,10 @@ body.lang-en [data-lang="ru"]{display:none !important}
 <script>
 /* =========================================================================
    SENTINEL cost/model/VRAM hub — pure client-side, no dependencies.
-   SINGLE SOURCE OF TRUTH: docs/LOCAL_MODELS.md §5 (VRAM) + §6 (token-cost).
+   SINGLE SOURCE OF TRUTH for token/VRAM math: docs/LOCAL_MODELS.md §5 + §6.
    Self-tests at the bottom assert the doc's worked examples (cost A-E; VRAM).
+   Pricing = illustrative editable seeds (MODELS) + best-effort prices.json +
+   on-click OpenRouter refresh — see the header comment for provenance/cutoff.
    ========================================================================= */
 
 /* ---- §6 token-cost constants (proven from code: max_tokens + budgets) ---- */
@@ -404,7 +442,8 @@ function estimateTokens(P, S, R, V, mode) {
     COST.HEAL_BUDGET);
   return { plan: plan, heal: heal, total: plan + heal };
 }
-/* §6.3 dollar model: split total ~inShare in / (1-inShare) out, price per 1M. */
+/* §6.3 dollar model: split total ~inShare in / (1-inShare) out, price per 1M.
+   Note: equals total*blended/1e6 when blended = in*inShare + out*(1-inShare). */
 function costUsd(total, priceIn, priceOut, inShare) {
   return total * inShare * (priceIn / 1e6) + total * (1 - inShare) * (priceOut / 1e6);
 }
@@ -417,16 +456,31 @@ function vramTotal(paramsB, quant) {
   return { weights: w, total: w + VRAM_OVERHEAD };
 }
 
-/* ---- cloud pricing: ILLUSTRATIVE, EDITABLE defaults (NOT current real prices) ----
-   $/1M tokens in/out. Sonnet-class 3/15 matches LOCAL_MODELS §6.3's own $0.06 example. */
-var PRICES = [
-  { key:'opus',     label:'Claude Opus-class',   in:15,   out:75,   link:'https://www.anthropic.com/pricing' },
-  { key:'sonnet',   label:'Claude Sonnet-class', in:3,    out:15,   link:'https://www.anthropic.com/pricing' },
-  { key:'gpt',      label:'GPT-class',           in:2.5,  out:10,   link:'https://openai.com/api/pricing/' },
-  { key:'deepseek', label:'DeepSeek-class',      in:0.30, out:1.20, link:'https://api-docs.deepseek.com/quick_start/pricing' }
+/* ---- cloud model catalog: ILLUSTRATIVE, EDITABLE seeds (NOT current real prices) ----
+   in/out = $/1M. src 'skill' = Claude pricing from claude-api skill 2026-06-04; 'verify' =
+   researched 2026-06-28 from provider pages (links). reasoning/vision/fit = documented OPINION.
+   orid = best-effort OpenRouter slug for the refresh button (unmatched rows keep their seed).
+   Sonnet 4.6 (3/15) blended at 80/20 = 5.4 -> reproduces LOCAL_MODELS §6.3's $0.06 example. */
+var MODELS = [
+  { key:'opus48',   label:'Claude Opus 4.8',   in:5,    out:25,  ctx:'1M',   reasoning:true,  vision:true,  mult:1.0, fit:'high', src:'skill',  link:'https://www.anthropic.com/pricing',                       orid:'anthropic/claude-opus-4.8' },
+  { key:'sonnet46', label:'Claude Sonnet 4.6', in:3,    out:15,  ctx:'1M',   reasoning:true,  vision:true,  mult:1.0, fit:'high', src:'skill',  link:'https://www.anthropic.com/pricing',                       orid:'anthropic/claude-sonnet-4.6' },
+  { key:'haiku45',  label:'Claude Haiku 4.5',  in:1,    out:5,   ctx:'200K', reasoning:false, vision:true,  mult:1.0, fit:'high', src:'skill',  link:'https://www.anthropic.com/pricing',                       orid:'anthropic/claude-haiku-4.5' },
+  { key:'gpt54',    label:'GPT-5.4',           in:2.5,  out:15,  ctx:'1M',   reasoning:false, vision:true,  mult:1.0, fit:'high', src:'verify', link:'https://openai.com/api/pricing/',                         orid:'openai/gpt-5.4' },
+  { key:'gpt54mini',label:'GPT-5.4-mini',      in:0.75, out:4.5, ctx:'400K', reasoning:false, vision:true,  mult:1.0, fit:'high', src:'verify', link:'https://openai.com/api/pricing/',                         orid:'openai/gpt-5.4-mini' },
+  { key:'o3',       label:'OpenAI o3',         in:2,    out:8,   ctx:'200K', reasoning:true,  vision:false, mult:1.3, fit:'med',  src:'verify', link:'https://openai.com/api/pricing/',                         orid:'openai/o3' },
+  { key:'grok43',   label:'xAI Grok 4.3',      in:1.25, out:2.5, ctx:'1M',   reasoning:false, vision:true,  mult:1.0, fit:'med',  src:'verify', link:'https://docs.x.ai/developers/models',                     orid:'x-ai/grok-4.3' },
+  { key:'glm5',     label:'Zhipu GLM-5',       in:1.0,  out:3.2, ctx:'—',    reasoning:false, vision:false, mult:1.0, fit:'med',  src:'verify', link:'https://docs.z.ai/guides/overview/pricing',               orid:'z-ai/glm-5' },
+  { key:'glm47',    label:'Zhipu GLM-4.7',     in:0.6,  out:2.2, ctx:'—',    reasoning:false, vision:false, mult:1.0, fit:'med',  src:'verify', link:'https://docs.z.ai/guides/overview/pricing',               orid:'z-ai/glm-4.7' },
+  { key:'dsflash',  label:'DeepSeek-V4-flash', in:0.14, out:0.28,ctx:'1M',   reasoning:true,  vision:false, mult:1.0, fit:'high', src:'verify', link:'https://api-docs.deepseek.com/quick_start/pricing',      orid:'deepseek/deepseek-v4-flash' },
+  { key:'dspro',    label:'DeepSeek-V4-pro',   in:0.435,out:0.87,ctx:'1M',   reasoning:true,  vision:false, mult:1.3, fit:'high', src:'verify', link:'https://api-docs.deepseek.com/quick_start/pricing',      orid:'deepseek/deepseek-v4-pro' },
+  { key:'qwenplus', label:'Qwen-plus',         in:0.4,  out:1.2, ctx:'1M',   reasoning:false, vision:false, mult:1.0, fit:'med',  src:'verify', link:'https://www.alibabacloud.com/help/en/model-studio/model-pricing', orid:'qwen/qwen-plus' }
 ];
+var INSHARE_SEED = 0.8;
+/* live, editable per-model pricing state (the inputs are a view onto this). */
+var SP = {};
+MODELS.forEach(function(m){ SP[m.key] = { in:m.in, out:m.out, blended:m.in*INSHARE_SEED + m.out*(1-INSHARE_SEED), mult:m.mult }; });
 
-/* ---- model catalog (names/sizes from LOCAL_MODELS §3; verify flag carried) ---- */
+/* ---- local model catalog (names/sizes from LOCAL_MODELS §3; verify flag carried) ---- */
 var CATALOG = [
   { n:'Phi-4-mini-instruct',           p:3.8,  q:'Q5_K_M', role:'PLAN',   v:'⚠' },
   { n:'Qwen3-4B',                      p:4,    q:'Q5_K_M', role:'PLAN',   v:'⚠' },
@@ -463,12 +517,33 @@ var TASK_PRESETS = {
 /* ----------------------------- helpers ----------------------------- */
 function $(id){ return document.getElementById(id); }
 function num(id, def){ var v = parseFloat($(id).value); return isFinite(v) ? v : def; }
-function grp(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); } // thin-space groups
-function money(x){ if (x === 0) return '$0.00'; if (x > 0 && x < 0.01) return '<$0.01'; return '$' + x.toFixed(2); }
+function val(id){ var e = $(id); return e ? e.value : ''; }
+function grp(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); } // thin-space groups
+function money(x){ if (x === 0) return '$0.00'; if (x > 0 && x < 0.01) return '&lt;$0.01'; return '$' + x.toFixed(2); }
 function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
 function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
+
+/* effective tokens + cost for a cloud model given the workload total + state. */
+function modelCost(m, total, st){
+  var sp = SP[m.key];
+  var eff = total * (sp.mult || 1);
+  var cost = st.splitMode ? costUsd(eff, sp.in, sp.out, st.inShare) : eff * sp.blended / 1e6;
+  return { eff: eff, cost: cost };
+}
+/* model-cell badges: fit (H/M/L, opinion) + reasoning/vision + provenance. */
+function badges(m){
+  var f = m.fit === 'high' ? 'h' : (m.fit === 'med' ? 'm' : 'l');
+  var fl = m.fit === 'high' ? 'H' : (m.fit === 'med' ? 'M' : 'L');
+  var b = ' <span class="bdg ' + f + '" title="fit for Sentinel (opinion)" aria-label="fit ' + m.fit + '">' + fl + '</span>';
+  if (m.reasoning) b += ' <span class="bdg" title="reasoning model — extra think-tokens" aria-label="reasoning">🧠</span>';
+  if (m.vision)    b += ' <span class="bdg" title="vision (screenshot)" aria-label="vision">👁</span>';
+  b += m.src === 'skill'
+    ? ' <span class="bdg" title="Claude pricing from claude-api skill 2026-06-04 — verify" aria-label="skill-sourced, verify">ⓢ</span>'
+    : ' <span class="bdg vf" title="illustrative — verify via link" aria-label="verify">⚠</span>';
+  return b;
+}
 
 /* ----------------------------- i18n ----------------------------- */
 function setLang(l){
@@ -486,14 +561,20 @@ function initLang(){
 }
 
 /* ----------------------------- state ----------------------------- */
-function getPrices(){
-  return PRICES.map(function(p){
-    var iin = $('price-' + p.key + '-in'), iout = $('price-' + p.key + '-out');
-    return {
-      key:p.key, label:p.label, link:p.link,
-      in:  iin  ? (parseFloat(iin.value)  || 0) : p.in,
-      out: iout ? (parseFloat(iout.value) || 0) : p.out
-    };
+function readPrices(){
+  var split = $('split-mode').checked;
+  MODELS.forEach(function(m){
+    var sp = SP[m.key];
+    var mu = parseFloat(val('price-' + m.key + '-mult')); if (isFinite(mu) && mu >= 0) sp.mult = mu;
+    if (split){
+      var i = parseFloat(val('price-' + m.key + '-in')), o = parseFloat(val('price-' + m.key + '-out'));
+      if (isFinite(i) && i >= 0) sp.in = i;
+      if (isFinite(o) && o >= 0) sp.out = o;
+      sp.blended = sp.in * INSHARE_SEED + sp.out * (1 - INSHARE_SEED);
+      var blEl = $('price-' + m.key + '-bl'); if (blEl) blEl.value = sp.blended; // keep blended field in sync so toggling back preserves edits
+    } else {
+      var b = parseFloat(val('price-' + m.key + '-bl')); if (isFinite(b) && b >= 0) sp.blended = b;
+    }
   });
 }
 function readState(){
@@ -511,6 +592,7 @@ function readState(){
     budget:  bRaw === '' ? 0 : Math.max(0, parseFloat(bRaw) || 0),
     monthly: mRaw === '' ? null : Math.max(0, parseFloat(mRaw) || 0),
     inShare: Math.min(1, Math.max(0, num('split', 80) / 100)),
+    splitMode: $('split-mode').checked,
     priority: $('priority').value
   };
 }
@@ -519,23 +601,27 @@ function pickTier(hwGb){ var c = null; TIERS.forEach(function(t){ if (t.gb <= hw
 /* ----------------------------- renderers ----------------------------- */
 function renderCost(st){
   var t = estimateTokens(st.P, st.S, st.R, st.V, st.mode);
-  var prices = getPrices();
-  var rows = '';
-  prices.forEach(function(p){
-    var cost = costUsd(t.total, p.in, p.out, st.inShare);
-    var fits = cost <= st.budget;
-    var runs = cost > 0 ? Math.floor(st.budget / cost) : Infinity;
-    rows += '<tr><td>' + esc(p.label) + '</td><td class="mono">' + grp(t.total) +
-      '</td><td class="mono">' + money(cost) + '</td><td class="mono">' + runsFmt(runs) +
-      '</td><td class="' + (fits ? 'yes' : 'no') + '" aria-label="' + (fits ? 'fits' : 'does not fit') + '">' +
-      (fits ? '✓' : '✗') + '</td></tr>';
+  var rows = MODELS.map(function(m){
+    var c = modelCost(m, t.total, st);
+    var fits = c.cost <= st.budget;
+    var runs = c.cost > 0 ? Math.floor(st.budget / c.cost) : Infinity;
+    return { m:m, eff:c.eff, cost:c.cost, fits:fits, runs:runs };
+  }).sort(function(a, b){ return a.cost - b.cost; });   // cheapest first
+  var html = '';
+  rows.forEach(function(r){
+    html += '<tr><td>' + esc(r.m.label) + badges(r.m) + '</td>' +
+      '<td class="mono">' + grp(r.eff) + '</td>' +
+      '<td class="mono">' + money(r.cost) + '</td>' +
+      '<td class="mono">' + runsFmt(r.runs) + '</td>' +
+      '<td class="' + (r.fits ? 'yes' : 'no') + '" aria-label="' + (r.fits ? 'fits' : 'does not fit') + '">' +
+      (r.fits ? '✓' : '✗') + '</td></tr>';
   });
-  rows += '<tr class="hi"><td>' + bi('Локально — ваш GPU', 'Local — your GPU') +
+  html += '<tr class="hi"><td>' + bi('Локально — ваш GPU', 'Local — your GPU') +
     '</td><td class="mono">' + grp(t.total) + '</td><td class="yes">' + bi('бесплатно', 'free') +
     '</td><td class="mono">∞</td><td class="yes" aria-label="fits">✓</td></tr>';
-  rows += '<tr class="mut"><td>Replay ' + bi('(повтор)', '(re-run)') +
+  html += '<tr class="mut"><td>Replay ' + bi('(повтор)', '(re-run)') +
     '</td><td class="mono">0</td><td class="mono">$0.00</td><td class="mono">∞</td><td class="yes" aria-label="fits">✓</td></tr>';
-  $('cost-body').innerHTML = rows;
+  $('cost-body').innerHTML = html;
 }
 
 function renderVram(st){
@@ -580,11 +666,14 @@ function renderRec(st){
   var savRu = saving > 0 ? ' (−' + saving + '% планирования)' : '';
   var savEn = saving > 0 ? ' (−' + saving + '% planning)' : '';
   var savTip = saving > 0 ? ' (−' + saving + '%)' : '';
-  var prices = getPrices();
-  var cloud = prices.map(function(p){ return { label:p.label, cost:costUsd(tCur.total, p.in, p.out, st.inShare) }; })
-                    .sort(function(a, b){ return a.cost - b.cost; });
-  var cheap = cloud[0], dear = cloud[cloud.length - 1];
+  // scan catalog for cheapest / priciest (respecting per-model multiplier + blended/in-out)
+  var ranked = MODELS.map(function(m){ return { m:m, cost:modelCost(m, tCur.total, st).cost }; })
+                     .sort(function(a, b){ return a.cost - b.cost; });
+  var cheap = ranked[0], dear = ranked[ranked.length - 1];
   var cheapRuns = cheap.cost > 0 ? Math.floor(st.budget / cheap.cost) : Infinity;
+  // cheapest VISION-capable cloud model (for the vision role)
+  var vis = ranked.filter(function(r){ return r.m.vision; })[0];
+
   // task label
   var tl = 'свой · custom', tlEN = 'custom';
   ['small','medium','large'].forEach(function(k){
@@ -605,10 +694,17 @@ function renderRec(st){
       'Mode <b>goal</b> ≈ ' + grp(tG.total) + savEn + ' if the flow is known; <b>replay</b> — 0 tokens.') + '</li>';
 
   var cloudLi = '<li>' + bi(
-    'Облако: дешевле всего <b>' + esc(cheap.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/прогон → бюджет ' +
-      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> прогонов. Дороже всего ' + esc(dear.label) + ' ≈ ' + money(dear.cost) + '.',
-    'Cloud: cheapest is <b>' + esc(cheap.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/run → budget ' +
-      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> runs. Priciest is ' + esc(dear.label) + ' ≈ ' + money(dear.cost) + '.') + '</li>';
+    'Облако: дешевле всего <b>' + esc(cheap.m.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/прогон → бюджет ' +
+      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> прогонов. Дороже всего ' + esc(dear.m.label) + ' ≈ ' + money(dear.cost) + '.',
+    'Cloud: cheapest is <b>' + esc(cheap.m.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/run → budget ' +
+      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> runs. Priciest is ' + esc(dear.m.label) + ' ≈ ' + money(dear.cost) + '.') + '</li>';
+
+  var visLi = '';
+  if (st.V && vis) {
+    visLi = '<li>' + bi(
+      'Vision-роль (скриншот): из облака с 👁 дешевле всего <b>' + esc(vis.m.label) + '</b> (≈ ' + money(vis.cost) + '/прогон).',
+      'Vision role (screenshot): cheapest 👁-capable cloud is <b>' + esc(vis.m.label) + '</b> (≈ ' + money(vis.cost) + '/run).') + '</li>';
+  }
 
   var localLi;
   if (!st.isCloud) {
@@ -634,37 +730,111 @@ function renderRec(st){
   if (st.monthly !== null && st.monthly > 0) {
     var rpm = cheap.cost > 0 ? Math.floor(st.monthly / cheap.cost) : Infinity;
     monthlyLi = '<li>' + bi(
-      'В месяц: бюджет ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> прогонов на ' + esc(cheap.label) + ' (локально — без лимита).',
-      'Monthly: budget ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> runs on ' + esc(cheap.label) + ' (local — unlimited).') + '</li>';
+      'В месяц: бюджет ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> прогонов на ' + esc(cheap.m.label) + ' (локально — без лимита).',
+      'Monthly: budget ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> runs on ' + esc(cheap.m.label) + ' (local — unlimited).') + '</li>';
   }
 
   var tip = '<li>' + bi(
-    'Совет: для регрессии — <b>replay</b> (0 токенов, $0). Новый флоу — <b>explore</b>; когда флоу известен — <b>goal</b>' + savTip + '.',
-    'Tip: for regression use <b>replay</b> (0 tokens, $0). New flow — <b>explore</b>; once known — <b>goal</b>' + savTip + '.') + '</li>';
+    'Совет: для регрессии — <b>replay</b> (0 токенов, $0). Новый флоу — <b>explore</b>; когда флоу известен — <b>goal</b>' + savTip + '. Дешёвый structured-JSON: DeepSeek/Haiku; vision — Claude/GPT/Grok.',
+    'Tip: for regression use <b>replay</b> (0 tokens, $0). New flow — <b>explore</b>; once known — <b>goal</b>' + savTip + '. Cheap structured-JSON: DeepSeek/Haiku; vision — Claude/GPT/Grok.') + '</li>';
 
   $('rec-out').innerHTML =
     '<p>' + bi('Для задачи ', 'For task ') + taskDesc + bi(', бюджет ', ', budget ') + money(st.budget) + bi('/прогон:', '/run:') + '</p>' +
-    '<ul>' + depth + cloudLi + localLi + monthlyLi + tip + '</ul>';
+    '<ul>' + depth + cloudLi + visLi + localLi + monthlyLi + tip + '</ul>';
 }
 
 function renderAll(){
+  readPrices();
   var st = readState();
   renderRec(st); renderCost(st); renderVram(st); renderTiers(st);
 }
 
-/* ----------------------------- wiring ----------------------------- */
+/* ----------------------------- pricing UI + refresh ----------------------------- */
 function buildPriceEditors(){
   var html = '';
-  PRICES.forEach(function(p){
-    html += '<div><label>' + esc(p.label) + ' — $/1M ' +
-      '<a href="' + p.link + '" target="_blank" rel="noopener">' + bi('проверьте', 'verify') + '</a></label>' +
-      '<div class="grid g2">' +
-      '<input id="price-' + p.key + '-in"  type="number" min="0" step="0.01" value="' + p.in + '"  aria-label="' + esc(p.label) + ' input $/1M">' +
-      '<input id="price-' + p.key + '-out" type="number" min="0" step="0.01" value="' + p.out + '" aria-label="' + esc(p.label) + ' output $/1M">' +
+  MODELS.forEach(function(m){
+    var sp = SP[m.key];
+    var srcb = m.src === 'skill'
+      ? '<span class="bdg" title="claude-api skill 2026-06-04 — verify">skill</span>'
+      : '<span class="bdg vf" title="verify via link">verify</span>';
+    html += '<div class="prow"><label style="margin:0">' + esc(m.label) + ' ' + srcb +
+      ' <a href="' + esc(m.link) + '" target="_blank" rel="noopener">' + bi('проверьте', 'verify') + '</a></label>' +
+      '<div class="prow-row">' +
+        '<div class="col"><label style="margin:0">$/1M</label>' +
+          '<input id="price-' + m.key + '-bl" type="number" min="0" step="0.01" value="' + sp.blended + '" aria-label="' + esc(m.label) + ' blended $/1M"></div>' +
+        '<div class="col"><label style="margin:0">' + bi('токен ×', 'token ×') + '</label>' +
+          '<input id="price-' + m.key + '-mult" type="number" min="0" step="0.1" value="' + sp.mult + '" aria-label="' + esc(m.label) + ' token multiplier"></div>' +
+      '</div>' +
+      '<div class="io">' +
+        '<div class="col"><label style="margin:0">in $/1M</label>' +
+          '<input id="price-' + m.key + '-in" type="number" min="0" step="0.01" value="' + sp.in + '" aria-label="' + esc(m.label) + ' input $/1M"></div>' +
+        '<div class="col"><label style="margin:0">out $/1M</label>' +
+          '<input id="price-' + m.key + '-out" type="number" min="0" step="0.01" value="' + sp.out + '" aria-label="' + esc(m.label) + ' output $/1M"></div>' +
       '</div></div>';
   });
   $('price-edit').innerHTML = html;
 }
+function setFieldVals(key){
+  var sp = SP[key];
+  var b = $('price-' + key + '-bl'), i = $('price-' + key + '-in'), o = $('price-' + key + '-out');
+  if (b) b.value = sp.blended;
+  if (i) i.value = sp.in;
+  if (o) o.value = sp.out;
+}
+function setAsof(asof, source){
+  $('price-asof').innerHTML = bi(
+    'Источник цен: ' + esc(source) + ' · ' + esc(asof) + ' · ⚠ verify',
+    'Price source: ' + esc(source) + ' · ' + esc(asof) + ' · ⚠ verify');
+}
+/* best-effort: override seeds from a committed prices.json (Pages/bundle). Fails silently on file://. */
+function loadPricesJson(){
+  try {
+    fetch('prices.json').then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+      if (!j || !j.prices) return;
+      Object.keys(j.prices).forEach(function(k){
+        if (!SP[k]) return;
+        var p = j.prices[k];
+        if (isFinite(p.in))  SP[k].in  = p.in;
+        if (isFinite(p.out)) SP[k].out = p.out;
+        SP[k].blended = SP[k].in * INSHARE_SEED + SP[k].out * (1 - INSHARE_SEED);
+        setFieldVals(k);
+      });
+      if (j._asof) setAsof(j._asof, 'prices.json');
+      renderAll();
+    }).catch(function(){ /* file:// or offline — keep embedded seeds */ });
+  } catch (e) { /* no fetch — keep seeds */ }
+}
+/* on-click only: live prices from OpenRouter (no key, CORS-open). Unmatched rows keep their seed. */
+function refreshOpenRouter(){
+  $('price-asof').innerHTML = bi('Загрузка из OpenRouter…', 'Loading from OpenRouter…');
+  fetch('https://openrouter.ai/api/v1/models').then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(function(j){
+    var byId = {};
+    (j.data || []).forEach(function(x){ byId[x.id] = x; });
+    var n = 0;
+    MODELS.forEach(function(m){
+      var x = byId[m.orid];
+      if (x && x.pricing) {
+        var i = parseFloat(x.pricing.prompt) * 1e6, o = parseFloat(x.pricing.completion) * 1e6;
+        if (isFinite(i) && isFinite(o)) {
+          SP[m.key].in = i; SP[m.key].out = o;
+          SP[m.key].blended = i * INSHARE_SEED + o * (1 - INSHARE_SEED);
+          setFieldVals(m.key); n++;
+        }
+      }
+    });
+    var today = new Date().toISOString().slice(0, 10);
+    $('price-asof').innerHTML = bi(
+      'OpenRouter: обновлено ' + n + ' из ' + MODELS.length + ' · ' + today + ' · ⚠ verify',
+      'OpenRouter: updated ' + n + ' of ' + MODELS.length + ' · ' + today + ' · ⚠ verify');
+    renderAll();
+  }).catch(function(e){
+    $('price-asof').innerHTML = bi(
+      'OpenRouter недоступен (' + esc(e && e.message || 'ошибка') + ') — оставлены сиды.',
+      'OpenRouter unavailable (' + esc(e && e.message || 'error') + ') — seeds kept.');
+  });
+}
+
+/* ----------------------------- wiring ----------------------------- */
 function applyTask(name){
   var pr = TASK_PRESETS[name]; if (!pr) return;
   $('P').value = pr.P; $('S').value = pr.S; $('R').value = pr.R; $('Rout').textContent = pr.R; $('V').checked = !!pr.V;
@@ -682,34 +852,44 @@ function init(){
   buildPriceEditors();
   applyTask('small');
   applyHw();
+  setAsof('исследование · research 2026-06-28 (seed)', 'embedded');
   // listeners
   document.querySelectorAll('#task-presets button').forEach(function(b){
     b.addEventListener('click', function(){ applyTask(b.getAttribute('data-task')); renderAll(); });
   });
   $('hw').addEventListener('change', function(){ applyHw(); renderAll(); });
   $('R').addEventListener('input', function(){ $('Rout').textContent = $('R').value; });
+  $('split-mode').addEventListener('change', function(){
+    $('price-edit').classList.toggle('io-on', $('split-mode').checked); renderAll();
+  });
+  $('or-btn').addEventListener('click', refreshOpenRouter);
   ['P','S','R','V','mode','vram','tps','budget','monthly','split','priority','mp','mq']
     .forEach(function(id){ var el = $(id); if (el){ el.addEventListener('input', renderAll); el.addEventListener('change', renderAll); } });
   $('price-edit').addEventListener('input', renderAll);
   renderAll();
+  loadPricesJson();   // best-effort override; never blocks initial render
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
 /* ----------------------------- self-tests (LOCAL_MODELS §5/§6) -----------------------------
-   These run in-browser only and log to console; they document the worked-example vectors and
-   catch drift from the doc. Never throw (won't break the page).                                */
+   In-browser only; log to console; document the worked-example vectors + the blended/multiplier
+   identities. Never throw (won't break the page).                                              */
 (function selfTest(){
   function close(a, b){ return Math.abs(a - b) <= Math.max(0.005, Math.abs(b) * 0.001); }
   var T = [];
-  // §6.3 cost vectors A-E (total tokens)
+  // §6.3 cost vectors A-E (total tokens) — unchanged by M11.6b
   T.push(['A', estimateTokens(1,5,0.10,0,'explore').total, 11475]);
   T.push(['B', estimateTokens(3,10,0.20,0,'explore').total, 55700]);
   T.push(['C', estimateTokens(3,10,0.20,0,'goal').total, 8500]);
   T.push(['D', estimateTokens(5,15,0.30,1,'explore').total, 70000]);
   T.push(['E', estimateTokens(9,9,0.9,1,'replay').total, 0]);
   // §6.3 dollar example A: 80/20 split, $3/$15 -> ~$0.06
-  var ca = costUsd(11475, 3, 15, 0.8);
-  T.push(['A$', Math.round(ca * 100) / 100, 0.06]);
+  T.push(['A$', Math.round(costUsd(11475, 3, 15, 0.8) * 100) / 100, 0.06]);
+  // blended identity: total*blended/1e6 == costUsd when blended = in*inShare + out*(1-inShare)
+  var blended = 3 * 0.8 + 15 * 0.2;
+  T.push(['blend=split', 11475 * blended / 1e6, costUsd(11475, 3, 15, 0.8)]);
+  // multiplier: 1.3x tokens -> 1.3x cost (linear)
+  T.push(['mult', 11475 * 1.3 * blended / 1e6, 1.3 * (11475 * blended / 1e6)]);
   // §5.3 VRAM examples (total GB)
   T.push(['7B Q8_0', vramTotal(7,'Q8_0').total, 8.94]);
   T.push(['13B Q4_K_M', vramTotal(13,'Q4_K_M').total, 9.32]);
@@ -717,7 +897,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   T.push(['70B Q3_K_M', vramTotal(70,'Q3_K_M').total, 31.31]);
   var bad = T.filter(function(r){ return !close(r[1], r[2]); });
   if (bad.length) console.warn('Sentinel self-test MISMATCH (check vs LOCAL_MODELS §5/§6):', bad);
-  else if (window.console) console.log('Sentinel self-test OK — all', T.length, 'vectors match LOCAL_MODELS §5/§6.');
+  else if (window.console) console.log('Sentinel self-test OK — all', T.length, 'checks pass.');
 })();
 </script>
 </body>

@@ -146,6 +146,34 @@ Ready-made env blocks for each runtime are in §4.
 
 ---
 
+### 3.4 Cloud models — illustrative pricing (⚠ verify, cutoff Jan-2026)
+
+Price source for the cost-explorer (`docs/index.html`). **Editable, illustrative** — NOT a claim of current
+cost (cloud pricing drifts). Claude is from the claude-api skill (2026-06-04); others were researched
+2026-06-28 from provider pages. Refreshed by CI `prices-refresh.yml` (weekly, via OpenRouter → PR) + the
+"Refresh from OpenRouter" button on the page. **Fit** for Sentinel's structured-JSON role is **opinion**, not a benchmark.
+
+| Model | $/1M in | $/1M out | Context | reasoning | vision | fit | Source |
+|---|---|---|---|---|---|---|---|
+| Claude Opus 4.8 | 5 | 25 | 1M | ✓ | ✓ | high | [anthropic](https://www.anthropic.com/pricing) (skill 06-04) |
+| Claude Sonnet 4.6 | 3 | 15 | 1M | ✓ | ✓ | high | anthropic (skill 06-04) |
+| Claude Haiku 4.5 | 1 | 5 | 200K | — | ✓ | high | anthropic (skill 06-04) |
+| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | [openai](https://openai.com/api/pricing/) ⚠ |
+| GPT-5.4-mini | 0.75 | 4.5 | 400K | — | ✓ | high | openai ⚠ |
+| OpenAI o3 | 2 | 8 | 200K | ✓ | — | med | openai ⚠ (vision unconfirmed) |
+| xAI Grok 4.3 | 1.25 | 2.5 | 1M | — | ✓ | med | [x.ai](https://docs.x.ai/developers/models) ⚠ |
+| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) ⚠ |
+| Zhipu GLM-4.7 | 0.6 | 2.2 | — | — | — | med | z.ai ⚠ |
+| DeepSeek-V4-flash | 0.14 | 0.28 | 1M | ✓ | — | high | [deepseek](https://api-docs.deepseek.com/quick_start/pricing) ⚠ |
+| DeepSeek-V4-pro | 0.435 | 0.87 | 1M | ✓ | — | high | deepseek ⚠ (a secondary source disputes this — verify) |
+| Qwen-plus | 0.4 | 1.2 | 1M | — | — | med | [alibaba](https://www.alibabacloud.com/help/en/model-studio/model-pricing) ⚠ (tiered pricing) |
+
+> Cost per run = `tokens × token-multiplier × blended$/1M`, where `blended = in·0.8 + out·0.2` (§6.3). Local =
+> free (your own hardware), §3.1–3.3. Reasoning models (o3 / DeepSeek-V4-pro) emit extra think-tokens →
+> their token-multiplier defaults > 1 (flash/lightweight variants, e.g. DeepSeek-V4-flash, stay 1.0; all editable).
+
+---
+
 ## 4. Runtime / endpoint catalog
 
 Exact Sentinel env blocks. All listed runtimes expose an **OpenAI-compatible** `/v1`
