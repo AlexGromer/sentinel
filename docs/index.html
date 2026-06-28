@@ -125,6 +125,21 @@ footer{color:var(--mut);font-size:.8rem;border-top:1px solid var(--line);margin-
 /* language visibility — default RU; toggled by body class */
 body.lang-ru [data-lang="en"]{display:none !important}
 body.lang-en [data-lang="ru"]{display:none !important}
+/* M12 console bubbles (sections #connect #build #chat) */
+.bubble{max-width:88%;padding:.5rem .7rem;border-radius:10px;border:1px solid var(--line);white-space:pre-wrap;word-break:break-word}
+.bubble.user{align-self:flex-end;background:var(--acc);color:#0b0b10;border-color:transparent}
+.bubble.sys{align-self:flex-start;background:var(--bg3)}
+.bubble.logline{align-self:flex-start;background:transparent;border:0;color:var(--mut);
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  font-size:.78rem;padding:.05rem .7rem;max-width:100%}
+.bubble .bmeta{font-size:.7rem;opacity:.8;margin-bottom:.2rem}
+.bubble pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;
+  font-size:.78rem;max-height:14rem;overflow:auto;background:var(--bg);
+  border:1px solid var(--line);border-radius:6px;padding:.5rem}
+.bubble .chDl{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
+textarea{width:100%;background:var(--bg3);border:1px solid var(--line);color:var(--tx);
+  border-radius:8px;padding:.5rem .6rem;font:inherit;resize:vertical;min-height:3rem}
+textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 </style>
 </head>
 <body class="lang-ru">
@@ -149,6 +164,9 @@ body.lang-en [data-lang="ru"]{display:none !important}
     <a href="#models"><span data-lang="ru">Модели</span><span data-lang="en">Models</span></a>
     <a href="#legend"><span data-lang="ru">Легенда</span><span data-lang="en">Legend</span></a>
     <a href="#docs"><span data-lang="ru">Документация</span><span data-lang="en">Docs</span></a>
+    <a href="#connect"><span data-lang="ru">Подключение</span><span data-lang="en">Connection</span></a>
+    <a href="#build"><span data-lang="ru">Конфигуратор</span><span data-lang="en">Builder</span></a>
+    <a href="#chat"><span data-lang="ru">Консоль</span><span data-lang="en">Console</span></a>
   </nav>
 </header>
 
@@ -406,6 +424,201 @@ body.lang-en [data-lang="ru"]{display:none !important}
       <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/THREAT_MODEL.md">THREAT_MODEL — STRIDE-lite</a>
       <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/ROADMAP.md">ROADMAP — <span data-lang="ru">дорожная карта + контракты M*</span><span data-lang="en">roadmap + M* contracts</span></a>
     </div>
+  </section>
+
+  <!-- ============================ CONNECT ============================ -->
+  <section class="card" id="connect">
+    <h2><span class="n">7</span><span data-lang="ru">Подключение к control-API</span><span data-lang="en">Control-API connection</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Укажи URL и токен локального control-API — тогда конфигуратор (#8) и консоль (#9) смогут запускать прогоны напрямую. Токен хранится только в памяти вкладки, никогда в <code>localStorage</code> или URL.</span>
+      <span data-lang="en">Enter your local control-API URL and bearer token — then the builder (#8) and console (#9) can launch runs directly. The token is kept only in this tab's memory, never in <code>localStorage</code> or the URL.</span>
+    </p>
+    <div class="grid g2">
+      <div>
+        <label for="capi"><span data-lang="ru">URL control-API</span><span data-lang="en">Control-API URL</span></label>
+        <input id="capi" type="url" placeholder="http://localhost:8090" autocomplete="off">
+      </div>
+      <div>
+        <label for="capitok">Bearer token <span class="hint" style="display:inline">(CONTROL_API_TOKEN)</span></label>
+        <input id="capitok" type="password" placeholder="—" autocomplete="off">
+      </div>
+    </div>
+    <div class="ctl-row">
+      <button type="button" class="btn" id="cap-check"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
+      <span id="cap-status" style="font-size:.88rem;color:var(--mut)"></span>
+    </div>
+    <p class="hint" style="margin-top:.6rem">
+      <span data-lang="ru">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (mixed-content). Control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла (<code>docker compose --profile control-api up</code>, порт 8090) ограничений нет.</span>
+      <span data-lang="en">From GitHub Pages live mode only works against <code>http://localhost</code> (mixed-content exemption). The control-API must emit CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). From the bundle (<code>docker compose --profile control-api up</code>, port 8090) there is no such restriction.</span>
+    </p>
+  </section>
+
+  <!-- ============================ BUILD ============================ -->
+  <section class="card" id="build">
+    <h2><span class="n">8</span><span data-lang="ru">Конфигуратор RunConfig</span><span data-lang="en">RunConfig builder</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Сборка <code>run.yaml</code> / env / команды из проверенной поверхности конфигурации (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Скачай файлы или нажми «▶ Запустить» для прямого вызова control-API (нужно подключение выше).</span>
+      <span data-lang="en">Build a valid <code>run.yaml</code> / env block / launch command from the verified config surface (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Download the files or press «▶ Run» to call the control-API directly (connection above required).</span>
+    </p>
+
+    <div class="grid g2">
+      <div>
+        <label for="b-mode"><span data-lang="ru">Режим (mode)</span><span data-lang="en">Mode</span></label>
+        <select id="b-mode">
+          <option value="explore">explore — авто-исследование · auto-explore</option>
+          <option value="goal" selected>goal — цель словами · NL goal</option>
+          <option value="describe">describe — описание потока · flow description</option>
+        </select>
+      </div>
+      <div>
+        <label for="b-target">Target URL</label>
+        <input id="b-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+      </div>
+    </div>
+
+    <div id="b-goalWrap">
+      <label for="b-goal"><span data-lang="ru">Цель (goal)</span><span data-lang="en">Goal</span></label>
+      <textarea id="b-goal" rows="2" placeholder="залогиниться и открыть биллинг / log in and open billing"></textarea>
+    </div>
+    <div id="b-descWrap" style="display:none">
+      <label for="b-describe"><span data-lang="ru">Описание потока (describe)</span><span data-lang="en">Flow description</span></label>
+      <textarea id="b-describe" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
+    </div>
+
+    <details>
+      <summary><span data-lang="ru">⚙ Бюджеты, auth, модель</span><span data-lang="en">⚙ Budgets, auth, model</span></summary>
+      <div class="grid g3" style="margin-top:.6rem">
+        <div>
+          <label for="b-planner">Planner</label>
+          <select id="b-planner">
+            <option value="heuristic">heuristic (детерминированный · deterministic)</option>
+            <option value="llm">llm (Opus / локальная · local)</option>
+            <option value="goal">goal (grounded)</option>
+          </select>
+        </div>
+        <div>
+          <label for="b-coverage">coverage_target</label>
+          <input id="b-coverage" type="number" min="0" max="1" step="0.05" value="0.85">
+        </div>
+        <div>
+          <label for="b-maxsteps">max_steps</label>
+          <input id="b-maxsteps" type="number" min="1" step="1" value="40">
+        </div>
+        <div>
+          <label for="b-planbud">plan_budget</label>
+          <input id="b-planbud" type="number" min="0" step="1000" value="50000">
+        </div>
+        <div>
+          <label for="b-healbud">heal_budget</label>
+          <input id="b-healbud" type="number" min="0" step="1000" value="20000">
+        </div>
+        <div>
+          <label for="b-totbud">total_budget</label>
+          <input id="b-totbud" type="number" min="0" step="1000" value="0">
+        </div>
+      </div>
+      <div class="grid g2" style="margin-top:.6rem">
+        <div>
+          <label for="b-ss">storage_state (<span data-lang="ru">путь</span><span data-lang="en">path</span>)</label>
+          <input id="b-ss" placeholder="state/auth.json">
+          <label for="b-sss" style="margin-top:.4rem">storage_state_save</label>
+          <input id="b-sss" placeholder="state/auth.json">
+          <label for="b-loginplan" style="margin-top:.4rem">login_plan</label>
+          <input id="b-loginplan" placeholder="runs/login/plan.json">
+          <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-pwnotrace" type="checkbox" checked style="width:auto">PW_NO_TRACE (<span data-lang="ru">откл. трейсинг при вводе пароля</span><span data-lang="en">disable tracing with password</span>)
+          </label>
+        </div>
+        <div>
+          <label for="b-backend">Backend</label>
+          <select id="b-backend">
+            <option value="">— по умолчанию · default (Anthropic)</option>
+            <option value="anthropic">anthropic</option>
+            <option value="openai">openai-compat (локальная/роутер · local/router)</option>
+          </select>
+          <div id="b-urlWrap" style="display:none">
+            <label for="b-baseurl" style="margin-top:.4rem">LLM_BASE_URL</label>
+            <input id="b-baseurl" placeholder="http://localhost:11434/v1">
+          </div>
+          <label for="b-modelp" style="margin-top:.4rem">LLM_MODEL_PLANNER</label>
+          <input id="b-modelp" placeholder="qwen3:14b  /  claude-opus-4-8  /  o3">
+          <label for="b-modelh" style="margin-top:.4rem">LLM_MODEL_HEAL (<span data-lang="ru">опц.</span><span data-lang="en">opt.</span>)</label>
+          <input id="b-modelh" placeholder="qwen2.5-vl:7b  /  claude-sonnet-4-6">
+          <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-vision" type="checkbox" style="width:auto">LLM_VISION (<span data-lang="ru">нужна VLM</span><span data-lang="en">requires VLM</span>)
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <h3 style="font-size:.95rem;margin:1rem 0 .3rem;color:var(--mut)">1) RunConfig YAML</h3>
+    <div style="position:relative;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem .7rem 0;margin-bottom:.6rem">
+      <div style="display:flex;gap:.4rem;position:absolute;top:.45rem;right:.5rem">
+        <button type="button" class="btn" id="b-dl-yaml" style="font-size:.74rem;padding:.18rem .5rem">⬇ run.yaml</button>
+        <button type="button" class="btn" id="b-cp-yaml" style="font-size:.74rem;padding:.18rem .5rem"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button>
+      </div>
+      <pre id="b-yaml" class="mono" style="white-space:pre-wrap;word-break:break-word;font-size:.82rem;margin:0;padding-top:2rem;padding-bottom:.6rem"></pre>
+    </div>
+
+    <h3 style="font-size:.95rem;margin:.8rem 0 .3rem;color:var(--mut)">2) Env</h3>
+    <div style="position:relative;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem .7rem 0;margin-bottom:.3rem">
+      <div style="display:flex;gap:.4rem;position:absolute;top:.45rem;right:.5rem">
+        <button type="button" class="btn" id="b-dl-env" style="font-size:.74rem;padding:.18rem .5rem">⬇ sentinel.env</button>
+        <button type="button" class="btn" id="b-cp-env" style="font-size:.74rem;padding:.18rem .5rem"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button>
+      </div>
+      <pre id="b-env" class="mono" style="white-space:pre-wrap;word-break:break-word;font-size:.82rem;margin:0;padding-top:2rem;padding-bottom:.6rem"></pre>
+    </div>
+    <span class="hint"><span data-lang="ru">⚠ Ключ не попадает в YAML — только в env. Не коммить env с реальным ключом.</span><span data-lang="en">⚠ The key stays in env only, not in YAML. Never commit env with a real key.</span></span>
+
+    <h3 style="font-size:.95rem;margin:.8rem 0 .3rem;color:var(--mut)">3) <span data-lang="ru">Команда</span><span data-lang="en">Command</span></h3>
+    <div style="position:relative;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem .7rem 0;margin-bottom:.6rem">
+      <button type="button" class="btn" id="b-cp-cmd" style="position:absolute;top:.45rem;right:.5rem;font-size:.74rem;padding:.18rem .5rem"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button>
+      <pre id="b-cmd" class="mono" style="white-space:pre-wrap;word-break:break-word;font-size:.82rem;margin:0;padding-top:2rem;padding-bottom:.6rem"></pre>
+    </div>
+
+    <div class="ctl-row">
+      <button type="button" class="btn" id="b-run" disabled
+        style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
+        ▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span>
+      </button>
+      <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7 выше)</span><span data-lang="en">check the connection first (section #7 above)</span></span>
+    </div>
+    <div id="b-runout" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem">
+      <pre id="b-runlog" class="mono" style="font-size:.8rem;white-space:pre-wrap;word-break:break-word;margin:0;max-height:14rem;overflow:auto"></pre>
+    </div>
+  </section>
+
+  <!-- ============================ CHAT ============================ -->
+  <section class="card" id="chat">
+    <h2><span class="n">9</span><span data-lang="ru">Консоль авторинга</span><span data-lang="en">Authoring console</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Опиши тест словами → агент авторит сценарий и запускает прогон → прогресс стримится → готовый <code>scenario.json</code> можно скачать. Каждое сообщение = один цикл авторинга/прогона (brain однопроходный). Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim).</span>
+      <span data-lang="en">Describe a test in words → the agent authors a scenario and runs it → progress streams in → download the resulting <code>scenario.json</code>. Each message = one authoring/run cycle (brain is single-pass). Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim).</span>
+    </p>
+    <div class="grid g2">
+      <div>
+        <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
+        <select id="ch-mode">
+          <option value="describe" selected>describe — описание потока → сценарий · flow → scenario</option>
+          <option value="goal">goal — цель словами → сценарий · NL goal → scenario</option>
+          <option value="explore">explore — авто-исследование · auto-explore</option>
+        </select>
+      </div>
+      <div>
+        <label for="ch-target">Target URL</label>
+        <input id="ch-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+      </div>
+    </div>
+    <label for="ch-text"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
+    <textarea id="ch-text" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
+    <div class="ctl-row">
+      <button type="button" class="btn" id="ch-send" disabled
+        style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
+        ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
+      </button>
+      <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7)</span><span data-lang="en">check the connection first (section #7)</span></span>
+    </div>
+    <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
   </section>
 
   <footer>
@@ -870,6 +1083,360 @@ function init(){
   loadPricesJson();   // best-effort override; never blocks initial render
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
+/* =========================================================================
+   M12 — Unified config+chat console (sections #connect #build #chat)
+   Shared helpers: capiBase/capiTok/authHdr, streamEvents, pollStatus,
+   fetchArtifact, dlBlob.  Build: renderBuild + run handler.
+   Chat: addBubble/addLogLine + send handler.
+   All user-facing strings go through bi(ru,en) so the language toggle works.
+   Token is memory-only (never localStorage/URL).
+   ========================================================================= */
+(function m12(){
+  'use strict';
+
+  /* ---- access helpers ---- */
+  function ge(id){ return document.getElementById(id); }
+  function capiBase(){ return (ge('capi').value||'').trim().replace(/\/+$/,''); }
+  function capiTok(){  return (ge('capitok').value||'').trim(); }
+  function authHdr(){  var t=capiTok(); return t?{Authorization:'Bearer '+t}:{}; }
+
+  /* ---- connection check (GET /healthz, no auth per contract) ---- */
+  ge('cap-check').addEventListener('click', async function(){
+    var base=capiBase();
+    if (!base){ ge('cap-status').innerHTML=bi('укажите URL','set a URL'); return; }
+    ge('cap-status').innerHTML=bi('проверяю…','checking…');
+    try {
+      var r=await fetch(base+'/healthz');
+      if (!r.ok){ ge('cap-status').innerHTML='<span style="color:var(--no)">✗ HTTP '+r.status+'</span>'; capUnlock(false); return; }
+      var j=await r.json();
+      ge('cap-status').innerHTML='<span style="color:var(--ok)">✓ ok v'+esc(j.version||'?')+' (runs='+(Number(j.runs)||0)+')</span>';
+      capUnlock(true);
+    } catch(e){
+      ge('cap-status').innerHTML='<span style="color:var(--no)">✗ '+esc(e.message)+' (CORS?)</span>';
+      capUnlock(false);
+    }
+  });
+  function capUnlock(ok){
+    ge('b-run').disabled=!ok;
+    ge('ch-send').disabled=!ok;
+  }
+
+  /* ---- SSE reader: fetch+reader because EventSource cannot send Authorization ---- */
+  async function streamEvents(base, id, h){
+    var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/events',{headers:authHdr()});
+    if (!r.ok||!r.body) throw new Error('SSE HTTP '+r.status);
+    var reader=r.body.getReader(), dec=new TextDecoder(), buf='';
+    for(;;){
+      var chunk=await reader.read();
+      if (chunk.done) break;
+      buf+=dec.decode(chunk.value,{stream:true});
+      var idx;
+      while ((idx=buf.indexOf('\n\n'))>=0){
+        var frame=buf.slice(0,idx); buf=buf.slice(idx+2);
+        var ev='message', data='';
+        var lines=frame.split('\n');
+        for (var li=0;li<lines.length;li++){
+          if (lines[li].startsWith('event:'))     ev=lines[li].slice(6).trim();
+          else if (lines[li].startsWith('data:')) data+=lines[li].slice(5).trim();
+        }
+        var p={}; try { p=JSON.parse(data||'{}'); } catch(ep){}
+        if      (ev==='state'){ if (h.onState) h.onState(p); }
+        else if (ev==='log')  { if (h.onLog)   h.onLog(p.line||''); }
+        else if (ev==='done') { if (h.onDone)  h.onDone(); return; }
+      }
+    }
+    if (h.onDone) h.onDone();
+  }
+
+  /* ---- polling fallback: GET /v1/runs/{id} every 2 s until terminal ---- */
+  function pollStatus(base, id){
+    return new Promise(function(resolve){
+      var n=0;
+      var t=setInterval(async function(){
+        if (++n>150){ clearInterval(t); resolve(null); return; }
+        try {
+          var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id),{headers:authHdr()});
+          var j=await r.json();
+          if (j.state&&j.state!=='running'){ clearInterval(t); resolve(j); }
+        } catch(ep2){ /* transient — keep polling */ }
+      },2000);
+    });
+  }
+
+  /* ---- artifact fetch + download ---- */
+  async function fetchArtifact(base, id, name){
+    try {
+      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/artifact?name='+encodeURIComponent(name),{headers:authHdr()});
+      return r.ok ? await r.text() : null;
+    } catch(ep3){ return null; }
+  }
+  function dlBlob(filename, content){
+    var blob=new Blob([content],{type:'application/json;charset=utf-8'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); },0);
+  }
+
+  /* ================================================================
+     BUILD SECTION (#build)
+     ================================================================ */
+  function bVal(id){ var e=ge(id); return e?e.value:''; }
+  function bq(s){ s=String(s); return '"'+s.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"'; }
+
+  function bSyncMode(){
+    var m=bVal('b-mode');
+    ge('b-goalWrap').style.display=(m==='goal')?'':'none';
+    ge('b-descWrap').style.display=(m==='describe')?'':'none';
+    if (m==='goal'&&!ge('b-planner').dataset.touched) ge('b-planner').value='goal';
+    renderBuild();
+  }
+
+  function renderBuild(){
+    var mode=bVal('b-mode'), target=bVal('b-target').trim();
+    /* YAML */
+    var lines=['# Sentinel RunConfig — generated by docs/index.html (M12 builder). Pass via: --run-config <file>'];
+    lines.push('mode: '+mode);
+    if (mode==='goal'&&ge('b-goal').value.trim())     lines.push('goal: '+bq(ge('b-goal').value.trim()));
+    if (mode==='describe'&&ge('b-describe').value.trim()) lines.push('describe: '+bq(ge('b-describe').value.trim()));
+    lines.push('planner: '+bVal('b-planner'));
+    lines.push('coverage_target: '+(bVal('b-coverage')||'0.85'));
+    lines.push('max_steps: '+(bVal('b-maxsteps')||'40'));
+    lines.push('plan_budget: '+(bVal('b-planbud')||'50000'));
+    lines.push('heal_budget: '+(bVal('b-healbud')||'20000'));
+    lines.push('total_budget: '+(bVal('b-totbud')||'0'));
+    var ss=bVal('b-ss').trim(), sss=bVal('b-sss').trim(), lp=bVal('b-loginplan').trim(), pnt=ge('b-pwnotrace').checked;
+    if (ss||sss||lp||pnt){
+      lines.push('auth:');
+      if (ss)  lines.push('  storage_state: '+bq(ss));
+      if (sss) lines.push('  storage_state_save: '+bq(sss));
+      if (lp)  lines.push('  login_plan: '+bq(lp));
+      lines.push('  pw_no_trace: '+(pnt?'true':'false'));
+    }
+    ge('b-yaml').textContent=lines.join('\n');
+
+    /* env */
+    var be=bVal('b-backend'), bu=bVal('b-baseurl').trim(),
+        mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim(), vis=ge('b-vision').checked;
+    var env=[];
+    if (be){
+      env.push('export LLM_BACKEND='+be);
+      if (be==='openai'&&bu) env.push('export LLM_BASE_URL='+bu);
+      if (mp) env.push('export LLM_MODEL_PLANNER='+mp);
+      if (mh) env.push('export LLM_MODEL_HEAL='+mh);
+      if (vis) env.push('export LLM_VISION=1');
+      if (be==='openai'){
+        env.push("export LLM_API_KEY=...        # local Ollama/vLLM: 'noauth'; cloud/router: your key — DO NOT COMMIT");
+      } else {
+        env.push('export ANTHROPIC_API_KEY=...  # required for the Anthropic backend — DO NOT COMMIT');
+      }
+    } else {
+      env.push('# default backend = Anthropic (claude-opus-4-8 planner / claude-sonnet-4-6 heal).');
+      env.push('export ANTHROPIC_API_KEY=...    # absent key -> offline heuristic / L1-L6 fallback. DO NOT COMMIT');
+    }
+    ge('b-env').textContent=env.join('\n');
+
+    /* command */
+    var t=target||'<TARGET_URL>';
+    var cmd=[];
+    cmd.push('# native:');
+    cmd.push('agentctl run --target '+bq(t)+' --run-config run.yaml');
+    cmd.push('');
+    cmd.push('# docker (mount run.yaml into /config):');
+    cmd.push('docker compose run --rm sentinel run --target '+bq(t)+' --run-config /config/run.yaml');
+    ge('b-cmd').textContent=cmd.join('\n');
+  }
+
+  /* copy helper */
+  function cpEl(srcId, btn){
+    var t=ge(srcId).textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t);
+    var o=btn.innerHTML;
+    btn.innerHTML=bi('скопировано','copied');
+    setTimeout(function(){ btn.innerHTML=o; },1000);
+  }
+  ge('b-cp-yaml').addEventListener('click',function(){ cpEl('b-yaml',this); });
+  ge('b-cp-env').addEventListener('click', function(){ cpEl('b-env',this); });
+  ge('b-cp-cmd').addEventListener('click', function(){ cpEl('b-cmd',this); });
+
+  /* download helper */
+  function dlText(srcId, filename){
+    var blob=new Blob([ge(srcId).textContent],{type:'text/plain;charset=utf-8'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); },0);
+  }
+  ge('b-dl-yaml').addEventListener('click',function(){ dlText('b-yaml','run.yaml'); });
+  ge('b-dl-env').addEventListener('click', function(){ dlText('b-env','sentinel.env'); });
+
+  /* build ▶ Run */
+  ge('b-run').addEventListener('click', async function(){
+    var base=capiBase(), target=bVal('b-target').trim(), mode=bVal('b-mode');
+    if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
+    var body={
+      target:target, mode:mode, planner:bVal('b-planner'),
+      goal:     mode==='goal'     ? ge('b-goal').value.trim()     : '',
+      describe: mode==='describe' ? ge('b-describe').value.trim() : '',
+      coverage_target: bVal('b-coverage'),
+      max_steps:       bVal('b-maxsteps')
+    };
+    bRunLog(bi('POST /v1/runs …','POST /v1/runs …'));
+    var hdr={}; var ah=authHdr();
+    hdr['Content-Type']='application/json';
+    if (ah.Authorization) hdr.Authorization=ah.Authorization;
+    var id;
+    try {
+      var r=await fetch(base+'/v1/runs',{method:'POST',headers:hdr,body:JSON.stringify(body)});
+      var j; try { j=await r.json(); } catch(ep){ j={}; }
+      if (r.status!==202){ bRunLog('✗ HTTP '+r.status+': '+esc(j.error||JSON.stringify(j))); return; }
+      id=j.run_id;
+      bRunLog(bi('Запущен','Started')+' run_id='+esc(id)+'\n'+bi('артефакты:','artifacts:')+' '+esc(j.artifact_dir||''));
+    } catch(e){ bRunLog('✗ '+esc(e.message)); return; }
+
+    var lastState=null;
+    try {
+      await streamEvents(base,id,{
+        onState: function(s){ lastState=s; },
+        onLog:   function(l){ bRunLog(bLogHtml+(bLogHtml?'\n':'')+esc(l)); }
+      });
+    } catch(e2){
+      bRunLog(bLogHtml+'\n'+bi('стрим недоступен — опрашиваю','stream unavailable — polling')+' ('+esc(e2.message)+')');
+      lastState=await pollStatus(base,id);
+    }
+    if (lastState){
+      bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
+        ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
+        (lastState.error?' · err='+esc(lastState.error):''));
+    }
+  });
+  var bLogHtml='';
+  function bRunLog(html){          // innerHTML (like the chat) so bi() labels render bilingually; server/user data is esc()'d by callers
+    bLogHtml=html;
+    ge('b-runout').style.display='';
+    ge('b-runlog').innerHTML=html;
+  }
+
+  /* wire build inputs */
+  ge('b-mode').addEventListener('change',bSyncMode);
+  ge('b-backend').addEventListener('change',function(){
+    ge('b-urlWrap').style.display=(bVal('b-backend')==='openai')?'':'none';
+    renderBuild();
+  });
+  ge('b-planner').addEventListener('input',function(){ ge('b-planner').dataset.touched='1'; });
+  ['b-goal','b-describe','b-target','b-planner','b-coverage','b-maxsteps','b-planbud',
+   'b-healbud','b-totbud','b-ss','b-sss','b-loginplan','b-baseurl','b-modelp','b-modelh',
+   'b-vision','b-pwnotrace'].forEach(function(id){
+    var el=ge(id); if (!el) return;
+    el.addEventListener('input',renderBuild);
+    el.addEventListener('change',renderBuild);
+  });
+  bSyncMode();   /* initial render */
+
+  /* ================================================================
+     CHAT SECTION (#chat)
+     ================================================================ */
+  var chBusy=false;
+
+  function addBubble(kind, html, meta){
+    var el=document.createElement('div');
+    el.className='bubble '+kind;
+    el.innerHTML=(meta?'<div class="bmeta">'+meta+'</div>':'')+html;
+    ge('ch-chat').appendChild(el);
+    el.scrollIntoView({block:'end'});
+    return el;
+  }
+  function addLogLine(line){
+    var el=document.createElement('div');
+    el.className='bubble logline';
+    el.textContent=line;
+    ge('ch-chat').appendChild(el);
+    el.scrollIntoView({block:'end'});
+  }
+
+  ge('ch-mode').addEventListener('change',function(){
+    var m=ge('ch-mode').value;
+    ge('ch-text').disabled=(m==='explore');
+    ge('ch-text').placeholder=
+      m==='goal'    ? 'залогиниться и открыть биллинг / log in and open billing'
+      : m==='describe' ? 'открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit'
+      : '(explore — текст не нужен · no text needed)';
+  });
+
+  ge('ch-send').addEventListener('click', async function(){
+    if (chBusy) return;
+    var base=capiBase(), target=ge('ch-target').value.trim(),
+        mode=ge('ch-mode').value, text=ge('ch-text').value.trim();
+    if (!target){ addBubble('sys',bi('Укажи Target URL.','Set a Target URL.')); return; }
+    if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
+
+    addBubble('user',esc(mode)+(text?' — '+esc(text):''),esc(target));
+    chBusy=true; ge('ch-send').disabled=true;
+
+    var body={
+      target:target, mode:mode,
+      planner: mode==='goal'?'goal':'heuristic',
+      goal:     mode==='goal'     ? text : '',
+      describe: mode==='describe' ? text : ''
+    };
+    var hdr2={}; var ah2=authHdr();
+    hdr2['Content-Type']='application/json';
+    if (ah2.Authorization) hdr2.Authorization=ah2.Authorization;
+    var id2;
+    try {
+      var r2=await fetch(base+'/v1/runs',{method:'POST',headers:hdr2,body:JSON.stringify(body)});
+      var j2; try { j2=await r2.json(); } catch(ep4){ j2={}; }
+      if (r2.status!==202){
+        addBubble('sys',bi('✗ запуск отклонён','✗ run rejected')+' — HTTP '+r2.status+': '+esc(j2.error||JSON.stringify(j2)));
+        chFinish(); return;
+      }
+      id2=j2.run_id;
+      addBubble('sys',bi('Запущен','Started')+' <code>run_id='+esc(id2)+'</code>',esc(j2.artifact_dir||''));
+    } catch(e3){ addBubble('sys','✗ '+esc(e3.message)); chFinish(); return; }
+
+    var lastState2=null;
+    try {
+      await streamEvents(base,id2,{
+        onState: function(s){ lastState2=s; },
+        onLog:   function(l){ addLogLine(l); }
+      });
+    } catch(e4){
+      addBubble('sys',bi('стрим недоступен — опрашиваю статус','stream unavailable — polling')+' ('+esc(e4.message)+')');
+      lastState2=await pollStatus(base,id2);
+    }
+    await chFinalize(base,id2,lastState2);
+    chFinish();
+  });
+
+  function chFinish(){ chBusy=false; ge('ch-send').disabled=false; }
+
+  async function chFinalize(base, id, st){
+    if (!st){ addBubble('sys',bi('Статус неизвестен (таймаут).','Status unknown (timeout).')); return; }
+    var code=st.exit_code, state=st.state, v;
+    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+' </span>';
+    else if (code===0)         v='<span style="color:var(--ok)">✓ '+bi('пройдено (exit 0)','pass (exit 0)')+'</span>';
+    else if (code===1)         v='<span style="color:var(--warn)">⚠ '+bi('тест нашёл проблему (exit 1)','the test found a problem (exit 1)')+'</span>';
+    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2)','visual/golden regression (exit 2)')+'</span>';
+    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('ошибка конфигурации — нужен человек (exit 3)','config error — needs a human (exit 3)')+'</span>';
+    else                       v='<span>exit '+esc(code)+'</span>';
+    addBubble('sys',v);
+
+    var artifacts=['scenario.json','report.json'];
+    for (var ai=0;ai<artifacts.length;ai++){
+      var name=artifacts[ai];
+      var content=await fetchArtifact(base,id,name);
+      if (!content) continue;
+      var preview=content.length>4000?content.slice(0,4000)+'\n… ('+content.length+' bytes)':content;
+      var el=addBubble('sys','<strong>'+esc(name)+'</strong><pre>'+esc(preview)+'</pre><div class="chDl"></div>');
+      (function(n,c){
+        var btn=document.createElement('button'); btn.className='btn';
+        btn.innerHTML='⬇ '+esc(n);
+        btn.addEventListener('click',function(){ dlBlob(n,c); });
+        el.querySelector('.chDl').appendChild(btn);
+      })(name,content);
+    }
+  }
+
+})(); /* end m12 */
 
 /* ----------------------------- self-tests (LOCAL_MODELS §5/§6) -----------------------------
    In-browser only; log to console; document the worked-example vectors + the blended/multiplier

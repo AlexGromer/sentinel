@@ -2,7 +2,7 @@
 
 > 🌐 [Русский](M12_CONTRACT.md) · **English**
 
-> **Status**: Phase-1 (shim) — ✅ **DELIVERED**; Phase-2 (unified page) — design · **Date**: 2026-06-28
+> **Status**: Phase-1 (shim) — ✅ **DELIVERED**; Phase-2 (unified page) — ✅ **DELIVERED** · **Date**: 2026-06-28
 > introduces **ADR-041** (OpenAI-compat shim) · builds on ADR-032 (control-API security) + ADR-040 (SSE machinery)
 
 ---
@@ -44,7 +44,9 @@ goroutine + `runStream`), called by both `POST /v1/runs` and the shim.
 spawned, the target is validated. Gates: `go build/vet/test -race` + `gofmt` + 5 httptest (`parseChatInstruction`
 unit · 403 without token · non-stream · stream · no-target) + a live curl smoke (stream + non-stream + 403).
 
-## Phase-2 — unified `docs/index.html` (design, next PR)
+## Phase-2 — unified `docs/index.html` (✅ DELIVERED)
+
+**Delivered** (`docs/index.html` 905→1469; calculators untouched): 3 sections added to the neon hub — **#connect** (control-API URL+token, memory-only), **#build** (RunConfig builder: YAML/env/cmd + download + ▶Run), **#chat** (describe/goal/explore → SSE-via-fetch → verdict + download `scenario.json`); a shared SSE/poll driver; bilingual (`data-lang`/`setLang`/`sentinel_lang`); air-gapped; `setup`/`chat` kept as standalone advanced deep-links; an OpenAI-shim (`/v1/chat/completions`) note in the chat section; `node --check` clean.
 
 Evolve the neon hub (`docs/index.html`): add two control-API-driven sections — **(a) RunConfig builder** (port
 `docs/setup` `render()` → YAML/env/cmd + download) and **(b) chat panel** (port `docs/chat` `streamEvents()`
