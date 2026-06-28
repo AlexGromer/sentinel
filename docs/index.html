@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel — стоимость, модели, железо · cost / models / hardware</title>
+<meta name="description" content="Sentinel: подбор модели, оценка токенов/стоимости/времени и VRAM — на одной странице, офлайн. Model picker, token/cost/time estimate and VRAM sizing — one page, offline.">
+<!--
+  Sentinel docs hub — single self-contained page (no network, no CDN, no fonts, no build).
+  Works on GitHub Pages, file:// and the webui Docker bundle identically.
+  ALL math mirrors docs/LOCAL_MODELS.md  §5 (VRAM) and §6 (token-cost) — the single source of
+  truth. If §5/§6 change, update the COST / BPW constants below AND re-verify the worked-example
+  self-tests (cost vectors A-E; VRAM examples). See the assert block at the end of the script.
+  Pricing and tok/s are ILLUSTRATIVE, editable defaults — never asserted as current real prices
+  (cloud pricing drifts; assistant knowledge cutoff Jan-2026). Verify via the provider links.
+-->
+<style>
+:root{
+  --bg:#0b0b10;--bg2:#13131c;--bg3:#1b1b26;--line:#2a2a38;
+  --tx:#e8e8ee;--mut:#9aa0b0;--acc:#ff2d55;--acc2:#ff6b88;
+  --ok:#36d399;--no:#ff4d6d;--warn:#ffb000;
+  --glow:0 0 8px rgba(255,45,85,.55),0 0 2px rgba(255,45,85,.85);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);
+  font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif}
+a{color:var(--acc2);text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 72px}
+/* header */
+header.top{position:sticky;top:0;z-index:20;background:rgba(11,11,16,.93);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+.hbar{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;
+  gap:12px;flex-wrap:wrap}
+.brand{font-weight:800;letter-spacing:.2em;font-size:1.2rem;color:#fff}
+.brand b{color:var(--acc);text-shadow:var(--glow);font-weight:800}
+.tag{color:var(--mut);font-size:.82rem;flex:1;min-width:160px}
+.neon{height:2px;background:linear-gradient(90deg,transparent,var(--acc),transparent);
+  box-shadow:var(--glow)}
+.nav{max-width:980px;margin:0 auto;padding:6px 16px;display:flex;gap:14px;flex-wrap:wrap}
+.nav a{color:var(--mut);font-size:.84rem}
+.nav a:hover{color:var(--acc2)}
+.toggle{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.toggle button{background:var(--bg3);color:var(--mut);border:0;padding:.32rem .7rem;
+  cursor:pointer;font:inherit}
+.toggle button[aria-pressed="true"]{background:var(--acc);color:#0b0b10;font-weight:700}
+/* cards & sections */
+.card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;
+  padding:18px;margin:18px 0}
+.card h2{margin:.1rem 0 .5rem;font-size:1.16rem;color:#fff;font-weight:700}
+.card h2 .n{color:var(--acc);text-shadow:var(--glow);margin-right:.35rem}
+.sub{color:var(--mut);font-size:.9rem;margin:.1rem 0 .7rem}
+/* controls */
+.grid{display:grid;gap:14px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:680px){.g3,.g2{grid-template-columns:1fr}}
+label{display:block;font-size:.82rem;color:var(--mut);margin:.5rem 0 .18rem}
+input,select{width:100%;background:var(--bg3);border:1px solid var(--line);color:var(--tx);
+  border-radius:8px;padding:.5rem .6rem;font:inherit}
+input[type=range]{padding:0}
+input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
+input:disabled{opacity:.4}
+.hint{display:block;font-size:.74rem;color:var(--mut);margin-top:.2rem}
+.presets{display:flex;flex-wrap:wrap;gap:8px}
+.presets button{flex:1;min-width:84px;background:var(--bg3);border:1px solid var(--line);
+  color:var(--tx);padding:.55rem;border-radius:8px;cursor:pointer;font:inherit}
+.presets button[aria-pressed="true"]{background:var(--acc);border-color:var(--acc);
+  color:#0b0b10;font-weight:700;box-shadow:var(--glow)}
+details{margin:.6rem 0;border:1px solid var(--line);border-radius:8px;padding:.2rem .6rem;background:var(--bg3)}
+summary{cursor:pointer;color:var(--acc2);font-size:.9rem;padding:.35rem 0}
+/* tables */
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.92rem;margin-top:.4rem}
+caption{caption-side:top;text-align:left;color:var(--warn);font-size:.78rem;margin-bottom:.4rem}
+th,td{border:1px solid var(--line);padding:.45rem .55rem;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;white-space:normal}
+thead th{color:var(--mut);font-weight:600;background:var(--bg3)}
+tr.hi td{background:rgba(255,45,85,.12)}
+tr.mut td{color:var(--mut)}
+.yes{color:var(--ok);font-weight:600}
+.no{color:var(--no);font-weight:600}
+.v-ok{color:var(--ok)}.v-warn{color:var(--warn)}
+/* recommendation */
+.rec{font-size:1.0rem;line-height:1.62}
+.rec p{margin:.2rem 0 .5rem}
+.rec ul{margin:.4rem 0;padding-left:1.15rem}
+.rec li{margin:.32rem 0}
+.rec b{color:var(--acc);text-shadow:0 0 6px rgba(255,45,85,.4)}
+.warnbox{background:rgba(255,176,0,.08);border:1px solid var(--warn);border-radius:8px;
+  padding:.5rem .7rem;font-size:.82rem;color:#ffd98a;margin:.6rem 0}
+.badge{display:inline-block;font-size:.7rem;color:var(--warn);border:1px solid var(--warn);
+  border-radius:5px;padding:0 .32rem;margin-left:.3rem}
+dl.legend{display:grid;grid-template-columns:max-content 1fr;gap:.3rem .9rem;margin:.4rem 0}
+dl.legend dt{color:var(--acc2);font-weight:600}
+dl.legend dd{margin:0;color:var(--tx)}
+@media(max-width:560px){dl.legend{grid-template-columns:1fr}}
+.links{display:grid;grid-template-columns:repeat(2,1fr);gap:.4rem .9rem}
+@media(max-width:560px){.links{grid-template-columns:1fr}}
+footer{color:var(--mut);font-size:.8rem;border-top:1px solid var(--line);margin-top:26px;padding-top:14px}
+/* language visibility — default RU; toggled by body class */
+body.lang-ru [data-lang="en"]{display:none !important}
+body.lang-en [data-lang="ru"]{display:none !important}
+</style>
+</head>
+<body class="lang-ru">
+<header class="top">
+  <div class="hbar">
+    <span class="brand">SENTI<b>NEL</b></span>
+    <span class="tag">
+      <span data-lang="ru">Подбор модели · стоимость · время · VRAM — на одной странице, офлайн.</span>
+      <span data-lang="en">Model picker · cost · time · VRAM — one page, offline.</span>
+    </span>
+    <span class="toggle" role="group" aria-label="Language / Язык">
+      <button type="button" id="lang-ru" aria-pressed="true" onclick="setLang('ru')">RU</button>
+      <button type="button" id="lang-en" aria-pressed="false" onclick="setLang('en')">EN</button>
+    </span>
+  </div>
+  <div class="neon"></div>
+  <nav class="nav" aria-label="sections">
+    <a href="#inputs"><span data-lang="ru">Параметры</span><span data-lang="en">Inputs</span></a>
+    <a href="#rec"><span data-lang="ru">Рекомендация</span><span data-lang="en">Recommendation</span></a>
+    <a href="#cost"><span data-lang="ru">Стоимость</span><span data-lang="en">Cost</span></a>
+    <a href="#vram-section">VRAM</a>
+    <a href="#models"><span data-lang="ru">Модели</span><span data-lang="en">Models</span></a>
+    <a href="#legend"><span data-lang="ru">Легенда</span><span data-lang="en">Legend</span></a>
+    <a href="#docs"><span data-lang="ru">Документация</span><span data-lang="en">Docs</span></a>
+  </nav>
+</header>
+
+<main class="wrap">
+
+  <p class="sub" style="margin-top:18px">
+    <span data-lang="ru">Введите размер сайта, железо и бюджет — ниже сразу появятся: внятная
+      рекомендация (что использовать, как глубоко копать, сколько прогонов влезает), сравнение
+      стоимости по моделям, проверка VRAM и подбор модели. Всё считается у вас в браузере, без
+      интернета. Формулы — из <a href="LOCAL_MODELS.md">LOCAL_MODELS</a> §5/§6.</span>
+    <span data-lang="en">Enter site size, hardware and budget — below you immediately get: a clear
+      recommendation (what to use, how deep to dig, how many runs fit), a cost comparison across
+      models, a VRAM fit check and a model picker. Everything runs in your browser, offline.
+      Formulas mirror <a href="LOCAL_MODELS.md">LOCAL_MODELS</a> §5/§6.</span>
+  </p>
+
+  <!-- ============================ SHARED INPUTS ============================ -->
+  <section class="card" id="inputs">
+    <h2><span class="n">▸</span><span data-lang="ru">Ваши параметры</span><span data-lang="en">Your inputs</span></h2>
+    <div class="grid g3">
+      <div>
+        <label><span data-lang="ru">Размер сайта</span><span data-lang="en">Site size</span></label>
+        <div class="presets" id="task-presets" role="group" aria-label="Site size">
+          <button type="button" data-task="small" aria-pressed="true"><span data-lang="ru">Малый</span><span data-lang="en">Small</span></button>
+          <button type="button" data-task="medium" aria-pressed="false"><span data-lang="ru">Средний</span><span data-lang="en">Medium</span></button>
+          <button type="button" data-task="large" aria-pressed="false"><span data-lang="ru">Большой</span><span data-lang="en">Large</span></button>
+        </div>
+        <span class="hint">
+          <span data-lang="ru">Малый ≈ 1 стр × 5 шагов. Средний ≈ 3 × 10. Большой ≈ 5 × 15 + vision.</span>
+          <span data-lang="en">Small ≈ 1 page × 5 steps. Medium ≈ 3 × 10. Large ≈ 5 × 15 + vision.</span>
+        </span>
+      </div>
+      <div>
+        <label for="hw"><span data-lang="ru">Железо</span><span data-lang="en">Hardware</span></label>
+        <select id="hw">
+          <option value="cpu" data-gb="0" data-tps="5">CPU-only</option>
+          <option value="8" data-gb="8" data-tps="25">8 GB GPU</option>
+          <option value="12" data-gb="12" data-tps="20" selected>12 GB GPU (RTX 2060/3060)</option>
+          <option value="16" data-gb="16" data-tps="30">16 GB GPU</option>
+          <option value="24" data-gb="24" data-tps="40">24 GB GPU (RTX 4090/3090)</option>
+          <option value="32" data-gb="32" data-tps="35">32 GB+ / 2×GPU</option>
+          <option value="cloud">Cloud API</option>
+        </select>
+        <span class="hint">
+          <span data-lang="ru">Локально = бесплатно (ваш GPU). «Cloud API» = платите за токены.</span>
+          <span data-lang="en">Local = free (your GPU). “Cloud API” = you pay per token.</span>
+        </span>
+      </div>
+      <div>
+        <label for="budget"><span data-lang="ru">Бюджет на прогон, $</span><span data-lang="en">Budget per run, $</span></label>
+        <input id="budget" type="number" min="0" step="0.01" value="1.00">
+        <label for="monthly" style="margin-top:.4rem"><span data-lang="ru">Бюджет в месяц, $ (опц.)</span><span data-lang="en">Monthly budget, $ (opt.)</span></label>
+        <input id="monthly" type="number" min="0" step="1" placeholder="—">
+      </div>
+    </div>
+
+    <details>
+      <summary><span data-lang="ru">⚙ Точная настройка (режим, страницы, шаги, vision, VRAM, tok/s)</span><span data-lang="en">⚙ Fine-tune (mode, pages, steps, vision, VRAM, tok/s)</span></summary>
+      <div class="grid g3">
+        <div>
+          <label for="mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
+          <select id="mode">
+            <option value="explore" selected>explore</option>
+            <option value="goal">goal</option>
+            <option value="replay">replay</option>
+          </select>
+          <span class="hint">
+            <span data-lang="ru">explore — исследовать всё; goal — по NL-цели (−~85% планир.); replay — повтор (0 токенов).</span>
+            <span data-lang="en">explore — map everything; goal — from an NL goal (−~85% planning); replay — re-run (0 tokens).</span>
+          </span>
+        </div>
+        <div>
+          <label for="P"><span data-lang="ru">Страниц (P)</span><span data-lang="en">Pages (P)</span></label>
+          <input id="P" type="number" min="0" step="1" value="1">
+          <label for="S" style="margin-top:.4rem"><span data-lang="ru">Шагов на страницу (S)</span><span data-lang="en">Steps per page (S)</span></label>
+          <input id="S" type="number" min="0" step="1" value="5">
+        </div>
+        <div>
+          <label for="R"><span data-lang="ru">Сломанных локаторов (R): </span><span data-lang="en">Broken locators (R): </span><span id="Rout" class="mono">10</span>%</label>
+          <input id="R" type="range" min="0" max="100" step="1" value="10" aria-describedby="Rhint">
+          <label style="margin-top:.4rem"><input id="V" type="checkbox" style="width:auto;margin-right:.4rem">Vision (V)</label>
+          <span class="hint" id="Rhint">
+            <span data-lang="ru">R — доля локаторов, которые дрейфят и требуют self-heal.</span>
+            <span data-lang="en">R — fraction of locators that drift and need self-heal.</span>
+          </span>
+        </div>
+        <div>
+          <label for="vram"><span data-lang="ru">VRAM GPU, ГБ</span><span data-lang="en">GPU VRAM, GB</span></label>
+          <input id="vram" type="number" min="0" step="1" value="12">
+        </div>
+        <div>
+          <label for="tps"><span data-lang="ru">Скорость, tok/s <span class="badge">≈ verify</span></span><span data-lang="en">Throughput, tok/s <span class="badge">≈ verify</span></span></label>
+          <input id="tps" type="number" min="0.1" step="1" value="20">
+          <span class="hint">
+            <span data-lang="ru">Ориентир — зависит от GPU и модели. Отредактируйте под себя.</span>
+            <span data-lang="en">Illustrative — depends on GPU and model. Edit to match yours.</span>
+          </span>
+        </div>
+        <div>
+          <label for="split"><span data-lang="ru">Сплит вход/выход, %</span><span data-lang="en">Input/output split, %</span></label>
+          <input id="split" type="number" min="0" max="100" step="1" value="80">
+          <label for="priority" style="margin-top:.4rem"><span data-lang="ru">Приоритет</span><span data-lang="en">Priority</span></label>
+          <select id="priority">
+            <option value="cheapest">Дешевле · Cheapest</option>
+            <option value="quality">Качество · Quality</option>
+            <option value="fastest">Быстрее · Fastest</option>
+            <option value="local">Только локально · Local-only</option>
+          </select>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ RECOMMENDATION ============================ -->
+  <section class="card" id="rec">
+    <h2><span class="n">1</span><span data-lang="ru">Рекомендация — что использовать</span><span data-lang="en">Recommendation — what to use</span></h2>
+    <div id="rec-out" class="rec" aria-live="polite"></div>
+  </section>
+
+  <!-- ============================ COST ============================ -->
+  <section class="card" id="cost">
+    <h2><span class="n">2</span><span data-lang="ru">Стоимость прогона по моделям</span><span data-lang="en">Cost per run across models</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Токены и $/прогон для вашей задачи на разных моделях/планах + сколько прогонов влезает в бюджет. Локально — бесплатно; replay — 0 токенов.</span>
+      <span data-lang="en">Tokens and $/run for your task across models/plans + how many runs fit your budget. Local is free; replay is 0 tokens.</span>
+    </p>
+    <div class="scroll">
+      <table>
+        <caption>⚠ <span data-lang="ru">цены ориентировочные — cutoff Jan-2026</span><span data-lang="en">illustrative pricing — cutoff Jan-2026</span></caption>
+        <thead><tr>
+          <th scope="col"><span data-lang="ru">Модель · план</span><span data-lang="en">Model · plan</span></th>
+          <th scope="col"><span data-lang="ru">Токенов/прогон</span><span data-lang="en">Tokens/run</span></th>
+          <th scope="col">$/<span data-lang="ru">прогон</span><span data-lang="en">run</span></th>
+          <th scope="col"><span data-lang="ru">Прогонов в бюджет</span><span data-lang="en">Runs in budget</span></th>
+          <th scope="col"><span data-lang="ru">Влезает?</span><span data-lang="en">Fits?</span></th>
+        </tr></thead>
+        <tbody id="cost-body"></tbody>
+      </table>
+    </div>
+    <details>
+      <summary><span data-lang="ru">💲 Редактировать цены (за 1M токенов) — ⚠ проверьте по ссылкам</span><span data-lang="en">💲 Edit prices (per 1M tokens) — ⚠ verify via the links</span></summary>
+      <div class="warnbox">
+        <span data-lang="ru">Цены — ориентировочные и редактируемые, НЕ утверждение об актуальной стоимости. Облачные цены меняются; knowledge cutoff — январь 2026. Проверьте по ссылкам провайдеров.</span>
+        <span data-lang="en">Prices are illustrative & editable, NOT a claim of current cost. Cloud pricing drifts; knowledge cutoff Jan-2026. Verify via the provider links.</span>
+      </div>
+      <div class="grid g2" id="price-edit"></div>
+    </details>
+  </section>
+
+  <!-- ============================ VRAM ============================ -->
+  <section class="card" id="vram-section">
+    <h2><span class="n">3</span>VRAM / <span data-lang="ru">железо</span><span data-lang="en">hardware</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Влезает ли модель в вашу видеопамять. Формула §5: <span class="mono">VRAM ≈ параметры × байт(quant) + ~1.5 ГБ</span> (KV-cache мал при batch=1).</span>
+      <span data-lang="en">Whether a model fits your VRAM. §5 formula: <span class="mono">VRAM ≈ params × bytes(quant) + ~1.5 GB</span> (KV-cache is small at batch=1).</span>
+    </p>
+    <div class="scroll"><table>
+      <caption><span data-lang="ru">VRAM на модель — влезает в вашу видеопамять</span><span data-lang="en">Per-model VRAM — fits your GPU memory</span></caption>
+      <thead><tr>
+        <th scope="col"><span data-lang="ru">Модель</span><span data-lang="en">Model</span></th>
+        <th scope="col"><span data-lang="ru">Параметры</span><span data-lang="en">Params</span></th>
+        <th scope="col">Quant</th>
+        <th scope="col">≈ VRAM</th>
+        <th scope="col"><span data-lang="ru">Роль</span><span data-lang="en">Role</span></th>
+        <th scope="col"><span data-lang="ru">Влезает в <span id="vram-gb-h" class="mono">12</span> ГБ?</span><span data-lang="en">Fits <span class="mono" id="vram-gb-h2">12</span> GB?</span></th>
+      </tr></thead>
+      <tbody id="vram-body"></tbody>
+    </table></div>
+    <details>
+      <summary><span data-lang="ru">🧮 Свой расчёт: параметры × quant</span><span data-lang="en">🧮 Custom: params × quant</span></summary>
+      <div class="grid g3">
+        <div>
+          <label for="mp"><span data-lang="ru">Параметры, B</span><span data-lang="en">Params, B</span></label>
+          <input id="mp" type="number" min="0" step="0.1" value="14">
+        </div>
+        <div>
+          <label for="mq">Quant</label>
+          <select id="mq">
+            <option>FP16</option><option>Q8_0</option><option>Q6_K</option>
+            <option selected>Q5_K_M</option><option>Q4_K_M</option><option>Q4_0</option><option>Q3_K_M</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div id="mp-out" class="mono" style="padding:.5rem 0"></div>
+        </div>
+      </div>
+    </details>
+    <span class="hint">
+      <span data-lang="ru">Оценка ±10–15%: embedding/vision-тензоры иногда в полной точности. Сверяйте <span class="mono">ollama show</span>.</span>
+      <span data-lang="en">Estimate ±10–15%: embedding/vision tensors are sometimes full-precision. Cross-check <span class="mono">ollama show</span>.</span>
+    </span>
+  </section>
+
+  <!-- ============================ MODEL SELECTOR ============================ -->
+  <section class="card" id="models">
+    <h2><span class="n">4</span><span data-lang="ru">Подбор модели по железу</span><span data-lang="en">Model picker by hardware</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Что брать на ваш тир VRAM (§3.3). Имена/размеры — из LOCAL_MODELS §3: <span class="v-ok">✅</span> проверено · <span class="v-warn">⚠</span> verify-before-use.</span>
+      <span data-lang="en">What to pick for your VRAM tier (§3.3). Names/sizes from LOCAL_MODELS §3: <span class="v-ok">✅</span> verified · <span class="v-warn">⚠</span> verify-before-use.</span>
+    </p>
+    <div class="scroll"><table>
+      <caption><span data-lang="ru">Подбор модели по тиру VRAM</span><span data-lang="en">Model picks by VRAM tier</span></caption>
+      <thead><tr>
+        <th scope="col">VRAM</th>
+        <th scope="col"><span data-lang="ru">PLAN (рассуждения)</span><span data-lang="en">PLAN (reasoning)</span></th>
+        <th scope="col"><span data-lang="ru">VISION (скриншот)</span><span data-lang="en">VISION (screenshot)</span></th>
+      </tr></thead>
+      <tbody id="tier-body"></tbody>
+    </table></div>
+  </section>
+
+  <!-- ============================ LEGEND ============================ -->
+  <section class="card" id="legend">
+    <h2><span class="n">5</span><span data-lang="ru">Легенда — что значат поля</span><span data-lang="en">Legend — what the fields mean</span></h2>
+    <dl class="legend">
+      <dt>P</dt><dd><span data-lang="ru">Страниц приложения, которые тестируем.</span><span data-lang="en">App pages under test.</span></dd>
+      <dt>S</dt><dd><span data-lang="ru">Шагов (действий) на страницу.</span><span data-lang="en">Steps (actions) per page.</span></dd>
+      <dt>R</dt><dd><span data-lang="ru">Доля сломанных локаторов (0–100%) — сколько требует self-heal.</span><span data-lang="en">Fraction of broken locators (0–100%) — how many need self-heal.</span></dd>
+      <dt>V</dt><dd><span data-lang="ru">Vision: чинить локаторы по скриншоту (VLM). Дороже.</span><span data-lang="en">Vision: heal locators from a screenshot (VLM). More expensive.</span></dd>
+      <dt><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></dt><dd><span data-lang="ru"><b class="mono">explore</b> — карта всего сайта; <b class="mono">goal</b> — по NL-цели поверх explore (−~85% планирования); <b class="mono">replay</b> — детерминированный повтор, 0 токенов.</span><span data-lang="en"><b class="mono">explore</b> — map the whole site; <b class="mono">goal</b> — from an NL goal on top of explore (−~85% planning); <b class="mono">replay</b> — deterministic re-run, 0 tokens.</span></dd>
+      <dt>PLAN / HEAL / VISION</dt><dd><span data-lang="ru">Роли LLM: планирование сценариев / повторная привязка локатора / чтение скриншота.</span><span data-lang="en">LLM roles: scenario planning / locator re-grounding / screenshot reading.</span></dd>
+      <dt><span data-lang="ru">Токены</span><span data-lang="en">Tokens</span></dt><dd><span data-lang="ru">Единицы работы LLM. Бюджеты: PLAN ≤ 50k, HEAL ≤ 20k на прогон (превышение → детерминированный fallback).</span><span data-lang="en">LLM work units. Budgets: PLAN ≤ 50k, HEAL ≤ 20k per run (overflow → deterministic fallback).</span></dd>
+      <dt>Quant</dt><dd><span data-lang="ru">Квантизация весов (Q4_K_M и т.п.): меньше бит → меньше VRAM, чуть ниже качество.</span><span data-lang="en">Weight quantization (Q4_K_M etc.): fewer bits → less VRAM, slightly lower quality.</span></dd>
+      <dt>VRAM</dt><dd><span data-lang="ru">Видеопамять GPU, нужная под модель.</span><span data-lang="en">GPU memory the model needs.</span></dd>
+      <dt>tok/s</dt><dd><span data-lang="ru">Скорость генерации (токенов/сек) — задаёт время прогона локально.</span><span data-lang="en">Generation speed (tokens/sec) — sets local run time.</span></dd>
+      <dt><span data-lang="ru">Прогонов</span><span data-lang="en">Runs</span></dt><dd><span data-lang="ru">Сколько прогонов покупает бюджет = бюджет ÷ цена прогона.</span><span data-lang="en">Runs the budget buys = budget ÷ cost per run.</span></dd>
+    </dl>
+  </section>
+
+  <!-- ============================ DOCS ============================ -->
+  <section class="card" id="docs">
+    <h2><span class="n">6</span><span data-lang="ru">Документация</span><span data-lang="en">Documentation</span></h2>
+    <div class="links">
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/README.md">README — <span data-lang="ru">обзор + быстрый старт</span><span data-lang="en">overview + quick start</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/LOCAL_MODELS.md">LOCAL_MODELS — <span data-lang="ru">модели, VRAM, токены (источник формул)</span><span data-lang="en">models, VRAM, tokens (formula source)</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/TESTING.md">TESTING — <span data-lang="ru">офлайн-гейты, локальные модели, live-прогон</span><span data-lang="en">offline gates, local models, live run</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/DEVELOPMENT.md">DEVELOPMENT — <span data-lang="ru">сборка, milestone-гейты</span><span data-lang="en">build, milestone gates</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/ARCHITECTURE.md">ARCHITECTURE — <span data-lang="ru">компоненты + ADR</span><span data-lang="en">components + ADR</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/DISTRIBUTION.md">DISTRIBUTION — <span data-lang="ru">поставка и онбординг</span><span data-lang="en">distribution & onboarding</span></a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/THREAT_MODEL.md">THREAT_MODEL — STRIDE-lite</a>
+      <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/ROADMAP.md">ROADMAP — <span data-lang="ru">дорожная карта + контракты M*</span><span data-lang="en">roadmap + M* contracts</span></a>
+    </div>
+  </section>
+
+  <footer>
+    <p>Sentinel — Apache-2.0.
+      <span data-lang="ru">Все расчёты выполняются в браузере (офлайн, без сети). Математика — из проверенных формул кода (LOCAL_MODELS §5/§6). Имена моделей и цены, помеченные «verify», относятся к post-cutoff (январь 2026) — проверяйте перед боевым использованием.</span>
+      <span data-lang="en">All calculations run in your browser (offline, no network). Math derives from verified code formulas (LOCAL_MODELS §5/§6). Model names and prices marked “verify” are post-cutoff (Jan-2026) — verify before production use.</span>
+    </p>
+  </footer>
+</main>
+
+<script>
+/* =========================================================================
+   SENTINEL cost/model/VRAM hub — pure client-side, no dependencies.
+   SINGLE SOURCE OF TRUTH: docs/LOCAL_MODELS.md §5 (VRAM) + §6 (token-cost).
+   Self-tests at the bottom assert the doc's worked examples (cost A-E; VRAM).
+   ========================================================================= */
+
+/* ---- §6 token-cost constants (proven from code: max_tokens + budgets) ---- */
+var COST = {
+  PLAN_BUDGET: 50000, HEAL_BUDGET: 20000,
+  TOK_EXPLORE: 2200,  TOK_GOAL: 2800,
+  TOK_HEAL_TEXT: 950, TOK_HEAL_VISION: 1250
+};
+/* P=pages, S=steps/page, R=broken fraction 0..1, V=vision 0|1, mode. */
+function estimateTokens(P, S, R, V, mode) {
+  if (mode === 'replay') return { plan: 0, heal: 0, total: 0 };      // §6.2 replay = 0
+  var plan = (mode === 'goal')
+    ? Math.min(COST.TOK_GOAL, COST.PLAN_BUDGET)                      // -> 2800
+    : Math.min(P * S * COST.TOK_EXPLORE, COST.PLAN_BUDGET);         // min(P*S*2200, 50000)
+  var heal = Math.min(
+    P * S * R * COST.TOK_HEAL_TEXT + P * S * R * V * COST.TOK_HEAL_VISION,
+    COST.HEAL_BUDGET);
+  return { plan: plan, heal: heal, total: plan + heal };
+}
+/* §6.3 dollar model: split total ~inShare in / (1-inShare) out, price per 1M. */
+function costUsd(total, priceIn, priceOut, inShare) {
+  return total * inShare * (priceIn / 1e6) + total * (1 - inShare) * (priceOut / 1e6);
+}
+
+/* ---- §5 VRAM constants (GGUF bytes-per-param + overhead) ---- */
+var BPW = { FP16:2.0, Q8_0:1.0625, Q6_K:0.8203, Q5_K_M:0.7129, Q4_K_M:0.6016, Q4_0:0.5625, Q3_K_M:0.4258 };
+var VRAM_OVERHEAD = 1.5;                  // §5.3 worked examples use 1.5 GB; KV negligible at batch=1
+function vramTotal(paramsB, quant) {
+  var w = paramsB * (BPW[quant] || BPW.Q4_K_M);
+  return { weights: w, total: w + VRAM_OVERHEAD };
+}
+
+/* ---- cloud pricing: ILLUSTRATIVE, EDITABLE defaults (NOT current real prices) ----
+   $/1M tokens in/out. Sonnet-class 3/15 matches LOCAL_MODELS §6.3's own $0.06 example. */
+var PRICES = [
+  { key:'opus',     label:'Claude Opus-class',   in:15,   out:75,   link:'https://www.anthropic.com/pricing' },
+  { key:'sonnet',   label:'Claude Sonnet-class', in:3,    out:15,   link:'https://www.anthropic.com/pricing' },
+  { key:'gpt',      label:'GPT-class',           in:2.5,  out:10,   link:'https://openai.com/api/pricing/' },
+  { key:'deepseek', label:'DeepSeek-class',      in:0.30, out:1.20, link:'https://api-docs.deepseek.com/quick_start/pricing' }
+];
+
+/* ---- model catalog (names/sizes from LOCAL_MODELS §3; verify flag carried) ---- */
+var CATALOG = [
+  { n:'Phi-4-mini-instruct',           p:3.8,  q:'Q5_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Qwen3-4B',                      p:4,    q:'Q5_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Qwen3-8B',                      p:8.2,  q:'Q5_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Qwen3-14B',                     p:14.8, q:'Q4_K_M', role:'PLAN',   v:'✅' },
+  { n:'DeepSeek-R1-Distill-Qwen-14B',  p:14,   q:'Q4_K_M', role:'PLAN',   v:'✅' },
+  { n:'Qwen3-30B-A3B (MoE)',           p:30,   q:'Q4_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Gemma-3-27B-IT',                p:27,   q:'Q4_0',   role:'PLAN',   v:'✅' },
+  { n:'Mistral-Small-3.2-24B',         p:24,   q:'Q4_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Qwen3-32B',                     p:32.8, q:'Q4_K_M', role:'PLAN',   v:'⚠' },
+  { n:'Llama-3.3-70B-Instruct',        p:70,   q:'Q3_K_M', role:'PLAN',   v:'✅' },
+  { n:'Qwen2.5-VL-7B-Instruct',        p:7.6,  q:'Q4_K_M', role:'VISION', v:'✅' },
+  { n:'Phi-4-reasoning-vision-15B',    p:15,   q:'Q4_K_M', role:'VISION', v:'✅' },
+  { n:'Qwen3-VL-8B-Instruct',          p:8,    q:'Q4_K_M', role:'VISION', v:'⚠' },
+  { n:'InternVL3-8B',                  p:8,    q:'Q4_K_M', role:'VISION', v:'⚠' },
+  { n:'MiniCPM-V-4.5',                 p:8,    q:'Q4_K_M', role:'VISION', v:'⚠' },
+  { n:'Pixtral-12B',                   p:12,   q:'Q4_K_M', role:'VISION', v:'⚠' }
+];
+
+/* ---- §3.3 VRAM tiers (drives the picker + the recommendation's local advice) ---- */
+var TIERS = [
+  { gb:8,  plan:'Qwen3-8B Q5_K_M / Phi-4-mini',                       pp:8.2,  pq:'Q5_K_M', vis:'Qwen2.5-VL-7B Q4 / InternVL3-8B' },
+  { gb:12, plan:'Qwen3-14B Q4_K_M',                                   pp:14.8, pq:'Q4_K_M', vis:'Phi-4-vision-15B Q4 / Qwen2.5-VL-7B Q5' },
+  { gb:16, plan:'Qwen3-14B Q6 / Mistral-Small-24B Q4',                pp:14.8, pq:'Q6_K',   vis:'любая 7–15B VLM · any 7-15B VLM' },
+  { gb:24, plan:'Qwen3-32B Q4_K_M / Gemma-3-27B QAT / Qwen3-30B-A3B', pp:32.8, pq:'Q4_K_M', vis:'15B VLM Q5/Q6' },
+  { gb:32, plan:'Llama-3.3-70B Q3/Q4',                                pp:70,   pq:'Q3_K_M', vis:'—' }
+];
+var TASK_PRESETS = {
+  small:  { P:1, S:5,  R:10, V:0 },
+  medium: { P:3, S:10, R:20, V:0 },
+  large:  { P:5, S:15, R:30, V:1 }
+};
+
+/* ----------------------------- helpers ----------------------------- */
+function $(id){ return document.getElementById(id); }
+function num(id, def){ var v = parseFloat($(id).value); return isFinite(v) ? v : def; }
+function grp(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); } // thin-space groups
+function money(x){ if (x === 0) return '$0.00'; if (x > 0 && x < 0.01) return '<$0.01'; return '$' + x.toFixed(2); }
+function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
+function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
+function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
+
+/* ----------------------------- i18n ----------------------------- */
+function setLang(l){
+  document.body.classList.remove('lang-ru', 'lang-en');
+  document.body.classList.add('lang-' + l);
+  document.documentElement.lang = l;
+  try { localStorage.setItem('sentinel_lang', l); } catch (e) {}
+  $('lang-ru').setAttribute('aria-pressed', l === 'ru' ? 'true' : 'false');
+  $('lang-en').setAttribute('aria-pressed', l === 'en' ? 'true' : 'false');
+}
+function initLang(){
+  var l = 'ru';
+  try { l = localStorage.getItem('sentinel_lang') || 'ru'; } catch (e) {}
+  setLang(l === 'en' ? 'en' : 'ru');
+}
+
+/* ----------------------------- state ----------------------------- */
+function getPrices(){
+  return PRICES.map(function(p){
+    var iin = $('price-' + p.key + '-in'), iout = $('price-' + p.key + '-out');
+    return {
+      key:p.key, label:p.label, link:p.link,
+      in:  iin  ? (parseFloat(iin.value)  || 0) : p.in,
+      out: iout ? (parseFloat(iout.value) || 0) : p.out
+    };
+  });
+}
+function readState(){
+  var bRaw = $('budget').value, mRaw = $('monthly').value;
+  var isCloud = $('hw').value === 'cloud';
+  return {
+    P: Math.max(0, num('P', 1)),
+    S: Math.max(0, num('S', 5)),
+    R: Math.min(1, Math.max(0, num('R', 10) / 100)),
+    V: $('V').checked ? 1 : 0,
+    mode: $('mode').value,
+    isCloud: isCloud,
+    hwGb: isCloud ? null : Math.max(0, num('vram', 12)),
+    tps:  isCloud ? null : Math.max(0.1, num('tps', 20)),
+    budget:  bRaw === '' ? 0 : Math.max(0, parseFloat(bRaw) || 0),
+    monthly: mRaw === '' ? null : Math.max(0, parseFloat(mRaw) || 0),
+    inShare: Math.min(1, Math.max(0, num('split', 80) / 100)),
+    priority: $('priority').value
+  };
+}
+function pickTier(hwGb){ var c = null; TIERS.forEach(function(t){ if (t.gb <= hwGb) c = t; }); return c || TIERS[0]; }
+
+/* ----------------------------- renderers ----------------------------- */
+function renderCost(st){
+  var t = estimateTokens(st.P, st.S, st.R, st.V, st.mode);
+  var prices = getPrices();
+  var rows = '';
+  prices.forEach(function(p){
+    var cost = costUsd(t.total, p.in, p.out, st.inShare);
+    var fits = cost <= st.budget;
+    var runs = cost > 0 ? Math.floor(st.budget / cost) : Infinity;
+    rows += '<tr><td>' + esc(p.label) + '</td><td class="mono">' + grp(t.total) +
+      '</td><td class="mono">' + money(cost) + '</td><td class="mono">' + runsFmt(runs) +
+      '</td><td class="' + (fits ? 'yes' : 'no') + '" aria-label="' + (fits ? 'fits' : 'does not fit') + '">' +
+      (fits ? '✓' : '✗') + '</td></tr>';
+  });
+  rows += '<tr class="hi"><td>' + bi('Локально — ваш GPU', 'Local — your GPU') +
+    '</td><td class="mono">' + grp(t.total) + '</td><td class="yes">' + bi('бесплатно', 'free') +
+    '</td><td class="mono">∞</td><td class="yes" aria-label="fits">✓</td></tr>';
+  rows += '<tr class="mut"><td>Replay ' + bi('(повтор)', '(re-run)') +
+    '</td><td class="mono">0</td><td class="mono">$0.00</td><td class="mono">∞</td><td class="yes" aria-label="fits">✓</td></tr>';
+  $('cost-body').innerHTML = rows;
+}
+
+function renderVram(st){
+  var gb = st.isCloud ? 24 : st.hwGb;          // cloud: show against 24 GB reference
+  $('vram-gb-h').textContent = gb; $('vram-gb-h2').textContent = gb;
+  var rows = '';
+  CATALOG.forEach(function(m){
+    var r = vramTotal(m.p, m.q);
+    var fits = r.total <= gb;
+    rows += '<tr><td>' + esc(m.n) + ' <span class="' + (m.v === '✅' ? 'v-ok' : 'v-warn') + '">' + m.v + '</span></td>' +
+      '<td class="mono">' + m.p + 'B</td><td class="mono">' + m.q + '</td>' +
+      '<td class="mono">' + r.total.toFixed(1) + ' GB</td><td>' + m.role + '</td>' +
+      '<td class="' + (fits ? 'yes' : 'no') + '" aria-label="' + (fits ? 'fits' : 'does not fit') + '">' +
+      (fits ? '✓' : '✗') + '</td></tr>';
+  });
+  $('vram-body').innerHTML = rows;
+  // custom mini-calc
+  var mp = Math.max(0, num('mp', 14)), mq = $('mq').value, rr = vramTotal(mp, mq);
+  var fit2 = rr.total <= gb;
+  $('mp-out').innerHTML = '≈ <b>' + rr.total.toFixed(1) + ' GB</b> · ' +
+    (fit2 ? '<span class="yes">' + bi('влезает в ' + gb + ' ГБ ✓', 'fits ' + gb + ' GB ✓') + '</span>'
+          : '<span class="no">' + bi('не влезает в ' + gb + ' ГБ ✗', 'exceeds ' + gb + ' GB ✗') + '</span>');
+}
+
+function renderTiers(st){
+  var cur = st.isCloud ? null : pickTier(st.hwGb);
+  var rows = '';
+  TIERS.forEach(function(t){
+    var hi = (cur && cur.gb === t.gb) ? ' class="hi"' : '';
+    rows += '<tr' + hi + '><td class="mono">' + t.gb + ' GB' + '</td><td>' + esc(t.plan) +
+      '</td><td>' + esc(t.vis) + '</td></tr>';
+  });
+  $('tier-body').innerHTML = rows;
+}
+
+function renderRec(st){
+  var tCur = estimateTokens(st.P, st.S, st.R, st.V, st.mode);
+  var modeName = st.mode === 'goal' ? 'goal' : (st.mode === 'replay' ? 'replay' : 'explore'); // whitelist — never put raw DOM .value into HTML
+  var tE = estimateTokens(st.P, st.S, st.R, st.V, 'explore');
+  var tG = estimateTokens(st.P, st.S, st.R, st.V, 'goal');
+  var saving = tE.total > 0 ? Math.max(0, Math.round((1 - tG.total / tE.total) * 100)) : 0;
+  var savRu = saving > 0 ? ' (−' + saving + '% планирования)' : '';
+  var savEn = saving > 0 ? ' (−' + saving + '% planning)' : '';
+  var savTip = saving > 0 ? ' (−' + saving + '%)' : '';
+  var prices = getPrices();
+  var cloud = prices.map(function(p){ return { label:p.label, cost:costUsd(tCur.total, p.in, p.out, st.inShare) }; })
+                    .sort(function(a, b){ return a.cost - b.cost; });
+  var cheap = cloud[0], dear = cloud[cloud.length - 1];
+  var cheapRuns = cheap.cost > 0 ? Math.floor(st.budget / cheap.cost) : Infinity;
+  // task label
+  var tl = 'свой · custom', tlEN = 'custom';
+  ['small','medium','large'].forEach(function(k){
+    var pr = TASK_PRESETS[k];
+    if (pr.P === st.P && pr.S === st.S && Math.round(pr.R) === Math.round(st.R * 100) && pr.V === st.V) {
+      tl = ({small:'малый',medium:'средний',large:'большой'})[k];
+      tlEN = ({small:'small',medium:'medium',large:'large'})[k];
+    }
+  });
+  var taskDesc = bi(
+    '«' + tl + '» (P=' + st.P + ', S=' + st.S + ', R=' + Math.round(st.R*100) + '%, ' + (st.V ? 'vision' : 'без vision') + ')',
+    '“' + tlEN + '” (P=' + st.P + ', S=' + st.S + ', R=' + Math.round(st.R*100) + '%, ' + (st.V ? 'vision' : 'no vision') + ')');
+
+  var depth = '<li>' + bi(
+    'Глубина: режим <b>' + modeName + '</b> ≈ <b>' + grp(tCur.total) + '</b> токенов/прогон. ' +
+      'Режим <b>goal</b> ≈ ' + grp(tG.total) + savRu + ', если флоу известен; <b>replay</b> — 0 токенов.',
+    'Depth: mode <b>' + modeName + '</b> ≈ <b>' + grp(tCur.total) + '</b> tokens/run. ' +
+      'Mode <b>goal</b> ≈ ' + grp(tG.total) + savEn + ' if the flow is known; <b>replay</b> — 0 tokens.') + '</li>';
+
+  var cloudLi = '<li>' + bi(
+    'Облако: дешевле всего <b>' + esc(cheap.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/прогон → бюджет ' +
+      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> прогонов. Дороже всего ' + esc(dear.label) + ' ≈ ' + money(dear.cost) + '.',
+    'Cloud: cheapest is <b>' + esc(cheap.label) + '</b> ≈ <b>' + money(cheap.cost) + '</b>/run → budget ' +
+      money(st.budget) + ' = <b>' + runsFmt(cheapRuns) + '</b> runs. Priciest is ' + esc(dear.label) + ' ≈ ' + money(dear.cost) + '.') + '</li>';
+
+  var localLi;
+  if (!st.isCloud) {
+    var tier = pickTier(st.hwGb), fit = vramTotal(tier.pp, tier.pq), fits = fit.total <= st.hwGb;
+    var tmin = minutesOf(tCur.total, st.tps);
+    var low = st.hwGb < 8;
+    localLi = '<li>' + bi(
+      'Локально (бесплатно, ваш GPU ' + st.hwGb + ' ГБ' + (low ? ', маловато — медленно' : '') + '): PLAN = <b>' + esc(tier.plan) + '</b> (~' +
+        fit.total.toFixed(1) + ' ГБ, ' + (fits ? 'влезает ✓' : 'НЕ влезает ✗') + ')' +
+        (st.V ? ', VISION = <b>' + esc(tier.vis) + '</b>' : '') + '. ≈ ' + grp(tCur.total) + ' ток ÷ ' + st.tps +
+        ' tok/s ≈ <b>' + tmin + ' мин/прогон</b>, $0 — без лимита по деньгам.',
+      'Local (free, your ' + st.hwGb + ' GB GPU' + (low ? ', tight — slow' : '') + '): PLAN = <b>' + esc(tier.plan) + '</b> (~' +
+        fit.total.toFixed(1) + ' GB, ' + (fits ? 'fits ✓' : 'does NOT fit ✗') + ')' +
+        (st.V ? ', VISION = <b>' + esc(tier.vis) + '</b>' : '') + '. ≈ ' + grp(tCur.total) + ' tok ÷ ' + st.tps +
+        ' tok/s ≈ <b>' + tmin + ' min/run</b>, $0 — no money limit.') + '</li>';
+  } else {
+    localLi = '<li>' + bi(
+      'Железо: <b>Cloud API</b> — платите за токены (таблица ниже). Локально было бы бесплатно на своём GPU.',
+      'Hardware: <b>Cloud API</b> — you pay per token (table below). Local would be free on your own GPU.') + '</li>';
+  }
+
+  var monthlyLi = '';
+  if (st.monthly !== null && st.monthly > 0) {
+    var rpm = cheap.cost > 0 ? Math.floor(st.monthly / cheap.cost) : Infinity;
+    monthlyLi = '<li>' + bi(
+      'В месяц: бюджет ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> прогонов на ' + esc(cheap.label) + ' (локально — без лимита).',
+      'Monthly: budget ' + money(st.monthly) + ' = <b>' + runsFmt(rpm) + '</b> runs on ' + esc(cheap.label) + ' (local — unlimited).') + '</li>';
+  }
+
+  var tip = '<li>' + bi(
+    'Совет: для регрессии — <b>replay</b> (0 токенов, $0). Новый флоу — <b>explore</b>; когда флоу известен — <b>goal</b>' + savTip + '.',
+    'Tip: for regression use <b>replay</b> (0 tokens, $0). New flow — <b>explore</b>; once known — <b>goal</b>' + savTip + '.') + '</li>';
+
+  $('rec-out').innerHTML =
+    '<p>' + bi('Для задачи ', 'For task ') + taskDesc + bi(', бюджет ', ', budget ') + money(st.budget) + bi('/прогон:', '/run:') + '</p>' +
+    '<ul>' + depth + cloudLi + localLi + monthlyLi + tip + '</ul>';
+}
+
+function renderAll(){
+  var st = readState();
+  renderRec(st); renderCost(st); renderVram(st); renderTiers(st);
+}
+
+/* ----------------------------- wiring ----------------------------- */
+function buildPriceEditors(){
+  var html = '';
+  PRICES.forEach(function(p){
+    html += '<div><label>' + esc(p.label) + ' — $/1M ' +
+      '<a href="' + p.link + '" target="_blank" rel="noopener">' + bi('проверьте', 'verify') + '</a></label>' +
+      '<div class="grid g2">' +
+      '<input id="price-' + p.key + '-in"  type="number" min="0" step="0.01" value="' + p.in + '"  aria-label="' + esc(p.label) + ' input $/1M">' +
+      '<input id="price-' + p.key + '-out" type="number" min="0" step="0.01" value="' + p.out + '" aria-label="' + esc(p.label) + ' output $/1M">' +
+      '</div></div>';
+  });
+  $('price-edit').innerHTML = html;
+}
+function applyTask(name){
+  var pr = TASK_PRESETS[name]; if (!pr) return;
+  $('P').value = pr.P; $('S').value = pr.S; $('R').value = pr.R; $('Rout').textContent = pr.R; $('V').checked = !!pr.V;
+  document.querySelectorAll('#task-presets button').forEach(function(b){
+    b.setAttribute('aria-pressed', b.getAttribute('data-task') === name ? 'true' : 'false');
+  });
+}
+function applyHw(){
+  var opt = $('hw').options[$('hw').selectedIndex], cloud = $('hw').value === 'cloud';
+  if (!cloud) { $('vram').value = opt.getAttribute('data-gb'); $('tps').value = opt.getAttribute('data-tps'); }
+  $('vram').disabled = cloud; $('tps').disabled = cloud;
+}
+function init(){
+  initLang();
+  buildPriceEditors();
+  applyTask('small');
+  applyHw();
+  // listeners
+  document.querySelectorAll('#task-presets button').forEach(function(b){
+    b.addEventListener('click', function(){ applyTask(b.getAttribute('data-task')); renderAll(); });
+  });
+  $('hw').addEventListener('change', function(){ applyHw(); renderAll(); });
+  $('R').addEventListener('input', function(){ $('Rout').textContent = $('R').value; });
+  ['P','S','R','V','mode','vram','tps','budget','monthly','split','priority','mp','mq']
+    .forEach(function(id){ var el = $(id); if (el){ el.addEventListener('input', renderAll); el.addEventListener('change', renderAll); } });
+  $('price-edit').addEventListener('input', renderAll);
+  renderAll();
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
+/* ----------------------------- self-tests (LOCAL_MODELS §5/§6) -----------------------------
+   These run in-browser only and log to console; they document the worked-example vectors and
+   catch drift from the doc. Never throw (won't break the page).                                */
+(function selfTest(){
+  function close(a, b){ return Math.abs(a - b) <= Math.max(0.005, Math.abs(b) * 0.001); }
+  var T = [];
+  // §6.3 cost vectors A-E (total tokens)
+  T.push(['A', estimateTokens(1,5,0.10,0,'explore').total, 11475]);
+  T.push(['B', estimateTokens(3,10,0.20,0,'explore').total, 55700]);
+  T.push(['C', estimateTokens(3,10,0.20,0,'goal').total, 8500]);
+  T.push(['D', estimateTokens(5,15,0.30,1,'explore').total, 70000]);
+  T.push(['E', estimateTokens(9,9,0.9,1,'replay').total, 0]);
+  // §6.3 dollar example A: 80/20 split, $3/$15 -> ~$0.06
+  var ca = costUsd(11475, 3, 15, 0.8);
+  T.push(['A$', Math.round(ca * 100) / 100, 0.06]);
+  // §5.3 VRAM examples (total GB)
+  T.push(['7B Q8_0', vramTotal(7,'Q8_0').total, 8.94]);
+  T.push(['13B Q4_K_M', vramTotal(13,'Q4_K_M').total, 9.32]);
+  T.push(['32B Q4_K_M', vramTotal(32,'Q4_K_M').total, 20.75]);
+  T.push(['70B Q3_K_M', vramTotal(70,'Q3_K_M').total, 31.31]);
+  var bad = T.filter(function(r){ return !close(r[1], r[2]); });
+  if (bad.length) console.warn('Sentinel self-test MISMATCH (check vs LOCAL_MODELS §5/§6):', bad);
+  else if (window.console) console.log('Sentinel self-test OK — all', T.length, 'vectors match LOCAL_MODELS §5/§6.');
+})();
+</script>
+</body>
+</html>

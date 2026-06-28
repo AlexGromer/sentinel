@@ -1,9 +1,10 @@
 # Minimal Jekyll config for GitHub Pages (built from /docs by .github/workflows/pages.yml).
 #
-# Design choice: only index.md carries front matter and is themed/rendered. The bilingual
-# contract docs (M*_CONTRACT.md, ARCHITECTURE references, etc.) contain Helm `{{ }}` snippets
-# that would trip Liquid, so optional-front-matter is intentionally NOT enabled — they stay as
-# static files and are linked to the repo (GitHub renders the markdown richly + bilingually).
+# Design choice: the landing is a self-contained docs/index.html (M11.6, ADR-033) — NO front
+# matter, copied verbatim (no theme/Liquid), so it renders identically on Pages, file:// and the
+# webui Docker bundle. The bilingual contract docs (M*_CONTRACT.md, etc.) contain Helm `{{ }}`
+# snippets that would trip Liquid, so optional-front-matter is intentionally NOT enabled — they
+# stay as static files linked to the repo (GitHub renders the markdown richly + bilingually).
 # The interactive calculators under calculators/ are plain vanilla HTML served verbatim
 # (no build step, no network — they also open straight from file:// for air-gapped use).
 title: Sentinel

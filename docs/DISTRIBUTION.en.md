@@ -4,7 +4,7 @@
 
 > **Status**: contract frozen | **Date**: 2026-06-27
 > **ADR**: ADR-030 (distribution strategy) · ADR-031 (setup-WebUI)
-> **Epic**: M11.1–M11.5 — sequenced; most items are not being built in this cycle
+> **Epic**: M11.1–M11.6 — sequenced; most items are not being built in this cycle (M11.6 delivered — issue #12)
 > **Authors**: system-architect agent, @AlexGromer
 
 ---
@@ -464,6 +464,39 @@ QUICKSTART includes an "Installation without internet access" section: download 
 - [ ] All QUICKSTART.md steps are reproducible in a clean Docker environment (verified in GitHub Actions)
 - [ ] Offline path is documented and verified (depends on M11.4)
 - [ ] `install.sh` does not require root when installing to `~/.local/bin`
+
+---
+
+## §8 M11.6 — Single-page Pages hub (dark-neon, bilingual, recommendation)
+
+**Status:** delivered (issue #12, expanded scope). Depends on: LOCAL_MODELS §3/§5/§6 (formula source).
+
+The Pages landing is rebuilt as **one self-contained `docs/index.html`** (full HTML, all CSS/JS inline, no
+network/CDN/fonts/build). All interactives are **sections on a single page** (no page hops): recommendation ·
+cost (§6) · VRAM (§5) · model selector (§3.3) · legend · documentation.
+
+- **Dark neon theme** (red accent `#ff2d55` on `#0b0b10`, high contrast, no clutter).
+- **Full-page RU/EN toggle** (default RU, persisted in `localStorage`; visibility via `data-lang` + CSS;
+  JS-rendered output emits both locales — toggling reflows instantly with no re-render).
+- **Recommendation engine**: task + hardware + budget → a clear answer (which model, mode/depth
+  explore/goal/replay, how many runs fit the budget, tokens, time, cost) — by model/hardware/task.
+- **Legend + per-field explanations**; advanced inputs collapsed in `<details>` (clean, no clutter).
+- **Anti-hallucination**: prices and tok/s are editable illustrative defaults marked "verify, cutoff Jan-2026"
+  with provider links; model names/sizes come from §3 with ✅/⚠ flags (nothing invented).
+- **Air-gapped parity**: identical on Pages, `file://` and the `webui` Docker bundle (previously `index.md`
+  rendered only via Jekyll). The old `docs/calculators/*.html` stay on disk as "advanced".
+- Replaces `docs/index.md` (Jekyll cayman) → static `index.html` (**ADR-033**). §5/§6 formulas verbatim;
+  embedded self-tests reproduce the worked examples (cost A–E; VRAM); `node --check` clean.
+
+### Acceptance criteria M11.6
+
+- [ ] From the landing a non-expert enters site size + budget and immediately sees the model comparison and a recommendation — with no hops to other pages
+- [ ] Math mirrors LOCAL_MODELS §5/§6 (cost vectors A–E + VRAM examples reproduce)
+- [ ] Full-page RU/EN toggle (default RU, localStorage) switches all text, including JS-rendered output
+- [ ] Dark neon theme, legend and per-field explanations are present
+- [ ] Air-gapped: no network/CDN; opens on Pages, `file://` and the `webui` bundle
+- [ ] Prices/tok/s are editable and marked "verify (cutoff Jan-2026)"; model names carry §3 flags
+- [ ] `node --check` on the extracted `<script>` is clean; gitleaks is clean
 
 ---
 

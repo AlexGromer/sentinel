@@ -29,7 +29,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/THREAT_MODEL.md | Security model (→ SECURITY.md) | STRIDE-lite over the trust boundaries; assets, current/planned mitigations, residual risk, owner-milestone |
 | docs/TESTING.md | Testing + onboarding guide | offline gates + local-model setup + live run (M9.1/M9.2 interpret artifacts/exit-codes) + zero-level docker-compose path |
 | docs/DISTRIBUTION.md | Distribution & onboarding epic (ADR-030/031) | Release/compose/Helm-Flux/setup-WebUI/air-gapped milestones + integration model (black-box + W3C traceparent M9.5, NO backend connector) |
-| docs/index.md · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub | front-mattered landing + minimal Jekyll (theme cayman) + 3 vanilla-JS calculators (vram · token-cost · model-selector; air-gapped, mirror LOCAL_MODELS §5) |
+| docs/index.html · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub (M11.6, ADR-033) | self-contained single-page hub `index.html` (dark-neon, bilingual RU/EN toggle, air-gapped — Pages/file:///webui; sections = recommendation · cost §6 · VRAM §5 · model-selector §3.3 · legend; mirrors LOCAL_MODELS §5/§6) + 3 standalone vanilla-JS calculators kept on disk as "advanced" (vram · token-cost · model-selector) |
 | docs/setup/index.html | setup-WebUI (ADR-031; M9.3 live) | static config generator (RunConfig YAML + env + command) + **download** buttons (full Pages generation) + **live mode** (control-API URL+token → /healthz → ▶Run POST /v1/runs → poll, M9.3 p2); vanilla JS, air-gapped; on Pages + Docker `webui` :8088 |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
@@ -78,6 +78,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | CONTRIBUTING.md · SECURITY.md · CODE_OF_CONDUCT.md · .github/{PULL_REQUEST_TEMPLATE,ISSUE_TEMPLATE/*,CODEOWNERS} | Community | repo hygiene: contribution guide (Conventional Commits, test gates, bilingual rule), security policy (+threat-model link), CoC, PR + issue templates, code owners |
 | LICENSE · NOTICE | Legal | Apache-2.0 license text + NOTICE (Copyright 2026 AlexGromer) |
 
+| docs/index.html | Web page | — |
 ## Directory Structure
 ```
 agent_development/
