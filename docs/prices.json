@@ -1,0 +1,19 @@
+{
+  "_asof": "2026-06-28",
+  "_source": "seed — Claude from claude-api skill 2026-06-04; others researched 2026-06-28 from provider pages",
+  "_verify": "Illustrative, editable, NOT a claim of current cost. Verify via provider links; cutoff Jan-2026. Refreshed by .github/workflows/prices-refresh.yml (OpenRouter); unmatched models keep their seed. Keys mirror docs/index.html MODELS[].key.",
+  "prices": {
+    "opus48":    { "in": 5,     "out": 25 },
+    "sonnet46":  { "in": 3,     "out": 15 },
+    "haiku45":   { "in": 1,     "out": 5 },
+    "gpt54":     { "in": 2.5,   "out": 15 },
+    "gpt54mini": { "in": 0.75,  "out": 4.5 },
+    "o3":        { "in": 2,     "out": 8 },
+    "grok43":    { "in": 1.25,  "out": 2.5 },
+    "glm5":      { "in": 1.0,   "out": 3.2 },
+    "glm47":     { "in": 0.6,   "out": 2.2 },
+    "dsflash":   { "in": 0.14,  "out": 0.28 },
+    "dspro":     { "in": 0.435, "out": 0.87 },
+    "qwenplus":  { "in": 0.4,   "out": 1.2 }
+  }
+}

@@ -487,6 +487,11 @@ QUICKSTART содержит раздел «Установка без досту�
   только через Jekyll). Старые `docs/calculators/*.html` остаются на диске как «продвинутые».
 - Замена `docs/index.md` (Jekyll cayman) → статический `index.html` (**ADR-033**). Формулы §5/§6 — дословно;
   встроенные self-test'ы воспроизводят worked-examples (cost A–E; VRAM); `node --check` чистый.
+- **M11.6b (доработка cost-explorer, ADR-034):** каталог популярных моделей (Claude/GPT/Grok/GLM/DeepSeek/Qwen
+  + локальные) + **среднее $/1M** по умолчанию (in/out — в advanced) + **per-model токен-множитель** (reasoning
+  think-токены) + fit/reasoning/vision-бэйджи; **air-gapped live-pricing**: встроенные сиды → `prices.json`
+  (CI `prices-refresh.yml` через OpenRouter → PR) → кнопка «Обновить из OpenRouter» (сеть только по клику).
+  Источник цен — LOCAL_MODELS §3.4.
 
 ### Критерии приёмки M11.6
 

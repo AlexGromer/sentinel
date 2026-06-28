@@ -146,6 +146,35 @@ export LLM_VISION=1
 
 ---
 
+### 3.4 Облачные модели — ориентировочные цены (⚠ verify, cutoff Jan-2026)
+
+Источник цен для cost-explorer (`docs/index.html`). **Редактируемые, ориентировочные** — не утверждение об
+актуальной стоимости (облачные цены дрейфуют). Claude — из claude-api skill (2026-06-04); остальные —
+исследование 2026-06-28 по страницам провайдеров. Обновляются: CI `prices-refresh.yml` (еженедельно, через
+OpenRouter → PR) + кнопка «Обновить из OpenRouter» на странице. **Пригодность (fit)** для structured-JSON
+Sentinel — **мнение**, не бенчмарк.
+
+| Модель | $/1M вход | $/1M выход | Контекст | reasoning | vision | fit | Источник |
+|---|---|---|---|---|---|---|---|
+| Claude Opus 4.8 | 5 | 25 | 1M | ✓ | ✓ | high | [anthropic](https://www.anthropic.com/pricing) (skill 06-04) |
+| Claude Sonnet 4.6 | 3 | 15 | 1M | ✓ | ✓ | high | anthropic (skill 06-04) |
+| Claude Haiku 4.5 | 1 | 5 | 200K | — | ✓ | high | anthropic (skill 06-04) |
+| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | [openai](https://openai.com/api/pricing/) ⚠ |
+| GPT-5.4-mini | 0.75 | 4.5 | 400K | — | ✓ | high | openai ⚠ |
+| OpenAI o3 | 2 | 8 | 200K | ✓ | — | med | openai ⚠ (vision не подтверждён) |
+| xAI Grok 4.3 | 1.25 | 2.5 | 1M | — | ✓ | med | [x.ai](https://docs.x.ai/developers/models) ⚠ |
+| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) ⚠ |
+| Zhipu GLM-4.7 | 0.6 | 2.2 | — | — | — | med | z.ai ⚠ |
+| DeepSeek-V4-flash | 0.14 | 0.28 | 1M | ✓ | — | high | [deepseek](https://api-docs.deepseek.com/quick_start/pricing) ⚠ |
+| DeepSeek-V4-pro | 0.435 | 0.87 | 1M | ✓ | — | high | deepseek ⚠ (вторичный источник спорит — проверьте) |
+| Qwen-plus | 0.4 | 1.2 | 1M | — | — | med | [alibaba](https://www.alibabacloud.com/help/en/model-studio/model-pricing) ⚠ (тарифы по тирам) |
+
+> Стоимость прогона = `токены × токен-множитель × среднее$/1M`, где `среднее = вход·0.8 + выход·0.2` (§6.3).
+> Локально = бесплатно (своё железо), §3.1–3.3. Reasoning-модели (o3 / DeepSeek-V4-pro) шлют лишние
+> think-токены → их токен-множитель по умолчанию > 1 (flash/лёгкие варианты, напр. DeepSeek-V4-flash — 1.0; всё редактируемо).
+
+---
+
 ## 4. Каталог runtime / endpoint
 
 Точные env-блоки `Sentinel`. Все перечисленные runtime экспонируют **OpenAI-совместимый** `/v1`
