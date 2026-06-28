@@ -1,4 +1,4 @@
-// Command control-api is Sentinel's NON-MCP HTTP control plane (M9.3, ADR-023 / ADR-032 / ADR-040).
+// Command control-api is Sentinel's NON-MCP HTTP control plane (M9.3, ADR-023 / ADR-032 / ADR-040 / ADR-041).
 //
 // It is the second way to drive Sentinel (the first is brain-as-MCP-server, M7): a thin HTTP API
 // that the setup-WebUI (or any script/CI) can call to start a run and poll its status. It spawns
@@ -13,6 +13,7 @@
 //
 // Endpoints (v1): GET /healthz · GET /v1/config-schema · POST /v1/runs · GET /v1/runs · GET /v1/runs/{id}
 // M9.3-tail (ADR-040): GET /v1/runs/{id}/events (SSE, token-gated) · GET /v1/runs/{id}/artifact (token-gated whitelist)
+// M12 (ADR-041): POST /v1/chat/completions (OpenAI-compat shim — one chat turn → one run, token-gated)
 package main
 
 import (
@@ -238,20 +239,10 @@ func validTarget(t string) bool {
 	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "file://")
 }
 
-func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
-	var req runRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
-		return
-	}
-	if !validTarget(req.Target) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target must be an http(s):// or file:// URL"})
-		return
-	}
+// spawnRun starts an `agentctl run` from req (caller validates the target) and returns the tracked
+// run record. Combined stdout+stderr is captured into rec.stream (ring buffer + SSE fan-out).
+// Shared by POST /v1/runs and the OpenAI-compat /v1/chat/completions shim (ADR-041).
+func (s *server) spawnRun(req runRequest) *run {
 	id := newRunID()
 	artDir := filepath.Join(s.repo, "runs", "control-"+id)
 	rec := &run{ID: id, State: "running", Target: req.Target, ArtifactDir: artDir, StartedAt: time.Now().UTC().Format(time.RFC3339), stream: newRunStream()}
@@ -301,8 +292,25 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		lw.flush()          // emit any trailing partial line
 		rec.stream.finish() // release SSE subscribers
 	}()
+	return rec
+}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id, "artifact_dir": artDir, "state": "running"})
+func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var req runRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
+		return
+	}
+	if !validTarget(req.Target) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target must be an http(s):// or file:// URL"})
+		return
+	}
+	rec := s.spawnRun(req)
+	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"})
 }
 
 func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
@@ -439,11 +447,255 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
+// readArtifact returns the contents of a whitelisted artifact for a run (or "", false). Used by the
+// chat shim to fold scenario.json into its reply; the HTTP artifact endpoint streams it instead.
+func (s *server) readArtifact(rec *run, name string) (string, bool) {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || !artifactWhitelist[name] {
+		return "", false // defense-in-depth: same path-traversal guard as handleRunArtifact
+	}
+	b, err := os.ReadFile(filepath.Join(rec.ArtifactDir, name))
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
+// --- OpenAI-compatible chat-completions shim (ADR-041) -------------------------------------------
+// Maps ONE chat turn → ONE Sentinel run (brain is one-shot). Lets any OpenAI client (Open WebUI,
+// DeepSeek/Mistral clients, SDKs, our own page) drive Sentinel "as a model" (model="sentinel").
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+}
+
+// extractTarget returns the first http(s)://|file:// token in content (supports a "target: <url>" line).
+func extractTarget(content string) string {
+	for _, tok := range strings.Fields(content) {
+		tok = strings.Trim(tok, "<>\"'`,;()[]")
+		if validTarget(tok) {
+			return tok
+		}
+	}
+	return ""
+}
+
+// stripTargetLine drops any "target: ..." lines from the instruction (they are metadata).
+func stripTargetLine(s string) string {
+	keep := make([]string, 0)
+	for _, ln := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ln)), "target:") {
+			continue
+		}
+		keep = append(keep, ln)
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
+}
+
+// parseChatInstruction derives (mode, target, instruction) from the chat messages + model name.
+// Mode: model suffix (sentinel-goal/-explore) or a leading "goal:"/"explore:"/"describe:" prefix;
+// default describe. Target: the most recent (last) valid URL across all messages. Instruction: the last user turn.
+func parseChatInstruction(model string, messages []chatMessage) (mode, target, text string) {
+	mode = "describe"
+	switch lm := strings.ToLower(model); {
+	case strings.Contains(lm, "goal"):
+		mode = "goal"
+	case strings.Contains(lm, "explore"):
+		mode = "explore"
+	}
+	for _, m := range messages {
+		if t := extractTarget(m.Content); t != "" {
+			target = t
+		}
+		if m.Role == "user" {
+			text = m.Content
+		}
+	}
+	text = strings.TrimSpace(text)
+	for _, p := range []struct{ pfx, md string }{{"goal:", "goal"}, {"describe:", "describe"}, {"explore:", "explore"}} {
+		if strings.HasPrefix(strings.ToLower(text), p.pfx) {
+			mode, text = p.md, strings.TrimSpace(text[len(p.pfx):])
+			break
+		}
+	}
+	return mode, target, stripTargetLine(text)
+}
+
+// verdict summarizes a finished run (exit-code → text) and folds in scenario.json if present.
+func (s *server) verdict(rec *run) string {
+	s.mu.RLock()
+	state, code, errStr := rec.State, rec.ExitCode, rec.Error
+	s.mu.RUnlock()
+	var v string
+	switch {
+	case state == "failed":
+		v = "✖ run did not start"
+		if errStr != "" {
+			v += " — " + errStr
+		}
+	case code == 0:
+		v = "✓ pass (exit 0)"
+	case code == 1:
+		v = "⚠ the test found a problem (exit 1)"
+	case code == 2:
+		v = "⚠ visual/golden regression (exit 2)"
+	case code == 3:
+		v = "✖ config error — needs a human (exit 3)"
+	default:
+		v = fmt.Sprintf("exit %d", code)
+	}
+	if sc, ok := s.readArtifact(rec, "scenario.json"); ok {
+		v += "\n\nscenario.json:\n" + sc
+	}
+	return v
+}
+
+func chatChunk(w http.ResponseWriter, fl http.Flusher, id string, created int64, model string, delta map[string]any, finish any) {
+	b, _ := json.Marshal(map[string]any{
+		"id": id, "object": "chat.completion.chunk", "created": created, "model": model,
+		"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finish}},
+	})
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	fl.Flush()
+}
+
+func chatCompletion(id string, created int64, model, content string) map[string]any {
+	return map[string]any{
+		"id": id, "object": "chat.completion", "created": created, "model": model,
+		"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": "stop"}},
+		"usage":   map[string]any{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+	}
+}
+
+// handleChatCompletions is the OpenAI-compatible shim, token-gated like other mutations.
+func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var req chatRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
+		return
+	}
+	mode, target, text := parseChatInstruction(req.Model, req.Messages)
+	model := req.Model
+	if model == "" {
+		model = "sentinel"
+	}
+	id, created := "chatcmpl-"+newRunID(), time.Now().Unix()
+
+	// Friendly, chat-shaped guidance instead of an HTTP error when the turn is unusable.
+	if !validTarget(target) {
+		s.chatReply(w, req.Stream, id, created, model, "Set a target first — include a URL like `target: https://app.example` (or a `file://` URL) in your message.")
+		return
+	}
+	if mode != "explore" && text == "" {
+		s.chatReply(w, req.Stream, id, created, model, "Describe the test in words, or prefix with `goal:` / `explore:`.")
+		return
+	}
+
+	rr := runRequest{Target: target, Mode: mode, Planner: "heuristic"}
+	switch mode {
+	case "goal":
+		rr.Goal, rr.Planner = text, "goal"
+	case "describe":
+		rr.Describe = text
+	}
+	rec := s.spawnRun(rr)
+
+	if req.Stream {
+		s.streamChat(w, r, rec, id, created, model)
+		return
+	}
+	s.blockingChat(w, rec, id, created, model)
+}
+
+// chatReply emits a single assistant message (one-shot guidance / errors), stream or not.
+func (s *server) chatReply(w http.ResponseWriter, stream bool, id string, created int64, model, msg string) {
+	if fl, ok := w.(http.Flusher); stream && ok {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		chatChunk(w, fl, id, created, model, map[string]any{"role": "assistant", "content": msg}, nil)
+		chatChunk(w, fl, id, created, model, map[string]any{}, "stop")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		fl.Flush()
+		return
+	}
+	writeJSON(w, http.StatusOK, chatCompletion(id, created, model, msg))
+}
+
+// streamChat streams the run's log lines + final verdict as OpenAI chat.completion.chunk events.
+func (s *server) streamChat(w http.ResponseWriter, r *http.Request, rec *run, id string, created int64, model string) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		s.blockingChat(w, rec, id, created, model)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	chatChunk(w, fl, id, created, model, map[string]any{"role": "assistant"}, nil)
+	buffered, ch, finished := rec.stream.subscribe()
+	for _, line := range buffered {
+		chatChunk(w, fl, id, created, model, map[string]any{"content": line + "\n"}, nil)
+	}
+	if !finished {
+		defer rec.stream.unsubscribe(ch)
+		ctx := r.Context()
+	loop:
+		for {
+			select {
+			case line, open := <-ch:
+				if !open {
+					break loop
+				}
+				chatChunk(w, fl, id, created, model, map[string]any{"content": line + "\n"}, nil)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+	chatChunk(w, fl, id, created, model, map[string]any{"content": "\n" + s.verdict(rec)}, nil)
+	chatChunk(w, fl, id, created, model, map[string]any{}, "stop")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	fl.Flush()
+}
+
+// blockingChat waits for the run to finish and returns a single chat.completion (logs + verdict).
+func (s *server) blockingChat(w http.ResponseWriter, rec *run, id string, created int64, model string) {
+	snapshot, ch, finished := rec.stream.subscribe()
+	lines := append([]string(nil), snapshot...)
+	if !finished {
+		defer rec.stream.unsubscribe(ch)
+		for line := range ch {
+			lines = append(lines, line)
+		}
+	}
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		content += "\n\n"
+	}
+	content += s.verdict(rec)
+	writeJSON(w, http.StatusOK, chatCompletion(id, created, model, content))
+}
+
 func (s *server) mux() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", s.handleHealthz)
 	m.HandleFunc("GET /v1/config-schema", s.handleConfigSchema)
 	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
+	m.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
