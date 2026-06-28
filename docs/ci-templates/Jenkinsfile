@@ -1,0 +1,67 @@
+// =============================================================================
+// Sentinel UI-test gate — Jenkins declarative pipeline (TEMPLATE).
+//
+// RU: Шаблон для ВАШЕГО репозитория. Sentinel = CLI со структурными кодами выхода
+//     (0/1/2/3) → ставит UI-тест в любой CI на коммит. Подробности: ci-templates/README.md.
+// EN: A template for YOUR repository. Sentinel = a CLI with structured exit codes
+//     (0/1/2/3) → drops a UI test into any commit-time CI. Details: ci-templates/README.en.md.
+//
+// Prereqs: Docker + a checkout of the Sentinel repo (or a published image once M11.1 lands),
+// and a committed frozen `config/plan.json` (author it with the chat-front / `--describe`,
+// then freeze the golden via `agentctl baseline update --plan plan.json`).
+// =============================================================================
+pipeline {
+  agent any
+
+  environment {
+    // App under test (override per branch/environment).
+    TARGET = 'https://staging.example.test'
+    // Optional: bind ANTHROPIC_API_KEY from Jenkins credentials to enable LLM self-healing.
+    // Absent key → deterministic heuristic planner + L1–L6 heal (still useful, fully offline).
+    // ANTHROPIC_API_KEY = credentials('anthropic-api-key')
+  }
+
+  stages {
+    stage('Build image') {
+      steps {
+        sh 'docker compose build sentinel'
+      }
+    }
+
+    stage('Replay (UI gate)') {
+      steps {
+        script {
+          // Replay a committed, frozen plan against the live app. `--ci` forbids bypassing the
+          // plan_hash hard-abort, so a tampered/stale plan fails closed (exit 3).
+          int code = sh(returnStatus: true, script: '''
+            docker compose run --rm \
+              -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+              sentinel run --target "$TARGET" --replay --plan /config/plan.json --ci \
+              --aut-version "${GIT_COMMIT:-unknown}"
+          ''')
+          echo "sentinel exit code: ${code}"
+          // 0 pass · 1 the test found a problem · 2 visual/golden regression · 3 config/plan-integrity.
+          if (code == 0) {
+            echo 'PASS — UI behaves as the frozen plan expects.'
+          } else if (code == 1) {
+            error 'FAIL: the test found a problem (exit 1) — an assertion failed / the described flow is gone.'
+          } else if (code == 2) {
+            error 'FAIL: visual/golden regression (exit 2) — the accessibility baseline drifted.'
+          } else if (code == 3) {
+            currentBuild.result = 'UNSTABLE'
+            echo 'UNSTABLE: config / plan-integrity error (exit 3) — needs a human (re-baseline or fix config).'
+          } else {
+            error "FAIL: unexpected exit ${code}."
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      // plan.json / transcript / heal-report / scenario.json / report / trace.zip land here.
+      archiveArtifacts artifacts: 'runs/**', allowEmptyArchive: true
+    }
+  }
+}

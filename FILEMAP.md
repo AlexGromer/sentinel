@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 39 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 40 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -31,6 +31,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/DISTRIBUTION.md | Distribution & onboarding epic (ADR-030/031) | Release/compose/Helm-Flux/setup-WebUI/air-gapped milestones + integration model (black-box + W3C traceparent M9.5, NO backend connector) |
 | docs/index.html · docs/prices.json · docs/_config.yml · docs/calculators/*.html | GitHub Pages hub (M11.6/M11.6b, ADR-033/034) | self-contained single-page hub `index.html` (dark-neon, bilingual RU/EN, air-gapped — Pages/file:///webui): recommendation engine + cost §6 (model catalog Claude/GPT/Grok/GLM/DeepSeek/Qwen + local; blended $/1M + per-model token multiplier; fit/reasoning/vision) + VRAM §5 + model-selector §3.3 + legend; pricing = embedded seeds + `prices.json` (CI-refreshed via `.github/workflows/prices-refresh.yml` + on-page OpenRouter button); mirrors LOCAL_MODELS §3.4/§5/§6. 3 standalone calculators kept as "advanced" |
 | docs/setup/index.html | setup-WebUI (ADR-031; M9.3 live) | static config generator (RunConfig YAML + env + command) + **download** buttons (full Pages generation) + **live mode** (control-API URL+token → /healthz → ▶Run POST /v1/runs → poll, M9.3 p2); vanilla JS, air-gapped; on Pages + Docker `webui` :8088 |
+| docs/chat/index.html | chat-authoring console (M9.3-tail, ADR-040) | vanilla/air-gapped/**bilingual** front over control-API: describe→author (`POST /v1/runs`)→**SSE** stream (`/events` via fetch-reader — EventSource can't send the bearer token)→show/download `scenario.json`/report (`/artifact`); poll fallback; exit-code verdict; Docker `webui` :8088/chat/ |
+| docs/ci-templates/{Jenkinsfile,.gitlab-ci.yml,README.md+.en.md} | CI templates (M9.3-tail, GAP-M9-12) | user-facing replay-gate templates: `agentctl run --replay --plan … --ci`, exit-code→verdict (0 pass / 1-2 fail / 3 unstable); Jenkins `UNSTABLE` + GitLab `allow_failure.exit_codes:[3]`; **NOT** our `.github/workflows/` |
 | docs/STATE_MACHINE / SELF_HEALING / DETERMINISM / MEMORY_PERSISTENCE / OBSERVABILITY / OUTPUTS .md | mechanics deep-dives | reference |
 | docs/ROADMAP.md, DESIGN_RECORD.md | delivery plan / design provenance | M0–M5 gates / 4 proposals + 3 verdicts |
 
@@ -41,7 +43,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
 | cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
 | cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
-| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; 5 httptest + live curl smoke |
+| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; **M9.3-tail (ADR-040)** SSE `/v1/runs/{id}/events` (token-gated; `runStream` ring-buffer + fan-out, `lineWriter` capture) + `/v1/runs/{id}/artifact` (token-gated whitelist + traversal-guard); 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; 8 httptest (race-clean) |
 | internal/orchestrator/pb/ | Go | generated gRPC stubs (from proto/runcontrol.proto) |
 | internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
@@ -92,6 +94,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/M9.6_CONTRACT.md / .en.md | Docs | **M9.6** (Wave D) browser-modes contract: headed + CDP-attach env-config, Chromium-only (ADR-036), headless-only determinism (ADR-037), deferred live-verify |
 | scripts/check_bilingual.py | Python | bilingual docs-parity CI gate — every primary `.md` must have a paired `.en.md` (+ SINGLE_LANGUAGE allowlist); run by the `bilingual` job in ci.yml |
 | docs/M9.8_CONTRACT.md / .en.md | Docs | **M9.8** (design-first, ADR-038/039) browser-extension contract: MV3 recorder + control-API WS transport (native-messaging alt) + record→scenario reuse (M9.2b) + co-pilot takeover/return; threat-model ❾; implementation deferred (blockers GAP-M9-03/13/14/15) |
+
 ## Directory Structure
 ```
 agent_development/
@@ -125,5 +128,5 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata
-- Last updated: 2026-06-27
+- Last updated: 2026-06-28
 - Phase: **M0–M8 + M2b + M4b done — gates green; M9.1 (ADR-026) + M9.2a (ADR-027) + M9.2b (ADR-028) delivered offline; Foundation cycle (ADR-029/030/031) delivered: security CI gates + docker-compose quickstart + GitHub Pages + calculators + LOCAL_MODELS/THREAT_MODEL/TESTING/DISTRIBUTION docs + L1–L5 fixtures.** M6 provider-agnostic backend (ADR-019); M7 MCP-server exposure (ADR-020); M8 distributed tracing + budget ceiling + Go orchestrator/report-service (ADR-021); **M9.1 form/login/validation primitives** (pw-executor fill/type/press/select/expect/saveStorageState + storageState auth + secrets-via-`secretRef` + `PW_NO_TRACE` gate) — all compile/test-verified (Python offline suite m3..m9 + go build/vet/test + tsc). Remaining: end-to-end observe (live OTLP trace, real budget-kill, browser byte-stability → RISK-009 flip) + M6 real-provider smoke (needs API key) + **M9.1 live UI run** (forms/Keycloak login, on "go").

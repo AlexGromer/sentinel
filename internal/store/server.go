@@ -5,11 +5,19 @@ package store
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	_ "modernc.org/sqlite"
 
 	pb "github.com/AlexGromer/sentinel/internal/store/pb"
@@ -26,7 +34,7 @@ CREATE TABLE IF NOT EXISTS healing_audit (
   original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL
 );
 CREATE TABLE IF NOT EXISTS golden_snapshots (
-  page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL
+  page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL, mac TEXT
 );
 CREATE TABLE IF NOT EXISTS step_failures (
   plan_id TEXT, step_key TEXT, last5 TEXT, last_aut_sha TEXT, quarantined INTEGER DEFAULT 0,
@@ -38,8 +46,9 @@ func now() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // Server is the SQLite-backed PersistenceService. Writes are serialized (single-writer).
 type Server struct {
 	pb.UnimplementedPersistenceServiceServer
-	db *sql.DB
-	mu sync.Mutex
+	db        *sql.DB
+	mu        sync.Mutex
+	goldenKey []byte // #24: HMAC key for golden_snapshots integrity (state/golden.key)
 }
 
 func New(path string) (*Server, error) {
@@ -53,7 +62,125 @@ func New(path string) (*Server, error) {
 	if _, err = db.Exec(schema); err != nil {
 		return nil, err
 	}
-	return &Server{db: db}, nil
+	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)
+		return nil, err
+	}
+	keyPath := filepath.Join(filepath.Dir(path), "golden.key")
+	_, statErr := os.Stat(keyPath)
+	keyExisted := statErr == nil
+	key, err := loadOrCreateGoldenKey(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{db: db, goldenKey: key}
+	// #24: the FIRST time the key is minted (fresh install or upgrade over a pre-#24 DB) we MAC
+	// whatever golden rows already exist (trust-on-first-use), then require a valid MAC on every read.
+	// This closes the MAC-strip downgrade: once the key exists, a NULL/empty mac is treated as tampered
+	// rather than silently trusted, so a DB swap or row edit that drops the mac is detected.
+	if !keyExisted {
+		if err := s.backfillGoldenMACs(); err != nil {
+			return nil, err
+		}
+	}
+	_ = os.Chmod(path, 0o600) // #24 (opt): restrict locators.db to the owner (best-effort)
+	return s, nil
+}
+
+// backfillGoldenMACs MACs any golden row missing one (NULL/empty), under the current key. Run once,
+// when the key is first created, to migrate pre-#24 baselines without breaking them (#24, TOFU).
+func (s *Server) backfillGoldenMACs() error {
+	rows, err := s.db.Query("SELECT page_key,a11y_hash,screenshot_hash FROM golden_snapshots WHERE mac IS NULL OR mac=''")
+	if err != nil {
+		return err
+	}
+	type row struct{ pk, a11y, shot string }
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.pk, &r.a11y, &r.shot); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range pending {
+		if _, err := s.db.Exec("UPDATE golden_snapshots SET mac=? WHERE page_key=?",
+			goldenMAC(s.goldenKey, r.pk, r.a11y, r.shot), r.pk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureGoldenMacColumn adds the `mac` column to a golden_snapshots table created before #24.
+// CREATE TABLE IF NOT EXISTS won't alter an existing table, so upgraded DBs need this idempotent ALTER.
+func ensureGoldenMacColumn(db *sql.DB) error {
+	rows, err := db.Query("PRAGMA table_info(golden_snapshots)")
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "mac" {
+			has = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE golden_snapshots ADD COLUMN mac TEXT")
+	return err
+}
+
+// loadOrCreateGoldenKey returns the HMAC key at path, generating a fresh 32-byte key (0600) on first
+// use. The key lives beside locators.db; a full DB swap by a peer without the key cannot forge MACs.
+func loadOrCreateGoldenKey(path string) ([]byte, error) {
+	if b, err := os.ReadFile(path); err == nil && len(b) >= 16 {
+		return b, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil { // lost a race (concurrent gateway) -> read the winner's key
+		if b, rerr := os.ReadFile(path); rerr == nil && len(b) >= 16 {
+			return b, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	if _, err := f.Write(key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// goldenMAC is HMAC-SHA256 over the integrity-bearing golden fields (created_at is excluded so the
+// MAC is stable across the Go and Python implementations, which format floats differently).
+func goldenMAC(key []byte, pageKey, a11y, shot string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(pageKey))
+	m.Write([]byte{0x1f})
+	m.Write([]byte(a11y))
+	m.Write([]byte{0x1f})
+	m.Write([]byte(shot))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 func (s *Server) Close() error {
@@ -124,22 +251,33 @@ func (s *Server) AppendAudit(_ context.Context, a *pb.AuditRow) (*pb.Empty, erro
 func (s *Server) SaveGolden(_ context.Context, g *pb.Golden) (*pb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	mac := goldenMAC(s.goldenKey, g.PageKey, g.A11YHash, g.ScreenshotHash)
 	_, err := s.db.Exec(
-		"INSERT OR REPLACE INTO golden_snapshots(page_key,a11y_hash,screenshot_hash,created_at) VALUES(?,?,?,?)",
-		g.PageKey, g.A11YHash, g.ScreenshotHash, now())
+		"INSERT OR REPLACE INTO golden_snapshots(page_key,a11y_hash,screenshot_hash,created_at,mac) VALUES(?,?,?,?,?)",
+		g.PageKey, g.A11YHash, g.ScreenshotHash, now(), mac)
 	return &pb.Empty{}, err
 }
 
 func (s *Server) GetGolden(_ context.Context, k *pb.PageKey) (*pb.Golden, error) {
 	g := &pb.Golden{PageKey: k.PageKey}
+	var mac sql.NullString
 	err := s.db.QueryRow(
-		"SELECT a11y_hash,screenshot_hash FROM golden_snapshots WHERE page_key=?",
-		k.PageKey).Scan(&g.A11YHash, &g.ScreenshotHash)
+		"SELECT a11y_hash,screenshot_hash,mac FROM golden_snapshots WHERE page_key=?",
+		k.PageKey).Scan(&g.A11YHash, &g.ScreenshotHash, &mac)
 	if err == sql.ErrNoRows {
 		return &pb.Golden{Found: false}, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	// #24: every golden row must carry a valid HMAC. Pre-#24 rows were MAC'd once at upgrade
+	// (backfillGoldenMACs), so a MISSING mac here is not "legacy" — it is a strip/inject attempt and
+	// is rejected, exactly like a wrong mac. This is what makes a DB swap detectable without the key:
+	// the swapped-in rows have no valid mac. Rejection -> brain maps DataLoss to a controlled exit 3.
+	want := goldenMAC(s.goldenKey, k.PageKey, g.A11YHash, g.ScreenshotHash)
+	if !mac.Valid || mac.String == "" || !hmac.Equal([]byte(want), []byte(mac.String)) {
+		return nil, status.Errorf(codes.DataLoss,
+			"golden integrity: missing or invalid MAC for page %q (tampered or DB swapped)", k.PageKey)
 	}
 	g.Found = true
 	return g, nil

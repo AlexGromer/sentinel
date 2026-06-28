@@ -66,12 +66,26 @@ func main() {
 		fmt.Fprintf(os.Stderr, "store-gateway: listen %s: %v\n", *addr, err)
 		os.Exit(1)
 	}
+	// #23 (THREAT_MODEL ❷): restrict the socket to the owner, then reject foreign-UID peers
+	// (SO_PEERCRED) — defense-in-depth under the per-run token below.
+	if err := os.Chmod(*addr, 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "[store-gateway] chmod socket 0600: %v\n", err)
+	}
+	lis = store.PeerCredListener(lis, uint32(os.Getuid()))
 
 	shutdown := setupTracing(context.Background())
 	defer shutdown()
 
 	// otelgrpc StatsHandler: server spans + W3C extraction from incoming metadata (no-op if tracing off).
-	g := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
+	// #23: a per-run shared secret (from agentctl, via STORE_TOKEN) authenticates brain->gateway
+	// calls. Absent it, serve unauthenticated (offline / direct-test fallback) but warn loudly.
+	if token := os.Getenv("STORE_TOKEN"); token != "" {
+		opts = append(opts, grpc.ChainUnaryInterceptor(store.TokenAuthInterceptor(token)))
+	} else {
+		fmt.Fprintln(os.Stderr, "[store-gateway] WARNING: STORE_TOKEN unset — gRPC authN disabled")
+	}
+	g := grpc.NewServer(opts...)
 	pb.RegisterPersistenceServiceServer(g, srv)
 
 	stop := make(chan os.Signal, 1)

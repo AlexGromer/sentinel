@@ -8,11 +8,52 @@ Two interchangeable implementations behind one method interface (ADR-015):
 `make_store(local_path)` returns GrpcStore when STORE_ADDR is set, else LocalStore. healing.py /
 replay.py / calibrate.py call the same methods on either. `Store` aliases LocalStore (tests import it).
 """
+import hashlib
+import hmac
 import json
 import os
 import pathlib
+import secrets
 import sqlite3
 import time
+
+# #23 (THREAT_MODEL ❷): gRPC metadata key carrying the per-run store token. Must match the Go
+# gateway's store.StoreTokenMDKey. Keys are lowercase per the gRPC/HTTP-2 convention.
+STORE_TOKEN_MD_KEY = "x-sentinel-store-token"
+
+
+class GoldenIntegrityError(Exception):
+    """#24 (THREAT_MODEL ❷ / STRIDE-T): a golden_snapshots row failed its HMAC — the row was
+    tampered with or the DB was swapped. replay.py converts this to a controlled exit 3."""
+
+
+def _load_or_create_key(path: str) -> bytes:
+    """Return the HMAC key at path, minting a fresh 32-byte key (0600) on first use. The key lives
+    beside locators.db; a peer who swaps the DB without the key cannot forge valid MACs (#24)."""
+    try:
+        with open(path, "rb") as fh:
+            b = fh.read()
+        if len(b) >= 16:
+            return b
+    except OSError:
+        pass
+    key = secrets.token_bytes(32)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:  # lost a race — read the winner's key
+        with open(path, "rb") as fh:
+            return fh.read()
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key)
+    return key
+
+
+def _golden_mac(key: bytes, page_key: str, a11y_hash: str, screenshot_hash: str) -> str:
+    """HMAC-SHA256 over the integrity-bearing golden fields. Byte-identical to the Go gateway's
+    goldenMAC (created_at excluded so Go/Python float formatting can't diverge)."""
+    msg = b"\x1f".join(s.encode("utf-8") for s in (page_key, a11y_hash, screenshot_hash))
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS healed_locators (
@@ -25,7 +66,7 @@ CREATE TABLE IF NOT EXISTS healing_audit (
   original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL
 );
 CREATE TABLE IF NOT EXISTS golden_snapshots (
-  page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL
+  page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL, mac TEXT
 );
 CREATE TABLE IF NOT EXISTS step_failures (
   plan_id TEXT, step_key TEXT, last5 TEXT, last_aut_sha TEXT, quarantined INTEGER DEFAULT 0,
@@ -42,8 +83,32 @@ class LocalStore:
         self.db = sqlite3.connect(path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
+        self._ensure_golden_mac_column()  # #24: migrate pre-integrity DBs (no mac column)
         self.db.commit()
         self._now = now or time.time
+        key_path = os.path.join(os.path.dirname(path) or ".", "golden.key")
+        key_existed = os.path.exists(key_path)
+        self._golden_key = _load_or_create_key(key_path)
+        # #24: on first key creation (fresh install or upgrade over a pre-#24 DB) MAC the existing
+        # rows once (trust-on-first-use); thereafter every read requires a valid MAC, so a NULL/
+        # stripped mac is rejected as tampering rather than silently trusted (closes the strip oracle).
+        if not key_existed:
+            self._backfill_golden_macs()
+
+    def _ensure_golden_mac_column(self) -> None:
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(golden_snapshots)").fetchall()]
+        if "mac" not in cols:
+            self.db.execute("ALTER TABLE golden_snapshots ADD COLUMN mac TEXT")
+
+    def _backfill_golden_macs(self) -> None:
+        rows = self.db.execute(
+            "SELECT page_key,a11y_hash,screenshot_hash FROM golden_snapshots "
+            "WHERE mac IS NULL OR mac=''").fetchall()
+        for pk, a11y, shot in rows:
+            self.db.execute("UPDATE golden_snapshots SET mac=? WHERE page_key=?",
+                            (_golden_mac(self._golden_key, pk, a11y, shot), pk))
+        if rows:
+            self.db.commit()
 
     def lookup(self, page_path, semantic_id, dom_subtree_hash):
         r = self.db.execute(
@@ -90,16 +155,26 @@ class LocalStore:
         return list(self.db.execute("SELECT strategy,outcome,confidence FROM healing_audit").fetchall())
 
     def save_golden(self, page_key, a11y_hash, screenshot_hash) -> None:
+        mac = _golden_mac(self._golden_key, page_key, a11y_hash, screenshot_hash)
         self.db.execute(
-            "INSERT OR REPLACE INTO golden_snapshots(page_key,a11y_hash,screenshot_hash,created_at) "
-            "VALUES(?,?,?,?)", (page_key, a11y_hash, screenshot_hash, self._now()))
+            "INSERT OR REPLACE INTO golden_snapshots(page_key,a11y_hash,screenshot_hash,created_at,mac) "
+            "VALUES(?,?,?,?,?)", (page_key, a11y_hash, screenshot_hash, self._now(), mac))
         self.db.commit()
 
     def get_golden(self, page_key):
         r = self.db.execute(
-            "SELECT a11y_hash,screenshot_hash FROM golden_snapshots WHERE page_key=?",
+            "SELECT a11y_hash,screenshot_hash,mac FROM golden_snapshots WHERE page_key=?",
             (page_key,)).fetchone()
-        return {"a11y_hash": r[0], "screenshot_hash": r[1]} if r else None
+        if not r:
+            return None
+        a11y, shot, mac = r[0], r[1], r[2]
+        # #24: every row must carry a valid MAC (pre-#24 rows were MAC'd once at upgrade). A missing
+        # or wrong MAC => stripped / tampered / DB swapped -> fail closed (replay maps this to exit 3).
+        want = _golden_mac(self._golden_key, page_key, a11y, shot)
+        if not mac or not hmac.compare_digest(want, mac):
+            raise GoldenIntegrityError(
+                f"golden integrity: missing or invalid MAC for page {page_key!r} (tampered or DB swapped)")
+        return {"a11y_hash": a11y, "screenshot_hash": shot}
 
     def record_step(self, plan_id, step_key, passed: bool, aut_sha: str) -> bool:
         row = self.db.execute(
@@ -160,6 +235,26 @@ def _trace_interceptor():
     return _Interceptor()
 
 
+def _token_interceptor(token: str):
+    """gRPC client interceptor that attaches the per-run store token (#23) to every call's metadata
+    so the Go store-gateway's TokenAuthInterceptor admits it. Mirrors _trace_interceptor's shape."""
+    import collections
+    import grpc
+
+    class _Details(collections.namedtuple(
+            "_Details", ("method", "timeout", "metadata", "credentials", "wait_for_ready", "compression"))):
+        pass
+
+    class _Interceptor(grpc.UnaryUnaryClientInterceptor):
+        def intercept_unary_unary(self, continuation, details, request):
+            md = list(details.metadata or []) + [(STORE_TOKEN_MD_KEY, token)]
+            details = _Details(details.method, details.timeout, md, details.credentials,
+                               details.wait_for_ready, details.compression)
+            return continuation(details, request)
+
+    return _Interceptor()
+
+
 class GrpcStore:
     """Thin gRPC client to the Go store-gateway. Same method interface as LocalStore (ADR-015)."""
 
@@ -168,7 +263,11 @@ class GrpcStore:
         from .pb import persistence_pb2 as pbmsg, persistence_pb2_grpc as pbgrpc
         self._pb = pbmsg
         base = grpc.insecure_channel(f"unix:{addr}")
-        self._ch = grpc.intercept_channel(base, _trace_interceptor())  # M8: W3C trace propagation
+        interceptors = [_trace_interceptor()]            # M8: W3C trace propagation
+        token = os.environ.get("STORE_TOKEN", "")
+        if token:
+            interceptors.append(_token_interceptor(token))  # #23: authN to the gateway
+        self._ch = grpc.intercept_channel(base, *interceptors)
         self._stub = pbgrpc.PersistenceServiceStub(self._ch)
 
     def lookup(self, page_path, semantic_id, dom_subtree_hash):
@@ -208,7 +307,13 @@ class GrpcStore:
             page_key=page_key, a11y_hash=a11y_hash, screenshot_hash=screenshot_hash))
 
     def get_golden(self, page_key):
-        g = self._stub.GetGolden(self._pb.PageKey(page_key=page_key))
+        import grpc
+        try:
+            g = self._stub.GetGolden(self._pb.PageKey(page_key=page_key))
+        except grpc.RpcError as e:  # #24: the gateway rejects a tampered golden with DATA_LOSS
+            if e.code() == grpc.StatusCode.DATA_LOSS:
+                raise GoldenIntegrityError(e.details() or "golden integrity: MAC mismatch") from None
+            raise
         return None if not g.found else {"a11y_hash": g.a11y_hash, "screenshot_hash": g.screenshot_hash}
 
     def record_step(self, plan_id, step_key, passed: bool, aut_sha: str) -> bool:
