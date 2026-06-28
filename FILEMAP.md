@@ -87,6 +87,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | deploy/flux/{sync,helmrelease,sentinel-secrets}.yaml | YAML | **M11.3** (ADR-035) Flux GitOps (v2 GA): `sync.yaml` Namespace+GitRepository+Kustomization (`wait`); `helmrelease.yaml` → chart; `sentinel-secrets.yaml` ExternalSecret/SealedSecret template (no secrets). ArgoCD↔Flux mutually exclusive |
 | deploy/argocd/sentinel-app.yaml | YAML | M5 ArgoCD Application (ADR-017); **M11.3** comment: secrets out-of-band + Flux mutual-exclusivity |
 | deploy/flux/sentinel-secrets.yaml | Configuration | — |
+| scripts/check_bilingual.py | Python source | — |
 ## Directory Structure
 ```
 agent_development/
