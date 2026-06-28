@@ -148,6 +148,21 @@ for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do .venv/bin/python tests/test_${t
 2. Сформировать соответствующую запись `alternatives` при explore в `brain/graph.py` `_buttons_from_interactives`, убедившись, что `pw-executor` `buildLocator` умеет строить и проверять этот тип локатора.
 3. `HealingEngine.heal` перебирает alternatives в записанном порядке; verify-before-accept перепроверяет каждого кандидата в живом DOM. Задокументировать в `docs/SELF_HEALING.md` + `docs/M2_CONTRACT.md`.
 
+### Secret plumbing (Helm/Flux, M11.3 · ADR-035)
+Цепочка секретов **chart → agentctl → brain** (закрывает Helm-половину GAP-SEC-001):
+
+1. **agentctl фильтрует env по умолчанию** (`filteredEnv()`, default-on): из хоста в brain проходят только curated-имена (PATH/…, ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/…, префиксы `LLM_`/`OTEL_`/`PW_`/`SENTINEL_`/`NODE_`/`GIT_`, + M11.3 PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_*/HTTP(S)\_PROXY) **+** имена из `SENTINEL_ENV_ALLOW`. Escape hatch — `SENTINEL_ENV_ALLOWLIST=0` (полный passthrough, для отладки). Функциональные run-vars фильтр не трогает (инъекция после фильтра в `spawnBrain`).
+2. **Chart подаёт секреты через `secretKeyRef`** при `secrets.enabled: true` (`values-prod.yaml`): `llmApiKey` (envName по умолч. `ANTHROPIC_API_KEY`) и `checkpointDsn` (при `checkpointDsn.enabled: true`), плюс произвольные `extraSecretEnv[]`. При `enabled: false` (dev/staging/offline) — plaintext-fallback `value:` (только `checkpointDsn`), API-ключ из `extraEnv`/хоста.
+3. **Chart авто-разрешает свои имена в allowlist:** helper `sentinel.envAllow` (`_helpers.tpl`) собирает ключи `extraEnv` + имена `extraSecretEnv` + кастомный `llmApiKey.envName` в `SENTINEL_ENV_ALLOW`, и ставит `SENTINEL_ENV_ALLOWLIST=1`. Иначе default-on фильтр срезал бы chart-переменные до brain.
+
+Создать Secret (out-of-band — chart его контент не хранит):
+```bash
+kubectl create secret generic sentinel-secrets -n sentinel \
+  --from-literal=llm-api-key="$ANTHROPIC_API_KEY" \
+  --from-literal=checkpoint-dsn="postgresql://…"
+```
+В GitOps — через SealedSecret/ExternalSecret (`deploy/flux/sentinel-secrets.yaml` — шаблон). Проверка, что секреты не в CronJob-спеке: `helm template deploy/sentinel -f deploy/sentinel/values-prod.yaml | grep -A2 secretKeyRef` (ключи только под `secretKeyRef`, без plaintext `value:`).
+
 ### Начать новую веху
 Сначала напишите `docs/M<N>_CONTRACT.md` (scope, контракты, гейт приёмки Given/When/Then), добавьте ADR в `ARCHITECTURE.md` если это архитектурное решение, добавьте задачи в `BACKLOG.md`, *затем* реализуйте.
 

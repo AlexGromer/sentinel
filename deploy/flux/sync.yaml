@@ -1,0 +1,42 @@
+# Flux GitOps entry point for Sentinel (home-lab, ADR-035 / M11.3). Bootstrap once:
+#   kubectl apply -f deploy/flux/sync.yaml
+# Flux then reconciles deploy/flux/ (this file + helmrelease.yaml + sentinel-secrets.yaml) on interval.
+#
+# apiVersions are Flux v2 GA — verify the target cluster runs Flux >= 2.3 (where helm.toolkit/v2 is GA).
+# This directory is applied as a PLAIN directory (no kustomization.yaml here by design — naming one
+# `kustomization.yaml` would make kustomize treat the dir as an overlay and collide with this Flux flow).
+#
+# RECONCILER CHOICE: Flux (these manifests) and ArgoCD (deploy/argocd/sentinel-app.yaml) are MUTUALLY
+# EXCLUSIVE — run exactly one against the `sentinel` release/namespace, never both.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentinel
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: sentinel
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://github.com/AlexGromer/sentinel.git   # VERIFY: your fork/repo
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: sentinel
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 2m
+  timeout: 5m
+  sourceRef:
+    kind: GitRepository
+    name: sentinel
+  path: ./deploy/flux        # plain directory apply (Namespace + HelmRelease + the Secret source)
+  prune: true
+  wait: true                 # gate health on the Secret + HelmRelease becoming Ready

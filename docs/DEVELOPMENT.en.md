@@ -148,6 +148,21 @@ for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do .venv/bin/python tests/test_${t
 2. Emit a matching `alternatives` entry at explore time in `brain/graph.py` `_buttons_from_interactives`, and ensure `pw-executor` `buildLocator` can build+probe that locator kind.
 3. `HealingEngine.heal` rotates alternatives in recorded order; verify-before-accept re-probes every candidate live. Document in `docs/SELF_HEALING.md` + `docs/M2_CONTRACT.md`.
 
+### Secret plumbing (Helm/Flux, M11.3 · ADR-035)
+The secret chain **chart → agentctl → brain** (closes the Helm half of GAP-SEC-001):
+
+1. **agentctl filters env by default** (`filteredEnv()`, default-on): only curated names reach the brain from the host (PATH/…, ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/…, prefixes `LLM_`/`OTEL_`/`PW_`/`SENTINEL_`/`NODE_`/`GIT_`, + M11.3 PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_*/HTTP(S)\_PROXY) **plus** names from `SENTINEL_ENV_ALLOW`. Escape hatch — `SENTINEL_ENV_ALLOWLIST=0` (full passthrough, for debugging). Functional run vars are untouched (injected after the filter in `spawnBrain`).
+2. **The chart supplies secrets via `secretKeyRef`** when `secrets.enabled: true` (`values-prod.yaml`): `llmApiKey` (envName default `ANTHROPIC_API_KEY`) and `checkpointDsn` (when `checkpointDsn.enabled: true`), plus arbitrary `extraSecretEnv[]`. When `enabled: false` (dev/staging/offline) — plaintext `value:` fallback (`checkpointDsn` only), API key from `extraEnv`/host.
+3. **The chart auto-allows its own names:** the `sentinel.envAllow` helper (`_helpers.tpl`) gathers `extraEnv` keys + `extraSecretEnv` names + a custom `llmApiKey.envName` into `SENTINEL_ENV_ALLOW`, and sets `SENTINEL_ENV_ALLOWLIST=1`. Otherwise the default-on filter would strip chart-supplied vars before the brain.
+
+Create the Secret (out-of-band — the chart does not store its content):
+```bash
+kubectl create secret generic sentinel-secrets -n sentinel \
+  --from-literal=llm-api-key="$ANTHROPIC_API_KEY" \
+  --from-literal=checkpoint-dsn="postgresql://…"
+```
+In GitOps — via SealedSecret/ExternalSecret (`deploy/flux/sentinel-secrets.yaml` — a template). Verify secrets are absent from the CronJob spec: `helm template deploy/sentinel -f deploy/sentinel/values-prod.yaml | grep -A2 secretKeyRef` (keys only under `secretKeyRef`, no plaintext `value:`).
+
 ### Start a new milestone
 Write `docs/M<N>_CONTRACT.md` first (scope, contracts, acceptance gate Given/When/Then), add an ADR to `ARCHITECTURE.md` if it’s an architectural decision, add tasks to `BACKLOG.md`, *then* implement.
 

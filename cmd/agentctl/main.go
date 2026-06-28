@@ -56,12 +56,15 @@ func mkArtifactDir(repo, runID, override string) string {
 
 // filteredEnv narrows the inherited environment to a security allowlist (GAP-SEC-001) so unrelated
 // host secrets (SSH keys, cloud creds, unrelated tokens) don't leak into the brain and its children.
-// OPT-IN via SENTINEL_ENV_ALLOWLIST=1; default is unchanged full inheritance (zero behaviour change).
-// When enabled: runtime essentials + the Sentinel/LLM/OTel/Playwright families pass, plus any names
-// the user explicitly lists in SENTINEL_ENV_ALLOW (comma-separated) — required for secretRef secret
-// vars (e.g. AUT_PASSWORD). M11.3 makes the allowlist the default after container-integration tests.
+// DEFAULT-ON since M11.3 (ADR-035): the allowlist is active unless SENTINEL_ENV_ALLOWLIST=0 — an
+// explicit opt-out escape hatch for debugging / unusual local setups. When active: runtime essentials
+// + the Sentinel/LLM/OTel/Playwright/proxy/TLS families pass, plus any names the user lists in
+// SENTINEL_ENV_ALLOW (comma-separated) — required for secretKeyRef secret vars (e.g. AUT_PASSWORD);
+// the Helm chart (deploy/sentinel) auto-emits SENTINEL_ENV_ALLOW from extraEnv/extraSecretEnv so those
+// reach the brain. Functional run vars (RUN_ID/TARGET_URL/RUN_MODE/…) bypass this filter — they are
+// appended after filteredEnv() in spawnBrain, never inherited from the host.
 func filteredEnv() []string {
-	if os.Getenv("SENTINEL_ENV_ALLOWLIST") != "1" {
+	if os.Getenv("SENTINEL_ENV_ALLOWLIST") == "0" { // opt-out escape hatch — full host-env passthrough
 		return os.Environ()
 	}
 	exact := map[string]bool{
@@ -70,6 +73,11 @@ func filteredEnv() []string {
 		"ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true, "CHECKPOINT_DSN": true,
 		"STORAGE_STATE": true, "STORAGE_STATE_SAVE": true, "MCP_TRANSPORT": true,
 		"ORCH_ADDR": true, "STORE_ADDR": true, "BRAIN_PYTHON": true, "PYTHONPATH": true,
+		// M11.3 (ADR-035): metrics push, visual-heal toggle, corporate TLS trust + proxy.
+		"PROM_PUSHGATEWAY": true, "HEAL_VISUAL": true,
+		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
+		"http_proxy": true, "https_proxy": true, "no_proxy": true,
 	}
 	for _, n := range strings.Split(os.Getenv("SENTINEL_ENV_ALLOW"), ",") {
 		if n = strings.TrimSpace(n); n != "" {

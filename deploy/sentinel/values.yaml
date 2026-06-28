@@ -37,3 +37,29 @@ resources:
     memory: 2Gi
 
 extraEnv: {}
+
+# Secret plumbing (M11.3, ADR-035 — closes the Helm half of GAP-SEC-001).
+#   enabled: false → dev/offline: CHECKPOINT_DSN uses the plaintext `value:` fallback above; the API
+#                    key comes from extraEnv/host env. No Secret object needed (offline-friendly).
+#   enabled: true  → prod: API key (+ optional DSN, + extraSecretEnv) sourced ONLY via secretKeyRef,
+#                    so `kubectl describe cronjob` reveals nothing. Provide the `sentinel-secrets`
+#                    Secret out-of-band (SealedSecret / ExternalSecret / sops) — template in
+#                    deploy/flux/sentinel-secrets.yaml.
+# Each extraEnv key, extraSecretEnv name, and a custom llmApiKey.envName is auto-appended to
+# SENTINEL_ENV_ALLOW (see _helpers.tpl) so it survives agentctl's default-on env-allowlist (ADR-035).
+secrets:
+  enabled: false
+  llmApiKey:
+    secretName: sentinel-secrets
+    key: llm-api-key
+    envName: ANTHROPIC_API_KEY      # rename to OPENAI_API_KEY / LLM_API_KEY for other backends
+  checkpointDsn:
+    enabled: false                  # set true only when using a Postgres checkpoint store (M5-3)
+    secretName: sentinel-secrets
+    key: checkpoint-dsn
+  # Extra secret-sourced env (e.g. authenticated-replay creds). Each renders a secretKeyRef AND is
+  # auto-added to SENTINEL_ENV_ALLOW.
+  extraSecretEnv: []
+  #  - name: AUT_PASSWORD
+  #    secretName: sentinel-secrets
+  #    key: aut-password
