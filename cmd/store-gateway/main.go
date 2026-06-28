@@ -47,6 +47,7 @@ func setupTracing(ctx context.Context) func() {
 func main() {
 	addr := flag.String("addr", "", "unix socket path to listen on (required)")
 	dbPath := flag.String("db", "state/locators.db", "sqlite database path")
+	noAuth := flag.Bool("no-auth", false, "serve without gRPC authentication (debug/offline only; STORE_TOKEN is ignored)")
 	flag.Parse()
 	if *addr == "" {
 		fmt.Fprintln(os.Stderr, "store-gateway: --addr <unix-socket> is required")
@@ -79,11 +80,17 @@ func main() {
 	// otelgrpc StatsHandler: server spans + W3C extraction from incoming metadata (no-op if tracing off).
 	opts := []grpc.ServerOption{grpc.StatsHandler(otelgrpc.NewServerHandler())}
 	// #23: a per-run shared secret (from agentctl, via STORE_TOKEN) authenticates brain->gateway
-	// calls. Absent it, serve unauthenticated (offline / direct-test fallback) but warn loudly.
-	if token := os.Getenv("STORE_TOKEN"); token != "" {
+	// calls. #34: fail closed — running unauthenticated must be a deliberate choice (--no-auth),
+	// never the silent result of an unset/stripped env var (which would re-open the #23 surface).
+	switch token := os.Getenv("STORE_TOKEN"); {
+	case token != "":
 		opts = append(opts, grpc.ChainUnaryInterceptor(store.TokenAuthInterceptor(token)))
-	} else {
-		fmt.Fprintln(os.Stderr, "[store-gateway] WARNING: STORE_TOKEN unset — gRPC authN disabled")
+	case *noAuth:
+		fmt.Fprintln(os.Stderr, "[store-gateway] WARNING: --no-auth set — gRPC authN disabled (debug/offline only)")
+	default:
+		fmt.Fprintln(os.Stderr, "store-gateway: STORE_TOKEN unset and --no-auth not given — "+
+			"refusing to start unauthenticated (#34); pass --no-auth to allow it deliberately")
+		os.Exit(2)
 	}
 	g := grpc.NewServer(opts...)
 	pb.RegisterPersistenceServiceServer(g, srv)
