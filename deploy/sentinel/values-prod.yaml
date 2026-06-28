@@ -1,6 +1,13 @@
 # prod namespace overrides
 schedule: "0 3 * * *"          # nightly
 target: "https://app.prod.example.com/"
+# M11.3 (ADR-035): prod sources the API key + checkpoint DSN ONLY from the `sentinel-secrets` Secret
+# via secretKeyRef — nothing secret in the CronJob spec. Supply the Secret out-of-band
+# (SealedSecret / ExternalSecret / sops). dev/staging keep secrets.enabled=false (offline-friendly).
+secrets:
+  enabled: true
+  checkpointDsn:
+    enabled: true                # prod uses the Postgres checkpoint store (M5-3)
 persistence:
   enabled: true
   storageClass: ceph-block

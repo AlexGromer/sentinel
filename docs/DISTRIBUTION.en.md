@@ -232,7 +232,7 @@ The user fills in a form in the browser → WebUI generates:
 
 ## §5 M11.3 — Helm / Flux / Argo extension (closes GAP-SEC-001)
 
-**Status:** not started. Depends on: M11.1 (release tag for chart appVersion). Helm chart (`deploy/sentinel/`) already exists from M5.
+**Status:** **DELIVERED** (M11.3, ADR-035 — closes the Helm half of GAP-SEC-001). Helm chart (`deploy/sentinel/`) exists from M5; the implementation below reflects the actual code (richer than this §5's original sketches, which it supersedes).
 
 ### Problem (GAP-SEC-001)
 
@@ -255,35 +255,30 @@ Additionally: `agentctl` passes `cmd.Env = append(os.Environ(), ...)` without an
 
 ### What M11.3 builds
 
-**1. env-allowlist in agentctl** (`cmd/agentctl/main.go`)
+**1. env-allowlist in agentctl — now default-on** (`cmd/agentctl/main.go`, `filteredEnv()`)
 
-```go
-// Was: cmd.Env = append(os.Environ(), extraEnv...)
-// Becomes:
-allowedPrefixes := []string{
-    "LLM_", "ANTHROPIC_", "OPENAI_", "OTEL_",
-    "CHECKPOINT_DSN", "STORAGE_STATE", "PW_", "MCP_",
-    "ORCH_ADDR", "STORE_SOCKET", "ARTIFACT_DIR",
-    "RUN_ID", "RUN_MODE", "TARGET_URL", "AUT_VERSION",
-}
-cmd.Env = filterEnv(os.Environ(), allowedPrefixes, extraEnv)
-```
+`filteredEnv()` keeps an **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3 additions** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY) **+ a prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`/`NODE_`/`GIT_`) **+** names from `SENTINEL_ENV_ALLOW` (comma-sep — for secretKeyRef vars like `AUT_PASSWORD`).
+
+M11.3 flips the flag to **default-on**: the filter is always active unless explicitly opted out via `SENTINEL_ENV_ALLOWLIST=0` (an escape hatch for debugging / unusual local setups). Functional run vars (RUN_ID/TARGET_URL/RUN_MODE/PLANNER/…) are **untouched** by the filter — they are appended after `filteredEnv()` in `spawnBrain`, never inherited from the host. Unit test: `cmd/agentctl/main_test.go` (default-on drops `AWS_SECRET_ACCESS_KEY`, passes curated + `SENTINEL_ENV_ALLOW` extras; `=0` → full passthrough).
 
 **2. Secret plumbing in the Helm chart**
 
-New values in `values.yaml`:
+New block in `values.yaml` (default `enabled: false` — dev/offline-friendly):
 ```yaml
 secrets:
+  enabled: false
   llmApiKey:
     secretName: sentinel-secrets
     key: llm-api-key
+    envName: ANTHROPIC_API_KEY      # rename per backend (OPENAI_API_KEY / LLM_API_KEY)
   checkpointDsn:
+    enabled: false                  # true only with a Postgres checkpoint store (M5-3)
     secretName: sentinel-secrets
     key: checkpoint-dsn
-  storageState:
-    secretName: sentinel-secrets
-    key: storage-state-path
+  extraSecretEnv: []                # extra secretKeyRef vars (e.g. AUT_PASSWORD)
 ```
+
+**env-allowlist coupling (critical):** since the filter is now default-on, any chart name outside the curated list would otherwise be **stripped**. So `cronjob.yaml` auto-emits `SENTINEL_ENV_ALLOW` (the `sentinel.envAllow` helper) from `extraEnv` keys + `extraSecretEnv` names + a custom `llmApiKey.envName`, and sets `SENTINEL_ENV_ALLOWLIST=1`.
 
 In `cronjob.yaml` — `secretKeyRef` instead of plaintext:
 ```yaml
@@ -307,14 +302,18 @@ Backward compatibility: plaintext `value:` is retained as a fallback (dev/offlin
 New directory `deploy/flux/`:
 ```
 deploy/flux/
-├── helmrelease.yaml          # HelmRelease referencing deploy/sentinel chart
-├── kustomization.yaml        # Flux Kustomization
-└── sentinel-secrets.yaml     # ExternalSecret / SealedSecret example (template)
+├── sync.yaml                 # Namespace + GitRepository + Flux Kustomization (bootstrap entry)
+├── helmrelease.yaml          # HelmRelease → chart deploy/sentinel
+└── sentinel-secrets.yaml     # ExternalSecret / SealedSecret example (template, no secrets)
 ```
+
+**apiVersions = Flux v2 GA** (not the early-sketch `v2beta2`; verify the cluster runs Flux ≥ 2.3): HelmRelease `helm.toolkit.fluxcd.io/v2`, GitRepository `source.toolkit.fluxcd.io/v1`, Flux Kustomization `kustomize.toolkit.fluxcd.io/v1`. The Flux Kustomization file is named **`sync.yaml`**, NOT `kustomization.yaml` (else kustomize would treat the dir as an overlay).
+
+**Secret ordering:** Flux `HelmRelease.spec.dependsOn` references only other HelmReleases/Kustomizations (not a raw Secret), so there is no literal "dependsOn Secret" in Flux. The CronJob runs on a schedule (not at install), so it tolerates the Secret arriving later; `sync.yaml` (`wait: true`) applies the Secret source alongside the release. For strict ordering, split into two Flux Kustomizations (secrets → app with `dependsOn`). ArgoCD ↔ Flux are **mutually exclusive**.
 
 `helmrelease.yaml` (example):
 ```yaml
-apiVersion: helm.toolkit.fluxcd.io/v2beta2
+apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: sentinel
@@ -337,16 +336,17 @@ spec:
         key: llm-api-key
 ```
 
-ArgoCD Application (already exists from M5) — updated to support the new `secrets` block.
+ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, exists from M5) — comment expanded: `secrets.enabled` (via `values-prod.yaml`) turns on secretKeyRef; the `sentinel-secrets` Secret itself is supplied out-of-band (SealedSecret/ExternalSecret/sops — ArgoCD does not store its content); ArgoCD ↔ Flux are mutually exclusive.
 
 ### Acceptance criteria M11.3
 
-- [ ] `kubectl describe cronjob sentinel` contains no API keys or DSN (they are in a Secret)
-- [ ] env-allowlist in agentctl: unit test confirms that unknown env variables are not passed to brain
-- [ ] `helm lint deploy/sentinel` passes (with `secrets.enabled: true` and `secrets.enabled: false`)
-- [ ] Flux HelmRelease reconciles green on a test K3s cluster
-- [ ] `helm template deploy/sentinel -f deploy/sentinel/values-prod.yaml | grep "value:"` — no secrets in plaintext
-- [ ] Documentation updated: `docs/DEVELOPMENT.md` describes Secret plumbing
+- [x] env-allowlist **default-on**: unit test (`cmd/agentctl/main_test.go`) confirms unknown env vars (`AWS_SECRET_ACCESS_KEY`) are not passed to brain; `SENTINEL_ENV_ALLOWLIST=0` → full passthrough
+- [x] `helm lint deploy/sentinel` passes with `secrets.enabled: true` **and** `false`
+- [x] `helm template … -f values-prod.yaml` — `ANTHROPIC_API_KEY` and `CHECKPOINT_DSN` only via `secretKeyRef`, no secret in plaintext `value:`; dev path keeps the plaintext fallback without `secretKeyRef`
+- [x] `deploy/flux/*.yaml` parse-clean, apiVersions = Flux v2 GA, no `kustomization.yaml` file
+- [x] Documentation: `docs/DEVELOPMENT.md` (+en) describes Secret plumbing; GAP-SEC-001 Helm half closed; ADR-035
+- [ ] **live-verify (no cluster/flux CLI):** `kubectl describe cronjob sentinel` contains no keys/DSN
+- [ ] **live-verify:** Flux HelmRelease reconciles green on K3s
 
 ---
 

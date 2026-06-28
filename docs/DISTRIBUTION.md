@@ -232,7 +232,7 @@ docker compose run --rm sentinel run \
 
 ## §5 M11.3 — Helm / Flux / Argo расширение (закрывает GAP-SEC-001)
 
-**Статус:** не начат. Зависит от: M11.1 (release tag для chart appVersion). Helm chart (`deploy/sentinel/`) уже существует с M5.
+**Статус:** **DELIVERED** (M11.3, ADR-035 — закрывает Helm-половину GAP-SEC-001). Helm chart (`deploy/sentinel/`) существует с M5; реализация ниже отражает фактический код (она богаче исходных набросков этого §5 и заменяет их).
 
 ### Проблема (GAP-SEC-001)
 
@@ -255,35 +255,30 @@ env:
 
 ### Что строит M11.3
 
-**1. env-allowlist в agentctl** (`cmd/agentctl/main.go`)
+**1. env-allowlist в agentctl — теперь default-on** (`cmd/agentctl/main.go`, `filteredEnv()`)
 
-```go
-// Было: cmd.Env = append(os.Environ(), extraEnv...)
-// Станет:
-allowedPrefixes := []string{
-    "LLM_", "ANTHROPIC_", "OPENAI_", "OTEL_",
-    "CHECKPOINT_DSN", "STORAGE_STATE", "PW_", "MCP_",
-    "ORCH_ADDR", "STORE_SOCKET", "ARTIFACT_DIR",
-    "RUN_ID", "RUN_MODE", "TARGET_URL", "AUT_VERSION",
-}
-cmd.Env = filterEnv(os.Environ(), allowedPrefixes, extraEnv)
-```
+`filteredEnv()` ведёт **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3-добавки** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY) **+ prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`/`NODE_`/`GIT_`) **+** имена из `SENTINEL_ENV_ALLOW` (comma-sep — для secretKeyRef-переменных вроде `AUT_PASSWORD`).
+
+M11.3 переворачивает флаг в **default-on**: фильтр активен всегда, кроме явного **opt-out** `SENTINEL_ENV_ALLOWLIST=0` (escape hatch для отладки/нестандартных локальных setup'ов). Функциональные run-переменные (RUN_ID/TARGET_URL/RUN_MODE/PLANNER/…) фильтр **не трогает** — они добавляются после `filteredEnv()` в `spawnBrain`, не наследуются из хоста. Unit-тест: `cmd/agentctl/main_test.go` (default-on исключает `AWS_SECRET_ACCESS_KEY`, пропускает curated + `SENTINEL_ENV_ALLOW`-extras; `=0` → полный passthrough).
 
 **2. Secret plumbing в Helm chart**
 
-Новые значения в `values.yaml`:
+Новый блок в `values.yaml` (default `enabled: false` — dev/offline-friendly):
 ```yaml
 secrets:
+  enabled: false
   llmApiKey:
     secretName: sentinel-secrets
     key: llm-api-key
+    envName: ANTHROPIC_API_KEY      # переименовать под backend (OPENAI_API_KEY / LLM_API_KEY)
   checkpointDsn:
+    enabled: false                  # true только при Postgres-checkpoint-store (M5-3)
     secretName: sentinel-secrets
     key: checkpoint-dsn
-  storageState:
-    secretName: sentinel-secrets
-    key: storage-state-path
+  extraSecretEnv: []                # доп. secretKeyRef-переменные (напр. AUT_PASSWORD)
 ```
+
+**Связка с env-allowlist (критично):** т.к. фильтр теперь default-on, любое chart-имя вне curated-списка иначе бы **отрезалось**. Поэтому `cronjob.yaml` авто-эмитит `SENTINEL_ENV_ALLOW` (helper `sentinel.envAllow`) из ключей `extraEnv` + имён `extraSecretEnv` + кастомного `llmApiKey.envName`, и ставит `SENTINEL_ENV_ALLOWLIST=1`.
 
 В `cronjob.yaml` — `secretKeyRef` вместо plaintext:
 ```yaml
@@ -307,14 +302,18 @@ env:
 Новый каталог `deploy/flux/`:
 ```
 deploy/flux/
-├── helmrelease.yaml          # HelmRelease referencing deploy/sentinel chart
-├── kustomization.yaml        # Flux Kustomization
-└── sentinel-secrets.yaml     # ExternalSecret / SealedSecret пример (шаблон)
+├── sync.yaml                 # Namespace + GitRepository + Flux Kustomization (bootstrap-вход)
+├── helmrelease.yaml          # HelmRelease → chart deploy/sentinel
+└── sentinel-secrets.yaml     # ExternalSecret / SealedSecret пример (шаблон, без секретов)
 ```
+
+**apiVersions = Flux v2 GA** (не `v2beta2` из ранних набросков; verify кластер ≥ Flux 2.3): HelmRelease `helm.toolkit.fluxcd.io/v2`, GitRepository `source.toolkit.fluxcd.io/v1`, Flux Kustomization `kustomize.toolkit.fluxcd.io/v1`. Файл Flux-Kustomization назван **`sync.yaml`**, НЕ `kustomization.yaml` (иначе kustomize принял бы каталог за overlay).
+
+**Порядок Secret:** Flux `HelmRelease.spec.dependsOn` ссылается только на другие HelmRelease/Kustomization (не на raw Secret), поэтому буквального «dependsOn Secret» в Flux нет. CronJob запускается по расписанию (не при install) → терпит позднее появление Secret; `sync.yaml` (`wait: true`) применяет Secret-источник вместе с релизом. Для строгого порядка — разнести на две Flux-Kustomization (secrets → app c `dependsOn`). ArgoCD ↔ Flux **взаимоисключающи**.
 
 `helmrelease.yaml` (пример):
 ```yaml
-apiVersion: helm.toolkit.fluxcd.io/v2beta2
+apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: sentinel
@@ -337,16 +336,17 @@ spec:
         key: llm-api-key
 ```
 
-ArgoCD Application (уже существует с M5) — обновляется для поддержки нового `secrets` блока.
+ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, существует с M5) — комментарий дополнен: `secrets.enabled` (через `values-prod.yaml`) включает secretKeyRef; сам `sentinel-secrets` Secret подаётся out-of-band (SealedSecret/ExternalSecret/sops, ArgoCD его контент не хранит); ArgoCD ↔ Flux взаимоисключающи.
 
 ### Критерии приёмки M11.3
 
-- [ ] `kubectl describe cronjob sentinel` не содержит API-ключей и DSN (они в Secret)
-- [ ] env-allowlist в agentctl: unit-тест подтверждает, что неизвестные env-переменные не передаются brain
-- [ ] `helm lint deploy/sentinel` проходит (с `secrets.enabled: true` и `secrets.enabled: false`)
-- [ ] Flux HelmRelease reconciles green на тестовом кластере K3s
-- [ ] `helm template deploy/sentinel -f deploy/sentinel/values-prod.yaml | grep "value:"` — ни одного секрета в plaintext
-- [ ] Документация обновлена: `docs/DEVELOPMENT.md` описывает Secret plumbing
+- [x] env-allowlist **default-on**: unit-тест (`cmd/agentctl/main_test.go`) подтверждает, что неизвестные env-переменные (`AWS_SECRET_ACCESS_KEY`) не передаются brain; `SENTINEL_ENV_ALLOWLIST=0` → полный passthrough
+- [x] `helm lint deploy/sentinel` проходит при `secrets.enabled: true` **и** `false`
+- [x] `helm template … -f values-prod.yaml` — `ANTHROPIC_API_KEY` и `CHECKPOINT_DSN` только через `secretKeyRef`, ни одного секрета в plaintext `value:`; в dev — plaintext-fallback без `secretKeyRef`
+- [x] `deploy/flux/*.yaml` parse-clean, apiVersions = Flux v2 GA, нет файла `kustomization.yaml`
+- [x] Документация: `docs/DEVELOPMENT.md` (+en) описывает Secret plumbing; GAP-SEC-001 Helm-половина закрыта; ADR-035
+- [ ] **live-verify (нет кластера/flux CLI):** `kubectl describe cronjob sentinel` не содержит ключей/DSN
+- [ ] **live-verify:** Flux HelmRelease reconciles green на K3s
 
 ---
 

@@ -32,11 +32,42 @@ spec:
                 - "--aut-version"
                 - {{ .Values.autVersion | quote }}
               env:
+                # M11.3 (ADR-035): activate agentctl's env-allowlist in-cluster + tell it which
+                # chart-supplied names to pass through (extraEnv / extraSecretEnv / custom envName).
+                - name: SENTINEL_ENV_ALLOWLIST
+                  value: "1"
+                {{- $envAllow := include "sentinel.envAllow" . }}
+                {{- if $envAllow }}
+                - name: SENTINEL_ENV_ALLOW
+                  value: {{ $envAllow | quote }}
+                {{- end }}
                 {{- if .Values.transport }}
                 - name: MCP_TRANSPORT
                   value: {{ .Values.transport | quote }}
                 {{- end }}
-                {{- if .Values.checkpointDsn }}
+                {{- if .Values.secrets.enabled }}
+                # Secrets via secretKeyRef — never plaintext in the CronJob spec (GAP-SEC-001).
+                - name: {{ .Values.secrets.llmApiKey.envName | default "ANTHROPIC_API_KEY" }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.llmApiKey.secretName }}
+                      key: {{ .Values.secrets.llmApiKey.key }}
+                {{- if .Values.secrets.checkpointDsn.enabled }}
+                - name: CHECKPOINT_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.secrets.checkpointDsn.secretName }}
+                      key: {{ .Values.secrets.checkpointDsn.key }}
+                {{- end }}
+                {{- range .Values.secrets.extraSecretEnv }}
+                - name: {{ .name }}
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .secretName }}
+                      key: {{ .key }}
+                {{- end }}
+                {{- else if .Values.checkpointDsn }}
+                # dev/offline fallback: plaintext DSN (no Secret object). API key arrives via extraEnv/host.
                 - name: CHECKPOINT_DSN
                   value: {{ .Values.checkpointDsn | quote }}
                 {{- end }}

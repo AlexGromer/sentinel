@@ -1,4 +1,11 @@
 # ArgoCD Application for Sentinel (home-lab GitOps, ADR-017). Apply to the argocd namespace.
+#
+# Secrets (M11.3 / ADR-035): the chart's `secrets.enabled` (set true via values-prod.yaml) sources the
+# API key + DSN through secretKeyRef from a Secret named `sentinel-secrets`. ArgoCD does NOT manage that
+# Secret's content — supply it out-of-band (SealedSecret / ExternalSecret / sops); see
+# deploy/flux/sentinel-secrets.yaml for a backend template that applies equally under ArgoCD.
+# RECONCILER CHOICE: ArgoCD (this file) and Flux (deploy/flux/) are MUTUALLY EXCLUSIVE — run exactly
+# one against the `sentinel` namespace, never both.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -37,7 +37,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 ## Quick Reference — source
 | Path | Lang | Purpose |
 |------|------|---------|
-| cmd/agentctl/main.go | Go | CLI subcommands: run / baseline update / locators clear-quarantine / export-spec / report / calibrate; spawns store-gateway (`runWithStore`); exit 0/1/2/3 |
+| cmd/agentctl/main.go | Go | CLI subcommands: run / baseline update / locators clear-quarantine / export-spec / report / calibrate; spawns store-gateway (`runWithStore`); exit 0/1/2/3; **M11.3** env-allowlist `filteredEnv()` **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`, extras via `SENTINEL_ENV_ALLOW`) |
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
 | cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
 | cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
@@ -82,6 +82,11 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/prices.json | Configuration | — |
 | scripts/refresh-prices.mjs | Project file | — |
 | .github/workflows/prices-refresh.yml | Configuration | — |
+| cmd/agentctl/main_test.go | Go | **M11.3** `filteredEnv()` unit tests (t.Setenv): default-on drops `AWS_SECRET_ACCESS_KEY` + passes curated/`SENTINEL_ENV_ALLOW` extras; `SENTINEL_ENV_ALLOWLIST=0` → full passthrough |
+| deploy/sentinel/ (chart) | Helm | M5 chart: CronJob replay (ADR-017) + configmap/pvc/sa; **M11.3** `secrets.{enabled,llmApiKey,checkpointDsn,extraSecretEnv}` → `secretKeyRef` (plaintext fallback) + `sentinel.envAllow` helper → `SENTINEL_ENV_ALLOW`; values-prod enables secrets |
+| deploy/flux/{sync,helmrelease,sentinel-secrets}.yaml | YAML | **M11.3** (ADR-035) Flux GitOps (v2 GA): `sync.yaml` Namespace+GitRepository+Kustomization (`wait`); `helmrelease.yaml` → chart; `sentinel-secrets.yaml` ExternalSecret/SealedSecret template (no secrets). ArgoCD↔Flux mutually exclusive |
+| deploy/argocd/sentinel-app.yaml | YAML | M5 ArgoCD Application (ADR-017); **M11.3** comment: secrets out-of-band + Flux mutual-exclusivity |
+| deploy/flux/sentinel-secrets.yaml | Configuration | — |
 ## Directory Structure
 ```
 agent_development/

@@ -29,3 +29,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+sentinel.envAllow (M11.3, ADR-035): comma-joined names that agentctl's default-on env-allowlist
+would otherwise strip. Emitted into SENTINEL_ENV_ALLOW so chart-supplied extraEnv keys, secret-sourced
+env (extraSecretEnv), and any custom llmApiKey.envName actually reach the brain. Curated families
+(ANTHROPIC_API_KEY, CHECKPOINT_DSN, LLM_ OTEL_ PW_ prefixes, ...) already pass unaided; re-listing is harmless.
+*/}}
+{{- define "sentinel.envAllow" -}}
+{{- $names := list -}}
+{{- range $k, $v := .Values.extraEnv -}}{{- $names = append $names $k -}}{{- end -}}
+{{- if .Values.secrets.enabled -}}
+{{- range .Values.secrets.extraSecretEnv -}}{{- $names = append $names .name -}}{{- end -}}
+{{- $names = append $names (.Values.secrets.llmApiKey.envName | default "ANTHROPIC_API_KEY") -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}

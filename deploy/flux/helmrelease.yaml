@@ -1,0 +1,42 @@
+# Flux HelmRelease for the Sentinel chart (deploy/sentinel), M11.3 / ADR-035.
+# apiVersion helm.toolkit.fluxcd.io/v2 is GA in Flux >= 2.3 (the spec's v2beta2 example is stale).
+#
+# Secret ordering: Flux HelmRelease `.spec.dependsOn` references only other HelmReleases/Kustomizations
+# (NOT raw Secrets), so it cannot literally "depend on" sentinel-secrets. The chart's CronJob runs on a
+# schedule (not at install), so it tolerates the Secret arriving slightly later — the sync.yaml
+# Kustomization (wait: true) applies the Secret source alongside this release. For STRICT ordering, split
+# into two Flux Kustomizations (one for sentinel-secrets.yaml, one for this HelmRelease) and set the
+# app Kustomization's `.spec.dependsOn` to the secrets Kustomization.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sentinel
+  namespace: flux-system
+spec:
+  interval: 10m
+  releaseName: sentinel
+  targetNamespace: sentinel        # the Namespace is created by sync.yaml
+  install:
+    createNamespace: false         # sync.yaml owns the Namespace
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  chart:
+    spec:
+      chart: ./deploy/sentinel
+      sourceRef:
+        kind: GitRepository
+        name: sentinel
+        namespace: flux-system
+  values:
+    # Source the API key + checkpoint DSN from the `sentinel-secrets` Secret via secretKeyRef
+    # (see sentinel-secrets.yaml). Nothing secret lands in the CronJob spec.
+    secrets:
+      enabled: true
+      checkpointDsn:
+        enabled: true
+    # target / schedule / autVersion inherit the chart's values.yaml — override per environment here:
+    # target: "https://your-app.example.com/"
+    # schedule: "0 2 * * *"
