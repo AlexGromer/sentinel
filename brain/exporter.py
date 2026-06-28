@@ -78,6 +78,14 @@ def export_spec(plan: dict) -> str:
             lines.append(f"  await {loc}.click();  // step {sid}: {intent}")
         elif kind == "fill":
             if s.get("secretRef") is not None:        # secret -> env ref, never a literal
+                # Invariant (ADR-026 / GAP-RISK-010): a secret fill is carried as `secretRef`
+                # (the env-var NAME) and is mutually exclusive with a literal `value` (see
+                # scenario._verb_step). Assert it here so a secret value can never be emitted
+                # into the exported spec, even if an upstream caller violates the schema.
+                if s.get("value") is not None:
+                    raise ValueError(
+                        f"step {sid}: fill carries both secretRef and a literal value "
+                        "— refusing to export (would leak the secret into the .spec.ts)")
                 lines.append(f"  await {loc}.fill(process.env.{s['secretRef']}!);  // step {sid}: {intent} (secret)")
             else:
                 lines.append(f"  await {loc}.fill('{_esc(s.get('value'))}');  // step {sid}: {intent}")

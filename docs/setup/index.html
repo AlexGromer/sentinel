@@ -109,7 +109,7 @@ Env моделей = <code>brain/llm.py make_backend</code> (per-role <code>LLM_
 
 <script>
 const $=id=>document.getElementById(id);
-function q(s){ s=String(s); return '"'+s.replace(/"/g,'\\"')+'"'; }
+function q(s){ s=String(s); return '"'+s.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"'; }
 function sync(){
   const mode=$("mode").value;
   $("goalWrap").classList.toggle("hide", mode!=="goal");
