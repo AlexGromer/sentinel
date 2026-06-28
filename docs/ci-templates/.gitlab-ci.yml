@@ -1,0 +1,52 @@
+# =============================================================================
+# Sentinel UI-test gate — GitLab CI (TEMPLATE).
+#
+# RU: Шаблон для ВАШЕГО репозитория. Sentinel = CLI со структурными кодами выхода
+#     (0/1/2/3). Подробности и таблица кодов: ci-templates/README.md.
+# EN: A template for YOUR repository. Sentinel = a CLI with structured exit codes
+#     (0/1/2/3). Details + exit-code table: ci-templates/README.en.md.
+#
+# Prereqs: Docker-in-Docker, a checkout of the Sentinel repo (or a published image once
+# M11.1 lands), and a committed frozen `config/plan.json` (author via the chat-front /
+# `--describe`, freeze via `agentctl baseline update --plan plan.json`).
+# =============================================================================
+stages:
+  - build
+  - test
+
+variables:
+  TARGET: "https://staging.example.test"   # app under test (override per environment)
+  DOCKER_DRIVER: overlay2
+  # ANTHROPIC_API_KEY: set as a masked CI/CD variable to enable LLM self-healing.
+  # Absent key → deterministic heuristic planner + L1–L6 heal (offline, still useful).
+
+build-sentinel:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - docker compose build sentinel
+
+sentinel-replay:
+  stage: test
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - echo "Replaying the frozen plan against $TARGET"
+    # Replay a committed, frozen plan; `--ci` forbids bypassing the plan_hash hard-abort.
+    # The job exits with sentinel's own code; allow_failure below maps exit 3 to a warning.
+    - >
+      docker compose run --rm
+      -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+      sentinel run --target "$TARGET" --replay --plan /config/plan.json --ci
+      --aut-version "${CI_COMMIT_SHA:-unknown}"
+  # 0 pass → success · 1 step-fail / 2 visual regression → failure · 3 config/plan-integrity → warning.
+  allow_failure:
+    exit_codes:
+      - 3
+  artifacts:
+    when: always
+    paths:
+      - runs/

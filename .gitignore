@@ -272,6 +272,12 @@ bun.lockb
 *.dll
 *.so
 *.dylib
+# cmd build outputs at repo root (canonical `go build -o bin/…` is already ignored via bin/)
+/agentctl
+/control-api
+/orchestrator
+/report-service
+/store-gateway
 
 # Rust
 target/
