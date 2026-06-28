@@ -90,6 +90,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | pw-executor/src/launch.ts | TS | **M9.6** (ADR-037) pure `resolveLaunchPlan(env)→{kind,headless,cdpEndpoint}` — precedence CDP>headed>headless; consumed by `ensureBrowser` |
 | pw-executor/src/launch.test.ts | TS | **M9.6** `node --test` for `resolveLaunchPlan` (5 cases, offline, no browser) |
 | docs/M9.6_CONTRACT.md / .en.md | Docs | **M9.6** (Wave D) browser-modes contract: headed + CDP-attach env-config, Chromium-only (ADR-036), headless-only determinism (ADR-037), deferred live-verify |
+| scripts/check_bilingual.py | Python | bilingual docs-parity CI gate — every primary `.md` must have a paired `.en.md` (+ SINGLE_LANGUAGE allowlist); run by the `bilingual` job in ci.yml |
 ## Directory Structure
 ```
 agent_development/
