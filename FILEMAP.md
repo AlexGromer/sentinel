@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 42 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 44 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -43,7 +43,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
 | cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
 | cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
-| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; **M9.3-tail (ADR-040)** SSE `/v1/runs/{id}/events` (token-gated; `runStream` ring-buffer + fan-out, `lineWriter` capture) + `/v1/runs/{id}/artifact` (token-gated whitelist + traversal-guard); 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; **M12 (ADR-041)** OpenAI-compat `POST /v1/chat/completions` shim (`spawnRun` refactor; 1 chat turn→1 run; stream→`chat.completion.chunk`, non-stream→verdict+`scenario.json`); 13 httptest (race-clean) |
+| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; **M9.3-tail (ADR-040)** SSE `/v1/runs/{id}/events` (token-gated; `runStream` ring-buffer + fan-out, `lineWriter` capture) + `/v1/runs/{id}/artifact` (token-gated whitelist + traversal-guard); 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; **M12 (ADR-041)** OpenAI-compat `POST /v1/chat/completions` shim (`spawnRun` refactor; 1 chat turn→1 run; stream→`chat.completion.chunk`, non-stream→verdict+`scenario.json`); **M9.8-prep (ADR-043)** WS `GET /v1/stream` (recorder ingest → see `ws.go`); 13+6 httptest (race-clean) |
 | internal/orchestrator/pb/ | Go | generated gRPC stubs (from proto/runcontrol.proto) |
 | internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |
@@ -98,6 +98,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | pw-executor/src/determinism.ts | TS | **GAP-RISK-009 / ADR-042** screenshot determinism anchors (single source of truth): `DETERMINISM_VIEWPORT` 1280×720 + `DETERMINISM_DEVICE_SCALE_FACTOR`=1 + `SCREENSHOT_DETERMINISM_OPTS` (`animations:'disabled'`/`caret:'hide'`/`scale:'css'`); consumed by `server.ts` |
 | pw-executor/src/determinism.test.ts | TS | **GAP-RISK-009** `node --test` locking the determinism anchors (regression guard, offline, no browser) |
 | tests/test_determinism_offline.py | Python | **GAP-RISK-009 / ADR-042** offline test for the opt-in visual-authoritative flip (`SENTINEL_VISUAL_AUTHORITATIVE`): advisory default → exit 0 vs authoritative → exit 2; FakeEx, no browser. In CI offline loop |
+| cmd/control-api/ws.go | Go | **M9.8-prep / ADR-043** hand-rolled RFC6455 WebSocket `GET /v1/stream` (client→server recorder ingest, closes GAP-M9-14): `Hijacker` upgrade + `wsAccept`/frame codec; token via `Sec-WebSocket-Protocol` (`bearer.<token>`, echoes only `sentinel.recorder.v1`); NDJSON events → `runs/record-<session>/events.ndjson`; ping/pong + idle/cap; reuse `s.authed`/Origin-allowlist (ADR-032). stdlib only |
+| cmd/control-api/ws_test.go | Go | **M9.8-prep** httptest for `/v1/stream` (race-clean): RFC6455 handshake/accept, token-via-subprotocol 403, bad-handshake 400, Origin reject, full 101 + masked-frame ingest |
+| frontend/ | TS (Next.js) | **M9.8-prep / ADR-044** AG-UI/CopilotKit rich co-pilot scaffold (`package.json` + `app/page.tsx` CopilotChat + `app/api/copilotkit/route.ts` Runtime→`createOpenAI({baseURL})`→shim + README). **DEV-only: not air-gapped, not in CI** (in `check_bilingual.py` SKIP_DIRS; node_modules gitignored). Versions verified 2026-06-28 |
 ## Directory Structure
 ```
 agent_development/

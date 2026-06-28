@@ -14,6 +14,7 @@
 // Endpoints (v1): GET /healthz · GET /v1/config-schema · POST /v1/runs · GET /v1/runs · GET /v1/runs/{id}
 // M9.3-tail (ADR-040): GET /v1/runs/{id}/events (SSE, token-gated) · GET /v1/runs/{id}/artifact (token-gated whitelist)
 // M12 (ADR-041): POST /v1/chat/completions (OpenAI-compat shim — one chat turn → one run, token-gated)
+// M9.8-prep (ADR-043): GET /v1/stream (hand-rolled WebSocket recorder ingest — client→server, token via subprotocol; see ws.go)
 package main
 
 import (
@@ -700,6 +701,7 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
 	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
+	m.HandleFunc("GET /v1/stream", s.handleStream)
 	return s.cors(m)
 }
 
