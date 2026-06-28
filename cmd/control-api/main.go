@@ -1,4 +1,4 @@
-// Command control-api is Sentinel's NON-MCP HTTP control plane (M9.3, ADR-023 / ADR-032).
+// Command control-api is Sentinel's NON-MCP HTTP control plane (M9.3, ADR-023 / ADR-032 / ADR-040).
 //
 // It is the second way to drive Sentinel (the first is brain-as-MCP-server, M7): a thin HTTP API
 // that the setup-WebUI (or any script/CI) can call to start a run and poll its status. It spawns
@@ -12,14 +12,17 @@
 //   - Only the known agentctl binary is spawned; the target URL scheme is validated.
 //
 // Endpoints (v1): GET /healthz · GET /v1/config-schema · POST /v1/runs · GET /v1/runs · GET /v1/runs/{id}
+// M9.3-tail (ADR-040): GET /v1/runs/{id}/events (SSE, token-gated) · GET /v1/runs/{id}/artifact (token-gated whitelist)
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -41,6 +44,105 @@ type run struct {
 	StartedAt   string `json:"started_at"`
 	FinishedAt  string `json:"finished_at,omitempty"`
 	Error       string `json:"error,omitempty"`
+
+	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
+}
+
+const maxStreamLines = 1000
+
+// runStream captures a run's combined stdout/stderr into a capped ring buffer and fans new lines
+// out to live SSE subscribers (ADR-040). All fields are guarded by mu.
+type runStream struct {
+	mu    sync.Mutex
+	lines []string                 // capped ring buffer (last maxStreamLines)
+	subs  map[chan string]struct{} // live SSE subscribers
+	done  bool
+}
+
+func newRunStream() *runStream { return &runStream{subs: map[chan string]struct{}{}} }
+
+// append records a line and non-blockingly fans it out to subscribers. A slow SSE client drops
+// lines (default branch) but the ring buffer keeps recent history, so a reconnect still catches up.
+func (rs *runStream) append(line string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.done {
+		return
+	}
+	rs.lines = append(rs.lines, line)
+	if len(rs.lines) > maxStreamLines {
+		rs.lines = rs.lines[len(rs.lines)-maxStreamLines:]
+	}
+	for ch := range rs.subs {
+		select {
+		case ch <- line:
+		default: // never block the run on a slow client
+		}
+	}
+}
+
+// subscribe returns a snapshot of buffered lines plus a channel of future lines. If the stream is
+// already finished the channel is nil and finished is true.
+func (rs *runStream) subscribe() (snapshot []string, ch chan string, finished bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	snapshot = append([]string(nil), rs.lines...)
+	if rs.done {
+		return snapshot, nil, true
+	}
+	ch = make(chan string, 256)
+	rs.subs[ch] = struct{}{}
+	return snapshot, ch, false
+}
+
+func (rs *runStream) unsubscribe(ch chan string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if _, ok := rs.subs[ch]; ok {
+		delete(rs.subs, ch)
+		close(ch)
+	}
+}
+
+// finish marks the stream complete and closes every live subscriber channel exactly once.
+func (rs *runStream) finish() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.done {
+		return
+	}
+	rs.done = true
+	for ch := range rs.subs {
+		delete(rs.subs, ch)
+		close(ch)
+	}
+}
+
+// lineWriter adapts an io.Writer (cmd.Stdout/Stderr) into rs.append, splitting on newlines.
+type lineWriter struct {
+	rs  *runStream
+	buf []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		w.rs.append(strings.TrimRight(string(w.buf[:i]), "\r"))
+		w.buf = w.buf[i+1:]
+	}
+	return len(p), nil
+}
+
+// flush emits any trailing partial line (call after the command exits, when writes have stopped).
+func (w *lineWriter) flush() {
+	if len(w.buf) > 0 {
+		w.rs.append(strings.TrimRight(string(w.buf), "\r\n"))
+		w.buf = nil
+	}
 }
 
 type server struct {
@@ -152,7 +254,7 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	id := newRunID()
 	artDir := filepath.Join(s.repo, "runs", "control-"+id)
-	rec := &run{ID: id, State: "running", Target: req.Target, ArtifactDir: artDir, StartedAt: time.Now().UTC().Format(time.RFC3339)}
+	rec := &run{ID: id, State: "running", Target: req.Target, ArtifactDir: artDir, StartedAt: time.Now().UTC().Format(time.RFC3339), stream: newRunStream()}
 	s.mu.Lock()
 	s.runs[id] = rec
 	s.mu.Unlock()
@@ -177,21 +279,27 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
 	cmd.Env = os.Environ() // inherits LLM_* etc. from the control-api process (operator-controlled)
+	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
+	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
+	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
+	lw := &lineWriter{rs: rec.stream}
+	cmd.Stdout = lw
+	cmd.Stderr = lw
 
 	go func() {
 		err := cmd.Run()
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		if err == nil {
 			rec.State, rec.ExitCode = "done", 0
-			return
-		}
-		if ee, ok := err.(*exec.ExitError); ok {
+		} else if ee, ok := err.(*exec.ExitError); ok {
 			rec.State, rec.ExitCode = "done", ee.ExitCode() // structured exit (0/1/2/3) is a valid outcome
-			return
+		} else {
+			rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
 		}
-		rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
+		s.mu.Unlock()
+		lw.flush()          // emit any trailing partial line
+		rec.stream.finish() // release SSE subscribers
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": id, "artifact_dir": artDir, "state": "running"})
@@ -219,6 +327,118 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec)
 }
 
+// artifactWhitelist limits artifact-fetch to known run outputs (no arbitrary file reads).
+var artifactWhitelist = map[string]bool{
+	"scenario.json":         true,
+	"reconcile-report.json": true,
+	"report.json":           true,
+	"report.html":           true,
+	"plan.json":             true,
+}
+
+// handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
+// Token-gated like mutations: logs are more sensitive than a bare status poll.
+func (s *server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	id := r.PathValue("id")
+	s.mu.RLock()
+	rec, ok := s.runs[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming unsupported"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering of the stream
+	w.WriteHeader(http.StatusOK)
+
+	sendState := func() {
+		s.mu.RLock()
+		data, _ := json.Marshal(map[string]any{"state": rec.State, "exit_code": rec.ExitCode, "error": rec.Error})
+		s.mu.RUnlock()
+		fmt.Fprintf(w, "event: state\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+	sendLog := func(line string) {
+		data, _ := json.Marshal(map[string]string{"line": line})
+		fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	sendState() // initial snapshot
+	buffered, ch, finished := rec.stream.subscribe()
+	for _, line := range buffered {
+		sendLog(line)
+	}
+	if !finished {
+		defer rec.stream.unsubscribe(ch)
+		ctx := r.Context()
+	live:
+		for {
+			select {
+			case line, open := <-ch:
+				if !open {
+					break live
+				}
+				sendLog(line)
+			case <-ctx.Done():
+				return // client disconnected
+			}
+		}
+	}
+	sendState() // final state + exit_code
+	fmt.Fprint(w, "event: done\ndata: {}\n\n")
+	flusher.Flush()
+}
+
+// handleRunArtifact serves a whitelisted artifact from a run's artifact dir (token-gated,
+// path-traversal-guarded) so the chat-front can display/download scenario.json / report.
+func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	id := r.PathValue("id")
+	s.mu.RLock()
+	rec, ok := s.runs[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || !artifactWhitelist[name] {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be one of: scenario.json, reconcile-report.json, report.json, report.html, plan.json"})
+		return
+	}
+	f, err := os.Open(filepath.Join(rec.ArtifactDir, name))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact not found (run may be incomplete)"})
+		return
+	}
+	defer f.Close()
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if strings.HasSuffix(name, ".html") {
+		// Serve report.html as a download, never inline — avoids the browser rendering
+		// agent-influenced HTML if someone navigates straight to this endpoint.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	_, _ = io.Copy(w, f)
+}
+
 func (s *server) mux() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", s.handleHealthz)
@@ -226,6 +446,8 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
+	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
+	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
 	return s.cors(m)
 }
 
