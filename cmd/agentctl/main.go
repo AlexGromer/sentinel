@@ -36,7 +36,11 @@ func newRunID() string {
 func newToken() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		// #34: fail closed. A degraded "" token would silently disable authN on BOTH the gateway
+		// and the brain (empty STORE_TOKEN → no interceptor), re-opening the #23 surface on a
+		// (rare) RNG failure. Abort instead of degrading.
+		fmt.Fprintf(os.Stderr, "agentctl: rand.Read for store token: %v\n", err)
+		os.Exit(1)
 	}
 	return hex.EncodeToString(b)
 }
