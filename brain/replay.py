@@ -9,7 +9,7 @@ Modes:
 - baseline: replay a trusted plan and CAPTURE goldens (the only golden mutation path; ADR-006).
 
 Exit codes: 0 pass · 1 step failure (non-quarantined) · 2 golden regression (non-quarantined) ·
-3 plan integrity (plan_hash mismatch) — hard-abort, nothing executed.
+3 integrity hard-abort — plan_hash mismatch (nothing executed) OR golden HMAC mismatch (#24).
 
 ADR-013: heal and golden-diff coexist — a healed step still executes AND its page is still
 golden-diffed. M3 note: quarantine suppresses a step's contribution to exit 1; golden regressions
@@ -20,6 +20,7 @@ import json
 import os
 
 from .state import normalize_url, canonical_plan_hash
+from .store import GoldenIntegrityError
 
 
 def _a11y_hash(aria: str) -> str:
@@ -189,7 +190,15 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 store.save_golden(pkey, a11y, shot)
                 rec["golden"] = "saved:" + pkey
             else:
-                g = store.get_golden(pkey)
+                try:
+                    g = store.get_golden(pkey)
+                except GoldenIntegrityError as e:
+                    # #24: a tampered/forged golden is an integrity failure — hard-abort like a
+                    # plan_hash mismatch (exit 3), never silently trust the forged baseline.
+                    report["exit_code"] = 3
+                    report["reason"] = str(e)
+                    _write(report, run_dir)
+                    return report
                 if g:
                     a_diff = g["a11y_hash"] != a11y
                     s_diff = g["screenshot_hash"] != shot

@@ -7,7 +7,7 @@
 //	agentctl locators clear-quarantine
 //
 // It spawns the Python brain (venv) via subprocess + env (no gRPC yet; M2b) and propagates the
-// brain's structured exit code (0 pass / 1 step-fail / 2 golden regression / 3 plan-integrity).
+// brain's structured exit code (0 pass / 1 step-fail / 2 golden regression / 3 integrity: plan_hash or golden HMAC).
 package main
 
 import (
@@ -27,6 +27,16 @@ func newRunID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		return "local"
+	}
+	return hex.EncodeToString(b)
+}
+
+// newToken mints the per-run shared secret that authenticates brain->store-gateway calls (#23).
+// It is passed to the gateway (STORE_TOKEN env) and the brain (STORE_TOKEN run-var), never to argv.
+func newToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
 	}
 	return hex.EncodeToString(b)
 }
@@ -136,7 +146,8 @@ func spawnBrain(repo, runID string, extra []string) int {
 
 // startGateway launches the Go store-gateway over a Unix socket (ADR-015). If the binary isn't
 // built it returns "" so the brain falls back to its LocalStore. Returns (STORE_ADDR, stop()).
-func startGateway(repo, runID string) (string, func()) {
+// token is handed to the gateway via env (STORE_TOKEN) so it can authenticate brain calls (#23).
+func startGateway(repo, runID, token string) (string, func()) {
 	gw := filepath.Join(repo, "bin", "store-gateway")
 	if _, err := os.Stat(gw); err != nil {
 		return "", func() {}
@@ -148,6 +159,7 @@ func startGateway(repo, runID string) (string, func()) {
 	cmd := exec.Command(gw, "--addr", sock, "--db", filepath.Join(repo, "state", "locators.db"))
 	cmd.Dir = repo
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "STORE_TOKEN="+token) // #23: gateway authenticates against this
 	if err := cmd.Start(); err != nil {
 		return "", func() {}
 	}
@@ -173,10 +185,12 @@ func startGateway(repo, runID string) (string, func()) {
 
 // runWithStore starts the gateway, injects STORE_ADDR, runs the brain, then stops the gateway.
 func runWithStore(repo, runID string, extra []string) int {
-	addr, stop := startGateway(repo, runID)
+	token := newToken() // #23: per-run secret shared by the gateway and the brain only
+	addr, stop := startGateway(repo, runID, token)
 	defer stop()
 	if addr != "" {
-		extra = append(extra, "STORE_ADDR="+addr)
+		// STORE_TOKEN is a run-var (appended after filteredEnv) so it always reaches the brain.
+		extra = append(extra, "STORE_ADDR="+addr, "STORE_TOKEN="+token)
 	}
 	return spawnBrain(repo, runID, extra)
 }
