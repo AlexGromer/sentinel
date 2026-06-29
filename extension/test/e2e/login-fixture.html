@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>Login fixture</h1>
+    <!-- preventDefault so submit fires for the recorder but the page doesn't navigate (which would wipe
+         the harness's captured events). The recorder's capture-phase listener still sees the submit. -->
+    <form id="f" onsubmit="event.preventDefault()">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="text" />
+      <label for="password">Password</label>
+      <input id="password" name="userPassword" type="password" autocomplete="current-password" />
+      <button id="go" type="submit" data-testid="login-btn">Sign in</button>
+    </form>
+  </body>
+</html>

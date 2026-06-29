@@ -56,9 +56,9 @@ SINGLE_LANGUAGE: set[str] = {
 # (state/, .claude/, runs/, .venv/, __pycache__) so the gate only sees source-tracked docs —
 # matching what CI checks out (a fresh tree has none of these).
 SKIP_DIRS: frozenset[str] = frozenset(
-    # "frontend" is the dev-only AG-UI/CopilotKit scaffold (ADR-044) — a Next.js app whose README is a
-    # single-language dev-tool doc, not part of the bilingual product docs (like node_modules).
-    {"node_modules", "dist", ".git", "bin", "state", ".claude", "runs", ".venv", "__pycache__", "memory", "frontend", ".next"}
+    # "frontend" / "extension" are dev-only scaffolds (ADR-044 / M9.8) — single-language dev-tool READMEs,
+    # not part of the bilingual product docs (like node_modules).
+    {"node_modules", "dist", ".git", "bin", "state", ".claude", "runs", ".venv", "__pycache__", "memory", "frontend", "extension", ".next"}
 )
 
 
