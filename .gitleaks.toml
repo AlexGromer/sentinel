@@ -1,0 +1,11 @@
+# gitleaks config — keep the full default ruleset, add a narrow allowlist for known test fixtures.
+#
+# The extension's e2e harness (extension/test/e2e/) types a FAKE password into a fixture login form to
+# prove the recorder redacts it — that literal trips the default `generic-api-key` rule even though it is
+# not a real secret. Allowlist that path only; detection stays active everywhere else.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Extension e2e test fixtures contain a fake password used to prove redaction (not real secrets)."
+paths = ['''extension/test/e2e/.*''']
