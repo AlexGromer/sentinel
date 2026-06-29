@@ -1,11 +1,14 @@
 # BACKLOG
 
-> Roadmap source of truth: `docs/M9_CONTRACT.md` (§A gaps + sub-milestones) · `GAPS.md` (GAP-M9-01..12) · `ARCHITECTURE.md` §3 ADRs / §6 change log.
+> Roadmap source of truth: `docs/COPILOT.md` (co-pilot vision+waves) · `docs/M9_CONTRACT.md` (§A gaps + sub-milestones) · `GAPS.md` (GAP-M9-01..18) · `ARCHITECTURE.md` §3 ADRs / §6 change log.
 
 ## Active
 
 - [ ] [M9.7] Pluggable adapters (auth/deploy/model/backend) — universality beyond DH. **Model/backend half addressed (ADR-045):** LiteLLM optional router + `docs/ADAPTERS.md`. Remainder = auth/deploy adapters. (P3) @system-architect — GAP-M9-08
-- [ ] [M9.8] (branch 2) Browser extension + co-pilot takeover/return. **Design-контракт DONE (ADR-038/039); M9.8-prep DONE** (WS `/v1/stream` ADR-043 + AG-UI `frontend/` ADR-044 → **GAP-M9-14 closed**). Остаток = MV3-расширение (рекордер GAP-M9-13 / takeover GAP-M9-15) **декомпозировано в issues → @0xCoDSnet**. (P3) @desktop-developer — GAP-M9-07
+- [ ] [M9.8] (branch 2) Browser extension + co-pilot takeover/return. **Design-контракт DONE (ADR-038/039); M9.8-prep DONE** (WS `/v1/stream` ADR-043 + AG-UI `frontend/` ADR-044 → **GAP-M9-14 closed**). Остаток = MV3-расширение (рекордер GAP-M9-13 / takeover GAP-M9-15) **→ @0xCoDSnet (#42-47)**; **brain-side F4 = M9.8-R3 [me]** (ниже). (P3) @desktop-developer — GAP-M9-07
+- [ ] [M9.9] **In-tool run-console (Replay-in-UI)** [me/R1, ADR-046] — control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal-guard, не произвольный путь) + `config-schema.modes`; vanilla-UI ▶Run / 🔁Re-run / 📌baseline + вердикт (`#build`/`#chat`/`chat/`/`setup/`); httptest. In-tool-first (CI-экспорт вторичен). Плумбинг оффлайн; live replay = M9-LIVE. (P2) @api-developer — GAP-M9-16
+- [ ] [M9.10] **Multi-turn conversational authoring** [me/R2, ADR-046] — brain `chat`/`refine` `RUN_MODE` на готовом LangGraph-checkpointer (стабильный `conversation_id`→`thread_id`) + message-history channel в `RunState` + мульти-тёрн-панель. Закрывает one-shot-ограничение (контекст + коррекция по ходу). (P2) @ml-engineer — GAP-M9-17
+- [ ] [M9.8-R3] **F4 co-pilot takeover (brain-side)** [me, ADR-046] — brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint) + WS `takeover/return/state-sync` поверх `/v1/stream`; парный к extension **#47** (@0xCoDSnet); тестируется fake-клиентом до #47. (P3) @ml-engineer — GAP-M9-18
 - [ ] [M10] Security module (separate, **authorization-gated**): XSS/CSRF/IDOR/auth-bypass/sensitive-data-in-DOM over the explore map. (P3) @appsec-engineer — GAP-M9-11
 - [ ] [M11.1] Release pipeline — GitHub Releases (multi-OS/arch binaries + Docker publish + checksums + Cosign/GPG signing + SBOM) + committed dependency lockfile. Closes GAP-SEC-002 remainder. (P2) @ci-cd-engineer — ADR-030
 - [ ] [M11.2] setup-WebUI — static client-side config generator MVP (vanilla, air-gapped → RunConfig YAML/env) then control-API-backed via M9.3. (P2) @web-developer — ADR-031

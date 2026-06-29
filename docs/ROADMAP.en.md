@@ -374,5 +374,4 @@ RunConfig: declarative `auth:`→`STORAGE_STATE*` + named `scenarios:` + `--scen
 describe-unmatched→1, `GOAL`⊕`DESCRIBE`→3. Offline-verified (`test_m9_2b` 20 + the m3..m9_2b regression 95 +
 `go build`/`vet` + `tsc` + gitleaks); a 5-dimension adversarial review (grounding held, determinism clean).
 The live goal/describe run is on "go".
-**Next: M9.3** (non-MCP control-API + chat-UI) · M9.4 (in-app/browser tabs + live per-step grounding) ·
-M9.7 (pluggable adapters).
+**Current co-pilot roadmap (single source): [`COPILOT.md`](COPILOT.md)** — layers · §F evolution · feature inventory · waves [me]/[0xCoDSnet]. In brief (as of 2026-06-29): M9.3/M9.4/M9.5/M9.6 ✅ · M12 ✅ · adopt LiteLLM+MCP-Inspector (ADR-045) ✅ → **R1 M9.9 Replay-in-UI → R2 M9.10 Multi-turn → R3 M9.8-F4-brain** [me]; MV3 #42-47 + security #36/37/38 [@0xCoDSnet]; then M9.7-rem · M10 · M11.x · M9-LIVE · Langfuse/DSPy. Authoritative: `../ARCHITECTURE.md §6` + `../BACKLOG.md`.

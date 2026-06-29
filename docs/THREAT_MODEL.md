@@ -94,6 +94,8 @@
 Граничные точки ❶–❼ соответствуют строкам таблицы ниже.
 
 > **Новые поверхности (M9.6/M9.8), не показанные на диаграмме выше (опциональны/будущее):** ❽ **CDP-attach** к браузеру пользователя (M9.6, opt-in `PW_CDP_ENDPOINT`) и ❾ **браузерное расширение** (M9.8, планируется) — см. §4.8 / §4.9.
+>
+> **Планируемые in-tool-поверхности (ADR-046):** (a) **replay/baseline control-API-endpoint** (M9.9/R1) — re-открывает spawn-поверхность ❶-класса → мера: только `from_run:<run_id>` + artifact-whitelist+traversal-guard (не произвольный путь). (b) **multi-turn conversation-state** (M9.10/R2) — новый ассет: конфиденциальность накопленного AUT-контекста + DoS unbounded-state → мера: per-session cap + 0700-изоляция. (c) **AG-UI npm-фронт** (`frontend/`, ADR-044) — npm supply-chain (усиливает GAP-SEC-002) + browser-токен → мера: dev-only/не-air-gapped, токен server-side в Runtime.
 
 ---
 
@@ -106,8 +108,8 @@
 
 | Угроза | Граница | STRIDE | Вер / Влияние | Существующая мера | Остаточный риск | Owner / Milestone |
 |---|---|---|---|---|---|---|
-| **Утечка всех host secrets в дочерние процессы.** `agentctl::spawnBrain` вызывает `cmd.Env = append(os.Environ(), …)` без allowlist (`main.go:68`). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | Нет | **GAP-SEC-001 OPEN**: нет env allowlist | M11.3 (env allowlist) |
-| **Plaintext secrets в Helm values → Kubernetes.** `cronjob.yaml:39–46` использует `value: {{ .Values.checkpointDsn }}` и `{{range .Values.extraEnv}} value: {{ $v }}` без `secretKeyRef`. CHECKPOINT_DSN и extraEnv хранятся как строки в `values-prod.yaml`, попадают в etcd в открытом виде и видны через `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Вер: H / Влияние: H | Нет | **GAP-SEC-001 OPEN**: нет `secretKeyRef` plumbing | M11.3 (Helm secretKeyRef) |
+| **Утечка всех host secrets в дочерние процессы.** `agentctl::spawnBrain` вызывает `cmd.Env = append(os.Environ(), …)` без allowlist (`main.go:68`). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; остаток — динамические Vault/CSI | M11.3 ✅ |
+| **Plaintext secrets в Helm values → Kubernetes.** `cronjob.yaml:39–46` использует `value: {{ .Values.checkpointDsn }}` и `{{range .Values.extraEnv}} value: {{ $v }}` без `secretKeyRef`. CHECKPOINT_DSN и extraEnv хранятся как строки в `values-prod.yaml`, попадают в etcd в открытом виде и видны через `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 CLOSED (Helm-half)** | M11.3 ✅ |
 
 ### 4.2 Граница ❷ — agentctl → store-gateway (Unix gRPC socket)
 

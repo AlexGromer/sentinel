@@ -46,7 +46,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (45 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (46 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Browser modes (M9.6):** own-headless by default; `PW_HEADLESS=0` — headed (visible), `PW_CDP_ENDPOINT` — CDP-attach to the user's existing Chrome. The engine is **Chromium-only by design** (ADR-036); deterministic golden replay is headless-only (see [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 
@@ -84,6 +84,7 @@ start an endpoint — `docker compose --profile ollama up -d ollama` (or the mul
 | [`docs/TESTING.md`](docs/TESTING.md) | offline gates, local models, live run, zero-level docker-compose |
 | [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM methodology + token-cost methodology + verified model & runtime catalog |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | pluggable adapters: optional LiteLLM router (behind `LLM_BASE_URL`) + MCP-Inspector M7 debugging |
+| [`docs/COPILOT.md`](docs/COPILOT.md) | co-pilot: vision · status (honest feature inventory) · agreements · wave roadmap [me]/[@0xCoDSnet] |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite over the trust boundaries (→ [`SECURITY.md`](SECURITY.md)) |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | contributor guide: build, milestone gates, extension recipes, Secret plumbing |
 | [`docs/DETERMINISM.md`](docs/DETERMINISM.md) | determinism, plan_hash, golden baselines, the headless-only boundary |

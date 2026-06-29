@@ -46,7 +46,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (45 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (46 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Режимы браузера (M9.6):** по умолчанию own-headless; `PW_HEADLESS=0` — headed (видимый), `PW_CDP_ENDPOINT` — CDP-attach к существующему Chrome пользователя. Движок — **только Chromium by design** (ADR-036); детерминированный голден-replay — только в headless (см. [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 
@@ -84,6 +84,7 @@ docker compose run --rm sentinel run --target "https://your-app.example" --goal 
 | [`docs/TESTING.md`](docs/TESTING.md) | offline-гейты, локальные модели, live-прогон, zero-level docker-compose |
 | [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM-методика + token-cost-методика + каталог моделей и runtime (verified) |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | подключаемые адаптеры: опц. LiteLLM-роутер (за `LLM_BASE_URL`) + MCP-Inspector отладка M7 |
+| [`docs/COPILOT.md`](docs/COPILOT.md) | co-pilot: видение · статус (честный feature-inventory) · договорённости · roadmap по волнам [me]/[@0xCoDSnet] |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite по границам доверия (→ [`SECURITY.md`](SECURITY.md)) |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | гайд контрибьютора: сборка, milestone-гейты, рецепты расширения, Secret-плумбинг |
 | [`docs/DETERMINISM.md`](docs/DETERMINISM.md) | детерминизм, plan_hash, golden baselines, граница headless-only |

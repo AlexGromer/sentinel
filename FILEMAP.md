@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 45 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 46 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -103,6 +103,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | frontend/ | TS (Next.js) | **M9.8-prep / ADR-044** AG-UI/CopilotKit rich co-pilot scaffold (`package.json` + `app/page.tsx` CopilotChat + `app/api/copilotkit/route.ts` Runtime→`createOpenAI({baseURL})`→shim + README). **DEV-only: not air-gapped, not in CI** (in `check_bilingual.py` SKIP_DIRS; node_modules gitignored). Versions verified 2026-06-28 |
 | deploy/litellm/config.yaml | YAML | **ADR-045** example LiteLLM proxy config: `model_list` routing to DeepSeek/Mistral/Anthropic/Ollama; provider keys via `os.environ/<VAR>` (no literals); mounted by the compose `litellm` profile |
 | docs/ADAPTERS.md / .en.md | Docs | **ADR-045** umbrella for pluggable adapters (M9.7/GAP-M9-08): §LiteLLM optional router (behind `LLM_BASE_URL`, compose `litellm` profile) + §MCP-Inspector M7-debug recipe (stdio → `tools/list`+sampling, GAP-VERIFY-006) |
+| docs/COPILOT.md / .en.md | Docs | **ADR-046** co-pilot single-source: end-goal · layers · §F evolution · honest feature-inventory (DONE/scaffold/design/not-built) · agreements (in-tool-first; vanilla=primary/AG-UI=dev) · wave-roadmap [me R1/R2/R3]/[@0xCoDSnet #42-47/#36-38] |
 ## Directory Structure
 ```
 agent_development/
