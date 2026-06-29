@@ -113,3 +113,74 @@ func TestSweepTracesTTL(t *testing.T) {
 		t.Error("fresh trace should be kept")
 	}
 }
+
+// TestMkArtifactDirControlAPIPath (#34 pt3): control-api drives agentctl with --artifact-dir =
+// repo/runs/control-<id>, a subdir of runs/. That override path must STILL chmod the runs/ root and
+// run sweepTraces — otherwise trace.zip (AUT DOM/screenshots) accumulates unbounded in a control-api
+// deployment. Before the fix, override != "" skipped both.
+func TestMkArtifactDirControlAPIPath(t *testing.T) {
+	t.Setenv("SENTINEL_TRACE_KEEP", "1")
+	t.Setenv("SENTINEL_TRACE_TTL_HOURS", "0")
+	repo := t.TempDir()
+	runsRoot := filepath.Join(repo, "runs")
+	now := time.Now()
+	writeTrace(t, runsRoot, "control-old1", now.Add(-2*time.Hour)) // oldest → should be pruned
+	writeTrace(t, runsRoot, "control-old2", now.Add(-1*time.Hour)) // newest existing → kept (KEEP=1)
+
+	override := filepath.Join(runsRoot, "control-new") // the just-started run, no trace.zip yet
+	if dir := mkArtifactDir(repo, "ignored", override); dir != override {
+		t.Fatalf("dir = %q, want override %q", dir, override)
+	}
+
+	if _, err := os.Stat(filepath.Join(runsRoot, "control-old1", "trace.zip")); err == nil {
+		t.Error("control-api --artifact-dir under runs/ must trigger sweepTraces; oldest trace not pruned")
+	}
+	if _, err := os.Stat(filepath.Join(runsRoot, "control-old2", "trace.zip")); err != nil {
+		t.Error("newest existing trace should be kept with KEEP=1")
+	}
+	rinfo, err := os.Stat(runsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := rinfo.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("runs/ perm = %o, want 0700 on the control-api override path", perm)
+	}
+}
+
+// TestMkArtifactDirExternalOverrideUntouched (#34 pt3): a user-supplied --artifact-dir OUTSIDE
+// repo/runs is a tree we don't own — mkArtifactDir must not sweep repo/runs for it, even with KEEP=0
+// (which would otherwise prune every trace). Guards against the fix over-reaching.
+func TestMkArtifactDirExternalOverrideUntouched(t *testing.T) {
+	t.Setenv("SENTINEL_TRACE_KEEP", "0")
+	t.Setenv("SENTINEL_TRACE_TTL_HOURS", "0")
+	repo := t.TempDir()
+	keep := writeTrace(t, filepath.Join(repo, "runs"), "runA", time.Now())
+
+	external := filepath.Join(t.TempDir(), "external-out")
+	mkArtifactDir(repo, "ignored", external)
+
+	if _, err := os.Stat(keep); err != nil {
+		t.Error("external --artifact-dir must NOT sweep repo/runs (not the managed tree for this run)")
+	}
+}
+
+// TestIsUnder covers the path-containment gate: root itself and nested paths match; a sibling sharing
+// the name prefix (runs-evil next to runs) does not.
+func TestIsUnder(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "runs")
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{root, true},
+		{filepath.Join(root, "control-x"), true},
+		{filepath.Join(root, "a", "b"), true},
+		{root + "-evil", false}, // sibling sharing the prefix, not nested
+		{filepath.Join(filepath.Dir(root), "other"), false},
+	}
+	for _, c := range cases {
+		if got := isUnder(c.path, root); got != c.want {
+			t.Errorf("isUnder(%q, %q) = %v, want %v", c.path, root, got, c.want)
+		}
+	}
+}
