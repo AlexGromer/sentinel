@@ -46,7 +46,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (46 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (47 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Режимы браузера (M9.6):** по умолчанию own-headless; `PW_HEADLESS=0` — headed (видимый), `PW_CDP_ENDPOINT` — CDP-attach к существующему Chrome пользователя. Движок — **только Chromium by design** (ADR-036); детерминированный голден-replay — только в headless (см. [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 

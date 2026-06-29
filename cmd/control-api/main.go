@@ -15,6 +15,10 @@
 // M9.3-tail (ADR-040): GET /v1/runs/{id}/events (SSE, token-gated) · GET /v1/runs/{id}/artifact (token-gated whitelist)
 // M12 (ADR-041): POST /v1/chat/completions (OpenAI-compat shim — one chat turn → one run, token-gated)
 // M9.8-prep (ADR-043): GET /v1/stream (hand-rolled WebSocket recorder ingest — client→server, token via subprotocol; see ws.go)
+// M9.9 (ADR-047): POST /v1/runs also accepts mode=replay|baseline + from_run:<prior run_id> — an in-tool
+// re-run / golden-baseline update of a PRIOR run's frozen plan. from_run resolves under runs/control-<id>/
+// to a whitelisted plan (plan.json|scenario.json), path-traversal-guarded — never an arbitrary --plan path.
+// It spawns `agentctl run --replay --plan <p>` (replay) or `agentctl baseline update --plan <p>` (baseline).
 package main
 
 import (
@@ -210,7 +214,7 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // render the form from one source of truth. Keys/defaults match the loader.
 func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"modes":   []string{"explore", "goal", "describe"},
+		"modes":   []string{"explore", "goal", "describe", "replay", "baseline"}, // replay/baseline (M9.9) need from_run:<prior run_id>
 		"planner": []string{"heuristic", "llm", "goal"},
 		"fields": map[string]any{
 			"target":          map[string]any{"type": "string", "required": true},
@@ -234,10 +238,41 @@ type runRequest struct {
 	Planner        string `json:"planner"`
 	CoverageTarget string `json:"coverage_target"`
 	MaxSteps       string `json:"max_steps"`
+	FromRun        string `json:"from_run"` // M9.9: prior run_id whose frozen plan to replay / baseline-update
+
+	plan string // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
 }
 
 func validTarget(t string) bool {
 	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "file://")
+}
+
+// replayInputs lists the frozen-plan artifacts a replay/baseline (M9.9) may consume from a prior run,
+// in resolution order. Only these names are accepted as a replay input — never an arbitrary path.
+var replayInputs = []string{"plan.json", "scenario.json"}
+
+// resolveFromRun maps a prior run_id (from_run) to its frozen-plan path under runs/control-<id>/ plus
+// the plan's target_url (M9.9, ADR-047). from_run is path-traversal-guarded exactly like artifact names
+// (handleRunArtifact) and the input filename is whitelisted (replayInputs), so a replay is a re-run of a
+// KNOWN prior plan, not the spawning of an arbitrary file on disk (THREAT_MODEL replay-surface).
+func (s *server) resolveFromRun(fromRun string) (planPath, planTarget string, err error) {
+	if fromRun == "" || strings.ContainsAny(fromRun, `/\`) || strings.Contains(fromRun, "..") {
+		return "", "", fmt.Errorf("must be a bare prior run_id (no path separators)")
+	}
+	dir := filepath.Join(s.repo, "runs", "control-"+fromRun)
+	for _, name := range replayInputs {
+		p := filepath.Join(dir, name)
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			continue
+		}
+		var meta struct {
+			TargetURL string `json:"target_url"`
+		}
+		_ = json.Unmarshal(b, &meta) // best-effort: agentctl/brain re-read the plan; we only need a fallback target
+		return p, meta.TargetURL, nil
+	}
+	return "", "", fmt.Errorf("no replayable plan (plan.json|scenario.json) for run %q", fromRun)
 }
 
 // spawnRun starts an `agentctl run` from req (caller validates the target) and returns the tracked
@@ -252,21 +287,34 @@ func (s *server) spawnRun(req runRequest) *run {
 	s.mu.Unlock()
 
 	// Build agentctl args from the request (no shell — args are passed directly, no injection).
-	args := []string{"run", "--target", req.Target, "--artifact-dir", artDir}
-	if req.Planner != "" {
-		args = append(args, "--planner", req.Planner)
-	}
-	if req.Goal != "" {
-		args = append(args, "--goal", req.Goal)
-	}
-	if req.Describe != "" {
-		args = append(args, "--describe", req.Describe)
-	}
-	if req.CoverageTarget != "" {
-		args = append(args, "--coverage-target", req.CoverageTarget)
-	}
-	if req.MaxSteps != "" {
-		args = append(args, "--max-steps", req.MaxSteps)
+	// req.plan is server-resolved (resolveFromRun); req.Target for replay/baseline is the effective
+	// target (request target, else the prior plan's target_url) decided in handleCreateRun.
+	var args []string
+	switch req.Mode {
+	case "replay": // M9.9: re-run a prior frozen plan, healing locators — `agentctl run --replay --plan`
+		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir, "--replay", "--plan", req.plan}
+	case "baseline": // M9.9: update golden baseline from a prior frozen plan (the only golden-write path)
+		args = []string{"baseline", "update", "--plan", req.plan, "--artifact-dir", artDir}
+		if req.Target != "" {
+			args = append(args, "--target", req.Target)
+		}
+	default: // explore / goal / describe (mode inferred from goal/describe as before)
+		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir}
+		if req.Planner != "" {
+			args = append(args, "--planner", req.Planner)
+		}
+		if req.Goal != "" {
+			args = append(args, "--goal", req.Goal)
+		}
+		if req.Describe != "" {
+			args = append(args, "--describe", req.Describe)
+		}
+		if req.CoverageTarget != "" {
+			args = append(args, "--coverage-target", req.CoverageTarget)
+		}
+		if req.MaxSteps != "" {
+			args = append(args, "--max-steps", req.MaxSteps)
+		}
 	}
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
@@ -306,9 +354,32 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
 		return
 	}
-	if !validTarget(req.Target) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target must be an http(s):// or file:// URL"})
-		return
+	switch req.Mode {
+	case "replay", "baseline": // M9.9: re-run / baseline-update a prior run's frozen plan
+		planPath, planTarget, err := s.resolveFromRun(req.FromRun)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from_run: " + err.Error()})
+			return
+		}
+		req.plan = planPath
+		if !validTarget(req.Target) { // request target wins; else fall back to the plan's target_url — but only if IT is valid
+			if validTarget(planTarget) {
+				req.Target = planTarget
+			} else {
+				req.Target = "" // never forward a scheme-less/invalid target as --target (baseline omits it; replay 400s below)
+			}
+		}
+		// `agentctl run --replay` requires a target (cmd/agentctl/main.go); baseline derives it from the
+		// plan when omitted, so only replay hard-requires one here.
+		if req.Mode == "replay" && !validTarget(req.Target) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "replay needs a target — none on the request and no target_url in the prior plan"})
+			return
+		}
+	default: // explore / goal / describe
+		if !validTarget(req.Target) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target must be an http(s):// or file:// URL"})
+			return
+		}
 	}
 	rec := s.spawnRun(req)
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"})
@@ -343,6 +414,8 @@ var artifactWhitelist = map[string]bool{
 	"report.json":           true,
 	"report.html":           true,
 	"plan.json":             true,
+	"heal-report.json":      true, // M9.9: replay output (golden diff / heal log)
+	"baseline-report.json":  true, // M9.9: baseline-update output
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
@@ -427,7 +500,7 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.URL.Query().Get("name")
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || !artifactWhitelist[name] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be one of: scenario.json, reconcile-report.json, report.json, report.html, plan.json"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a whitelisted run artifact (e.g. scenario.json, plan.json, report.json, heal-report.json)"})
 		return
 	}
 	f, err := os.Open(filepath.Join(rec.ArtifactDir, name))
@@ -528,7 +601,9 @@ func parseChatInstruction(model string, messages []chatMessage) (mode, target, t
 	return mode, target, stripTargetLine(text)
 }
 
-// verdict summarizes a finished run (exit-code → text) and folds in scenario.json if present.
+// verdict summarizes a finished run (exit-code → text) and folds in the relevant artifact (scenario.json
+// for authoring; heal-report.json / baseline-report.json for M9.9 replay/baseline). NOTE: exit 2 is
+// overloaded — a real golden regression OR a bad invocation (missing plan, etc.); inspect heal-report.json.
 func (s *server) verdict(rec *run) string {
 	s.mu.RLock()
 	state, code, errStr := rec.State, rec.ExitCode, rec.Error
@@ -547,12 +622,17 @@ func (s *server) verdict(rec *run) string {
 	case code == 2:
 		v = "⚠ visual/golden regression (exit 2)"
 	case code == 3:
-		v = "✖ config error — needs a human (exit 3)"
+		v = "✖ integrity/config error — plan_hash or golden mismatch, or bad invocation — needs a human (exit 3)"
 	default:
 		v = fmt.Sprintf("exit %d", code)
 	}
 	if sc, ok := s.readArtifact(rec, "scenario.json"); ok {
 		v += "\n\nscenario.json:\n" + sc
+	}
+	if hr, ok := s.readArtifact(rec, "heal-report.json"); ok { // M9.9 replay output
+		v += "\n\nheal-report.json:\n" + hr
+	} else if br, ok := s.readArtifact(rec, "baseline-report.json"); ok { // M9.9 baseline output
+		v += "\n\nbaseline-report.json:\n" + br
 	}
 	return v
 }

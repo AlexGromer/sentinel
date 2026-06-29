@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,13 +78,11 @@ func TestCORSDisallowedOrigin(t *testing.T) {
 	}
 }
 
-// newRunServer returns a server backed by a temp repo + a fake agentctl that echoes a line to
-// stdout and one to stderr, then exits 1 (a real "the test found a problem" exit code).
-func newRunServer(t *testing.T) (*server, string) {
+// newRunServerWithScript backs the server with a temp repo + a fake agentctl whose script body is given.
+func newRunServerWithScript(t *testing.T, body string) (*server, string) {
 	t.Helper()
 	repo := t.TempDir()
 	script := filepath.Join(repo, "fake-agentctl.sh")
-	body := "#!/bin/sh\necho 'planning step 1'\necho 'walking page' 1>&2\nexit 1\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatalf("write fake agentctl: %v", err)
 	}
@@ -93,6 +93,13 @@ func newRunServer(t *testing.T) (*server, string) {
 		corsAllow: map[string]bool{},
 		runs:      map[string]*run{},
 	}, repo
+}
+
+// newRunServer returns a server backed by a temp repo + a fake agentctl that echoes a line to
+// stdout and one to stderr, then exits 1 (a real "the test found a problem" exit code).
+func newRunServer(t *testing.T) (*server, string) {
+	t.Helper()
+	return newRunServerWithScript(t, "#!/bin/sh\necho 'planning step 1'\necho 'walking page' 1>&2\nexit 1\n")
 }
 
 // createRunAndWait POSTs a run and waits briefly for the spawned process to finish, returning its id.
@@ -300,5 +307,276 @@ func TestChatCompletionsNoTarget(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Set a target") {
 		t.Fatalf("no-target should ask for a target:\n%s", rec.Body.String())
+	}
+}
+
+// --- M9.9 replay / baseline (ADR-047) -----------------------------------------------------------
+
+// newArgvCapturingServer backs the server with a fake agentctl that records its argv (one arg per
+// line) to <repo>/argv.txt and exits with exitCode. Returns the server, repo, and the argv path.
+func newArgvCapturingServer(t *testing.T, exitCode int) (s *server, repo, argvPath string) {
+	t.Helper()
+	repo = t.TempDir()
+	argvPath = filepath.Join(repo, "argv.txt")
+	script := filepath.Join(repo, "fake-agentctl.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argvPath + "'\nexit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write capturing agentctl: %v", err)
+	}
+	return &server{
+		repo:      repo,
+		agentctl:  script,
+		token:     "secret-tok",
+		corsAllow: map[string]bool{},
+		runs:      map[string]*run{},
+	}, repo, argvPath
+}
+
+// seedPriorPlan writes a frozen-plan file (plan.json or scenario.json) for a prior run id under
+// <repo>/runs/control-<priorID>/, returning its absolute path (what from_run must resolve to).
+func seedPriorPlan(t *testing.T, repo, priorID, name, content string) string {
+	t.Helper()
+	dir := filepath.Join(repo, "runs", "control-"+priorID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func runBody(t *testing.T, m map[string]string) string {
+	t.Helper()
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// postRun POSTs a JSON run body with the test token and returns the recorder (no wait).
+func postRun(t *testing.T, s *server, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	return rec
+}
+
+// postRunAndWait POSTs a run body, requires 202, and waits for the spawned process to finish.
+func postRunAndWait(t *testing.T, s *server, body string) string {
+	t.Helper()
+	rec := postRun(t, s, body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create run: got %d want 202 (%s)", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("create run body: %v", err)
+	}
+	id := resp["run_id"]
+	for i := 0; i < 200; i++ {
+		s.mu.RLock()
+		st := s.runs[id].State
+		s.mu.RUnlock()
+		if st != "running" {
+			return id
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not finish in time", id)
+	return ""
+}
+
+func readArgv(t *testing.T, argvPath string) []string {
+	t.Helper()
+	b, err := os.ReadFile(argvPath)
+	if err != nil {
+		t.Fatalf("read argv: %v", err)
+	}
+	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+}
+
+// TestCreateRunReplayArgv: mode=replay + from_run → `agentctl run --target <plan target> --artifact-dir
+// <new> --replay --plan <prior plan.json>` (target derived from the frozen plan's target_url).
+func TestCreateRunReplayArgv(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	planPath := seedPriorPlan(t, repo, "prior1", "plan.json",
+		`{"target_url":"https://app.example","plan_id":"p1","plan_hash":"h","steps":[]}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior1"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://app.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id), "--replay", "--plan", planPath}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("replay argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunBaselineArgv: mode=baseline → `agentctl baseline update --plan <p> --artifact-dir <new>
+// --target <plan target>` (the only golden-write path; target defaulted from the plan).
+func TestCreateRunBaselineArgv(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	planPath := seedPriorPlan(t, repo, "prior2", "plan.json", `{"target_url":"https://app.example","steps":[]}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "baseline", "from_run": "prior2"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"baseline", "update", "--plan", planPath,
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id), "--target", "https://app.example"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("baseline argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunBaselineNoTarget: a plan without target_url → baseline omits --target (agentctl falls
+// back to the plan's own target_url).
+func TestCreateRunBaselineNoTarget(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	planPath := seedPriorPlan(t, repo, "prior3", "plan.json", `{"steps":[]}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "baseline", "from_run": "prior3"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"baseline", "update", "--plan", planPath, "--artifact-dir", filepath.Join(repo, "runs", "control-"+id)}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("baseline (no target) argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunReplayScenarioFallback: with only scenario.json present, from_run resolves to it.
+func TestCreateRunReplayScenarioFallback(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	scenPath := seedPriorPlan(t, repo, "prior4", "scenario.json", `{"target_url":"https://app.example","steps":[]}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior4"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://app.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id), "--replay", "--plan", scenPath}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("scenario-fallback argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunReplayPrefersPlanOverScenario: when both exist, plan.json wins (resolution order).
+func TestCreateRunReplayPrefersPlanOverScenario(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	planPath := seedPriorPlan(t, repo, "prior5", "plan.json", `{"target_url":"https://app.example"}`)
+	seedPriorPlan(t, repo, "prior5", "scenario.json", `{"target_url":"https://other.example"}`)
+	_ = postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior5"}))
+	argv := readArgv(t, argvPath)
+	if argv[len(argv)-1] != planPath {
+		t.Fatalf("--plan should prefer plan.json (%s), got %s", planPath, argv[len(argv)-1])
+	}
+	if argv[2] != "https://app.example" {
+		t.Fatalf("target should come from plan.json, got %s", argv[2])
+	}
+}
+
+// TestCreateRunReplayRequestTargetOverrides: an explicit request target wins over the plan's target_url.
+func TestCreateRunReplayRequestTargetOverrides(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	planPath := seedPriorPlan(t, repo, "prior7", "plan.json", `{"steps":[]}`) // no target_url
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior7", "target": "https://override.example"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://override.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id), "--replay", "--plan", planPath}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("override argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunReplayRejectsBadFromRun: from_run must be a bare run_id — no path separators/traversal.
+func TestCreateRunReplayRejectsBadFromRun(t *testing.T) {
+	s, _ := newRunServer(t) // default stub; none of these must spawn it
+	for _, fr := range []string{"", "../../etc", "a/b", `a\b`, "..", "x/../y"} {
+		rec := postRun(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": fr}))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("from_run %q: got %d want 400 (%s)", fr, rec.Code, rec.Body.String())
+		}
+	}
+	s.mu.RLock()
+	n := len(s.runs)
+	s.mu.RUnlock()
+	if n != 0 {
+		t.Fatalf("a rejected from_run must not spawn a run, got %d", n)
+	}
+}
+
+// TestCreateRunReplayMissingPlan: from_run resolving to a dir with no plan.json/scenario.json → 400.
+func TestCreateRunReplayMissingPlan(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := postRun(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "ghost"}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing plan: got %d want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateRunReplayNeedsTarget: replay with neither a request target nor a plan target_url → 400.
+func TestCreateRunReplayNeedsTarget(t *testing.T) {
+	s, repo := newRunServer(t)
+	seedPriorPlan(t, repo, "prior6", "plan.json", `{"steps":[]}`) // no target_url
+	rec := postRun(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior6"}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("replay no target: got %d want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "replay needs a target") {
+		t.Fatalf("expected target error, got %s", rec.Body.String())
+	}
+}
+
+// TestReplayExitCodePropagation: a replay run's structured exit code (here 2) reaches the run record.
+func TestReplayExitCodePropagation(t *testing.T) {
+	s, repo, _ := newArgvCapturingServer(t, 2) // golden-regression-style exit
+	seedPriorPlan(t, repo, "prior8", "plan.json", `{"target_url":"https://app.example"}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior8"}))
+	s.mu.RLock()
+	st, code := s.runs[id].State, s.runs[id].ExitCode
+	s.mu.RUnlock()
+	if st != "done" || code != 2 {
+		t.Fatalf("replay exit: state=%q code=%d want done/2", st, code)
+	}
+}
+
+// TestConfigSchemaIncludesReplayBaseline: the WebUI's form source-of-truth advertises the new modes.
+func TestConfigSchemaIncludesReplayBaseline(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestServer().mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config-schema: got %d want 200", rec.Code)
+	}
+	var body struct {
+		Modes []string `json:"modes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("config-schema body: %v", err)
+	}
+	has := map[string]bool{}
+	for _, m := range body.Modes {
+		has[m] = true
+	}
+	for _, want := range []string{"explore", "goal", "describe", "replay", "baseline"} {
+		if !has[want] {
+			t.Fatalf("config-schema modes missing %q: %v", want, body.Modes)
+		}
+	}
+}
+
+// TestRunArtifactReplayOutputs: replay/baseline outputs are whitelisted and fetchable.
+func TestRunArtifactReplayOutputs(t *testing.T) {
+	s, repo := newRunServer(t)
+	id := createRunAndWait(t, s)
+	artDir := filepath.Join(repo, "runs", "control-"+id)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"heal-report.json", "baseline-report.json"} {
+		if err := os.WriteFile(filepath.Join(artDir, name), []byte(`{"ok":true}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+id+"/artifact?name="+name, nil)
+		req.Header.Set("Authorization", "Bearer secret-tok")
+		s.mux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok"`) {
+			t.Fatalf("artifact %s: got %d body=%s", name, rec.Code, rec.Body.String())
+		}
 	}
 }
