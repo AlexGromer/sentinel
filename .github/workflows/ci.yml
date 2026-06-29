@@ -86,6 +86,9 @@ jobs:
             echo "== test_${t}_offline =="
             .venv/bin/python tests/test_${t}_offline.py
           done
+          # M9.8 recorder→bridge tie (offline, FakeExecutor) — doesn't fit the _offline.py glob above.
+          echo "== test_record_bridge_recorder_e2e =="
+          .venv/bin/python tests/test_record_bridge_recorder_e2e.py
 
       # Ship only compiled outputs; node_modules / browsers / .venv are reinstalled
       # by downstream jobs (cheaper than dragging them through artifact storage).
