@@ -95,6 +95,8 @@
 <div class="row" style="margin-top:.6rem">
   <button id="check" type="button">Проверить</button>
   <button id="run" type="button" disabled>▶ Запустить</button>
+  <button id="rerun" type="button" disabled title="replay">🔁 Перепрогон</button>
+  <button id="baseline" type="button" disabled title="baseline update">📌 Эталон</button>
   <span id="capistatus" class="mut"></span>
 </div>
 <div class="out" id="runout" style="display:none;margin-top:.6rem"><pre id="runlog"></pre></div>
@@ -200,16 +202,18 @@ $("check").addEventListener("click", async () => {
     $("run").disabled = false;
   } catch (e) { setCapiStatus("✗ недоступен (CORS/выключен): " + e.message); $("run").disabled = true; }
 });
-$("run").addEventListener("click", async () => {
-  const base = capiBase(), tok = $("capitok").value.trim(), target = $("target").value.trim(), mode = $("mode").value;
-  if (!target) { runLog("укажите target URL в секции «Сценарий»"); return; }
-  const body = {
-    target, mode, planner: $("planner").value,
-    goal: mode === "goal" ? $("goal").value.trim() : "",
-    describe: mode === "describe" ? $("describe").value.trim() : "",
-    coverage_target: $("coverage").value, max_steps: $("maxsteps").value,
-  };
-  runLog("POST /v1/runs …");
+// last COMPLETED run — enables 🔁 Перепрогон (replay) / 📌 Эталон (baseline), которые целятся в него через from_run (ADR-047)
+let lastRunId = null;
+function setRunControls(disabled){
+  $("run").disabled = disabled;
+  $("rerun").disabled = disabled || !lastRunId;
+  $("baseline").disabled = disabled || !lastRunId;
+}
+// Общий драйвер: ▶ Запустить / 🔁 Перепрогон / 📌 Эталон шлют в один POST /v1/runs и опрашивают статус.
+async function startRun(body, label) {
+  const base = capiBase(), tok = $("capitok").value.trim();
+  runLog((label ? label + "\n" : "") + "POST /v1/runs …");
+  setRunControls(true);
   try {
     const r = await fetch(base + "/v1/runs", {
       method: "POST",
@@ -217,21 +221,47 @@ $("run").addEventListener("click", async () => {
       body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.status !== 202) { runLog("✗ HTTP " + r.status + ": " + (j.error || JSON.stringify(j))); return; }
+    if (r.status !== 202) { runLog("✗ HTTP " + r.status + ": " + (j.error || JSON.stringify(j))); setRunControls(false); return; }
     runLog("✓ запущен run_id=" + j.run_id + "\nартефакты: " + j.artifact_dir + "\nопрашиваю статус…");
     pollRun(base, j.run_id, tok);
-  } catch (e) { runLog("✗ " + e.message); }
+  } catch (e) { runLog("✗ " + e.message); setRunControls(false); }
+}
+$("run").addEventListener("click", () => {
+  const target = $("target").value.trim(), mode = $("mode").value;
+  if (!target) { runLog("укажите target URL в секции «Сценарий»"); return; }
+  startRun({
+    target, mode, planner: $("planner").value,
+    goal: mode === "goal" ? $("goal").value.trim() : "",
+    describe: mode === "describe" ? $("describe").value.trim() : "",
+    coverage_target: $("coverage").value, max_steps: $("maxsteps").value,
+  });
 });
+$("rerun").addEventListener("click", () => { if (lastRunId) startRun({ mode: "replay", from_run: lastRunId }, "🔁 Перепрогон from_run=" + lastRunId); });
+$("baseline").addEventListener("click", () => { if (lastRunId) startRun({ mode: "baseline", from_run: lastRunId }, "📌 Эталон from_run=" + lastRunId); });
+
+// exit-код → человекочитаемый вердикт (RU-only — страница монолингвальна)
+function setupVerdict(j) {
+  if (j.state === "failed") return "✖ прогон не запущен" + (j.error ? " — " + j.error : "");
+  switch (j.exit_code) {
+    case 0: return "✓ пройдено (exit 0)";
+    case 1: return "⚠ тест нашёл проблему (exit 1)";
+    case 2: return "⚠ визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌";
+    case 3: return "✖ целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)";
+    default: return "exit " + j.exit_code;
+  }
+}
 function pollRun(base, id, tok) {
   let n = 0;
   const timer = setInterval(async () => {
-    if (++n > 150) { clearInterval(timer); runLog($("runlog").textContent + "\n(опрос остановлен — таймаут)"); return; }
+    if (++n > 150) { clearInterval(timer); runLog($("runlog").textContent + "\n(опрос остановлен — таймаут)"); setRunControls(false); return; }
     try {
       const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id), { headers: tok ? { Authorization: "Bearer " + tok } : {} });
       const j = await r.json();
       if (j.state && j.state !== "running") {
         clearInterval(timer);
-        runLog("● " + j.state + " · exit_code=" + j.exit_code + (j.error ? (" · err=" + j.error) : "") + "\nартефакты: " + j.artifact_dir);
+        lastRunId = id; // remember for re-run / baseline
+        runLog("● " + j.state + " · exit_code=" + j.exit_code + (j.error ? (" · err=" + j.error) : "") + "\nартефакты: " + j.artifact_dir + "\n" + setupVerdict(j));
+        setRunControls(false);
       } else { runLog("… running (" + n + ")  run_id=" + id); }
     } catch (e) { /* transient — keep polling */ }
   }, 2000);
