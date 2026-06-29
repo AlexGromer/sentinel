@@ -581,11 +581,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
         ▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span>
       </button>
+      <button type="button" class="btn" id="b-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+      <button type="button" class="btn" id="b-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
       <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7 выше)</span><span data-lang="en">check the connection first (section #7 above)</span></span>
     </div>
     <div id="b-runout" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem">
       <pre id="b-runlog" class="mono" style="font-size:.8rem;white-space:pre-wrap;word-break:break-word;margin:0;max-height:14rem;overflow:auto"></pre>
     </div>
+    <div id="b-verdict" style="margin-top:.5rem;font-weight:700"></div>
+    <div id="b-arts" class="ctl-row" style="margin-top:.3rem"></div>
   </section>
 
   <!-- ============================ CHAT ============================ -->
@@ -616,6 +620,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
         ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
       </button>
+      <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+      <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
       <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7)</span><span data-lang="en">check the connection first (section #7)</span></span>
     </div>
     <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
@@ -1269,18 +1275,47 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   ge('b-dl-yaml').addEventListener('click',function(){ dlText('b-yaml','run.yaml'); });
   ge('b-dl-env').addEventListener('click', function(){ dlText('b-env','sentinel.env'); });
 
-  /* build ▶ Run */
-  ge('b-run').addEventListener('click', async function(){
-    var base=capiBase(), target=bVal('b-target').trim(), mode=bVal('b-mode');
-    if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
-    var body={
-      target:target, mode:mode, planner:bVal('b-planner'),
-      goal:     mode==='goal'     ? ge('b-goal').value.trim()     : '',
-      describe: mode==='describe' ? ge('b-describe').value.trim() : '',
-      coverage_target: bVal('b-coverage'),
-      max_steps:       bVal('b-maxsteps')
-    };
-    bRunLog(bi('POST /v1/runs …','POST /v1/runs …'));
+  /* build run drivers — ▶ Run / 🔁 Re-run / 📌 baseline share bSubmit (ADR-047 from_run) */
+  var bLogHtml='';
+  function bRunLog(html){          // innerHTML (like the chat) so bi() labels render bilingually; server/user data is esc()'d by callers
+    bLogHtml=html;
+    ge('b-runout').style.display='';
+    ge('b-runlog').innerHTML=html;
+  }
+  var bLastRunId=null;            // last COMPLETED run — enables 🔁/📌 (they target it via from_run)
+  function bSetControls(disabled){
+    ge('b-run').disabled=disabled;
+    ge('b-rerun').disabled=disabled||!bLastRunId;
+    ge('b-baseline').disabled=disabled||!bLastRunId;
+  }
+  function renderBuildVerdict(st){
+    var code=st.exit_code, state=st.state, v;
+    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+'</span>';
+    else if (code===0)         v='<span style="color:var(--ok)">✓ '+bi('пройдено (exit 0)','pass (exit 0)')+'</span>';
+    else if (code===1)         v='<span style="color:var(--warn)">⚠ '+bi('тест нашёл проблему (exit 1)','the test found a problem (exit 1)')+'</span>';
+    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌','visual/golden regression (exit 2) — you can update the baseline 📌')+'</span>';
+    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)','integrity/config (plan_hash/golden) — needs a human (exit 3)')+'</span>';
+    else                       v='<span>exit '+esc(code)+'</span>';
+    ge('b-verdict').innerHTML=v;
+  }
+  async function bShowArtifacts(base, id){
+    var box=ge('b-arts'); box.innerHTML='';
+    var names=['scenario.json','report.json','heal-report.json','baseline-report.json'];
+    for (var i=0;i<names.length;i++){
+      var content=await fetchArtifact(base,id,names[i]);
+      if (!content) continue;
+      (function(n,c){
+        var btn=document.createElement('button'); btn.className='btn'; btn.innerHTML='⬇ '+esc(n);
+        btn.addEventListener('click',function(){ dlBlob(n,c); });
+        box.appendChild(btn);
+      })(names[i],content);
+    }
+  }
+  async function bSubmit(body, label){
+    var base=capiBase();
+    ge('b-verdict').innerHTML=''; ge('b-arts').innerHTML='';
+    bRunLog((label?label+'\n':'')+bi('POST /v1/runs …','POST /v1/runs …'));
+    bSetControls(true);
     var hdr={}; var ah=authHdr();
     hdr['Content-Type']='application/json';
     if (ah.Authorization) hdr.Authorization=ah.Authorization;
@@ -1288,10 +1323,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     try {
       var r=await fetch(base+'/v1/runs',{method:'POST',headers:hdr,body:JSON.stringify(body)});
       var j; try { j=await r.json(); } catch(ep){ j={}; }
-      if (r.status!==202){ bRunLog('✗ HTTP '+r.status+': '+esc(j.error||JSON.stringify(j))); return; }
+      if (r.status!==202){ bRunLog('✗ HTTP '+r.status+': '+esc(j.error||JSON.stringify(j))); bSetControls(false); return; }
       id=j.run_id;
       bRunLog(bi('Запущен','Started')+' run_id='+esc(id)+'\n'+bi('артефакты:','artifacts:')+' '+esc(j.artifact_dir||''));
-    } catch(e){ bRunLog('✗ '+esc(e.message)); return; }
+    } catch(e){ bRunLog('✗ '+esc(e.message)); bSetControls(false); return; }
 
     var lastState=null;
     try {
@@ -1307,14 +1342,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
         (lastState.error?' · err='+esc(lastState.error):''));
+      renderBuildVerdict(lastState);
+      await bShowArtifacts(base,id);
+      bLastRunId=id;            // remember only a CONFIRMED-complete run (for re-run / baseline)
     }
-  });
-  var bLogHtml='';
-  function bRunLog(html){          // innerHTML (like the chat) so bi() labels render bilingually; server/user data is esc()'d by callers
-    bLogHtml=html;
-    ge('b-runout').style.display='';
-    ge('b-runlog').innerHTML=html;
+    bSetControls(false);
   }
+  ge('b-run').addEventListener('click', function(){
+    var target=bVal('b-target').trim(), mode=bVal('b-mode');
+    if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
+    bSubmit({
+      target:target, mode:mode, planner:bVal('b-planner'),
+      goal:     mode==='goal'     ? ge('b-goal').value.trim()     : '',
+      describe: mode==='describe' ? ge('b-describe').value.trim() : '',
+      coverage_target: bVal('b-coverage'),
+      max_steps:       bVal('b-maxsteps')
+    });
+  });
+  ge('b-rerun').addEventListener('click', function(){ if (bLastRunId) bSubmit({ mode:'replay', from_run:bLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' from_run='+esc(bLastRunId)); });
+  ge('b-baseline').addEventListener('click', function(){ if (bLastRunId) bSubmit({ mode:'baseline', from_run:bLastRunId }, '📌 '+bi('Эталон','Baseline')+' from_run='+esc(bLastRunId)); });
 
   /* wire build inputs */
   ge('b-mode').addEventListener('change',bSyncMode);
@@ -1362,22 +1408,21 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       : '(explore — текст не нужен · no text needed)';
   });
 
-  ge('ch-send').addEventListener('click', async function(){
+  var chLastRunId=null;          // last COMPLETED run — enables 🔁/📌 (they target it via from_run)
+  function chSetControls(disabled){
+    ge('ch-send').disabled=disabled;
+    ge('ch-rerun').disabled=disabled||!chLastRunId;
+    ge('ch-baseline').disabled=disabled||!chLastRunId;
+  }
+  function chFinish(){ chBusy=false; chSetControls(false); }
+
+  /* shared chat run driver — ▶ Send / 🔁 Re-run / 📌 baseline (ADR-047 from_run) */
+  async function chRunFlow(body, sumHtml, sumMeta){
     if (chBusy) return;
-    var base=capiBase(), target=ge('ch-target').value.trim(),
-        mode=ge('ch-mode').value, text=ge('ch-text').value.trim();
-    if (!target){ addBubble('sys',bi('Укажи Target URL.','Set a Target URL.')); return; }
-    if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
-
-    addBubble('user',esc(mode)+(text?' — '+esc(text):''),esc(target));
-    chBusy=true; ge('ch-send').disabled=true;
-
-    var body={
-      target:target, mode:mode,
-      planner: mode==='goal'?'goal':'heuristic',
-      goal:     mode==='goal'     ? text : '',
-      describe: mode==='describe' ? text : ''
-    };
+    var base=capiBase();
+    if (!base){ addBubble('sys',bi('Укажи control-API URL и проверь подключение.','Set the control-API URL and check the connection.')); return; }
+    addBubble('user', sumHtml, sumMeta);
+    chBusy=true; chSetControls(true);
     var hdr2={}; var ah2=authHdr();
     hdr2['Content-Type']='application/json';
     if (ah2.Authorization) hdr2.Authorization=ah2.Authorization;
@@ -1404,23 +1449,34 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       lastState2=await pollStatus(base,id2);
     }
     await chFinalize(base,id2,lastState2);
+    if (lastState2) chLastRunId=id2;   // remember only a CONFIRMED-complete run
     chFinish();
-  });
+  }
 
-  function chFinish(){ chBusy=false; ge('ch-send').disabled=false; }
+  ge('ch-send').addEventListener('click', function(){
+    var target=ge('ch-target').value.trim(), mode=ge('ch-mode').value, text=ge('ch-text').value.trim();
+    if (!target){ addBubble('sys',bi('Укажи Target URL.','Set a Target URL.')); return; }
+    if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
+    chRunFlow({
+      target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic',
+      goal: mode==='goal'?text:'', describe: mode==='describe'?text:''
+    }, esc(mode)+(text?' — '+esc(text):''), esc(target));
+  });
+  ge('ch-rerun').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'replay', from_run:chLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
+  ge('ch-baseline').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'baseline', from_run:chLastRunId }, '📌 '+bi('Зафиксировать эталон','Update baseline')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
 
   async function chFinalize(base, id, st){
     if (!st){ addBubble('sys',bi('Статус неизвестен (таймаут).','Status unknown (timeout).')); return; }
     var code=st.exit_code, state=st.state, v;
-    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+' </span>';
+    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+'</span>';
     else if (code===0)         v='<span style="color:var(--ok)">✓ '+bi('пройдено (exit 0)','pass (exit 0)')+'</span>';
     else if (code===1)         v='<span style="color:var(--warn)">⚠ '+bi('тест нашёл проблему (exit 1)','the test found a problem (exit 1)')+'</span>';
-    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2)','visual/golden regression (exit 2)')+'</span>';
-    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('ошибка конфигурации — нужен человек (exit 3)','config error — needs a human (exit 3)')+'</span>';
+    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌','visual/golden regression (exit 2) — you can update the baseline 📌')+'</span>';
+    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)','integrity/config (plan_hash/golden) — needs a human (exit 3)')+'</span>';
     else                       v='<span>exit '+esc(code)+'</span>';
     addBubble('sys',v);
 
-    var artifacts=['scenario.json','report.json'];
+    var artifacts=['scenario.json','report.json','heal-report.json','baseline-report.json'];
     for (var ai=0;ai<artifacts.length;ai++){
       var name=artifacts[ai];
       var content=await fetchArtifact(base,id,name);

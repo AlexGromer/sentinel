@@ -46,7 +46,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | Opt-in visual-authoritative flip | ADR-042 | ⚙️ flag (default-off; default-on → M9-LIVE proof) |
 | Vanilla chat-front (air-gapped, **one-shot**) | M9.3-tail/ADR-040 | ✅ DONE (`docs/chat/`, `docs/index.html#chat`) |
 | OpenAI-compat шим (Open WebUI/SDK = **клиент**, «как модель») | M12/ADR-041 | ✅ DONE (`/v1/chat/completions`) |
-| **Replay/baseline ВНУТРИ UI** | M9.3 «вне scope» → **R1/M9.9** | 🔄 backend DONE (R1a/ADR-047: control-API `mode=replay\|baseline`+`from_run`+httptest) / UI ▶/🔁/📌 pending (R1b) — GAP-M9-16 |
+| **Replay/baseline ВНУТРИ UI** | M9.3 «вне scope» → **R1/M9.9** | ✅ DONE — R1a backend (ADR-047) + R1b UI ▶/🔁/📌 в `#build`/`#chat`/`chat/`/`setup/` (GAP-M9-16) |
 | **Multi-turn чат / контекст / коррекция по ходу** | «brain-extension» → **R2/M9.10** | ❌ not-built → запланировано (GAP-M9-17) |
 | Headed / видимый браузер (F2) | M9.6/ADR-037 | ✅ DONE offline (live pending) |
 | CDP-attach к Chrome пользователя (F3) | M9.6/ADR-036/037 | ✅ DONE offline (live pending) |
@@ -75,7 +75,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 ### Мои волны (`control-API` / `brain` / vanilla-UI) — порядок R1 → R2 → R3
 | # | Веха | Содержание | Закрывает |
 |---|------|-----------|-----------|
-| **R1** | **M9.9 In-tool run-console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal-guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + вердикт в vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **R1a backend ✅ (ADR-047); R1b UI pending** | GAP-M9-16 |
+| **R1** | **M9.9 In-tool run-console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal-guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + вердикт в vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **✅ DONE (R1a backend + R1b UI)** | GAP-M9-16 |
 | **R2** | **M9.10 Multi-turn авторинг** | brain `chat`/`refine` `RUN_MODE` — резюм из checkpointer по стабильному `conversation_id`→`thread_id`; message-history в `RunState`; мульти-тёрн-панель | GAP-M9-17 |
 | **R3** | **M9.8 F4 takeover (brain-side)** | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS-сигналы `takeover/return/state-sync` поверх `/v1/stream` | GAP-M9-18 (+½ GAP-M9-15) |
 
@@ -89,7 +89,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 M9.7-remainder (auth/deploy adapters) · M10 security-модуль · M11.1 release (lockfile/SBOM/signing — пересекается с #38) · M11.2/4/5 · **M9-LIVE** (живые прогоны — «go»+ключ+браузер) · Langfuse/DSPy.
 
 ## 6. Как закрываются desync-точки
-- «Запуск/перепрогон внутри инструмента» → **R1** (GAP-M9-16).
+- «Запуск/перепрогон внутри инструмента» → **R1** ✅ DONE (GAP-M9-16).
 - «Контекст, не one-shot, коррекция по ходу» → **R2** (GAP-M9-17).
 - «Перехват/co-pilot/партнёрство» → **R3** (brain) + #47 (extension) = F4 (GAP-M9-15/18).
 - «Показывал в браузере, что делает» → **уже есть** (F2 headed / F3 CDP-attach, M9.6); live-verify = M9-LIVE.

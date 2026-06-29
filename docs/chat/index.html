@@ -79,6 +79,8 @@
   <textarea id="text" placeholder="открыть форму регистрации, заполнить email и пароль, отправить"></textarea>
   <div class="row">
     <button id="send" type="button" class="primary" disabled>▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span></button>
+    <button id="rerun" type="button" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+    <button id="baseline" type="button" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
     <span class="mut" style="font-size:.82rem"><span data-lang="ru">сначала «Проверить» подключение</span><span data-lang="en">check the connection first</span></span>
   </div>
 </fieldset>
@@ -87,8 +89,8 @@
 <div id="chat" class="chat"></div>
 
 <details><summary><span data-lang="ru">Соответствие коду / коды выхода</span><span data-lang="en">Code map / exit codes</span></summary>
-<p><span data-lang="ru">Эндпоинты: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). Стрим читается через <code>fetch()</code>+reader (EventSource не умеет слать <code>Authorization</code>); при сбое — fallback на 2с-опрос <code>/v1/runs/{id}</code>. Коды выхода: <strong>0</strong> pass · <strong>1</strong> тест нашёл проблему · <strong>2</strong> визуальная/golden-регрессия · <strong>3</strong> ошибка конфигурации (нужен человек). Источник: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span>
-<span data-lang="en">Endpoints: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). The stream is read via <code>fetch()</code>+reader (EventSource cannot send <code>Authorization</code>); on failure it falls back to 2 s polling of <code>/v1/runs/{id}</code>. Exit codes: <strong>0</strong> pass · <strong>1</strong> the test found a problem · <strong>2</strong> visual/golden regression · <strong>3</strong> config error (needs a human). Source: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span></p></details>
+<p><span data-lang="ru">Эндпоинты: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). Стрим читается через <code>fetch()</code>+reader (EventSource не умеет слать <code>Authorization</code>); при сбое — fallback на 2с-опрос <code>/v1/runs/{id}</code>. Коды выхода: <strong>0</strong> pass · <strong>1</strong> тест нашёл проблему · <strong>2</strong> визуальная/golden-регрессия · <strong>3</strong> целостность/конфигурация — plan_hash/golden или плохой вызов (нужен человек). Источник: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span>
+<span data-lang="en">Endpoints: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). The stream is read via <code>fetch()</code>+reader (EventSource cannot send <code>Authorization</code>); on failure it falls back to 2 s polling of <code>/v1/runs/{id}</code>. Exit codes: <strong>0</strong> pass · <strong>1</strong> the test found a problem · <strong>2</strong> visual/golden regression · <strong>3</strong> integrity/config — plan_hash/golden or bad invocation (needs a human). Source: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span></p></details>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -148,23 +150,25 @@ $("check").addEventListener("click", async () => {
   } catch(e){ $("capistatus").innerHTML = "✗ " + bi("недоступен (CORS/выключен)","unreachable (CORS/off)") + ": " + esc(e.message); $("send").disabled = true; }
 });
 
-// --- send: POST /v1/runs → stream events → fetch artifact ---
+// --- run drivers: POST /v1/runs → stream events → verdict + artifacts ---
 let busy = false;
-$("send").addEventListener("click", async () => {
+let lastRunId = null; // last COMPLETED run — enables 🔁 Re-run / 📌 baseline (they target it via from_run, ADR-047)
+
+// enable/disable the three run controls; re-run/baseline also require a completed run to exist
+function setControls(disabled){
+  $("send").disabled = disabled;
+  $("rerun").disabled = disabled || !lastRunId;
+  $("baseline").disabled = disabled || !lastRunId;
+}
+function finishTurn(){ busy = false; setControls(false); }
+
+// Shared run driver so ▶ Run, 🔁 Re-run and 📌 baseline behave identically (one POST → stream → verdict).
+async function runFlow(body, userSummary){
   if (busy) return;
-  const base = capiBase(), target = $("target").value.trim(), mode = $("mode").value, text = $("text").value.trim();
-  if (!target) { addMsg("sys", bi("Укажи target URL.","Set a target URL.")); return; }
-  if (mode !== "explore" && !text) { addMsg("sys", bi("Опиши тест словами.","Describe the test in words.")); return; }
-
-  const summary = esc(mode) + (text ? " — " + esc(text) : "") ;
-  addMsg("user", summary + '<div class="meta" style="margin-top:.2rem">' + esc(target) + '</div>');
-  busy = true; $("send").disabled = true;
-
-  const body = {
-    target, mode, planner: mode === "goal" ? "goal" : "heuristic",
-    goal: mode === "goal" ? text : "",
-    describe: mode === "describe" ? text : "",
-  };
+  const base = capiBase();
+  if (!base) { addMsg("sys", bi("Укажи control-API URL и проверь подключение.","Set the control-API URL and check the connection.")); return; }
+  addMsg("user", userSummary);
+  busy = true; setControls(true);
   let id;
   try {
     const r = await fetch(base + "/v1/runs", { method:"POST", headers:{ "Content-Type":"application/json", ...authHdr() }, body: JSON.stringify(body) });
@@ -176,20 +180,34 @@ $("send").addEventListener("click", async () => {
 
   let lastState = null;
   try {
-    await streamEvents(base, id, {
-      onState: s => { lastState = s; },
-      onLog:   l => addLog(l),
-      onDone:  () => {},
-    });
+    await streamEvents(base, id, { onState: s => { lastState = s; }, onLog: l => addLog(l), onDone: () => {} });
   } catch(e){
     addMsg("sys", bi("стрим недоступен — опрашиваю статус","stream unavailable — polling status") + " (" + esc(e.message) + ")");
     lastState = await pollStatus(base, id);
   }
   await finalize(base, id, lastState);
+  if (lastState) lastRunId = id; // remember only a CONFIRMED-complete run
   finishTurn();
+}
+
+// ▶ authoring run (describe / goal / explore)
+$("send").addEventListener("click", () => {
+  const target = $("target").value.trim(), mode = $("mode").value, text = $("text").value.trim();
+  if (!target) { addMsg("sys", bi("Укажи target URL.","Set a target URL.")); return; }
+  if (mode !== "explore" && !text) { addMsg("sys", bi("Опиши тест словами.","Describe the test in words.")); return; }
+  const summary = esc(mode) + (text ? " — " + esc(text) : "") + '<div class="meta" style="margin-top:.2rem">' + esc(target) + '</div>';
+  runFlow({ target, mode, planner: mode === "goal" ? "goal" : "heuristic", goal: mode === "goal" ? text : "", describe: mode === "describe" ? text : "" }, summary);
 });
 
-function finishTurn(){ busy = false; $("send").disabled = false; }
+// 🔁 replay the last run's frozen plan · 📌 update its golden baseline (both via from_run, ADR-047)
+$("rerun").addEventListener("click", () => {
+  if (!lastRunId) return;
+  runFlow({ mode:"replay", from_run: lastRunId }, "🔁 " + bi("Перепрогон","Re-run") + ' <code>from_run=' + esc(lastRunId) + '</code>');
+});
+$("baseline").addEventListener("click", () => {
+  if (!lastRunId) return;
+  runFlow({ mode:"baseline", from_run: lastRunId }, "📌 " + bi("Зафиксировать эталон","Update baseline") + ' <code>from_run=' + esc(lastRunId) + '</code>');
+});
 
 // Read text/event-stream via fetch()+reader so we can send the bearer header (EventSource cannot).
 async function streamEvents(base, id, h){
@@ -241,13 +259,13 @@ async function finalize(base, id, st){
   if (state === "failed") v = '<span class="verdict no">✖ ' + bi("прогон не запущен","run did not start") + (st.error ? " — " + esc(st.error) : "") + '</span>';
   else if (code === 0)    v = '<span class="verdict ok">✓ ' + bi("пройдено (exit 0)","pass (exit 0)") + '</span>';
   else if (code === 1)    v = '<span class="verdict warn">⚠ ' + bi("тест нашёл проблему (exit 1)","the test found a problem (exit 1)") + '</span>';
-  else if (code === 2)    v = '<span class="verdict warn">⚠ ' + bi("визуальная/golden-регрессия (exit 2)","visual/golden regression (exit 2)") + '</span>';
-  else if (code === 3)    v = '<span class="verdict no">✖ ' + bi("ошибка конфигурации — нужен человек (exit 3)","config error — needs a human (exit 3)") + '</span>';
+  else if (code === 2)    v = '<span class="verdict warn">⚠ ' + bi("визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌","visual/golden regression (exit 2) — you can update the baseline 📌") + '</span>';
+  else if (code === 3)    v = '<span class="verdict no">✖ ' + bi("целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)","integrity/config (plan_hash/golden) — needs a human (exit 3)") + '</span>';
   else                    v = '<span class="verdict">exit ' + esc(code) + '</span>';
   addMsg("sys", v);
 
-  // Show + offer the authored scenario (and report if present).
-  for (const name of ["scenario.json", "report.json"]){
+  // Show + offer the authored scenario, the report, and (for replay/baseline) the heal/baseline report.
+  for (const name of ["scenario.json", "report.json", "heal-report.json", "baseline-report.json"]){
     const content = await fetchArtifact(base, id, name);
     if (!content) continue;
     const preview = content.length > 4000 ? content.slice(0, 4000) + "\n… (" + content.length + " bytes)" : content;
