@@ -12,7 +12,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | Path | Purpose | Key contents |
 |------|---------|--------------|
 | README.md | Project overview + quickstart | what/why, status, architecture, build/run |
-| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 46 ADRs, §0 BUILD-ONLY, change log |
+| ARCHITECTURE.md | Canonical architecture + ADRs | context, components, boundaries, 47 ADRs, §0 BUILD-ONLY, change log |
 | GAPS.md | Open questions / VERIFY / risks | GAP-[CAT]-[NUM] tracking |
 | BACKLOG.md | Task tracking | M0–M8 done; Active = M9.1..M9.8 + M10 |
 | docs/DEVELOPMENT.md | Contributor guide | setup, build/run, milestone gates, extension recipes |
@@ -43,7 +43,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/store-gateway/main.go | Go | M2b-1: gRPC PersistenceService over a Unix socket (agentctl-spawned) |
 | cmd/orchestrator/main.go | Go | M8 run supervisor (ADR-021): gRPC RunControl + spawns brain + budget reconcile + SIGTERM hard-ceiling; grpc+stdlib only, compile-verified |
 | cmd/report-service/main.go | Go | M8 HTTP report-service (ADR-021): /report/<id> HTML+JSON, /metrics (stdlib only), long-lived service mode; compile-verified |
-| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; **M9.3-tail (ADR-040)** SSE `/v1/runs/{id}/events` (token-gated; `runStream` ring-buffer + fan-out, `lineWriter` capture) + `/v1/runs/{id}/artifact` (token-gated whitelist + traversal-guard); 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; **M12 (ADR-041)** OpenAI-compat `POST /v1/chat/completions` shim (`spawnRun` refactor; 1 chat turn→1 run; stream→`chat.completion.chunk`, non-stream→verdict+`scenario.json`); **M9.8-prep (ADR-043)** WS `GET /v1/stream` (recorder ingest → see `ws.go`); 13+6 httptest (race-clean) |
+| cmd/control-api/{main,main_test}.go | Go | **M9.3** non-MCP HTTP control-plane (ADR-032): /healthz · /v1/config-schema · POST /v1/runs (spawns agentctl) · /v1/runs/{id}; **M9.3-tail (ADR-040)** SSE `/v1/runs/{id}/events` (token-gated; `runStream` ring-buffer + fan-out, `lineWriter` capture) + `/v1/runs/{id}/artifact` (token-gated whitelist + traversal-guard); 127.0.0.1-bind + bearer-token + CORS-allowlist (Pages→local); stdlib only; **M12 (ADR-041)** OpenAI-compat `POST /v1/chat/completions` shim (`spawnRun` refactor; 1 chat turn→1 run; stream→`chat.completion.chunk`, non-stream→verdict+`scenario.json`); **M9.8-prep (ADR-043)** WS `GET /v1/stream` (recorder ingest → see `ws.go`); **M9.9 (ADR-047)** `POST /v1/runs` += `mode=replay\|baseline`+`from_run` (resolve prior `runs/control-<id>/{plan.json\|scenario.json}`, traversal-guard; argv `run --replay --plan`/`baseline update --plan`), whitelist += `heal-report.json`/`baseline-report.json`; 25 (+12 M9.9) +6 httptest (race-clean) |
 | internal/orchestrator/pb/ | Go | generated gRPC stubs (from proto/runcontrol.proto) |
 | internal/store/server.go | Go | SQLite-backed PersistenceService (sole writer, ADR-007/015); WAL checkpoint on close |
 | internal/store/server_test.go | Go | gateway unit tests (golden/locator/quarantine round-trips) |

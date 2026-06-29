@@ -95,7 +95,7 @@
 
 > **Новые поверхности (M9.6/M9.8), не показанные на диаграмме выше (опциональны/будущее):** ❽ **CDP-attach** к браузеру пользователя (M9.6, opt-in `PW_CDP_ENDPOINT`) и ❾ **браузерное расширение** (M9.8, планируется) — см. §4.8 / §4.9.
 >
-> **Планируемые in-tool-поверхности (ADR-046):** (a) **replay/baseline control-API-endpoint** (M9.9/R1) — re-открывает spawn-поверхность ❶-класса → мера: только `from_run:<run_id>` + artifact-whitelist+traversal-guard (не произвольный путь). (b) **multi-turn conversation-state** (M9.10/R2) — новый ассет: конфиденциальность накопленного AUT-контекста + DoS unbounded-state → мера: per-session cap + 0700-изоляция. (c) **AG-UI npm-фронт** (`frontend/`, ADR-044) — npm supply-chain (усиливает GAP-SEC-002) + browser-токен → мера: dev-only/не-air-gapped, токен server-side в Runtime.
+> **Планируемые in-tool-поверхности (ADR-046):** (a) **replay/baseline control-API-endpoint** (M9.9/R1) — re-открывает spawn-поверхность ❶-класса → мера: только `from_run:<run_id>` + artifact-whitelist+traversal-guard (не произвольный путь). **[R1a ✅ реализовано в `cmd/control-api`: `resolveFromRun` (guard `/`,`\`,`..` + `{plan.json\|scenario.json}`-whitelist) + httptest на traversal/missing-plan.]** (b) **multi-turn conversation-state** (M9.10/R2) — новый ассет: конфиденциальность накопленного AUT-контекста + DoS unbounded-state → мера: per-session cap + 0700-изоляция. (c) **AG-UI npm-фронт** (`frontend/`, ADR-044) — npm supply-chain (усиливает GAP-SEC-002) + browser-токен → мера: dev-only/не-air-gapped, токен server-side в Runtime.
 
 ---
 

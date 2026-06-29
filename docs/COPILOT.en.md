@@ -47,7 +47,7 @@ context + correction). **Status:** one-shot ✅ (M9.2a/b/M9.3/M12) · **multi-tu
 | Opt-in visual-authoritative flip | ADR-042 | ⚙️ flag (default-off; default-on → M9-LIVE proof) |
 | Vanilla chat-front (air-gapped, **one-shot**) | M9.3-tail/ADR-040 | ✅ DONE (`docs/chat/`, `docs/index.html#chat`) |
 | OpenAI-compat shim (Open WebUI/SDK = **client**, "as a model") | M12/ADR-041 | ✅ DONE (`/v1/chat/completions`) |
-| **Replay/baseline INSIDE the UI** | M9.3 "out of scope" → **R1/M9.9** | ⏳ deferred → scheduled (GAP-M9-16) |
+| **Replay/baseline INSIDE the UI** | M9.3 "out of scope" → **R1/M9.9** | 🔄 backend DONE (R1a/ADR-047: control-API `mode=replay\|baseline`+`from_run`+httptest) / UI ▶/🔁/📌 pending (R1b) — GAP-M9-16 |
 | **Multi-turn chat / context / mid-run correction** | "brain-extension" → **R2/M9.10** | ❌ not-built → scheduled (GAP-M9-17) |
 | Headed / visible browser (F2) | M9.6/ADR-037 | ✅ DONE offline (live pending) |
 | CDP-attach to the user's Chrome (F3) | M9.6/ADR-036/037 | ✅ DONE offline (live pending) |
@@ -76,7 +76,7 @@ context + correction). **Status:** one-shot ✅ (M9.2a/b/M9.3/M12) · **multi-tu
 ### My waves (`control-API` / `brain` / vanilla-UI) — order R1 → R2 → R3
 | # | Milestone | Content | Closes |
 |---|-----------|---------|--------|
-| **R1** | **M9.9 In-tool run console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + verdict in vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest | GAP-M9-16 |
+| **R1** | **M9.9 In-tool run console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + verdict in vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **R1a backend ✅ (ADR-047); R1b UI pending** | GAP-M9-16 |
 | **R2** | **M9.10 Multi-turn authoring** | brain `chat`/`refine` `RUN_MODE` — resume from the checkpointer by a stable `conversation_id`→`thread_id`; message-history in `RunState`; multi-turn panel | GAP-M9-17 |
 | **R3** | **M9.8 F4 takeover (brain-side)** | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS `takeover/return/state-sync` signals over `/v1/stream` | GAP-M9-18 (+½ GAP-M9-15) |
 

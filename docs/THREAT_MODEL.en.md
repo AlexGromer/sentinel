@@ -95,7 +95,7 @@ Boundary points ❶–❼ correspond to rows in the table below.
 
 > **New surfaces (M9.6/M9.8), not shown in the diagram above (optional/future):** ❽ **CDP-attach** to the user's browser (M9.6, opt-in `PW_CDP_ENDPOINT`) and ❾ **browser extension** (M9.8, planned) — see §4.8 / §4.9.
 >
-> **Planned in-tool surfaces (ADR-046):** (a) **replay/baseline control-API endpoint** (M9.9/R1) — re-opens a boundary-❶-class spawn surface → mitigation: `from_run:<run_id>` + the artifact whitelist+traversal-guard only (never an arbitrary path). (b) **multi-turn conversation-state** (M9.10/R2) — a new asset: confidentiality of accumulated AUT context + DoS via unbounded state → mitigation: per-session cap + 0700 isolation. (c) **AG-UI npm front** (`frontend/`, ADR-044) — npm supply-chain (compounds GAP-SEC-002) + a browser token → mitigation: dev-only/not-air-gapped, token server-side in the Runtime.
+> **Planned in-tool surfaces (ADR-046):** (a) **replay/baseline control-API endpoint** (M9.9/R1) — re-opens a boundary-❶-class spawn surface → mitigation: `from_run:<run_id>` + the artifact whitelist+traversal-guard only (never an arbitrary path). **[R1a ✅ shipped in `cmd/control-api`: `resolveFromRun` (guards `/`,`\`,`..` + `{plan.json\|scenario.json}` whitelist) + httptests for traversal/missing-plan.]** (b) **multi-turn conversation-state** (M9.10/R2) — a new asset: confidentiality of accumulated AUT context + DoS via unbounded state → mitigation: per-session cap + 0700 isolation. (c) **AG-UI npm front** (`frontend/`, ADR-044) — npm supply-chain (compounds GAP-SEC-002) + a browser token → mitigation: dev-only/not-air-gapped, token server-side in the Runtime.
 
 ---
 
