@@ -378,5 +378,4 @@ heuristic-explore → **карта сайта** (обобщена за пред�
 `--scenario`. Коды выхода: describe-unmatched→1, `GOAL`⊕`DESCRIBE`→3. Offline-verified (`test_m9_2b` 20 +
 регресс m3..m9_2b 95 + `go build`/`vet` + `tsc` + gitleaks); 5-мерный adversarial review (grounding
 выстоял, детерминизм чист). Живой goal/describe-прогон — по «go».
-**Следующее: M9.3** (не-MCP control-API + чат-UI) · M9.4 (in-app/browser tabs + live per-step grounding) ·
-M9.7 (pluggable adapters).
+**Актуальный co-pilot-roadmap (единый источник): [`COPILOT.md`](COPILOT.md)** — слои · §F-эволюция · feature-inventory · волны [me]/[0xCoDSnet]. Кратко (на 2026-06-29): M9.3/M9.4/M9.5/M9.6 ✅ · M12 ✅ · adopt LiteLLM+MCP-Inspector (ADR-045) ✅ → **R1 M9.9 Replay-in-UI → R2 M9.10 Multi-turn → R3 M9.8-F4-brain** [me]; MV3 #42-47 + security #36/37/38 [@0xCoDSnet]; дальше M9.7-rem · M10 · M11.x · M9-LIVE · Langfuse/DSPy. Авторитетно: `../ARCHITECTURE.md §6` + `../BACKLOG.md`.

@@ -94,6 +94,8 @@ Artifacts → runs/<id>/ : plan.json, transcript, heal-report.json,
 Boundary points ❶–❼ correspond to rows in the table below.
 
 > **New surfaces (M9.6/M9.8), not shown in the diagram above (optional/future):** ❽ **CDP-attach** to the user's browser (M9.6, opt-in `PW_CDP_ENDPOINT`) and ❾ **browser extension** (M9.8, planned) — see §4.8 / §4.9.
+>
+> **Planned in-tool surfaces (ADR-046):** (a) **replay/baseline control-API endpoint** (M9.9/R1) — re-opens a boundary-❶-class spawn surface → mitigation: `from_run:<run_id>` + the artifact whitelist+traversal-guard only (never an arbitrary path). (b) **multi-turn conversation-state** (M9.10/R2) — a new asset: confidentiality of accumulated AUT context + DoS via unbounded state → mitigation: per-session cap + 0700 isolation. (c) **AG-UI npm front** (`frontend/`, ADR-044) — npm supply-chain (compounds GAP-SEC-002) + a browser token → mitigation: dev-only/not-air-gapped, token server-side in the Runtime.
 
 ---
 
@@ -106,8 +108,8 @@ Boundary points ❶–❼ correspond to rows in the table below.
 
 | Threat | Boundary | STRIDE | Prob / Impact | Existing control | Residual risk | Owner / Milestone |
 |---|---|---|---|---|---|---|
-| **Leakage of all host secrets to child processes.** `agentctl::spawnBrain` calls `cmd.Env = append(os.Environ(), …)` without an allowlist (`main.go:68`). All host variables (SSH keys, cloud credentials, tokens unrelated to Sentinel) are inherited by the Python brain, Node.js pw-executor, and their subprocesses, and may also surface in stderr on error. | host-env → brain subprocess | **I** (Information Disclosure) | Prob: H / Impact: H | None | **GAP-SEC-001 OPEN**: no env allowlist | M11.3 (env allowlist) |
-| **Plaintext secrets in Helm values → Kubernetes.** `cronjob.yaml:39–46` uses `value: {{ .Values.checkpointDsn }}` and `{{range .Values.extraEnv}} value: {{ $v }}` without `secretKeyRef`. `CHECKPOINT_DSN` and `extraEnv` are stored as plain strings in `values-prod.yaml`, land in etcd in plaintext, and are visible via `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Prob: H / Impact: H | None | **GAP-SEC-001 OPEN**: no `secretKeyRef` plumbing | M11.3 (Helm secretKeyRef) |
+| **Leakage of all host secrets to child processes.** `agentctl::spawnBrain` calls `cmd.Env = append(os.Environ(), …)` without an allowlist (`main.go:68`). All host variables (SSH keys, cloud credentials, tokens unrelated to Sentinel) are inherited by the Python brain, Node.js pw-executor, and their subprocesses, and may also surface in stderr on error. | host-env → brain subprocess | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; residual — dynamic Vault/CSI | M11.3 ✅ |
+| **Plaintext secrets in Helm values → Kubernetes.** `cronjob.yaml:39–46` uses `value: {{ .Values.checkpointDsn }}` and `{{range .Values.extraEnv}} value: {{ $v }}` without `secretKeyRef`. `CHECKPOINT_DSN` and `extraEnv` are stored as plain strings in `values-prod.yaml`, land in etcd in plaintext, and are visible via `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 CLOSED (Helm-half)** | M11.3 ✅ |
 
 ### 4.2 Boundary ❷ — agentctl → store-gateway (Unix gRPC socket)
 
