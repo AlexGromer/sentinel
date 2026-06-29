@@ -27,14 +27,15 @@ FROM mcr.microsoft.com/playwright:v1.61.1-noble AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
  && rm -rf /var/lib/apt/lists/*
-# Deps mirror brain/pyproject.toml. `openai` (OpenAI-compat backend, ADR-019: local models /
-# routers) and `pyyaml` (RunConfig YAML, ADR-027/028) are REQUIRED at runtime — without them
-# local-model runs and `--run-config` break inside the container.
-RUN python3 -m venv /app/.venv \
- && /app/.venv/bin/pip install --no-cache-dir \
-      langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres anthropic openai pyyaml \
-      grpcio grpcio-tools mcp \
-      opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
+# Brain deps come from the committed lockfile (brain/uv.lock), installed FROZEN by uv (#38) — a
+# reproducible, pinned install instead of the old unpinned `pip install <names>`. uv is pinned by
+# image tag and uses the system python3 (>=3.11); the venv lands at /app/.venv. Copy the manifest +
+# lock first so the dependency layer caches across brain/ source changes. `package = false` in
+# pyproject means only the locked deps install, not the brain itself.
+COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /bin/
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv UV_PYTHON_PREFERENCE=only-system UV_PYTHON=python3
+COPY brain/pyproject.toml brain/uv.lock /app/brain/
+RUN cd /app/brain && uv sync --frozen --no-dev
 COPY --from=go-build /out/agentctl /out/store-gateway /out/control-api /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
