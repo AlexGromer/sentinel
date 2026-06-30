@@ -59,12 +59,13 @@ context + correction). **Status:** one-shot ✅ (M9.2a/b/M9.3/M12) · **multi-tu
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** partial ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy adapter not-built** |
 | Security module (XSS/CSRF/IDOR…, authz-gated) | M10/GAP-M9-11 | ❌ design-only |
+| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 📋 planned (docs-frozen; after R2b→R3) |
 | Accuracy (Langfuse/DSPy) | roadmap | ❌ not-built (after user tests) |
 
 ## 4. Agreements (principles)
 
 1. **In-tool-first.** Run/re-run/baseline **inside the tool** are primary. CI export (Jenkins/GitLab — `docs/ci-templates/`, already shipped) is secondary/bonus.
-2. **Vanilla `docs/*` = primary UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (not air-gapped, not in CI) — a parallel option, not a replacement.
+2. **Vanilla `docs/*` = primary UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (not air-gapped, not in CI) — a parallel option, not a replacement. **Evolution (epic M13-15, ADR-049..053):** profiles = topology-not-features (both full + air-gapped); AG-UI → a **full rich front** (M14) over the R3-WS in BOTH profiles; vanilla `docs/*` = the air-gapped variant of the same set; metrics **self-contained** (ADR-051).
 3. **Open WebUI = a compatible client** of the OpenAI-compat shim (optional, you run it), **NOT the co-pilot**. Takeover/co-pilot comes from the **extension (`chrome.debugger`) + brain**, not a chat UI.
 4. **Multi-turn is in progress** (M9.10): backend ✅ (R2a, ADR-048 — checkpointer-resume), UI = R2b. The seam exists (checkpointer).
 5. **F4 is a joint milestone:** the extension/CDP/panel — @0xCoDSnet (#47); brain interrupt/resume + WS signals — mine (R3).
@@ -78,6 +79,26 @@ context + correction). **Status:** one-shot ✅ (M9.2a/b/M9.3/M12) · **multi-tu
 | **R1** | **M9.9 In-tool run console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + verdict in vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **✅ DONE (R1a backend + R1b UI)** | GAP-M9-16 |
 | **R2** | **M9.10 Multi-turn authoring** | brain `chat` `RUN_MODE` — resume from the checkpointer by a stable `conversation_id`→`thread_id`; a `messages` add_messages channel in `RunState`; conditional-entry refine; agentctl/control-API `conversation_id` — **R2a backend ✅ DONE (ADR-048)**; multi-turn panel = **R2b** | GAP-M9-17 |
 | **R3** | **M9.8 F4 takeover (brain-side)** | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS `takeover/return/state-sync` signals over `/v1/stream` | GAP-M9-18 (+½ GAP-M9-15) |
+
+### Epic: Rich-UI + Persistence + Metrics (M13–M15, ADR-049..053) — after R2b→R3
+**Two-tier:** profiles = **TOPOLOGY, not features** — both carry the full feature set (chat/copilot/UI/replay/library/metrics) and both are **air-gapped**-installable. **Control-plane** (always-on: control-API+store-gateway+DB) **vs run-unit** (ephemeral: brain+pw-executor, spawned for 1 run → exit). CronJob (ADR-017) = a scheduled-run-unit trigger, **not** the service deployment. Profiles: **standalone** (1 host/compose/SQLite) · **service** (K8s/Postgres/HA) — both air-gapped (ADR-053).
+
+| # | Milestone | Content | ADR |
+|---|-----------|---------|-----|
+| **M13** | Persistence / Service layer | store-gateway N domains (hybrid SQLite/Postgres) + control-API CRUD + persist runs + full=service mode | ADR-049/050 |
+| **M14** | Rich AG-UI (full) + split setup-UI | SPA on AG-UI events over the R3-WS (not the one-shot shim); Settings \| Tests (library·launch·history·viewing·chats·metrics) | ADR-052 |
+| **M15** | Metrics & dashboards-in-UI | run metrics → DB (M13) → **native charts** in the SPA; Prom/Grafana = optional export | ADR-051 |
+
+**Data model (5 domains, owner = store-gateway, hybrid):**
+| Domain | Contents | Relation to current |
+|---|---|---|
+| scenarios/tests | scenario_id, name, target, steps, plan_hash, tags · "test" = scenario + golden + schedule | `scenario.json`/`plan.json` in `runs/` → indexed |
+| runs | run_id, conversation_id, mode, target, exit_code, times, verdict | in-memory control-API map → persisted |
+| chats | conversation_id, turns, messages | projection of R2a `state/conversations.db` (not a duplicate) |
+| results | heal-report.json / report.json | files → index+view |
+| metrics | pass/heal/fail/regression, coverage, duration, cost, flake trends | from results → time-series for native charts |
+
+**Why after R2b→R3:** rich AG-UI without R3-WS = the one-shot shim again; M14/M15 ⊃ the M13 store; the chats domain is partly ready (R2a).
 
 ### @0xCoDSnet waves
 | Track | Issues | Dependencies |
