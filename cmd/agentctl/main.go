@@ -3,6 +3,7 @@
 // Subcommands:
 //
 //	agentctl run --target <URL> [--planner h|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]
+//	agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn, ADR-048)
 //	agentctl baseline update --plan <plan.json> [--target <URL>]   (the only golden-baseline mutation path)
 //	agentctl locators clear-quarantine
 //
@@ -50,6 +51,7 @@ func newToken() string {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> [--planner heuristic|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
+	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 }
@@ -288,6 +290,7 @@ func cmdRun(repo string, args []string) int {
 	autVersion := fs.String("aut-version", "", "app-under-test version/sha (flake quarantine)")
 	ci := fs.Bool("ci", false, "CI mode (forbids --force-replay)")
 	force := fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
+	conversationID := fs.String("conversation-id", "", "M9.10 multi-turn conversation id (use with --mode chat); resumes the thread by conversation_id->thread_id (ADR-048)")
 	_ = fs.Parse(args)
 
 	// M9.2a (ADR-027): record which flags the user actually set, so RunConfig precedence (flag > file)
@@ -334,6 +337,9 @@ func cmdRun(repo string, args []string) int {
 		"AUT_VERSION=" + *autVersion,
 		"CI=" + boolEnv(*ci),
 		"FORCE_REPLAY=" + boolEnv(*force),
+		// M9.10 (ADR-048): chat-mode conversation thread key. Run-var (appended after filteredEnv), so it
+		// always reaches the brain; only read when RUN_MODE=chat. The SENTINEL_ prefix is allowlisted too.
+		"SENTINEL_CONVERSATION_ID=" + *conversationID,
 	}
 	if *replay { // replay needs the locator/golden/quarantine store
 		return runWithStore(repo, runID, extra)

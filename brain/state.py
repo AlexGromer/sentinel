@@ -1,8 +1,10 @@
 """Sentinel brain — shared RunState and pure helpers (M1)."""
 import hashlib
 import json
-from typing import TypedDict
+from typing import Annotated, TypedDict
 from urllib.parse import urlsplit, urlunsplit
+
+from langgraph.graph.message import add_messages
 
 
 class RunState(TypedDict, total=False):
@@ -16,6 +18,11 @@ class RunState(TypedDict, total=False):
     artifact_dir: str
     goal: str                     # M9.2a: NL goal text for goal-mode (GoalPlanner); "" in explore-mode
     describe: str                 # M9.2b: NL flow description for describe-mode (DescribePlanner); "" otherwise
+    # M9.10 (ADR-048): multi-turn conversation accumulator (chat mode). The brain feeds plain dicts
+    # {role, content}; LangGraph's add_messages reducer coerces them to BaseMessage and APPENDS across
+    # turns, persisted by the shared checkpointer (thread_id=conversation_id). Empty/absent for one-shot
+    # explore/goal/describe runs — so their behavior (and plan_hash) is unchanged.
+    messages: Annotated[list, add_messages]
     # M9.2b two-phase authoring (ADR-028): a site-wide element map built during the explore walk, then
     # a one-shot scenario head grounds the goal/describe into replayable steps.
     site_map: dict                # page_path -> [element {semantic_id,role,name,testid,locator,alternatives,page}]

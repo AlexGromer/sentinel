@@ -79,6 +79,21 @@ def _elements_from_interactives(elements: list, path: str) -> list:
     return out
 
 
+def _user_turns(messages: list) -> list:
+    """M9.10 (ADR-048): pull user-turn text out of the messages channel for refine context. Entries are
+    BaseMessage objects (after add_messages coercion) or plain dicts — duck-typed on `.type`/`.content`
+    so the brain needs no langchain_core import. BaseMessage `.type` is 'human'; a dict uses 'user'."""
+    out = []
+    for m in messages or []:
+        if isinstance(m, dict):
+            role, content = m.get("role"), m.get("content")
+        else:
+            role, content = getattr(m, "type", None), getattr(m, "content", None)
+        if role in ("human", "user") and content:
+            out.append(content)
+    return out
+
+
 def build_graph(ex, planner, tx_write, scenario_head=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
@@ -225,27 +240,38 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
         return {}
 
     def scenario(state: RunState) -> dict:
-        """M9.2b (ADR-028): ONE-SHOT phase-2 head — author a grounded scenario over the COMPLETE site map.
+        """M9.2b (ADR-028): phase-2 head — author a grounded scenario over the COMPLETE site map.
         No-op unless `scenario_head` is wired (goal/describe mode). Appends grounded steps to the plan;
-        records `scenario_unmatched` (refs/draft steps that couldn't bind to a real element)."""
+        records `scenario_unmatched` (refs/draft steps that couldn't bind to a real element).
+
+        M9.10 (ADR-048): also the RESUME entrypoint for multi-turn chat (conditional edge from START on a
+        warm thread). It re-authors over the PERSISTED site_map using the prior conversation turns as
+        refine context, then records an assistant summary so the next turn inherits the thread. `prior`
+        is empty for one-shot goal/describe (no messages) ⇒ that path stays byte-identical."""
         if scenario_head is None:
             return {}
         from .scenario import flatten_site_map, ground_scenario, reconcile
         site_map = state.get("site_map") or {}
         base_id = len(state.get("exploration_plan", []))
+        # M9.10: prior user turns (all but the current — which IS this turn's goal/describe) = refine context.
+        prior = _user_turns(state.get("messages"))[:-1]
         if scenario_head.name == "goal":
-            out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"))
+            out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"), history=prior)
             steps, unmatched = ground_scenario(out.get("refs", []), site_map, start_id=base_id + 1)
         else:  # describe: LLM draft -> deterministic reconcile against the real map
-            out = scenario_head.draft()
+            out = scenario_head.draft(history=prior)
             steps, unmatched = reconcile(out.get("draft", []), site_map, start_id=base_id + 1)
         tok = out.get("tokens") or {}
         tx_write({"step": "scenario", "planner": scenario_head.name, "model": scenario_head.model,
                   "decision": "scenario", "reason": f"{len(steps)} grounded, {len(unmatched)} unmatched",
                   "prompt_tokens": tok.get("prompt"), "completion_tokens": tok.get("completion")})
         rc.report(state.get("run_id", ""), "plan", tok.get("prompt"), tok.get("completion"))
+        # M9.10: record an assistant summary into the conversation thread for the next turn's context.
+        summary = {"role": "assistant",
+                   "content": f"authored {len(steps)} grounded step(s), {len(unmatched)} unmatched"}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + steps,
-                "scenario_steps": steps, "scenario_unmatched": unmatched, "phase": "scenario"}
+                "scenario_steps": steps, "scenario_unmatched": unmatched, "phase": "scenario",
+                "messages": [summary]}
 
     def report(state: RunState) -> dict:
         """Freeze plan.json with a deterministic plan_hash over the ordered steps."""
@@ -271,6 +297,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
     def route_checkpoint(state: RunState) -> str:
         return "scenario" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
 
+    def route_entry(state: RunState) -> str:
+        """M9.10 (ADR-048): conditional entry. A RESUMED multi-turn thread carries a persisted `site_map`
+        AND prior `messages` → skip the browser explore, go straight to re-author (`scenario`). A cold
+        turn-1 / one-shot run has an empty site_map → the full `perceive`-walk. Pure explore is unchanged
+        (site_map starts {} ⇒ always `perceive`)."""
+        return "scenario" if (state.get("site_map") and state.get("messages")) else "perceive"
+
     def _traced(node_name, fn):
         """Wrap a node in a per-node OTel span (M8, ADR-021); no-op when tracing isn't configured."""
         def wrapped(state):
@@ -283,7 +316,9 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
                      ("act", act), ("verify", verify), ("heal", heal),
                      ("checkpoint", checkpoint), ("scenario", scenario), ("report", report)]:
         b.add_node(name, _traced(name, fn))
-    b.add_edge(START, "perceive")
+    # M9.10 (ADR-048): conditional entry — resume a warm multi-turn thread straight into `scenario`,
+    # else the normal cold/one-shot `perceive` walk. (Was an unconditional START->perceive edge.)
+    b.add_conditional_edges(START, route_entry, {"perceive": "perceive", "scenario": "scenario"})
     b.add_edge("perceive", "ground")
     b.add_edge("ground", "plan")
     b.add_conditional_edges("plan", route_plan, {"act": "act", "scenario": "scenario"})

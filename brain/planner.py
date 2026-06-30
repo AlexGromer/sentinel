@@ -160,11 +160,14 @@ class GoalPlanner:
             log("GoalPlanner error -> heuristic:", e)
             return self._fallback.propose(state, candidates)
 
-    def build_scenario(self, flat_map: list, goal: str = None) -> dict:
-        """M9.2b (ADR-028) ONE-SHOT scenario head: given the COMPLETE flattened site map + goal, return
-        ordered refs `{"refs":[{ref,verb,value?}], "tokens":...}`. Returns empty on no-goal/no-backend/
-        budget/error (the caller authors nothing). The actual grounding (ref must exist in the map) is
-        enforced downstream in brain/scenario.ground_scenario — this just proposes candidate refs."""
+    def build_scenario(self, flat_map: list, goal: str = None, history: list = None) -> dict:
+        """M9.2b (ADR-028) scenario head: given the COMPLETE flattened site map + goal, return ordered
+        refs `{"refs":[{ref,verb,value?}], "tokens":...}`. Returns empty on no-goal/no-backend/budget/
+        error (the caller authors nothing). The actual grounding (ref must exist in the map) is enforced
+        downstream in brain/scenario.ground_scenario — this just proposes candidate refs.
+
+        M9.10 (ADR-048): `history` (prior user turns, oldest first) refines the scenario across a
+        multi-turn conversation; empty/None ⇒ one-shot prompt unchanged (byte-identical)."""
         goal = (goal or self.goal or "").strip()
         if not goal or not self._backend:
             return {"refs": [], "tokens": None}
@@ -175,12 +178,17 @@ class GoalPlanner:
         try:
             menu = [{"ref": e["semantic_id"], "page": e.get("page"), "role": e.get("role"),
                      "name": e.get("name")} for e in flat_map]
+            convo = ""
+            if history:   # M9.10 (ADR-048): multi-turn refine context — prior conversation turns
+                convo = ("prior conversation turns (oldest first) — REFINE the scenario to satisfy ALL of "
+                         "them plus the current goal:\n" + "\n".join(f"- {h}" for h in history) + "\n")
             prompt = (
                 "You are authoring an end-to-end UI test scenario toward a GOAL, choosing ONLY from the "
                 "real elements discovered across the whole site. Output the ordered actions.\n"
                 f"goal: {goal}\n"
-                f"elements: {json.dumps(menu)[:8000]}\n"
-                'Reply with ONLY JSON: {"steps": [{"ref": "<semantic_id from elements>", '
+                + convo
+                + f"elements: {json.dumps(menu)[:8000]}\n"
+                + 'Reply with ONLY JSON: {"steps": [{"ref": "<semantic_id from elements>", '
                 '"verb": "click|fill|type|select|press|assert", "value": "<optional>"}]}. '
                 "Use only refs present in elements; omit anything not present."
             )
@@ -209,9 +217,12 @@ class DescribePlanner:
         self._backend = backend if backend is not None else make_backend("planner")
         self.model = self._backend.model if self._backend else "claude-opus-4-8"
 
-    def draft(self) -> dict:
+    def draft(self, history: list = None) -> dict:
         """Return `{"draft":[{verb,intent,hypothesized_target,value?}], "tokens":...}`; empty on
-        no-description/no-backend/budget/error."""
+        no-description/no-backend/budget/error.
+
+        M9.10 (ADR-048): `history` (prior user turns, oldest first) refines the draft across a multi-turn
+        conversation; empty/None ⇒ one-shot prompt unchanged (byte-identical)."""
         if not self.description or not self._backend:
             return {"draft": [], "tokens": None}
         from . import budget
@@ -219,12 +230,17 @@ class DescribePlanner:
             log("DescribePlanner: plan budget exceeded -> empty draft")
             return {"draft": [], "tokens": None}
         try:
+            convo = ""
+            if history:   # M9.10 (ADR-048): multi-turn refine context — prior conversation turns
+                convo = ("prior conversation turns (oldest first) — REFINE the draft to satisfy ALL of "
+                         "them plus the current description:\n" + "\n".join(f"- {h}" for h in history) + "\n")
             prompt = (
                 "Convert this NL description of a UI flow into an ordered DRAFT of intended steps. Do NOT "
                 "invent selectors; describe each target by role/name/text so it can be matched against the "
                 "real page later.\n"
                 f"description: {self.description}\n"
-                'Reply with ONLY JSON: {"steps": [{"verb": "click|fill|type|select|press|assert", '
+                + convo
+                + 'Reply with ONLY JSON: {"steps": [{"verb": "click|fill|type|select|press|assert", '
                 '"intent": "<short>", "hypothesized_target": {"role": "<opt>", "name": "<opt>", '
                 '"text": "<opt>"}, "value": "<opt>"}]}.'
             )

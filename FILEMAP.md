@@ -51,8 +51,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | proto/persistence.proto | proto3 | PersistenceService contract (mirrors store.py 1:1) |
 | proto/runcontrol.proto | proto3 | M8 RunControl contract (StartRun/ReportEvent→Control/Abort); brain↔orchestrator token-reconcile (ADR-021) |
 | go.mod, go.sum | Go | module + deps (grpc, protobuf, modernc.org/sqlite, opentelemetry-go + otelgrpc) |
-| brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate; `make_store` |
-| brain/graph.py | Python | LangGraph StateGraph; explore captures L1–L6 alternatives; **M9.2b** `_elements_from_interactives` (button+input/select/link) + `site_map` accumulation + `scenario` node (one-shot phase-2 head, ADR-028) |
+| brain/__main__.py | Python | entrypoint; dispatch explore/replay/baseline/clear-quarantine/export-spec/report/calibrate/**chat (M9.10)**; `make_store`; **M9.10** `_run_chat` (stateful multi-turn: cold turn-1 explore+author / warm turn-N refine, resume by `conversation_id`→`thread_id` over shared `state/conversations.db`, ADR-048) |
+| brain/graph.py | Python | LangGraph StateGraph; explore captures L1–L6 alternatives; **M9.2b** `_elements_from_interactives` (button+input/select/link) + `site_map` accumulation + `scenario` node (one-shot phase-2 head, ADR-028); **M9.10** conditional-entry `route_entry` (`START`→`scenario` if persisted `site_map`+`messages`, else `perceive`) + `scenario` folds accumulated history (ADR-048) |
 | brain/planner.py | Python | HeuristicPlanner (default) + LLMPlanner (provider-agnostic, ADR-011/019) + **M9.2a** GoalPlanner (goal-directed, grounded index-pick, ADR-027) + `make_planner(env)` factory (`--goal` auto-default); **M9.2b** `GoalPlanner.build_scenario` (one-shot) + `DescribePlanner.draft` (ADR-028) |
 | brain/scenario.py | Python | **M9.2b** (ADR-028) authoring substrate: `flatten_site_map` + `ground_scenario`(LLM refs→steps) + `reconcile`(draft→steps); binds to real site-map elements, synthesizes cross-page navigates, shapes to the replay step schema; pure/offline |
 | brain/runconfig.py | Python | **M9.2a** minimal RunConfig YAML (ADR-027) + **M9.2b** rich (ADR-028): `load_run_config` + `apply_run_config` (mode/goal/planner/budgets + declarative `auth:`/`scenarios:` + `--scenario` selector; precedence flag>file>default); pyyaml |
@@ -64,7 +64,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | brain/replay.py | Python | replay + M3 trust layer (plan_hash, golden-diff, quarantine, exit codes) — store-agnostic |
 | brain/store.py | Python | LocalStore (SQLite, tests/fallback) + GrpcStore (gRPC client, prod) + `make_store` (ADR-015) |
 | brain/exporter.py / report.py / calibrate.py | Python | M4 generators (.spec.ts / HTML+JSON+Prom / heal histogram) |
-| brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client |
+| brain/state.py, brain/executor.py | Python | RunState + hashing helpers; pw-executor JSON-RPC client; **M9.10** `messages: Annotated[list, add_messages]` channel (multi-turn conversation accumulator, ADR-048) |
 | brain/validation.py | Python | **M9.1** negative-input generator (sketch, ADR-026): `invalid_inputs_for(field)` by type + `fill`+`assert` step-pair helper; pure, no I/O (full engine M9.2) |
 | brain/pb/ | Python | generated gRPC stubs (PersistenceService + RunControl) |
 | brain/pyproject.toml | Python | deps: langgraph, langgraph-checkpoint-sqlite, anthropic, openai, grpcio, grpcio-tools, pyyaml (M9.2a RunConfig) |
@@ -98,6 +98,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | pw-executor/src/determinism.ts | TS | **GAP-RISK-009 / ADR-042** screenshot determinism anchors (single source of truth): `DETERMINISM_VIEWPORT` 1280×720 + `DETERMINISM_DEVICE_SCALE_FACTOR`=1 + `SCREENSHOT_DETERMINISM_OPTS` (`animations:'disabled'`/`caret:'hide'`/`scale:'css'`); consumed by `server.ts` |
 | pw-executor/src/determinism.test.ts | TS | **GAP-RISK-009** `node --test` locking the determinism anchors (regression guard, offline, no browser) |
 | tests/test_determinism_offline.py | Python | **GAP-RISK-009 / ADR-042** offline test for the opt-in visual-authoritative flip (`SENTINEL_VISUAL_AUTHORITATIVE`): advisory default → exit 0 vs authoritative → exit 2; FakeEx, no browser. In CI offline loop |
+| tests/test_r2_multiturn_offline.py | Python | **M9.10 / ADR-048** offline two-turn test: shared checkpointer (MemorySaver+SqliteSaver), `conversation_id` thread resume — turn-2 skips explore (conditional-entry→`scenario`), `messages` accumulate, refine over persisted `site_map` + one-shot regression (no conversation_id → unchanged); FakeBackend (queued)/FakeEx, no browser. In CI offline loop |
 | cmd/control-api/ws.go | Go | **M9.8-prep / ADR-043** hand-rolled RFC6455 WebSocket `GET /v1/stream` (client→server recorder ingest, closes GAP-M9-14): `Hijacker` upgrade + `wsAccept`/frame codec; token via `Sec-WebSocket-Protocol` (`bearer.<token>`, echoes only `sentinel.recorder.v1`); NDJSON events → `runs/record-<session>/events.ndjson`; ping/pong + idle/cap; reuse `s.authed`/Origin-allowlist (ADR-032). stdlib only |
 | cmd/control-api/ws_test.go | Go | **M9.8-prep** httptest for `/v1/stream` (race-clean): RFC6455 handshake/accept, token-via-subprotocol 403, bad-handshake 400, Origin reject, full 101 + masked-frame ingest |
 | frontend/ | TS (Next.js) | **M9.8-prep / ADR-044** AG-UI/CopilotKit rich co-pilot scaffold (`package.json` + `app/page.tsx` CopilotChat + `app/api/copilotkit/route.ts` Runtime→`createOpenAI({baseURL})`→shim + README). **DEV-only: not air-gapped, not in CI** (in `check_bilingual.py` SKIP_DIRS; node_modules gitignored). Versions verified 2026-06-28 |
@@ -133,7 +134,7 @@ M4:       brain.exporter / report / calibrate (pure generators)
 - TS: `cd pw-executor && npm install && npm run build` (`npx playwright install chromium-headless-shell`)
 - Py: `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai grpcio grpcio-tools`
 - gRPC stubs (regen): `.venv/bin/python -m grpc_tools.protoc -I proto --python_out=brain/pb --grpc_python_out=brain/pb proto/persistence.proto proto/runcontrol.proto` — then patch the `_pb2_grpc.py` top-level import to `from . import` (package-relative); (+ go plugins for internal/store/pb, internal/orchestrator/pb)
-- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do .venv/bin/python tests/test_${t}_offline.py; done`
+- tests: `go test ./internal/store/ && for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn determinism; do .venv/bin/python tests/test_${t}_offline.py; done`
 - full contributor guide: docs/DEVELOPMENT.md
 
 ## Metadata

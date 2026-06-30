@@ -552,10 +552,94 @@ func TestConfigSchemaIncludesReplayBaseline(t *testing.T) {
 	for _, m := range body.Modes {
 		has[m] = true
 	}
-	for _, want := range []string{"explore", "goal", "describe", "replay", "baseline"} {
+	for _, want := range []string{"explore", "goal", "describe", "replay", "baseline", "chat"} {
 		if !has[want] {
 			t.Fatalf("config-schema modes missing %q: %v", want, body.Modes)
 		}
+	}
+}
+
+// --- M9.10 multi-turn (ADR-048): conversation_id → `--mode chat --conversation-id` argv --------------
+
+// TestCreateRunChatGoalArgv: a goal request carrying conversation_id spawns
+// `agentctl run --target <t> --artifact-dir <new> --mode chat --conversation-id <id> --goal <g>`.
+func TestCreateRunChatGoalArgv(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{
+		"target": "https://app.example", "goal": "log in", "conversation_id": "conv-abc123"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://app.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id),
+		"--mode", "chat", "--conversation-id", "conv-abc123", "--goal", "log in"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("chat goal argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunChatDescribeArgv: a describe request with conversation_id → `--mode chat` + describe.
+func TestCreateRunChatDescribeArgv(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{
+		"target": "https://app.example", "describe": "pay the bill", "conversation_id": "conv_42"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://app.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id),
+		"--mode", "chat", "--conversation-id", "conv_42", "--describe", "pay the bill"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("chat describe argv:\n got %#v\nwant %#v", argv, want)
+	}
+}
+
+// TestCreateRunNoConversationIDStaysOneShot: WITHOUT conversation_id, a goal run is unchanged — no
+// `--mode chat`/`--conversation-id` leak into argv (one-shot regression).
+func TestCreateRunNoConversationIDStaysOneShot(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{
+		"target": "https://app.example", "goal": "log in", "planner": "goal"}))
+	argv := readArgv(t, argvPath)
+	want := []string{"run", "--target", "https://app.example",
+		"--artifact-dir", filepath.Join(repo, "runs", "control-"+id), "--planner", "goal", "--goal", "log in"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("one-shot (no conversation_id) argv:\n got %#v\nwant %#v", argv, want)
+	}
+	for _, a := range argv {
+		if a == "--mode" || a == "--conversation-id" {
+			t.Fatalf("one-shot run must not carry %q: %#v", a, argv)
+		}
+	}
+}
+
+// TestCreateRunChatRejectsBadConversationID: a malformed conversation_id is 400'd and never spawns
+// (it becomes the persisted thread key — defense in depth against control chars / oversize / separators).
+func TestCreateRunChatRejectsBadConversationID(t *testing.T) {
+	s, _ := newRunServer(t) // default stub; none of these must spawn it
+	for _, cid := range []string{"a/b", `a\b`, "..", "../x", "bad id", "a\tb", "x.y", strings.Repeat("x", 129)} {
+		rec := postRun(t, s, runBody(t, map[string]string{
+			"target": "https://app.example", "goal": "g", "conversation_id": cid}))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("conversation_id %q: got %d want 400 (%s)", cid, rec.Code, rec.Body.String())
+		}
+	}
+	s.mu.RLock()
+	n := len(s.runs)
+	s.mu.RUnlock()
+	if n != 0 {
+		t.Fatalf("a rejected conversation_id must not spawn a run, got %d", n)
+	}
+}
+
+// TestConfigSchemaIncludesConversationID: the WebUI form source-of-truth advertises the chat field.
+func TestConfigSchemaIncludesConversationID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestServer().mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	var body struct {
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("config-schema body: %v", err)
+	}
+	if _, ok := body.Fields["conversation_id"]; !ok {
+		t.Fatalf("config-schema fields missing conversation_id: %v", body.Fields)
 	}
 }
 
