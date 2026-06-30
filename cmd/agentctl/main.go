@@ -258,7 +258,9 @@ func startGateway(repo, runID, token string) (string, func()) {
 	cmd := exec.Command(gw, "--addr", sock, "--db", filepath.Join(repo, "state", "locators.db"))
 	cmd.Dir = repo
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "STORE_TOKEN="+token) // #23: gateway authenticates against this
+	// #36: narrow the gateway's env to the same allowlist the brain gets (GAP-SEC-001) instead of the
+	// full host env — the gateway only needs PATH + OTEL_* for tracing; STORE_TOKEN is appended here.
+	cmd.Env = append(filteredEnv(), "STORE_TOKEN="+token) // #23: gateway authenticates against this
 	if err := cmd.Start(); err != nil {
 		return "", func() {}
 	}

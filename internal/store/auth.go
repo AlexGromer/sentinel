@@ -20,8 +20,9 @@ const StoreTokenMDKey = "x-sentinel-store-token"
 
 // TokenAuthInterceptor returns a unary server interceptor that rejects (codes.Unauthenticated) any
 // call whose metadata does not carry exactly one StoreTokenMDKey value equal to token. The compare
-// is constant-time. The gateway installs it only when a token is configured (STORE_TOKEN set); with
-// no token the gateway logs a warning and serves unauthenticated (offline / direct-test fallback).
+// is constant-time. The gateway installs it whenever STORE_TOKEN is set; with no token it fails
+// closed — refuses to start (exit 2) unless --no-auth is passed for a deliberate debug/offline run
+// (#34/#35). It never silently serves unauthenticated.
 func TokenAuthInterceptor(token string) grpc.UnaryServerInterceptor {
 	want := []byte(token)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {

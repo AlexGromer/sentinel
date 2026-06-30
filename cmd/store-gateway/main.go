@@ -44,6 +44,30 @@ func setupTracing(ctx context.Context) func() {
 	return func() { _ = tp.Shutdown(context.Background()) }
 }
 
+// authMode is the store-gateway's startup auth decision (#34/#35): authenticate every call with the
+// per-run token, serve unauthenticated by an explicit --no-auth, or fail closed and refuse to start.
+type authMode int
+
+const (
+	authToken  authMode = iota // STORE_TOKEN present -> install the auth interceptor
+	authNoAuth                 // --no-auth given (and no token) -> serve unauthenticated, deliberately
+	authRefuse                 // neither -> refuse to start (exit 2); never a silent no-auth fallback
+)
+
+// decideAuth maps (STORE_TOKEN, --no-auth) to the startup auth decision. Fail-closed: an empty token
+// without an explicit --no-auth is authRefuse, never a silent unauthenticated serve (#34/#35). A
+// present token always wins, even if --no-auth was also passed.
+func decideAuth(token string, noAuth bool) authMode {
+	switch {
+	case token != "":
+		return authToken
+	case noAuth:
+		return authNoAuth
+	default:
+		return authRefuse
+	}
+}
+
 func main() {
 	addr := flag.String("addr", "", "unix socket path to listen on (required)")
 	dbPath := flag.String("db", "state/locators.db", "sqlite database path")
@@ -82,12 +106,13 @@ func main() {
 	// #23: a per-run shared secret (from agentctl, via STORE_TOKEN) authenticates brain->gateway
 	// calls. #34: fail closed — running unauthenticated must be a deliberate choice (--no-auth),
 	// never the silent result of an unset/stripped env var (which would re-open the #23 surface).
-	switch token := os.Getenv("STORE_TOKEN"); {
-	case token != "":
+	token := os.Getenv("STORE_TOKEN")
+	switch decideAuth(token, *noAuth) {
+	case authToken:
 		opts = append(opts, grpc.ChainUnaryInterceptor(store.TokenAuthInterceptor(token)))
-	case *noAuth:
+	case authNoAuth:
 		fmt.Fprintln(os.Stderr, "[store-gateway] WARNING: --no-auth set — gRPC authN disabled (debug/offline only)")
-	default:
+	case authRefuse:
 		fmt.Fprintln(os.Stderr, "store-gateway: STORE_TOKEN unset and --no-auth not given — "+
 			"refusing to start unauthenticated (#34); pass --no-auth to allow it deliberately")
 		os.Exit(2)

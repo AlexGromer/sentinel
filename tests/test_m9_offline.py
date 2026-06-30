@@ -295,6 +295,22 @@ def test_export_spec_maps_new_kinds_and_keeps_secret_as_env_ref():
     assert "expect(page.getByRole('alert')).not.toBeVisible();" in spec, spec  # negative polarity (expect_ok=False)
 
 
+def test_export_spec_rejects_secret_with_literal_value():
+    # ADR-026 / GAP-RISK-010 invariant: a fill is EITHER a secret (secretRef = env-var name) OR a
+    # literal value, never both. If an upstream caller violates that, the exporter must refuse rather
+    # than emit the secret into the .spec.ts. (#33/#36 follow-up — guards the exporter.py:80 raise.)
+    steps = [_nav(),
+             {"step_id": 2, "action_type": "fill", "semantic_id": "pw", "intent": "password",
+              "locator": {"label": "Password"}, "secretRef": "LOGIN_PASSWORD", "value": SECRET,
+              "alternatives": None}]
+    try:
+        export_spec(_frozen(steps))
+    except ValueError as e:
+        assert "secretRef" in str(e) and SECRET not in str(e), e   # raises, and never echoes the secret
+        return
+    raise AssertionError("export_spec must raise ValueError when a fill carries both secretRef and value")
+
+
 # --- 13-14: validation generator (sketch) ------------------------------------
 def test_invalid_inputs_generator_by_type():
     cases = validation.invalid_inputs_for({"type": "email", "required": True, "name": "email"})
