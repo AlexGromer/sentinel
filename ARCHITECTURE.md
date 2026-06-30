@@ -86,6 +86,33 @@ Production-grade автономный standalone агент UI-тестиров�
 
 ---
 
+### Жизненный цикл прогона, сторы и ресурсная модель (M8 + R2 + ADR-004/007/046/048/049)
+
+**Control-plane vs run-unit (ADR-049).** Долгоживущие: `control-API` (UI/спавн), `store-gateway` (БД), `orchestrator` (budget/takeover). Эфемерный **run-unit** = `brain` (LangGraph) + `pw-executor` (Chromium) — спавнится на ОДИН прогон/тёрн и завершается; память между прогонами/тёрнами — только через checkpointer.
+
+**Два РАЗНЫХ стора (часто путают):**
+| Стор | Компонент | БД | Кто пишет | Что |
+|---|---|---|---|---|
+| **store-gateway** | Go gRPC single-writer (ADR-007) | `state/locators.db` (SQLite `0600`) | только Go (brain = gRPC-клиент) | `healed_locators` · `golden_snapshots` · `healing_audit` · `step_failures` — trust/heal-слой |
+| **checkpointer** | LangGraph saver (ADR-004/017/048) | `state/conversations.db` (chat, по `conversation_id`) ИЛИ per-run `ARTIFACT_DIR/checkpoint.db` (explore) ИЛИ Postgres (`CHECKPOINT_DSN`) | brain напрямую | граф-стейт: intra-run + разговор + (R3) interrupt/resume |
+
+Разные файлы намеренно (ADR-004): инвариант «Go store-gateway = единственный writer ОСНОВНОЙ БД» сохраняется. **M13** расширяет именно store-gateway на 5 доменов.
+
+**Браузер — per-run, НЕ персистентный.** Каждый browser-прогон: `initialize` → работа → `traceStop` + `shutdown`/`close` в конце.
+- **Replay/baseline** — браузер участвует ПОЛНОСТЬЮ (исполняет шаги против живого AUT) → teardown в конце.
+- **Авторинг-чат:** explore-обход (с браузером) только на **cold turn-1** (спавн+закрытие ВНУТРИ turn-1); **warm refine-тёрны браузер НЕ зовут** (`scenario`-node авторит над persisted `site_map`).
+- **Персистентный браузер — только CDP-attach** (M9.6/F3, opt-in): подключение к браузеру ПОЛЬЗОВАТЕЛЯ, teardown его не закрывает (`attachedOverCDP`, `pw-executor/src/server.ts:509`) — live/takeover-путь (R3 + #47).
+
+**⚠ Stale-site-map (размен refine, GAP-M9-19):** warm refine авторит над `site_map` КАКИМ ОН БЫЛ на turn-1. Если AUT изменился между тёрнами — refine этого не увидит → нужен новый explore (новый разговор / cold-тёрн). **Предусмотреть:** staleness-detect (сравнить a11y-хэш текущей страницы с persisted) ЛИБО явная кнопка «re-explore» в refine ЛИБО TTL на `site_map` → план M13/M14.
+
+**Brain-процесс (per-turn):** `agentctl`/`control-API` спавнит brain (`RUN_MODE` + env) → `main()` диспатчит → (chat) resume `conversation_id` из checkpointer → граф `perceive→ground→plan→act→verify→…→scenario→report` (или сразу `scenario` на warm) → каждый node-step `rc.report()` → `orchestrator` отдаёт `Control{abort|takeover}` → артефакты + stdout (→ control-API SSE/WS) → exit `0/1/2/3`. **(R3) takeover:** `Control.takeover` → LangGraph `interrupt`+persist → человек ведёт (CDP) → return → новый brain-вызов `resume` с точки прерывания.
+
+**Ресурсная модель (замерено 2026-06-30):** brain cold-import ≈ **0.75–1.0 с / ~60 МБ RSS** (эфемерно, освобождается на exit); браузер ≈ **1–3 с + сотни МБ** (только cold turn-1 / replay). Spawn ≪ LLM-вызов авторинга (несколько секунд) ⇒ старт не bottleneck. **Осознанный размен (ADR-046):** process-per-turn-resume (через checkpointer) выбран над резидентным brain — ради простоты, crash-isolation, air-gapped, бесконфликтной конкуренции; цена ≈ 1 с импорта/тёрн. **Оптимизация (если профайл M9-LIVE покажет bottleneck):** warm-pool резидентных brain-воркеров ИЛИ lazy-import grpc/anthropic — отложено.
+
+**Контекст-бюджет:** per-LLM-call ограничен (site_map-меню `[:8000]` симв., `max_tokens` 200 per-step / 800 авторинг). **⚠ История разговора растёт без обрезки (GAP-M9-20):** R2a `messages`-канал + `_user_turns` отдают ВСЕ user-тёрны, `conversations.db` копит всё → для длинных разговоров промпт/чекпойнт раздувается. План **M13** (chats-домен): cap последних N тёрнов + бегущее summary + retention.
+
+---
+
 ## 3. Решения (журнал ADR)
 
 | ID | Дата | Решение | Статус | Контекст / отклонённая альтернатива |

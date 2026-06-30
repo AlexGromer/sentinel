@@ -86,6 +86,33 @@ A production-grade, standalone autonomous UI-testing agent that (1) explores an 
 
 ---
 
+### Run lifecycle, stores & resource model (M8 + R2 + ADR-004/007/046/048/049)
+
+**Control-plane vs run-unit (ADR-049).** Long-lived: `control-API` (UI/spawn), `store-gateway` (DB), `orchestrator` (budget/takeover). The ephemeral **run-unit** = `brain` (LangGraph) + `pw-executor` (Chromium) — spawned for ONE run/turn and exits; memory across runs/turns is ONLY via the checkpointer.
+
+**Two DISTINCT stores (often confused):**
+| Store | Component | DB | Writer | Holds |
+|---|---|---|---|---|
+| **store-gateway** | Go gRPC single-writer (ADR-007) | `state/locators.db` (SQLite `0600`) | Go only (brain = gRPC client) | `healed_locators` · `golden_snapshots` · `healing_audit` · `step_failures` — the trust/heal layer |
+| **checkpointer** | LangGraph saver (ADR-004/017/048) | `state/conversations.db` (chat, by `conversation_id`) OR per-run `ARTIFACT_DIR/checkpoint.db` (explore) OR Postgres (`CHECKPOINT_DSN`) | brain directly | graph state: intra-run + conversation + (R3) interrupt/resume |
+
+Separate files by design (ADR-004): the "Go store-gateway = single writer of the MAIN DB" invariant holds. **M13** extends the store-gateway to the 5 domains.
+
+**Browser — per-run, NOT persistent.** Every browser run: `initialize` → work → `traceStop` + `shutdown`/`close` at the end.
+- **Replay/baseline** — the browser participates FULLY (executes steps against the live AUT) → teardown at the end.
+- **Authoring chat:** the explore walk (with a browser) is only on **cold turn-1** (spawn+close WITHIN turn-1); **warm refine turns do NOT call the browser** (the `scenario` node authors over the persisted `site_map`).
+- **A persistent browser exists ONLY for CDP-attach** (M9.6/F3, opt-in): attaching to the USER's browser; teardown does not close it (`attachedOverCDP`, `pw-executor/src/server.ts:509`) — the live/takeover path (R3 + #47).
+
+**⚠ Stale-site-map (refine trade-off, GAP-M9-19):** a warm refine authors over the `site_map` AS IT WAS at turn-1. If the AUT changed between turns, refine won't see it → a new explore is needed (new conversation / cold turn). **To foresee:** staleness-detect (compare the current page's a11y hash with the persisted one) OR an explicit "re-explore" button in refine OR a `site_map` TTL → planned for M13/M14.
+
+**Brain process (per-turn):** `agentctl`/`control-API` spawns the brain (`RUN_MODE` + env) → `main()` dispatches → (chat) resume `conversation_id` from the checkpointer → graph `perceive→ground→plan→act→verify→…→scenario→report` (or straight to `scenario` on a warm turn) → each node-step `rc.report()` → `orchestrator` returns `Control{abort|takeover}` → artifacts + stdout (→ control-API SSE/WS) → exit `0/1/2/3`. **(R3) takeover:** `Control.takeover` → LangGraph `interrupt`+persist → the human drives (CDP) → return → a new brain invocation `resume`s from the interrupt point.
+
+**Resource model (measured 2026-06-30):** brain cold-import ≈ **0.75–1.0 s / ~60 MB RSS** (ephemeral, freed on exit); the browser ≈ **1–3 s + hundreds of MB** (cold turn-1 / replay only). Spawn ≪ the LLM authoring call (several seconds) ⇒ startup is not the bottleneck. **Deliberate trade (ADR-046):** process-per-turn-resume (via the checkpointer) was chosen over a resident brain — for simplicity, crash-isolation, air-gapped, conflict-free concurrency; cost ≈ 1 s import/turn. **Optimization (if M9-LIVE profiling shows a bottleneck):** a warm pool of resident brain workers OR lazy-importing grpc/anthropic — deferred.
+
+**Context budget:** per-LLM-call is bounded (site_map menu `[:8000]` chars, `max_tokens` 200 per-step / 800 authoring). **⚠ The conversation history grows unbounded (GAP-M9-20):** the R2a `messages` channel + `_user_turns` pass ALL user turns, and `conversations.db` accumulates everything → for long conversations the prompt/checkpoint bloats. Planned for **M13** (chats domain): cap the last N turns + a running summary + retention.
+
+---
+
 ## 3. Decisions (ADR Log)
 
 | ID | Date | Decision | Status | Context / rejected alternative |
