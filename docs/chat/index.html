@@ -44,8 +44,8 @@
 </header>
 
 <p class="sub">
-  <span data-lang="ru">Статический клиент (vanilla JS, без сервера и сети — работает offline / air-gapped). «Чат» здесь — <strong>консоль авторинга поверх локального control-API</strong>: опиши тест словами → агент авторит сценарий и запускает прогон → прогресс стримится → готовый <code>scenario.json</code> можно скачать. Это <strong>не</strong> мульти-тёрн LLM-чат: brain отрабатывает один проход (описание → один <code>scenario.json</code> → выход), каждое сообщение = один цикл авторинга/прогона.</span>
-  <span data-lang="en">Static client (vanilla JS, no server, no network — works offline / air-gapped). "Chat" here is an <strong>authoring console over a local control-API</strong>: describe a test in words → the agent authors a scenario and runs it → progress streams in → download the resulting <code>scenario.json</code>. This is <strong>not</strong> a multi-turn LLM chat: the brain runs one pass (description → one <code>scenario.json</code> → exit), so each message = one authoring/run cycle.</span>
+  <span data-lang="ru">Статический клиент (vanilla JS, без сервера и сети — работает offline / air-gapped). «Чат» здесь — <strong>консоль авторинга поверх локального control-API с мульти-тёрн-памятью</strong> (ADR-048): опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> — контекст разговора хранится server-side по <code>conversation_id</code> (turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта без повторного обхода) → готовый <code>scenario.json</code> можно скачать. Кнопка «Новый разговор» начинает свежий контекст. (Режим <code>explore</code> остаётся one-shot.)</span>
+  <span data-lang="en">Static client (vanilla JS, no server, no network — works offline / air-gapped). "Chat" here is an <strong>authoring console over a local control-API with multi-turn memory</strong> (ADR-048): describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> — the conversation context is kept server-side by <code>conversation_id</code> (turn-1 explores+authors, later turns refine over the same site map without re-crawling) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context. (The <code>explore</code> mode stays one-shot.)</span>
 </p>
 
 <fieldset><legend><span data-lang="ru">Подключение</span><span data-lang="en">Connection</span></legend>
@@ -81,6 +81,7 @@
     <button id="send" type="button" class="primary" disabled>▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span></button>
     <button id="rerun" type="button" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
     <button id="baseline" type="button" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+    <button id="newconv" type="button" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
     <span class="mut" style="font-size:.82rem"><span data-lang="ru">сначала «Проверить» подключение</span><span data-lang="en">check the connection first</span></span>
   </div>
 </fieldset>
@@ -153,6 +154,14 @@ $("check").addEventListener("click", async () => {
 // --- run drivers: POST /v1/runs → stream events → verdict + artifacts ---
 let busy = false;
 let lastRunId = null; // last COMPLETED run — enables 🔁 Re-run / 📌 baseline (they target it via from_run, ADR-047)
+// M9.10 (ADR-048): multi-turn authoring. A stable conversation_id minted on the first goal/describe send
+// and resent each turn → the brain resumes the thread (turn-1 explores+authors, turn-N refines over the
+// persisted site map). In-memory only (never URL/storage). "New conversation" clears it. explore stays one-shot.
+let conversationId = null, turnN = 0;
+function newConversationId(){
+  try { if (window.crypto && crypto.randomUUID) return "conv-" + crypto.randomUUID(); } catch(e){}
+  return "conv-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);  // charset [a-z0-9-], << 128
+}
 
 // enable/disable the three run controls; re-run/baseline also require a completed run to exist
 function setControls(disabled){
@@ -195,8 +204,24 @@ $("send").addEventListener("click", () => {
   const target = $("target").value.trim(), mode = $("mode").value, text = $("text").value.trim();
   if (!target) { addMsg("sys", bi("Укажи target URL.","Set a target URL.")); return; }
   if (mode !== "explore" && !text) { addMsg("sys", bi("Опиши тест словами.","Describe the test in words.")); return; }
-  const summary = esc(mode) + (text ? " — " + esc(text) : "") + '<div class="meta" style="margin-top:.2rem">' + esc(target) + '</div>';
-  runFlow({ target, mode, planner: mode === "goal" ? "goal" : "heuristic", goal: mode === "goal" ? text : "", describe: mode === "describe" ? text : "" }, summary);
+  const body = { target, mode, planner: mode === "goal" ? "goal" : "heuristic", goal: mode === "goal" ? text : "", describe: mode === "describe" ? text : "" };
+  // M9.10: goal/describe are a multi-turn conversation — attach a stable conversation_id (server resumes
+  // the thread). explore has no goal/describe so the brain's chat-mode can't use it → keep it one-shot.
+  let turnLabel = "";
+  if (mode !== "explore") {
+    if (!conversationId) conversationId = newConversationId();
+    body.conversation_id = conversationId;
+    turnLabel = bi("тёрн ", "turn ") + (++turnN) + " · ";
+  }
+  const convMeta = (mode !== "explore") ? " · <code>" + esc(conversationId) + "</code>" : "";
+  const summary = turnLabel + esc(mode) + (text ? " — " + esc(text) : "") + '<div class="meta" style="margin-top:.2rem">' + esc(target) + convMeta + '</div>';
+  runFlow(body, summary);
+});
+
+// 🆕 start a fresh multi-turn context (next goal/describe send mints a new conversation_id)
+$("newconv").addEventListener("click", () => {
+  conversationId = null; turnN = 0;
+  addMsg("sys", "— " + bi("новый разговор","new conversation") + " —");
 });
 
 // 🔁 replay the last run's frozen plan · 📌 update its golden baseline (both via from_run, ADR-047)

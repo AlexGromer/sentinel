@@ -596,8 +596,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   <section class="card" id="chat">
     <h2><span class="n">9</span><span data-lang="ru">Консоль авторинга</span><span data-lang="en">Authoring console</span></h2>
     <p class="sub">
-      <span data-lang="ru">Опиши тест словами → агент авторит сценарий и запускает прогон → прогресс стримится → готовый <code>scenario.json</code> можно скачать. Каждое сообщение = один цикл авторинга/прогона (brain однопроходный). Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim).</span>
-      <span data-lang="en">Describe a test in words → the agent authors a scenario and runs it → progress streams in → download the resulting <code>scenario.json</code>. Each message = one authoring/run cycle (brain is single-pass). Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim).</span>
+      <span data-lang="ru">Опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> (мульти-тёрн-память server-side по <code>conversation_id</code>, ADR-048: turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта) → готовый <code>scenario.json</code> можно скачать. «Новый разговор» начинает свежий контекст; режим <code>explore</code> остаётся one-shot. Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot).</span>
+      <span data-lang="en">Describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> (server-side multi-turn memory keyed by <code>conversation_id</code>, ADR-048: turn-1 explores+authors, later turns refine over the same site map) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context; the <code>explore</code> mode stays one-shot. Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot).</span>
     </p>
     <div class="grid g2">
       <div>
@@ -622,6 +622,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       </button>
       <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
       <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+      <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
       <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7)</span><span data-lang="en">check the connection first (section #7)</span></span>
     </div>
     <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
@@ -1409,6 +1410,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   });
 
   var chLastRunId=null;          // last COMPLETED run — enables 🔁/📌 (they target it via from_run)
+  // M9.10 (ADR-048): multi-turn authoring — a stable conversation_id (in-memory) minted on the first
+  // goal/describe send and resent each turn so the brain resumes the thread; "New conversation" clears it.
+  var chConvId=null, chTurnN=0;
+  function chNewConvId(){
+    try { if (window.crypto && crypto.randomUUID) return 'conv-'+crypto.randomUUID(); } catch(e){}
+    return 'conv-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);  // [a-z0-9-], << 128
+  }
   function chSetControls(disabled){
     ge('ch-send').disabled=disabled;
     ge('ch-rerun').disabled=disabled||!chLastRunId;
@@ -1457,13 +1465,22 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var target=ge('ch-target').value.trim(), mode=ge('ch-mode').value, text=ge('ch-text').value.trim();
     if (!target){ addBubble('sys',bi('Укажи Target URL.','Set a Target URL.')); return; }
     if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
-    chRunFlow({
-      target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic',
-      goal: mode==='goal'?text:'', describe: mode==='describe'?text:''
-    }, esc(mode)+(text?' — '+esc(text):''), esc(target));
+    var body={ target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic',
+      goal: mode==='goal'?text:'', describe: mode==='describe'?text:'' };
+    // M9.10: goal/describe = a multi-turn conversation (attach conversation_id; server resumes the thread).
+    // explore has no goal/describe → brain chat-mode can't use it → keep it one-shot.
+    var turnLabel='', convMeta=esc(target);
+    if (mode!=='explore'){
+      if (!chConvId) chConvId=chNewConvId();
+      body.conversation_id=chConvId;
+      turnLabel=bi('тёрн ','turn ')+(++chTurnN)+' · ';
+      convMeta=esc(target)+' · '+esc(chConvId);
+    }
+    chRunFlow(body, turnLabel+esc(mode)+(text?' — '+esc(text):''), convMeta);
   });
   ge('ch-rerun').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'replay', from_run:chLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
   ge('ch-baseline').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'baseline', from_run:chLastRunId }, '📌 '+bi('Зафиксировать эталон','Update baseline')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
+  ge('ch-newconv').addEventListener('click', function(){ chConvId=null; chTurnN=0; addBubble('sys','— '+bi('новый разговор','new conversation')+' —'); });
 
   async function chFinalize(base, id, st){
     if (!st){ addBubble('sys',bi('Статус неизвестен (таймаут).','Status unknown (timeout).')); return; }
