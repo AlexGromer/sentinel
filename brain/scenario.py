@@ -15,7 +15,7 @@ verb fields (value/text/key/condition/…) cross into a step — LLM `reason`/sc
 from .state import normalize_url, semantic_id
 
 # Verbs an authored step may carry (brain/replay.py schema). An LLM verb outside this -> unmatched.
-_VALID_VERBS = {"click", "fill", "type", "select", "press", "assert"}
+VALID_VERBS = {"click", "fill", "type", "select", "press", "assert"}
 
 
 def flatten_site_map(site_map: dict) -> list:
@@ -96,7 +96,7 @@ def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_
             unmatched.append({"ref": r.get("ref"), "reason": "ref not in site map"})
             continue
         verb = (r.get("verb") or "click").strip().lower()
-        if verb not in _VALID_VERBS:                        # out-of-spec verb -> not authorable
+        if verb not in VALID_VERBS:                        # out-of-spec verb -> not authorable
             unmatched.append({"ref": r.get("ref"), "reason": f"unsupported verb {verb!r}"})
             continue
         bound.append((el, verb, r))
@@ -140,7 +140,7 @@ def reconcile(draft_steps: list, site_map: dict, start_page: str = "", start_id:
                               "reason": "no unique real element matched"})
             continue
         verb = (d.get("verb") or "click").strip().lower()
-        if verb not in _VALID_VERBS:                        # out-of-spec verb -> not authorable
+        if verb not in VALID_VERBS:                        # out-of-spec verb -> not authorable
             unmatched.append({"intent": d.get("intent"), "reason": f"unsupported verb {verb!r}"})
             continue
         extra = {k: d.get(k) for k in ("value", "text", "key", "clear", "condition", "expected",

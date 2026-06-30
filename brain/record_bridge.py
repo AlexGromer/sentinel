@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import sys
 
-from .scenario import _VALID_VERBS, ground_scenario
+from .scenario import VALID_VERBS, ground_scenario
 from .state import canonical_plan_hash, normalize_url, semantic_id
 
 # DOM event type -> replay verb. `submit` is dropped: the user's click on the submit control is already
@@ -91,12 +91,17 @@ def _verb_for(ev: dict):
     """Explicit event `verb` wins (recorder may say select/press/type); else map the DOM type. None=skip."""
     v = (ev.get("verb") or "").strip().lower()
     if v:
-        return v if v in _VALID_VERBS else None
+        return v if v in VALID_VERBS else None
     return _VERB_BY_TYPE.get((ev.get("type") or "").strip().lower())
 
 
-def _attach_value(ref: dict, verb: str, ev: dict) -> None:
-    """Route the recorded value into the field ground_scenario._verb_step reads for this verb."""
+def _attach_value(ref: dict, verb: str, ev: dict) -> bool:
+    """Route the recorded value into the field ground_scenario._verb_step reads for this verb.
+
+    Returns False to DROP the event: a `press` with no resolvable key would bake `key=None` into the
+    step — `canonical_plan_hash` would include it and replay would call `browser.press key=None`, which
+    fails. Drop it the same way an empty-selector event is dropped, never emit a malformed step.
+    """
     if verb == "fill":
         if ev.get("secretRef"):                         # redacted secret -> env ref, never a literal (M9.1)
             ref["secretRef"] = ev["secretRef"]
@@ -107,7 +112,15 @@ def _attach_value(ref: dict, verb: str, ev: dict) -> None:
     elif verb == "type":
         ref["text"] = ev.get("value", "")
     elif verb == "press":
-        ref["key"] = ev.get("key") or ev.get("value")
+        key = ev.get("key") or ev.get("value")
+        if not key:
+            return False                                # no key -> drop, never a key=None step
+        ref["key"] = key
+    elif verb == "assert":                              # only via an explicit recorder verb=assert
+        for k in ("condition", "expected", "expect_ok"):
+            if ev.get(k) is not None:
+                ref[k] = ev[k]
+    return True
 
 
 def events_to_steps(events: list, start_id: int = 1):
@@ -118,7 +131,7 @@ def events_to_steps(events: list, start_id: int = 1):
         if not isinstance(ev, dict):
             continue
         verb = _verb_for(ev)
-        if verb not in _VALID_VERBS:                    # None (e.g. submit) or out-of-spec -> drop
+        if verb not in VALID_VERBS:                     # None (e.g. submit) or out-of-spec -> drop
             continue
         resolved = _resolve_locator(ev.get("selectorCandidates"))
         if not resolved:                                # no real selector -> skip, never fabricate
@@ -126,13 +139,15 @@ def events_to_steps(events: list, start_id: int = 1):
         primary, alternatives, role, name = resolved
         page = normalize_url(ev.get("url") or "")
         sid = semantic_id(page, role, name or _loc_label(primary))
-        bucket = site_map.setdefault(page, [])
+        ref = {"ref": sid, "verb": verb,
+               "intent": f"{verb} {role} '{name}'".strip() if (role or name) else f"{verb} {_loc_label(primary)}"}
+        if not _attach_value(ref, verb, ev):            # e.g. press with no key -> drop before registering
+            log(f"dropping {verb} event with no usable value/key")
+            continue
+        bucket = site_map.setdefault(page, [])          # register the element only once the event is known-good
         if not any(e["semantic_id"] == sid for e in bucket):
             bucket.append({"semantic_id": sid, "role": role, "name": name,
                            "locator": primary, "alternatives": alternatives, "page": page})
-        ref = {"ref": sid, "verb": verb,
-               "intent": f"{verb} {role} '{name}'".strip() if (role or name) else f"{verb} {_loc_label(primary)}"}
-        _attach_value(ref, verb, ev)
         # collapse consecutive same-element fills: live typing emits many input events, one per keystroke,
         # but the scenario wants a single fill carrying the final value.
         if verb == "fill" and refs and refs[-1]["ref"] == sid and refs[-1].get("verb") == "fill":

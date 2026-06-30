@@ -143,6 +143,31 @@ def test_write_scenario_roundtrips_to_replayable_file():
     assert on_disk["plan_hash"] and on_disk["steps"][0]["action_type"] == "navigate"
 
 
+def test_press_without_key_is_dropped_with_key_kept():
+    # A press whose key never resolved must be DROPPED — emitting key=None would bake into the step
+    # and replay's browser.press key=None fails. A press WITH a key is kept.
+    events = [
+        {"type": "click", "url": LOGIN, "verb": "press",
+         "selectorCandidates": [{"strategy": "css", "locator": {"css": "#a"}}]},          # no key -> dropped
+        {"type": "click", "url": LOGIN, "verb": "press", "key": "Enter",
+         "selectorCandidates": [{"strategy": "css", "locator": {"css": "#b"}}]},          # key -> kept
+    ]
+    scenario, _ = build_scenario(events)
+    presses = _verbs(scenario["steps"], "press")
+    assert len(presses) == 1, scenario["steps"]
+    assert presses[0]["key"] == "Enter", presses[0]
+    assert not any("key" in s and s["key"] is None for s in scenario["steps"]), "no key=None step may be emitted"
+
+
+def test_assert_verb_passes_through_condition():
+    events = [{"type": "click", "url": LOGIN, "verb": "assert", "condition": "visible", "expect_ok": False,
+               "selectorCandidates": [{"strategy": "role_name", "locator": {"role": "alert", "name": "Err"}}]}]
+    scenario, _ = build_scenario(events)
+    asserts = _verbs(scenario["steps"], "assert")
+    assert len(asserts) == 1, scenario["steps"]
+    assert asserts[0]["condition"] == "visible" and asserts[0]["expect_ok"] is False, asserts[0]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
