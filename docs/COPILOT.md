@@ -59,12 +59,13 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** частично ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy-адаптер not-built** |
 | Security-модуль (XSS/CSRF/IDOR…, authz-gated) | M10/GAP-M9-11 | ❌ design-only |
+| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 📋 planned (docs-frozen; после R2b→R3) |
 | Точность (Langfuse/DSPy) | roadmap | ❌ not-built (после user-тестов) |
 
 ## 4. Договорённости (принципы)
 
 1. **In-tool-first.** Запуск/перепрогон/baseline **внутри инструмента** — первичны. CI-экспорт (Jenkins/GitLab — `docs/ci-templates/`, уже есть) — вторичен/бонус.
-2. **Vanilla `docs/*` = первичный UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (не air-gapped, не в CI) — параллельная опция, не замена.
+2. **Vanilla `docs/*` = первичный UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (не air-gapped, не в CI) — параллельная опция, не замена. **Эволюция (эпик M13-15, ADR-049..053):** профили = топология-не-фичи (оба full + air-gapped); AG-UI → **полноценный rich-фронт** (M14) поверх R3-WS в ОБОИХ профилях; vanilla `docs/*` = air-gapped-вариант того же набора; метрики **self-contained** (ADR-051).
 3. **Open WebUI = совместимый клиент** OpenAI-compat-шима (опц., сам поднимаешь), **НЕ co-pilot**. Перехват/co-pilot даёт **расширение (`chrome.debugger`) + brain**, не чат-UI.
 4. **Multi-turn — в работе** (M9.10): backend ✅ (R2a, ADR-048 — checkpointer-resume), UI = R2b. Шов готов (checkpointer).
 5. **F4 — совместная веха:** расширение/CDP/panel — @0xCoDSnet (#47); brain interrupt/resume + WS-сигналы — мои (R3).
@@ -78,6 +79,26 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | **R1** | **M9.9 In-tool run-console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal-guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + вердикт в vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **✅ DONE (R1a backend + R1b UI)** | GAP-M9-16 |
 | **R2** | **M9.10 Multi-turn авторинг** | brain `chat` `RUN_MODE` — резюм из checkpointer по стабильному `conversation_id`→`thread_id`; `messages` add_messages-канал в `RunState`; conditional-entry refine; agentctl/control-API `conversation_id` — **R2a backend ✅ DONE (ADR-048)**; мульти-тёрн-панель = **R2b** | GAP-M9-17 |
 | **R3** | **M9.8 F4 takeover (brain-side)** | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS-сигналы `takeover/return/state-sync` поверх `/v1/stream` | GAP-M9-18 (+½ GAP-M9-15) |
+
+### Эпик: Rich-UI + Persistence + Metrics (M13–M15, ADR-049..053) — после R2b→R3
+**Two-tier:** профили = **ТОПОЛОГИЯ, не фичи** — оба несут весь функционал (chat/copilot/UI/replay/library/metrics) и оба **air-gapped**-устанавливаемые. **Control-plane** (always-on: control-API+store-gateway+БД) **vs run-unit** (ephemeral: brain+pw-executor, спавн на 1 прогон → exit). CronJob (ADR-017) = триггер планового run-unit, **не** деплой сервиса. Профили: **standalone** (1 хост/compose/SQLite) · **service** (K8s/Postgres/HA) — оба air-gapped (ADR-053).
+
+| # | Веха | Содержание | ADR |
+|---|------|-----------|-----|
+| **M13** | Persistence / Service layer | store-gateway N-доменов (hybrid SQLite/Postgres) + control-API CRUD + persist runs + full=service-режим | ADR-049/050 |
+| **M14** | Rich AG-UI (full) + split setup-UI | SPA на AG-UI-событиях поверх R3-WS (не one-shot-шим); Settings \| Tests (библиотека·запуск·история·просмотр·чаты·метрики) | ADR-052 |
+| **M15** | Metrics & dashboards-in-UI | метрики прогонов → БД (M13) → **native-графики** в SPA; Prom/Grafana = опц. экспорт | ADR-051 |
+
+**Модель данных (5 доменов, владелец = store-gateway, hybrid):**
+| Домен | Содержимое | Связь с текущим |
+|---|---|---|
+| scenarios/tests | scenario_id, name, target, steps, plan_hash, tags · «test» = scenario + golden + расписание | `scenario.json`/`plan.json` в `runs/` → индексируем |
+| runs | run_id, conversation_id, mode, target, exit_code, времена, verdict | in-memory map control-API → персистим |
+| chats | conversation_id, тёрны, messages | проекция R2a `state/conversations.db` (не дубль) |
+| results | heal-report.json / report.json | файлы → индекс+просмотр |
+| metrics | pass/heal/fail/regression, coverage, duration, cost, flake-тренды | из results → time-series под native-графики |
+
+**Почему после R2b→R3:** rich AG-UI без R3-WS = снова one-shot-шим; M14/M15 ⊃ хранилище M13; chats-домен частично готов (R2a).
 
 ### Волны @0xCoDSnet
 | Трек | Issues | Зависимости |
