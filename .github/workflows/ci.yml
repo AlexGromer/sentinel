@@ -74,12 +74,8 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: Provision brain venv (full runtime deps — mirrors brain/pyproject.toml)
-        run: |
-          uv venv
-          uv pip install langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres \
-            anthropic openai pyyaml mcp grpcio grpcio-tools \
-            opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
+      - name: Provision brain venv (frozen install from brain/uv.lock — #38)
+        run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
       - name: Python offline suite (m3..m9_2b + r2_multiturn + determinism — FakeBackend/FakeExecutor, no network)
         env:
@@ -142,10 +138,8 @@ jobs:
       - name: Install Playwright browser (chromium-headless-shell)
         run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
 
-      - name: Provision brain venv
-        run: |
-          uv venv
-          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+      - name: Provision brain venv (frozen install from brain/uv.lock — #38)
+        run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
       # Explore -> baseline -> replay. The heuristic planner is deterministic and
       # needs no ANTHROPIC_API_KEY; replay runs without --heal-llm for the same reason.
@@ -236,10 +230,8 @@ jobs:
       - name: Install Playwright browser (chromium-headless-shell)
         run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
 
-      - name: Provision brain venv
-        run: |
-          uv venv
-          uv pip install langgraph langgraph-checkpoint-sqlite anthropic
+      - name: Provision brain venv (frozen install from brain/uv.lock — #38)
+        run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
       - name: Explore testdata/site -> plan.json
         run: |
@@ -259,9 +251,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # security: DETERMINISTIC gates only — gitleaks (HARD, secrets scan over full history)
-  # + pip-audit (advisory, Python deps unpinned — emits a freeze artifact). The live-advisory-DB
-  # scanners (govulncheck + npm audit) moved to security-nightly.yml (#8) so PR/push greenness
-  # never hinges on a freshly published upstream CVE. Runs in parallel with build.
+  # + pip-audit (advisory, over the committed brain/uv.lock) + a CycloneDX SBOM artifact (#38). The
+  # live-advisory-DB scanners (govulncheck + npm audit) moved to security-nightly.yml (#8) so PR/push
+  # greenness never hinges on a freshly published upstream CVE. Runs in parallel with build.
   # ---------------------------------------------------------------------------
   security:
     runs-on: ubuntu-latest
@@ -278,14 +270,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      - name: pip-audit (Python deps — advisory; emits requirements.lock)
-        continue-on-error: true   # deps are unpinned; transitive advisories are soft until a lockfile lands (GAP-SEC-002)
+      - name: pip-audit (Python deps — advisory; audits the committed lock)
+        continue-on-error: true   # advisory: a newly published CVE against the pinned lock must not redden an unrelated PR (#8)
         run: |
-          uv venv
-          uv pip install langgraph langgraph-checkpoint-sqlite langgraph-checkpoint-postgres \
-            anthropic openai pyyaml mcp grpcio grpcio-tools \
-            opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc prometheus-client
-          uv pip freeze > requirements.lock
+          uv export --frozen --no-dev --no-emit-project --project brain --format requirements-txt > requirements.lock
           uvx pip-audit -r requirements.lock
 
       - name: Upload Python dependency freeze (advisory artifact)
@@ -295,6 +283,19 @@ jobs:
           name: python-requirements-lock
           path: requirements.lock
           if-no-files-found: warn
+
+      - name: SBOM (CycloneDX, from the frozen lock — #38)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --project brain --format requirements-txt > sbom-requirements.txt
+          uvx --from cyclonedx-bom cyclonedx-py requirements sbom-requirements.txt -o sbom.cdx.json
+
+      - name: Upload SBOM (CycloneDX)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # bilingual: docs parity gate — every primary *.md must have a *.en.md pair,
