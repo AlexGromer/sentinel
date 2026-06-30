@@ -73,12 +73,35 @@ func mkArtifactDir(repo, runID, override string) string {
 	// after MkdirAll to enforce 0700 even when a permissive umask would have widened the create mode.
 	_ = os.MkdirAll(dir, 0o700)
 	_ = os.Chmod(dir, 0o700)
-	if override == "" { // only manage the default runs/ tree, never a user-supplied --artifact-dir
-		runsRoot := filepath.Join(repo, "runs")
+	// #34 pt3: manage the runs/ root (0700) + trace retention whenever the artifact dir lives under
+	// repo/runs — the default ./runs/<id> tree AND the control-api override path (runs/control-<id>,
+	// what the chat-front + OpenAI-compat shim drive). Without this, control-api passed --artifact-dir
+	// so override != "" and BOTH the chmod and sweepTraces were skipped, letting trace.zip (AUT
+	// DOM/screenshots, possible PII) accumulate unbounded in a Docker/control-api deployment. A truly
+	// external --artifact-dir (outside runs/) is still left untouched — we never chmod or sweep a
+	// user-supplied directory we don't own.
+	runsRoot := filepath.Join(repo, "runs")
+	if isUnder(dir, runsRoot) {
 		_ = os.Chmod(runsRoot, 0o700)
 		sweepTraces(runsRoot)
 	}
 	return dir
+}
+
+// isUnder reports whether path is root itself or nested inside root. It compares cleaned absolute
+// paths so a relative --artifact-dir and an absolute repo/runs (or vice versa) still match, and a
+// sibling like runs-evil/ next to runs/ does not.
+func isUnder(path, root string) bool {
+	ap, err1 := filepath.Abs(path)
+	ar, err2 := filepath.Abs(root)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	rel, err := filepath.Rel(ar, ap)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // envInt reads an int env var, falling back to def when unset or unparsable.
