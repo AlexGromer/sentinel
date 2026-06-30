@@ -136,12 +136,14 @@ Sentinel = автономный агент, **реализованный в ко
 - **M9.6** headed + CDP-attach режимы (фундамент расширения).
 - **M9.7** Pluggable adapters (auth/deploy/model) — универсальность.
 - **M9.8 (ветка 2)** Браузерное расширение + co-pilot takeover/return.
+- **M9.10** Multi-turn авторинг — диалог с контекстом + коррекция по ходу (checkpointer-resume `conversation_id`→`thread_id`, ADR-048). *R2a backend ✅; UI-панель R2b.*
 
 ## ADR'ы (этого контракта)
 - **ADR-022** Goal-directed / NL-авторинг через explore-first grounding (новый `GoalPlanner`).
 - **ADR-023** Двойной доступ к чату: MCP (M7) + не-MCP HTTP/gRPC control-API.
 - **ADR-024** Режимы выполнения браузера: own-headless → headed → CDP-attach → co-pilot.
 - **ADR-025** Универсальность через pluggable adapters (auth/deploy/model/backend).
+- **ADR-048** Stateful multi-turn авторинг (M9.10) — checkpointer-resume `conversation_id`→`thread_id`, `messages` add_messages-канал, conditional-entry refine.
 
 ## Вне scope (этот контракт = заморозка дизайна)
 Имплементация (под-milestone'ы M9.x). Тестирование backend-API без UI (Sentinel — UI-агент).

@@ -137,12 +137,14 @@ Sentinel = an autonomous agent **implemented in code** (polyglot), not a Claude 
 - **M9.6** headed + CDP-attach modes (foundation for the extension).
 - **M9.7** Pluggable adapters (auth/deploy/model) — universality.
 - **M9.8 (branch 2)** Browser extension + co-pilot takeover/return.
+- **M9.10** Multi-turn authoring — dialogue with context + mid-run correction (checkpointer-resume `conversation_id`→`thread_id`, ADR-048). *R2a backend ✅; UI panel R2b.*
 
 ## ADRs (of this contract)
 - **ADR-022** Goal-directed / NL authoring via explore-first grounding (new `GoalPlanner`).
 - **ADR-023** Dual chat access: MCP (M7) + a non-MCP HTTP/gRPC control API.
 - **ADR-024** Browser execution modes: own-headless → headed → CDP-attach → co-pilot.
 - **ADR-025** Universality via pluggable adapters (auth/deploy/model/backend).
+- **ADR-048** Stateful multi-turn authoring (M9.10) — checkpointer-resume `conversation_id`→`thread_id`, a `messages` add_messages channel, conditional-entry refine.
 
 ## Out of scope (this contract = design freeze)
 Implementation (the M9.x sub-milestones). Testing backend APIs without a UI (Sentinel is a UI agent).

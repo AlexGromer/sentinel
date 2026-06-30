@@ -1,6 +1,6 @@
 """Sentinel brain entrypoint — dispatches all modes.
 
-RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate | mcp-server.
+RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate | mcp-server | chat.
 Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
@@ -127,6 +127,122 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         return 0 if ok else 1
     finally:
         tx.close()
+
+
+def _conversations_store_path() -> str:
+    """M9.10 (ADR-048): the SHARED, NON-ephemeral checkpoint store for multi-turn chat threads — distinct
+    from the per-run ARTIFACT_DIR/checkpoint.db (that one is keyed by a unique run_id, so it can't be
+    resumed). CHECKPOINT_DSN (Postgres) overrides this in `_checkpointer`; otherwise it is SQLite at
+    SENTINEL_CONVERSATIONS_DB (an override for tests / relocation) or the air-gapped default
+    state/conversations.db. The thread (keyed by thread_id=conversation_id) is NOT deleted at turn end."""
+    override = os.environ.get("SENTINEL_CONVERSATIONS_DB", "").strip()
+    if override:
+        pathlib.Path(override).parent.mkdir(parents=True, exist_ok=True)
+        return override
+    pathlib.Path("state").mkdir(parents=True, exist_ok=True)
+    return str((pathlib.Path("state") / "conversations.db").resolve())
+
+
+class _NoBrowser:
+    """M9.10: a guard executor for the warm refine path. Turn-N resumes straight into the `scenario` node
+    (conditional entry), which never drives the browser — so this is never called. If a warm turn DOES try
+    to reach a browser node, fail loudly rather than silently spawn/hang."""
+
+    def call(self, method, **kwargs):
+        raise RuntimeError(f"refine turn must not drive the browser (called {method!r})")
+
+    def close(self):
+        pass
+
+
+def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) -> int:
+    """M9.10 (ADR-048): stateful multi-turn authoring. One brain process per turn; conversation memory is
+    the shared checkpointer keyed by thread_id=conversation_id (state/conversations.db or CHECKPOINT_DSN).
+
+    Turn-1 (COLD — no thread state) explores + authors WITH a browser. Turn-N (WARM — a persisted
+    site_map) RESUMES straight into the `scenario` node (conditional entry, brain/graph.py:route_entry)
+    and re-authors over the persisted map using the prior conversation as refine context — NO browser.
+    The deliverable each turn is scenario.json (renumbered from 1)."""
+    goal = os.environ.get("GOAL", "").strip()
+    describe = os.environ.get("DESCRIBE", "").strip()
+    if goal and describe:
+        log("FATAL: GOAL and DESCRIBE are mutually exclusive -> exit 3")
+        return 3
+    if not goal and not describe:
+        log("FATAL: chat mode needs GOAL or DESCRIBE -> exit 3")
+        return 3
+    from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
+    scenario_head = GoalPlanner(goal) if goal else DescribePlanner(describe)
+    planner = HeuristicPlanner()    # the explore walk stays deterministic; authoring is the scenario head
+    user_msg = {"role": "user", "content": goal or describe}
+    cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": conversation_id}}
+    tx = open(out / "llm-transcript.jsonl", "w")
+
+    def tx_write(rec: dict) -> None:
+        tx.write(json.dumps(rec) + "\n")
+        tx.flush()
+
+    with span("sentinel.run", run_id=run_id, mode="chat", conversation_id=conversation_id,
+              store=("postgres" if os.environ.get("CHECKPOINT_DSN") else "sqlite")):
+        try:
+            with _checkpointer(_conversations_store_path()) as saver:
+                # Peek the thread WITHOUT a browser: a warm turn already has a persisted site_map.
+                # get_state always returns a StateSnapshot — on a brand-new thread its .values is {} (not
+                # None), so the guard + .get keep a cold turn-1 from being mistaken for a resume.
+                probe = build_graph(_NoBrowser(), planner, tx_write,
+                                    scenario_head=scenario_head).compile(checkpointer=saver)
+                snap = probe.get_state(cfg)
+                warm = bool(snap and snap.values and snap.values.get("site_map"))
+                if warm:
+                    log(f"chat: RESUME conversation={conversation_id} "
+                        f"(warm — refine over persisted site map, no browser)")
+                    final = probe.invoke({"messages": [user_msg], "goal": goal, "describe": describe,
+                                          "run_id": run_id, "artifact_dir": str(out)}, config=cfg)
+                else:
+                    if not target:
+                        log("FATAL: chat cold-start needs TARGET_URL -> exit 2")
+                        return 2
+                    log(f"chat: COLD conversation={conversation_id} (explore + author) target={target}")
+                    trace_path = str((out / "trace.zip").resolve())
+                    base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
+                    ex = make_executor(os.environ["PW_EXECUTOR_CMD"])   # only the cold turn spawns a browser
+                    try:
+                        ex.call("initialize")
+                        ex.call("browser.navigate", url=target)
+                        init = {
+                            "run_id": run_id, "run_mode": "chat", "target_url": target,
+                            "base_origin": base_origin, "coverage_target": coverage_target,
+                            "max_steps": max_steps, "artifact_dir": str(out),
+                            "goal": goal, "describe": describe, "messages": [user_msg],
+                            "site_map": {}, "phase": "explore", "scenario_steps": [],
+                            "scenario_unmatched": [], "current_url": target, "page_model": {},
+                            "exploration_plan": [{"step_id": 1, "intent": f"navigate to target {target}",
+                                                  "semantic_id": semantic_id(normalize_url(target), "navigate", ""),
+                                                  "action_type": "navigate", "target": normalize_url(target),
+                                                  "locator": None, "alternatives": None, "is_milestone": True}],
+                            "plan_hash": "", "current_step": 1, "interactive_seen": [],
+                            "interactive_exercised": [], "visited_paths": [], "nav_frontier": [],
+                            "coverage_achieved": 0.0, "exploration_complete": False,
+                            "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
+                        }
+                        app = build_graph(ex, planner, tx_write,
+                                          scenario_head=scenario_head).compile(checkpointer=saver)
+                        final = app.invoke(init, config=cfg)
+                        ex.call("browser.traceStop", path=trace_path)
+                        ex.call("shutdown")
+                    finally:
+                        ex.close()
+                scenario_steps = final.get("scenario_steps", [])
+                scenario_unmatched = final.get("scenario_unmatched", [])
+                eff_target = target or final.get("target_url", "")
+                print("=" * 60)
+                print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
+                      f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
+                print("=" * 60)
+                return _write_scenario(out, run_id, eff_target, scenario_steps,
+                                       scenario_unmatched, bool(describe))
+        finally:
+            tx.close()
 
 
 def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_version, ci, force) -> int:
@@ -305,6 +421,16 @@ def main() -> int:
         # M7 (ADR-020): expose the brain as an MCP server; the host drives + supplies the model.
         from .server import run_mcp_server
         return run_mcp_server(out, run_id)
+    if run_mode == "chat":
+        # M9.10 (ADR-048): stateful multi-turn authoring. Dispatched BEFORE make_executor — a warm
+        # refine turn must not spawn a browser; _run_chat creates the executor lazily on a cold turn only.
+        conversation_id = os.environ.get("SENTINEL_CONVERSATION_ID", "").strip()
+        if not conversation_id:
+            log("FATAL: chat mode requires SENTINEL_CONVERSATION_ID -> exit 2")
+            return 2
+        return _run_chat(run_id, out, conversation_id, target,
+                         float(os.environ.get("COVERAGE_TARGET", "0.85")),
+                         int(os.environ.get("MAX_STEPS", "40")))
     if run_mode == "explore" and not target:
         log("FATAL: TARGET_URL not set")
         return 2

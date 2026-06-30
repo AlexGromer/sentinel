@@ -19,6 +19,9 @@
 // re-run / golden-baseline update of a PRIOR run's frozen plan. from_run resolves under runs/control-<id>/
 // to a whitelisted plan (plan.json|scenario.json), path-traversal-guarded — never an arbitrary --plan path.
 // It spawns `agentctl run --replay --plan <p>` (replay) or `agentctl baseline update --plan <p>` (baseline).
+// M9.10 (ADR-048): POST /v1/runs also accepts conversation_id:<id> — a multi-turn chat turn. The id is the
+// resumable thread key (conversation_id→thread_id; charset/length-validated); turn-1 explores+authors,
+// turn-N refines over the persisted site map. spawnRun adds `agentctl run --mode chat --conversation-id`.
 package main
 
 import (
@@ -214,12 +217,13 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // render the form from one source of truth. Keys/defaults match the loader.
 func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"modes":   []string{"explore", "goal", "describe", "replay", "baseline"}, // replay/baseline (M9.9) need from_run:<prior run_id>
+		"modes":   []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
 		"planner": []string{"heuristic", "llm", "goal"},
 		"fields": map[string]any{
 			"target":          map[string]any{"type": "string", "required": true},
 			"goal":            map[string]any{"type": "string"},
 			"describe":        map[string]any{"type": "string"},
+			"conversation_id": map[string]any{"type": "string"}, // M9.10: multi-turn chat thread key (resume by conversation_id)
 			"coverage_target": map[string]any{"type": "number", "default": 0.85},
 			"max_steps":       map[string]any{"type": "int", "default": 40},
 			"plan_budget":     map[string]any{"type": "int", "default": 50000},
@@ -238,13 +242,31 @@ type runRequest struct {
 	Planner        string `json:"planner"`
 	CoverageTarget string `json:"coverage_target"`
 	MaxSteps       string `json:"max_steps"`
-	FromRun        string `json:"from_run"` // M9.9: prior run_id whose frozen plan to replay / baseline-update
+	FromRun        string `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
+	ConversationID string `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
 
 	plan string // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
 }
 
 func validTarget(t string) bool {
 	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "file://")
+}
+
+// validConversationID guards the M9.10 multi-turn thread key (ADR-048). It is NOT used in a filesystem
+// path (the conversation store is fixed at state/conversations.db; the per-turn run_id is the artifact
+// dir), and it is passed as a discrete argv element (no shell). We still bound it to a safe charset +
+// length so a hostile client can't stuff control chars / a huge string into the persisted thread key.
+func validConversationID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		ok := r == '-' || r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // replayInputs lists the frozen-plan artifacts a replay/baseline (M9.9) may consume from a prior run,
@@ -298,8 +320,11 @@ func (s *server) spawnRun(req runRequest) *run {
 		if req.Target != "" {
 			args = append(args, "--target", req.Target)
 		}
-	default: // explore / goal / describe (mode inferred from goal/describe as before)
+	default: // explore / goal / describe / chat (mode inferred from goal/describe + conversation_id as before)
 		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir}
+		if req.ConversationID != "" { // M9.10 (ADR-048): multi-turn — resume the thread by conversation_id
+			args = append(args, "--mode", "chat", "--conversation-id", req.ConversationID)
+		}
 		if req.Planner != "" {
 			args = append(args, "--planner", req.Planner)
 		}
@@ -375,9 +400,14 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "replay needs a target — none on the request and no target_url in the prior plan"})
 			return
 		}
-	default: // explore / goal / describe
+	default: // explore / goal / describe / chat
 		if !validTarget(req.Target) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target must be an http(s):// or file:// URL"})
+			return
+		}
+		// M9.10 (ADR-048): a chat turn carries a conversation_id (thread key) — validate it before spawn.
+		if req.ConversationID != "" && !validConversationID(req.ConversationID) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id must be 1-128 chars of [A-Za-z0-9_-]"})
 			return
 		}
 	}
