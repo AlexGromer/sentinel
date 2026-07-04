@@ -25,17 +25,17 @@ M14 закрывает это: HTTP-поверхность доменов, жи�
 
 | type | data | эмитент |
 |---|---|---|
-| `run.started` | `{mode,target,planner}` | control-API (на spawn) |
-| `state.transition` | `{from,to}` | brain (perceive/ground/plan/act/verify) |
-| `step.progress` | `{n,total,desc}` | brain (act/verify) |
+| `run.started` | `{mode,target,planner}` | brain (perceive) |
+| `state.transition` | `{from,to}` | brain (perceive, verify) |
+| `step.progress` | `{n,total,desc}` | brain (act) |
 | `tool.call` | `{name,args_summary}` | brain (act) |
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
 | `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
-| `run.finished` | `{exit_code}` | control-API |
+| `run.finished` | `{exit_code}` | control-API — **UI-ветка готова, эмиссия отложена (follow-up)** |
 | `log` | `{line}` | passthrough сырого stdout |
 
-**Транспорт (надстройка R3, НЕ one-shot-шим ADR-041)**: поверх существующего WS `GET /v1/stream`. Клиент коннектится с `?run_id=<id>` (charset `validRunID`, `filepath.Base`-санитайз — переиспользуем доказанный код `?session=`) → сервер **подписывает** сокет на `runStream` этого run → пушит конверты как `wsOpText`-фреймы. Client→server takeover/return без изменений — **дуплекс на одном сокете**.
+**Транспорт (надстройка R3, НЕ one-shot-шим ADR-041)**: поверх существующего WS `GET /v1/stream`. Клиент коннектится с `?run_id=<id>` (charset `validRunID` — тот же charset-guard, что у `?session=`; `run_id` используется как ключ `s.runs`-map/JSON, в путь НЕ идёт, потому `filepath.Base` не нужен) → сервер **подписывает** сокет на `runStream` этого run → пушит конверты как `wsOpText`-фреймы. Client→server takeover/return без изменений — **дуплекс на одном сокете**.
 
 > **Слайс, не полнота**: M14 тянет вперёд из M9-LIVE только **подписку по `run_id`** (одна вкладка ↔ один run). **Полная cross-run ownership-авторизация** (сокет может адресовать только свои run) остаётся **M9-LIVE** — сегодня любой authed-клиент может адресовать любой run_id (комментарий в `ws.go`), для single-user-localhost приемлемо.
 
@@ -99,6 +99,7 @@ CopilotKit (npm/React + Node-runtime) может быть только **dev-у�
 ## 7. Отложено
 - **M15**: wiring доменов `results`/`metrics` + native-charts в Tests-панели (сегодня — заглушки).
 - **M9-LIVE**: live e2e AG-UI (реальный браузер) · полная ownership-авторизация `run_id`↔session · живая проверка auto-HITL.
+- **replay/baseline AG-UI + auto-HITL**: сегодня AG-UI-эмиссия + auto-HITL подключены только к **graph-режимам** (explore/goal/describe/chat через `build_graph`); путь `run_replay` (где реальный L1-L6 heal с confidence-gate) → **follow-up** (валидируется живо в M9-LIVE). Live-timeline для replay/baseline-run деградирует в `log`-view (не богатые chips).
 - **M-STRUCTURED-OUT** (сразу после M14): strict `tool_use`/`json_schema` вместо `find('{')`-парса.
 - **M-INSTALL / M-AUTOPILOT-LOCAL** (после эпика): self-installer · hw-probe→sizing→ollama-deploy + UI model-management.
 - **M13-service** (M11): Postgres/migrations/TCP.

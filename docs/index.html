@@ -889,7 +889,7 @@ function mdRender(raw){
   html = html.replace(/(^|[^*])\*([^\n*]+?)\*(?!\*)/g, '$1<em>$2</em>');
   html = html.replace(/\b_([^\n_]+?)_\b/g, '<em>$1</em>');
   html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, function(_, text, url){
-    return '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
   });
   html = html.replace(/\n/g, '<br>');
   html = html.replace(/ B(\d+) /g, function(_, i){ return blocks[Number(i)]; });

@@ -25,17 +25,17 @@ M14 closes this: an HTTP surface for the domains, a live AG-UI timeline on top o
 
 | type | data | emitter |
 |---|---|---|
-| `run.started` | `{mode,target,planner}` | control-API (on spawn) |
-| `state.transition` | `{from,to}` | brain (perceive/ground/plan/act/verify) |
-| `step.progress` | `{n,total,desc}` | brain (act/verify) |
+| `run.started` | `{mode,target,planner}` | brain (perceive) |
+| `state.transition` | `{from,to}` | brain (perceive, verify) |
+| `step.progress` | `{n,total,desc}` | brain (act) |
 | `tool.call` | `{name,args_summary}` | brain (act) |
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
 | `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
-| `run.finished` | `{exit_code}` | control-API |
+| `run.finished` | `{exit_code}` | control-API — **UI branch ready, emission deferred (follow-up)** |
 | `log` | `{line}` | passthrough of raw stdout |
 
-**Transport (an R3 add-on, NOT the one-shot ADR-041 shim)**: on top of the existing WS `GET /v1/stream`. The client connects with `?run_id=<id>` (charset `validRunID`, `filepath.Base` sanitization — reusing the already-proven `?session=` code) → the server **subscribes** the socket to that run's `runStream` → pushes envelopes as `wsOpText` frames. Client→server takeover/return unchanged — **duplex on one socket**.
+**Transport (an R3 add-on, NOT the one-shot ADR-041 shim)**: on top of the existing WS `GET /v1/stream`. The client connects with `?run_id=<id>` (charset `validRunID` — the same charset guard as `?session=`; `run_id` is used as an `s.runs` map key / JSON field and never flows into a path, so no `filepath.Base` is needed) → the server **subscribes** the socket to that run's `runStream` → pushes envelopes as `wsOpText` frames. Client→server takeover/return unchanged — **duplex on one socket**.
 
 > **A slice, not full scope**: M14 pulls forward from M9-LIVE only the **`run_id` subscription** (one tab ↔ one run). **Full cross-run ownership authorization** (a socket may only address its own runs) remains **M9-LIVE** — today any authed client can address any run_id (comment in `ws.go`), acceptable for single-user localhost.
 
@@ -99,6 +99,7 @@ CopilotKit (npm/React + Node runtime) can only ever be a **dev convenience**: it
 ## 7. Deferred
 - **M15**: wiring the `results`/`metrics` domains + native charts into the Tests panels (stubs today).
 - **M9-LIVE**: live e2e AG-UI (a real browser) · full `run_id`↔session ownership authorization · a live check of auto-HITL.
+- **replay/baseline AG-UI + auto-HITL**: today AG-UI emission + auto-HITL are wired only for the **graph modes** (explore/goal/describe/chat via `build_graph`); the `run_replay` path (where real L1-L6 healing with a confidence gate happens) → **follow-up** (validated live in M9-LIVE). The Live timeline degrades to a `log` view for a replay/baseline run (not rich chips).
 - **M-STRUCTURED-OUT** (right after M14): strict `tool_use`/`json_schema` instead of `find('{')` parsing.
 - **M-INSTALL / M-AUTOPILOT-LOCAL** (after the epic): self-installer · hw-probe→sizing→ollama-deploy + UI model management.
 - **M13-service** (M11): Postgres/migrations/TCP.

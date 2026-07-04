@@ -23,7 +23,7 @@ CI export is **secondary** (a bonus); **working inside the tool** is primary.
 | **Multi-turn dialogue + correction** | context across messages, mid-run fixes | **✅ DONE** — R2a backend (checkpointer-resume) + R2b UI (vanilla, ADR-048); live=M9-LIVE |
 | **Co-pilot takeover/return (F4)** | agent ↔ human on one live session | MV3 extension + `chrome.debugger` (0xCoDSnet) + brain interrupt/resume (R3) |
 | **MV3 recorder** | record human actions → scenario | MV3 content-script → `/v1/stream` → `reconcile` (0xCoDSnet) |
-| **Rich front (opt.)** | streaming/HITL/generative-UI | AG-UI/CopilotKit `frontend/` (dev) — **vanilla `docs/*` stays primary, air-gapped** |
+| **Rich AG-UI co-pilot** | streaming/HITL/generative-UI/timeline | **in-house vanilla** in `docs/*` (M14, ADR-055) — the sovereign single UI, air-gapped; CopilotKit `frontend/` frozen (deprecated) |
 
 ## 2. Two evolution axes
 
@@ -53,7 +53,7 @@ context + correction). **Status: multi-turn ✅ DONE** (M9.10, ADR-048) — **R2
 | **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ❌ design-only (extension+brain) |
 | WS transport client→server (`/v1/stream`) | M9.8-prep/ADR-043 | ✅ DONE |
 | SSE server→client + artifact-fetch | M9.3-tail/ADR-040 | ✅ DONE |
-| AG-UI/CopilotKit rich front | M9.8-prep/ADR-044 | 🧪 scaffold (`frontend/`, dev-only, not air-gapped, not in CI) |
+| Rich AG-UI co-pilot (vanilla) | **M14/ADR-055** | ✅ in-house in `docs/index.html` (Settings\|Tests · library/promote · live AG-UI timeline · auto-HITL banner); CopilotKit `frontend/` frozen (reference) |
 | **MV3 recorder extension** | M9.8/ADR-038 (GAP-M9-13) | ❌ not-built → @0xCoDSnet (#42-47) |
 | LiteLLM opt-router · MCP-Inspector | ADR-045 | ✅ DONE (config/docs) |
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
@@ -65,7 +65,7 @@ context + correction). **Status: multi-turn ✅ DONE** (M9.10, ADR-048) — **R2
 ## 4. Agreements (principles)
 
 1. **In-tool-first.** Run/re-run/baseline **inside the tool** are primary. CI export (Jenkins/GitLab — `docs/ci-templates/`, already shipped) is secondary/bonus.
-2. **Vanilla `docs/*` = primary UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (not air-gapped, not in CI) — a parallel option, not a replacement. **Evolution (epic M13-15, ADR-049..053):** profiles = topology-not-features (both full + air-gapped); AG-UI → a **full rich front** (M14) over the R3-WS in BOTH profiles; vanilla `docs/*` = the air-gapped variant of the same set; metrics **self-contained** (ADR-051).
+2. **Vanilla `docs/*` = the SOLE sovereign UI** (air-gapped, zero-build, `file://`-safe). **CopilotKit `frontend/` — deprecated (ADR-055), frozen as a reference** (npm/build/Node = not air-gapped → not the delivery path; removes GAP-SEC-002). **Evolution (epic M13-15, ADR-049..053; refined by ADR-055):** we write the rich AG-UI co-pilot OURSELVES in vanilla over the R3-WS (`@@AGUI` events, M14) — not via the kit; profiles = topology-not-features; metrics **self-contained** (ADR-051, M15).
 3. **Open WebUI = a compatible client** of the OpenAI-compat shim (optional, you run it), **NOT the co-pilot**. Takeover/co-pilot comes from the **extension (`chrome.debugger`) + brain**, not a chat UI.
 4. **Multi-turn is ✅ DONE** (M9.10, ADR-048): R2a backend (checkpointer-resume) + R2b UI (vanilla); offline-verified, live=M9-LIVE.
 5. **F4 is a joint milestone:** the extension/CDP/panel — @0xCoDSnet (#47); brain interrupt/resume + WS signals — mine (R3).
