@@ -33,7 +33,13 @@
 | **M9.3 — Control-API (non-MCP)** | ✅ готово (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); чат-фронт + CI-шаблоны — остаток (GAP-M9-03), ADR-023/032 |
 | **M9.4 + M9.5 — Tabs + backend correlation** | ✅ готово (offline, Wave A) — in-app вкладки (`[role=tab]`) + браузерные вкладки (multi-page) + `traceparent`-инъекция в запросы, ADR-022/024 |
 | **M9.6 — Browser modes** | ✅ готово (offline, Wave D) — headed + CDP-attach (env-тумблер `PW_HEADLESS=0` / `PW_CDP_ENDPOINT`); **Chromium-only by design**, ADR-036/037 |
+| **M9.7 — Pluggable adapters** | 🔶 частично — model/backend через LiteLLM-роутер (ADR-045); остаток — auth/deploy-адаптеры (GAP-M9-08) |
+| **M9.8-R3 — Co-pilot takeover (brain-side)** | ✅ готово — takeover/return поверх RunControl gRPC (`interrupt()`/`Command(resume)`, abort>takeover), ADR-054; MV3-расширение → @0xCoDSnet |
+| **M9.9 — Replay-in-UI (R1)** | ✅ готово — ▶/🔁/📌 run/replay/baseline + вердикт в vanilla-консолях (`mode=replay\|baseline`, `from_run`), ADR-047 |
+| **M9.10 — Multi-turn authoring (R2)** | ✅ готово — многотёрновый диалог (`conversation_id` → checkpointer-resume, `messages`-канал), ADR-048 |
 | **M11.x — Дистрибуция/Pages** | ✅ частично — docker-compose · Helm/Flux + Secret-плумбинг (M11.3) · GitHub Pages-хаб + калькуляторы (M11.6/b). Подробно — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M12 — OpenAI-compat shim + единая консоль** | ✅ готово — `POST /v1/chat/completions` (1 тёрн→1 прогон) + единая `docs/index.html` (#connect/#build/#chat), ADR-041 |
+| **M13 — Persistence / 5-домен store-gateway** | ✅ готово — store-gateway на 5 доменов (SQLite-first), `runs`+`chats` персистятся; `scenarios`/`tests`/`results`/`metrics` = схема+RPC (wiring → M14/M15), ADR-049/050 |
 
 Подробности по вехам: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -46,7 +52,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (47 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (54 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Режимы браузера (M9.6):** по умолчанию own-headless; `PW_HEADLESS=0` — headed (видимый), `PW_CDP_ENDPOINT` — CDP-attach к существующему Chrome пользователя. Движок — **только Chromium by design** (ADR-036); детерминированный голден-replay — только в headless (см. [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 
