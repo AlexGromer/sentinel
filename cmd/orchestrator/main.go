@@ -43,6 +43,7 @@ type runState struct {
 	planLimit, healLimit, totalLimit    int64
 	breached                            bool
 	reason                              string
+	takeover                            bool // M9.8 F4 (ADR-054): operator takeover pending (set by Takeover, cleared by Return)
 }
 
 type orchestrator struct {
@@ -108,6 +109,11 @@ func (o *orchestrator) ReportEvent(_ context.Context, e *pb.RunEvent) (*pb.Contr
 	if rs.breached {
 		return &pb.Control{Abort: true, Reason: rs.reason}, nil
 	}
+	// M9.8 F4 (ADR-054): a pending takeover pauses the brain. abort (a hard stop) already took
+	// precedence above; takeover only fires when the run is otherwise allowed to continue.
+	if rs.takeover {
+		return &pb.Control{Takeover: true, Reason: "operator takeover"}, nil
+	}
 	return &pb.Control{Abort: false}, nil
 }
 
@@ -117,6 +123,27 @@ func (o *orchestrator) Abort(_ context.Context, r *pb.AbortRequest) (*pb.AbortRe
 	rs := o.get(r.RunId)
 	rs.breached, rs.reason = true, "external abort: "+r.Reason
 	return &pb.AbortReply{Ok: true}, nil
+}
+
+// Takeover sets a per-run takeover flag (M9.8 F4, ADR-054). The next ReportEvent reply then carries
+// Control.takeover=true, so the brain interrupt()s + persists at its superstep boundary and yields the
+// live browser to the operator. External signal — forwarded by the control-API over its WebSocket.
+func (o *orchestrator) Takeover(_ context.Context, r *pb.TakeoverRequest) (*pb.TakeoverReply, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.get(r.RunId).takeover = true
+	fmt.Fprintf(os.Stderr, "[orchestrator] Takeover %s reason=%q\n", r.RunId, r.Reason)
+	return &pb.TakeoverReply{Ok: true}, nil
+}
+
+// Return clears the takeover flag (M9.8 F4, ADR-054); the brain's next poll sees no takeover pending and
+// resumes the checkpointer thread (Command(resume=...)) from exactly where it paused.
+func (o *orchestrator) Return(_ context.Context, r *pb.ReturnRequest) (*pb.ReturnReply, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.get(r.RunId).takeover = false
+	fmt.Fprintf(os.Stderr, "[orchestrator] Return %s\n", r.RunId)
+	return &pb.ReturnReply{Ok: true}, nil
 }
 
 func (o *orchestrator) breachOf(runID string) (bool, string) {

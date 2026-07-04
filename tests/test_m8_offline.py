@@ -85,7 +85,10 @@ def test_runcontrol_noop_without_orchestrator():
     os.environ.pop("ORCH_ADDR", None)
     from brain import runcontrol
     rc = runcontrol.make_client()
-    assert rc.report("run", "plan", 100, 50) is False   # no orchestrator -> never aborts
+    # M9.8 F4 (ADR-054): report()/poll() now return a control VERB, not a bool. The no-op client (no
+    # orchestrator wired) never aborts and never pauses for a takeover.
+    assert rc.report("run", "plan", 100, 50) == runcontrol.CONTINUE   # no orchestrator -> never aborts
+    assert rc.poll("run") == runcontrol.CONTINUE                      # ...and never signals a takeover
     rc.close()
 
 

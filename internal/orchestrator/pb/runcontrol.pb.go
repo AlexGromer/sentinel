@@ -216,9 +216,12 @@ func (x *RunEvent) GetStatus() string {
 }
 
 type Control struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Abort         bool                   `protobuf:"varint,1,opt,name=abort,proto3" json:"abort,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Abort  bool                   `protobuf:"varint,1,opt,name=abort,proto3" json:"abort,omitempty"`
+	Reason string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// M9.8 F4 (ADR-054): pause for an operator takeover. DISTINCT from abort — the run is not killed; it
+	// interrupt()s and persists, then resumes on Return. abort takes precedence (a hard stop beats a pause).
+	Takeover      bool `protobuf:"varint,3,opt,name=takeover,proto3" json:"takeover,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -265,6 +268,13 @@ func (x *Control) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *Control) GetTakeover() bool {
+	if x != nil {
+		return x.Takeover
+	}
+	return false
 }
 
 type AbortRequest struct {
@@ -363,6 +373,191 @@ func (x *AbortReply) GetOk() bool {
 	return false
 }
 
+// M9.8 F4 (ADR-054): operator takeover/return signals (external), modelled on Abort.
+type TakeoverRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TakeoverRequest) Reset() {
+	*x = TakeoverRequest{}
+	mi := &file_runcontrol_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TakeoverRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TakeoverRequest) ProtoMessage() {}
+
+func (x *TakeoverRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runcontrol_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TakeoverRequest.ProtoReflect.Descriptor instead.
+func (*TakeoverRequest) Descriptor() ([]byte, []int) {
+	return file_runcontrol_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TakeoverRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *TakeoverRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type TakeoverReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TakeoverReply) Reset() {
+	*x = TakeoverReply{}
+	mi := &file_runcontrol_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TakeoverReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TakeoverReply) ProtoMessage() {}
+
+func (x *TakeoverReply) ProtoReflect() protoreflect.Message {
+	mi := &file_runcontrol_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TakeoverReply.ProtoReflect.Descriptor instead.
+func (*TakeoverReply) Descriptor() ([]byte, []int) {
+	return file_runcontrol_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TakeoverReply) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+type ReturnRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReturnRequest) Reset() {
+	*x = ReturnRequest{}
+	mi := &file_runcontrol_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReturnRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReturnRequest) ProtoMessage() {}
+
+func (x *ReturnRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runcontrol_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReturnRequest.ProtoReflect.Descriptor instead.
+func (*ReturnRequest) Descriptor() ([]byte, []int) {
+	return file_runcontrol_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ReturnRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+type ReturnReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReturnReply) Reset() {
+	*x = ReturnReply{}
+	mi := &file_runcontrol_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReturnReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReturnReply) ProtoMessage() {}
+
+func (x *ReturnReply) ProtoReflect() protoreflect.Message {
+	mi := &file_runcontrol_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReturnReply.ProtoReflect.Descriptor instead.
+func (*ReturnReply) Descriptor() ([]byte, []int) {
+	return file_runcontrol_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ReturnReply) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 var File_runcontrol_proto protoreflect.FileDescriptor
 
 const file_runcontrol_proto_rawDesc = "" +
@@ -380,21 +575,33 @@ const file_runcontrol_proto_rawDesc = "" +
 	"\x04node\x18\x02 \x01(\tR\x04node\x12#\n" +
 	"\rprompt_tokens\x18\x03 \x01(\x03R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x04 \x01(\x03R\x10completionTokens\x12\x16\n" +
-	"\x06status\x18\x05 \x01(\tR\x06status\"7\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"S\n" +
 	"\aControl\x12\x14\n" +
 	"\x05abort\x18\x01 \x01(\bR\x05abort\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"=\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1a\n" +
+	"\btakeover\x18\x03 \x01(\bR\btakeover\"=\n" +
 	"\fAbortRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x1c\n" +
 	"\n" +
 	"AbortReply\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\x8d\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"@\n" +
+	"\x0fTakeoverRequest\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x1f\n" +
+	"\rTakeoverReply\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"&\n" +
+	"\rReturnRequest\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"\x1d\n" +
+	"\vReturnReply\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xbf\x03\n" +
 	"\n" +
 	"RunControl\x12Z\n" +
 	"\bStartRun\x12'.sentinel.runcontrol.v1.StartRunRequest\x1a%.sentinel.runcontrol.v1.StartRunReply\x12P\n" +
 	"\vReportEvent\x12 .sentinel.runcontrol.v1.RunEvent\x1a\x1f.sentinel.runcontrol.v1.Control\x12Q\n" +
-	"\x05Abort\x12$.sentinel.runcontrol.v1.AbortRequest\x1a\".sentinel.runcontrol.v1.AbortReplyB<Z:github.com/AlexGromer/sentinel/internal/orchestrator/pb;pbb\x06proto3"
+	"\x05Abort\x12$.sentinel.runcontrol.v1.AbortRequest\x1a\".sentinel.runcontrol.v1.AbortReply\x12Z\n" +
+	"\bTakeover\x12'.sentinel.runcontrol.v1.TakeoverRequest\x1a%.sentinel.runcontrol.v1.TakeoverReply\x12T\n" +
+	"\x06Return\x12%.sentinel.runcontrol.v1.ReturnRequest\x1a#.sentinel.runcontrol.v1.ReturnReplyB<Z:github.com/AlexGromer/sentinel/internal/orchestrator/pb;pbb\x06proto3"
 
 var (
 	file_runcontrol_proto_rawDescOnce sync.Once
@@ -408,7 +615,7 @@ func file_runcontrol_proto_rawDescGZIP() []byte {
 	return file_runcontrol_proto_rawDescData
 }
 
-var file_runcontrol_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_runcontrol_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_runcontrol_proto_goTypes = []any{
 	(*StartRunRequest)(nil), // 0: sentinel.runcontrol.v1.StartRunRequest
 	(*StartRunReply)(nil),   // 1: sentinel.runcontrol.v1.StartRunReply
@@ -416,16 +623,24 @@ var file_runcontrol_proto_goTypes = []any{
 	(*Control)(nil),         // 3: sentinel.runcontrol.v1.Control
 	(*AbortRequest)(nil),    // 4: sentinel.runcontrol.v1.AbortRequest
 	(*AbortReply)(nil),      // 5: sentinel.runcontrol.v1.AbortReply
+	(*TakeoverRequest)(nil), // 6: sentinel.runcontrol.v1.TakeoverRequest
+	(*TakeoverReply)(nil),   // 7: sentinel.runcontrol.v1.TakeoverReply
+	(*ReturnRequest)(nil),   // 8: sentinel.runcontrol.v1.ReturnRequest
+	(*ReturnReply)(nil),     // 9: sentinel.runcontrol.v1.ReturnReply
 }
 var file_runcontrol_proto_depIdxs = []int32{
 	0, // 0: sentinel.runcontrol.v1.RunControl.StartRun:input_type -> sentinel.runcontrol.v1.StartRunRequest
 	2, // 1: sentinel.runcontrol.v1.RunControl.ReportEvent:input_type -> sentinel.runcontrol.v1.RunEvent
 	4, // 2: sentinel.runcontrol.v1.RunControl.Abort:input_type -> sentinel.runcontrol.v1.AbortRequest
-	1, // 3: sentinel.runcontrol.v1.RunControl.StartRun:output_type -> sentinel.runcontrol.v1.StartRunReply
-	3, // 4: sentinel.runcontrol.v1.RunControl.ReportEvent:output_type -> sentinel.runcontrol.v1.Control
-	5, // 5: sentinel.runcontrol.v1.RunControl.Abort:output_type -> sentinel.runcontrol.v1.AbortReply
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: sentinel.runcontrol.v1.RunControl.Takeover:input_type -> sentinel.runcontrol.v1.TakeoverRequest
+	8, // 4: sentinel.runcontrol.v1.RunControl.Return:input_type -> sentinel.runcontrol.v1.ReturnRequest
+	1, // 5: sentinel.runcontrol.v1.RunControl.StartRun:output_type -> sentinel.runcontrol.v1.StartRunReply
+	3, // 6: sentinel.runcontrol.v1.RunControl.ReportEvent:output_type -> sentinel.runcontrol.v1.Control
+	5, // 7: sentinel.runcontrol.v1.RunControl.Abort:output_type -> sentinel.runcontrol.v1.AbortReply
+	7, // 8: sentinel.runcontrol.v1.RunControl.Takeover:output_type -> sentinel.runcontrol.v1.TakeoverReply
+	9, // 9: sentinel.runcontrol.v1.RunControl.Return:output_type -> sentinel.runcontrol.v1.ReturnReply
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -442,7 +657,7 @@ func file_runcontrol_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runcontrol_proto_rawDesc), len(file_runcontrol_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
