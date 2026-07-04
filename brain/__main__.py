@@ -185,6 +185,24 @@ class _NoBrowser:
         pass
 
 
+def _project_chat(conversation_id: str, target: str, final: dict) -> None:
+    """M13 (ADR-050): emit the browsable `chats` projection to the store-gateway (best-effort). Reads the
+    accumulated conversation from the final graph state; a no-op when STORE_ADDR is unset (offline). This
+    is an index, NOT a duplicate of the checkpointer thread (which stays the source of truth)."""
+    from .store import make_chat_projector
+    from .graph import _user_turns, _rolling_summary
+    projector = make_chat_projector()
+    if not projector:
+        return
+    try:
+        turns = _user_turns(final.get("messages"))
+        projector.upsert_chat(conversation_id=conversation_id, last_target=target,
+                              turn_count=len(turns), last_goal=(turns[-1] if turns else ""),
+                              summary=_rolling_summary(turns))
+    finally:
+        projector.close()
+
+
 def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) -> int:
     """M9.10 (ADR-048): stateful multi-turn authoring. One brain process per turn; conversation memory is
     the shared checkpointer keyed by thread_id=conversation_id (state/conversations.db or CHECKPOINT_DSN).
@@ -269,6 +287,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 scenario_steps = final.get("scenario_steps", [])
                 scenario_unmatched = final.get("scenario_unmatched", [])
                 eff_target = target or final.get("target_url", "")
+                _project_chat(conversation_id, eff_target, final)  # M13: browsable chats projection (best-effort)
                 print("=" * 60)
                 print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
