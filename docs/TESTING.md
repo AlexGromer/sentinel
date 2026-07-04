@@ -1,6 +1,6 @@
 # Sentinel — Руководство по тестированию
 
-> 🌐 **Русский** (основная версия) · English — _будет добавлен_ (перевод — следующий цикл)
+> 🌐 **Русский** (основная версия) · [English](TESTING.en.md)
 
 Handoff-grade гайд: любой разработчик должен дойти от чистого клона до зелёного CI без
 устных объяснений. Читайте вместе с [`DEVELOPMENT.md`](DEVELOPMENT.md) (сборка компонентов,
@@ -28,7 +28,7 @@ go test ./...
 Запустите все offline-тесты одной командой:
 
 ```bash
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism m13_chats; do
     .venv/bin/python tests/test_${t}_offline.py
 done
 ```
