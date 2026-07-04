@@ -161,14 +161,15 @@ func (w *lineWriter) flush() {
 }
 
 type server struct {
-	repo      string
-	agentctl  string
-	token     string
-	corsAllow map[string]bool
-	orchAddr  string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
-	store     *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
-	mu        sync.RWMutex
-	runs      map[string]*run
+	repo       string
+	agentctl   string
+	token      string
+	corsAllow  map[string]bool
+	orchAddr   string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
+	store      *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
+	publicBind bool         // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
+	mu         sync.RWMutex
+	runs       map[string]*run
 }
 
 func newRunID() string {
@@ -864,12 +865,13 @@ func main() {
 	}
 	addr := envOr("CONTROL_API_ADDR", "127.0.0.1:8090")
 	s := &server{
-		repo:      repo,
-		agentctl:  envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),
-		token:     os.Getenv("CONTROL_API_TOKEN"),
-		corsAllow: map[string]bool{},
-		orchAddr:  os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
-		runs:      map[string]*run{},
+		repo:       repo,
+		agentctl:   envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),
+		token:      os.Getenv("CONTROL_API_TOKEN"),
+		corsAllow:  map[string]bool{},
+		orchAddr:   os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
+		publicBind: !strings.HasPrefix(addr, "127.0.0.1") && !strings.HasPrefix(addr, "localhost"),
+		runs:       map[string]*run{},
 	}
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {
 		if o = strings.TrimSpace(o); o != "" {

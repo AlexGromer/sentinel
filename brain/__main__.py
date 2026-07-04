@@ -241,7 +241,16 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 probe = build_graph(_NoBrowser(), planner, tx_write,
                                     scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
                 snap = probe.get_state(cfg)
-                warm = bool(snap and snap.values and snap.values.get("site_map"))
+                has_map = bool(snap and snap.values and snap.values.get("site_map"))
+                # GAP-M9-19: a warm refine reuses the PERSISTED site map without re-checking the target.
+                # SENTINEL_REFINE_REVERIFY=1 forces a re-explore (cold path, with the browser) so a stale
+                # map is refreshed — the opt-in staleness mitigation. (Auto-detection needs a live a11y-hash
+                # probe on the warm turn, which has no browser → that half is M9-LIVE.)
+                reverify = os.environ.get("SENTINEL_REFINE_REVERIFY") == "1"
+                if has_map and reverify:
+                    log("chat: SENTINEL_REFINE_REVERIFY=1 — re-exploring instead of warm refine "
+                        "(GAP-M9-19: refresh a possibly-stale site map)")
+                warm = has_map and not reverify
                 if warm:
                     log(f"chat: RESUME conversation={conversation_id} "
                         f"(warm — refine over persisted site map, no browser)")

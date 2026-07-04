@@ -9,7 +9,9 @@ No browser / network / gateway. Proves:
   no-op without a store-gateway (STORE_ADDR unset).
 """
 import os
+import pathlib
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -95,6 +97,54 @@ def test_project_chat_noop_without_gateway():
     import brain.__main__ as m
     os.environ.pop("STORE_ADDR", None)  # make_chat_projector -> None
     m._project_chat("c", "t", {"messages": [{"role": "user", "content": "x"}]})  # must not raise
+
+
+# --- GAP-M9-19: SENTINEL_REFINE_REVERIFY forces a warm thread to re-explore --
+def test_reverify_forces_reexplore_on_warm_thread():
+    import brain.__main__ as m
+    import brain.llm as llm
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    # 1) seed a WARM thread (a cold turn-1 that explores + persists a site_map) into the SQLite file.
+    budget.reset(plan_limit=10**6, heal_limit=10**6)
+    fb1 = QueuedFakeBackend([_reply([{"ref": _USER_SID, "verb": "fill", "value": "alice"}])])
+    ex = WalkEx()
+    ex.call("browser.navigate", url=_LOGIN)
+    with SqliteSaver.from_conn_string(db) as saver:
+        app = build_graph(ex, HeuristicPlanner(), lambda r: None,
+                          scenario_head=GoalPlanner(goal="log in", backend=fb1)).compile(checkpointer=saver)
+        app.invoke(_explore_init(goal="log in", messages=[{"role": "user", "content": "log in"}]),
+                   config={"recursion_limit": 200, "configurable": {"thread_id": "conv-rv"}})
+
+    # 2) _run_chat turn-2 with REVERIFY=1: despite the warm thread it must take the COLD path and spawn a
+    #    browser executor (re-explore), NOT the warm no-browser refine.
+    made = {"n": 0}
+
+    def fake_make_executor(cmd):
+        made["n"] += 1
+        e = WalkEx()
+        e.call("browser.navigate", url=_LOGIN)
+        return e
+
+    budget.reset(plan_limit=10**6, heal_limit=10**6)
+    out = pathlib.Path(tempfile.mkdtemp())
+    fb2 = QueuedFakeBackend([_reply([{"ref": _USER_SID, "verb": "fill", "value": "bob"}])])
+    saved, orig_mx, orig_mb = dict(os.environ), m.make_executor, llm.make_backend
+    os.environ.update({"GOAL": "set user bob", "DESCRIBE": "", "CHECKPOINT_DSN": "", "PW_EXECUTOR_CMD": "x",
+                       "SENTINEL_CONVERSATIONS_DB": db, "SENTINEL_CONVERSATION_ID": "conv-rv",
+                       "SENTINEL_REFINE_REVERIFY": "1"})
+    m.make_executor = fake_make_executor
+    llm.make_backend = lambda role: fb2
+    try:
+        rc = m._run_chat("t2", out, "conv-rv", _LOGIN, 0.85, 40)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        m.make_executor, llm.make_backend = orig_mx, orig_mb
+    assert made["n"] == 1, "REVERIFY=1 must force the cold path (spawn a browser executor to re-explore)"
+    assert rc == 0, f"re-explore + author should exit 0, got {rc}"
+    budget.reset()
 
 
 if __name__ == "__main__":
