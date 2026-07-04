@@ -179,9 +179,28 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer subprotocol (Sec-WebSocket-Protocol: bearer.<token>)"})
 		return
 	}
-	// CSWSH defense: if an Origin is present and an allowlist is configured, enforce it.
-	if origin := r.Header.Get("Origin"); origin != "" && len(s.corsAllow) > 0 && !s.corsAllow[origin] {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin not allowed"})
+	// CSWSH defense (R3-hardening, M13): reject a cross-origin handshake unless the origin is explicitly
+	// allowlisted. When bound PUBLICLY with no allowlist, refuse any browser Origin — exposing the socket
+	// non-locally requires configuring CONTROL_API_CORS_ORIGINS (fail-closed). On a localhost bind an
+	// absent allowlist stays permissive (dev), still gated by the bearer subprotocol above.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		switch {
+		case len(s.corsAllow) > 0:
+			if !s.corsAllow[origin] {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin not allowed"})
+				return
+			}
+		case s.publicBind:
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin present but no allowlist on a non-local bind (set CONTROL_API_CORS_ORIGINS)"})
+			return
+		}
+	}
+	// R3-hardening (M13, #58 note): a client may RESUME a prior recorder session (?session=<id>) so a
+	// mid-recording reconnect appends to the SAME runs/record-<id>/events.ndjson instead of fragmenting
+	// into a fresh dir. Validated to a bare session id (no path traversal); empty => a new session.
+	resumeSession := r.URL.Query().Get("session")
+	if resumeSession != "" && !validRunID(resumeSession) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session must be a bare recorder session id"})
 		return
 	}
 	hj, ok := w.(http.Hijacker)
@@ -208,14 +227,21 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.streamRecord(conn, brw.Reader)
+	s.streamRecord(conn, brw.Reader, resumeSession)
 }
 
 // streamRecord runs the recorder read loop: persist each text/binary event line to the session's
 // events.ndjson, answer pings, and stop on close / idle / cap. Split out so a test can drive it.
-func (s *server) streamRecord(conn net.Conn, br *bufio.Reader) {
-	session := newRunID()
-	dir := filepath.Join(s.repo, "runs", "record-"+session)
+// resumeSession (validated by the caller) appends to an existing session; empty mints a new one.
+func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession string) {
+	session := resumeSession
+	if session == "" || !validRunID(session) { // re-validate: only [A-Za-z0-9_-] (no path separators)
+		session = newRunID()
+	}
+	// The resumed ?session= id is user input. validRunID already bars path separators; filepath.Base
+	// strips any residual path components so record-<session> is always a single leaf under runs/ — a
+	// path-traversal barrier that the static taint analysis also recognizes (defense-in-depth).
+	dir := filepath.Join(s.repo, "runs", filepath.Base("record-"+session))
 	_ = os.MkdirAll(dir, 0o700)
 	f, ferr := os.OpenFile(filepath.Join(dir, "events.ndjson"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if ferr == nil {

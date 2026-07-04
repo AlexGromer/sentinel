@@ -1,0 +1,155 @@
+// Sentinel StoreService (M13, ADR-049/050) — the store-gateway's 5-domain persistence contract,
+// layered on top of the legacy heal/trust PersistenceService (persistence.proto) in the SAME package
+// + go_package so both services live in one `pb` package and one single-writer DB (ADR-007).
+// SQLite-first (portable `ON CONFLICT` SQL); a Postgres backend slots in later behind STORE_DSN
+// (M13-service, M11/ADR-053). Stubs are generated for Go + Python; drift = build failure.
+syntax = "proto3";
+
+package sentinel.persistence.v1;
+
+option go_package = "github.com/AlexGromer/sentinel/internal/store/pb;pb";
+
+import "persistence.proto"; // reuse Empty
+
+// --- runs (persist control-API's in-memory run map; survives restart) --------
+message RunRecord {
+  string run_id = 1;
+  string conversation_id = 2; // M13: the runs<->chats join (today only in argv, lost on restart)
+  string mode = 3;            // explore | goal | describe | replay | baseline | chat
+  string target = 4;
+  string planner = 5;
+  string state = 6;           // running | done | failed
+  int64 exit_code = 7;
+  string artifact_dir = 8;
+  string error = 9;
+  string started_at = 10;     // RFC3339
+  string finished_at = 11;    // RFC3339 ("" while running)
+  bool found = 12;            // false => no such run (GetRun)
+}
+message RunId { string run_id = 1; }
+message ListRunsReq {
+  int64 limit = 1;   // 0 => a sane default cap
+  int64 offset = 2;
+  string state = 3;  // "" => any
+}
+message RunList { repeated RunRecord runs = 1; int64 total = 2; }
+
+// --- scenarios / tests (index plan.json/scenario.json; promote -> test) ------
+message Scenario {
+  string scenario_id = 1;
+  string name = 2;
+  string target = 3;
+  string run_mode = 4;    // goal | describe
+  string plan_hash = 5;   // brain/state.py:canonical_plan_hash
+  string steps_json = 6;  // opaque grounded-steps JSON
+  int64 unmatched = 7;
+  string tags = 8;        // comma-separated
+  string source_run_id = 9;
+  string created_at = 10;
+  bool found = 11;
+}
+message ScenarioId { string scenario_id = 1; }
+message ListScenariosReq { int64 limit = 1; int64 offset = 2; string target = 3; }
+message ScenarioList { repeated Scenario scenarios = 1; int64 total = 2; }
+message PromoteReq {
+  string scenario_id = 1;
+  string name = 2;
+  string schedule = 3; // reserved: stored, NOT executed (no scheduler in M13)
+}
+message TestRecord {
+  string test_id = 1;
+  string scenario_id = 2;
+  string plan_hash = 3;
+  string name = 4;
+  string schedule = 5;    // reserved column only
+  bool enabled = 6;
+  string last_status = 7; // pass | fail | ""
+  string last_run_id = 8;
+  string created_at = 9;
+  bool found = 10;
+}
+message TestId { string test_id = 1; }
+message ListTestsReq { int64 limit = 1; int64 offset = 2; }
+message TestList { repeated TestRecord tests = 1; int64 total = 2; }
+
+// --- chats (BROWSABLE PROJECTION of state/conversations.db, NOT a duplicate) -
+message ChatProjection {
+  string conversation_id = 1;
+  string last_target = 2;
+  int64 turn_count = 3;
+  string last_active = 4; // RFC3339
+  string last_goal = 5;
+  string summary = 6;     // rolling summary (GAP-M9-20)
+  bool found = 7;
+}
+message ConversationId { string conversation_id = 1; }
+message ListChatsReq { int64 limit = 1; int64 offset = 2; }
+message ChatList { repeated ChatProjection chats = 1; int64 total = 2; }
+
+// --- results (index heal-report.json / report.json) --------------------------
+message ResultRecord {
+  string run_id = 1;
+  string plan_id = 2;
+  string mode = 3;
+  string verdict = 4;         // pass | problem | regression | integrity
+  int64 exit_code = 5;
+  int64 healed = 6;
+  int64 failed = 7;
+  string regressions_json = 8;
+  string steps_json = 9;
+  double coverage = 10;
+  int64 duration_ms = 11;
+  string created_at = 12;
+  bool found = 13;
+}
+message ListResultsReq { int64 limit = 1; int64 offset = 2; }
+message ResultList { repeated ResultRecord results = 1; int64 total = 2; }
+
+// --- metrics (time-series ingested from results; trends for M15) -------------
+message MetricPoint {
+  string run_id = 1;
+  double ts = 2;
+  string name = 3;
+  double value = 4;
+  string labels_json = 5;
+}
+message MetricsBatch { repeated MetricPoint points = 1; }
+message MetricsQuery {
+  string name = 1;
+  double since_ts = 2;
+  double until_ts = 3;
+  int64 limit = 4;
+}
+message MetricsSeries { repeated MetricPoint points = 1; }
+message TrendReq {
+  string metric = 1;
+  int64 window = 2; // last N runs (0 => a sane default)
+}
+message TrendPoint { string run_id = 1; double ts = 2; double value = 3; }
+message TrendReply { repeated TrendPoint points = 1; }
+
+service StoreService {
+  // runs
+  rpc UpsertRun(RunRecord) returns (Empty);
+  rpc GetRun(RunId) returns (RunRecord);
+  rpc ListRuns(ListRunsReq) returns (RunList);
+  // scenarios / tests
+  rpc SaveScenario(Scenario) returns (Empty);
+  rpc GetScenario(ScenarioId) returns (Scenario);
+  rpc ListScenarios(ListScenariosReq) returns (ScenarioList);
+  rpc PromoteTest(PromoteReq) returns (TestRecord);
+  rpc GetTest(TestId) returns (TestRecord);
+  rpc ListTests(ListTestsReq) returns (TestList);
+  // chats (projection)
+  rpc UpsertChat(ChatProjection) returns (Empty);
+  rpc GetChat(ConversationId) returns (ChatProjection);
+  rpc ListChats(ListChatsReq) returns (ChatList);
+  // results
+  rpc SaveResult(ResultRecord) returns (Empty);
+  rpc GetResult(RunId) returns (ResultRecord);
+  rpc ListResults(ListResultsReq) returns (ResultList);
+  // metrics
+  rpc IngestMetrics(MetricsBatch) returns (Empty);
+  rpc QueryMetrics(MetricsQuery) returns (MetricsSeries);
+  rpc Trends(TrendReq) returns (TrendReply);
+}

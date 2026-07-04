@@ -119,6 +119,7 @@ func main() {
 	}
 	g := grpc.NewServer(opts...)
 	pb.RegisterPersistenceServiceServer(g, srv)
+	pb.RegisterStoreServiceServer(g, srv) // M13 (ADR-050): 5-domain persistence on the same server
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

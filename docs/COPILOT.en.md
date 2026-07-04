@@ -59,7 +59,7 @@ context + correction). **Status: multi-turn ✅ DONE** (M9.10, ADR-048) — **R2
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** partial ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy adapter not-built** |
 | Security module (XSS/CSRF/IDOR…, authz-gated) | M10/GAP-M9-11 | ❌ design-only |
-| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 📋 planned (docs-frozen; after R3) |
+| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 🚧 **M13 in progress** (persistence, SQLite-first, waves 1-6 on branch; Postgres/service → M13-service); M14/M15 📋 planned |
 | Accuracy (Langfuse/DSPy) | roadmap | ❌ not-built (after user tests) |
 
 ## 4. Agreements (principles)

@@ -365,6 +365,91 @@ func TestStreamTakeoverReturnForwardsToOrchestrator(t *testing.T) {
 	}
 }
 
+// --- R3-hardening (M13): Origin fail-closed on a public bind + recorder session-resume ---
+
+func TestStreamPublicBindRejectsOriginWithoutAllowlist(t *testing.T) {
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: true, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public bind + no allowlist + Origin: got %d want 403 (fail-closed)", rec.Code)
+	}
+}
+
+func TestStreamLocalBindPermitsOriginWithoutAllowlist(t *testing.T) {
+	// Local bind (publicBind=false) + empty allowlist: the Origin passes the CSWSH gate, so the request
+	// reaches the hijack — which a ResponseRecorder can't satisfy → 500 streaming-unsupported. A non-403
+	// proves the Origin was NOT rejected (dev-permissive, still bearer-gated).
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: false, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code == http.StatusForbidden {
+		t.Fatal("local bind must not reject an Origin without an allowlist")
+	}
+}
+
+func TestStreamBadSessionRejected(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.URL.RawQuery = "session=../../etc/passwd"
+	newTestServer().mux().ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("path-traversal session id: got %d want 400", rec.Code)
+	}
+}
+
+func TestStreamSessionResumeAppendsToSameDir(t *testing.T) {
+	s, repo := newRunServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+	host := strings.TrimPrefix(ts.URL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const sess = "resume-abc123"
+	req := "GET /v1/stream?session=" + sess + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\n" +
+		"Connection: Upgrade\r\nSec-WebSocket-Key: " + rfcSampleKey + "\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: sentinel.recorder.v1, bearer.secret-tok\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	for { // drain handshake headers
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			break
+		}
+	}
+	_, payload, err := readServerFrame(br) // greeting must carry the RESUMED session id
+	if err != nil {
+		t.Fatal(err)
+	}
+	var greet map[string]string
+	if err := json.Unmarshal(payload, &greet); err != nil || greet["session"] != sess {
+		t.Fatalf("greeting session = %v want %q", greet, sess)
+	}
+	event := `{"type":"click","selector":"#x"}`
+	_, _ = conn.Write(wsClientFrame(wsOpText, []byte(event)))
+	_, _, _ = readServerFrame(br) // ack
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+
+	data, err := os.ReadFile(filepath.Join(repo, "runs", "record-"+sess, "events.ndjson"))
+	if err != nil || !strings.Contains(string(data), event) {
+		t.Fatalf("event not appended to the resumed session dir record-%s: %v", sess, err)
+	}
+}
+
 func TestStreamTakeoverMissingRunID(t *testing.T) {
 	s, _ := newRunServer(t)
 	fake, target := startFakeOrch(t)

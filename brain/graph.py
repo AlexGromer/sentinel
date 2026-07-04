@@ -95,6 +95,30 @@ def _user_turns(messages: list) -> list:
     return out
 
 
+_REFINE_HISTORY_KEEP = int(os.environ.get("SENTINEL_REFINE_HISTORY_KEEP", "6"))
+
+
+def _rolling_summary(user_turns: list) -> str:
+    """M9.10/GAP-M9-20: a bounded one-line summary of a conversation (turn count + the opening request).
+    Feeds the chats projection (brain/store.py) and the 'earlier context' prefix when older turns are
+    capped out of the refine prompt — so neither the prompt nor the stored summary grows with length."""
+    turns = user_turns or []
+    if not turns:
+        return ""
+    return f"{len(turns)} turn(s); started: {(turns[0] or '')[:80]!r}"
+
+
+def _capped_history(user_turns: list, keep: int = _REFINE_HISTORY_KEEP) -> list:
+    """GAP-M9-20: cap refine history to the last `keep` user-turns; older turns collapse into a single
+    summary line so the refine prompt (and its token cost) stays bounded as a conversation grows. A
+    short conversation (<= keep turns) is returned unchanged — byte-identical to the pre-cap behavior."""
+    turns = list(user_turns or [])
+    if len(turns) <= keep:
+        return turns
+    older, recent = turns[:-keep], turns[-keep:]
+    return [f"[earlier: {_rolling_summary(older)}]"] + recent
+
+
 def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
@@ -289,7 +313,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         site_map = state.get("site_map") or {}
         base_id = len(state.get("exploration_plan", []))
         # M9.10: prior user turns (all but the current — which IS this turn's goal/describe) = refine context.
-        prior = _user_turns(state.get("messages"))[:-1]
+        # GAP-M9-20: cap to the last N turns + a rolling-summary prefix so the prompt stays bounded.
+        prior = _capped_history(_user_turns(state.get("messages"))[:-1])
         if scenario_head.name == "goal":
             out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"), history=prior)
             steps, unmatched = ground_scenario(out.get("refs", []), site_map, start_id=base_id + 1)

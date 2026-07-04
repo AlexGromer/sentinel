@@ -108,6 +108,13 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/COPILOT.md / .en.md | Docs | **ADR-046** co-pilot single-source: end-goal · layers · §F evolution · honest feature-inventory (DONE/scaffold/design/not-built) · agreements (in-tool-first; vanilla=primary/AG-UI=dev) · wave-roadmap [me R1/R2/R3]/[@0xCoDSnet #42-47/#36-38] |
 | tests/test_r3_takeover_offline.py | Tests | — |
 | cmd/orchestrator/main_test.go | Go | **M9.8 F4 / ADR-054** orchestrator unit tests: Takeover→`Control.takeover`→Return flow, abort precedence over takeover, per-run isolation |
+| internal/store/domains.go | Go | **M13 / ADR-050** StoreService impl — 20 RPCs over 5 domains (runs·scenarios/tests·chats-projection·results·metrics), portable `ON CONFLICT` upserts under the single-writer `s.mu` (ADR-007); `PromoteTest` freezes the scenario `plan_hash`. Registered in `cmd/store-gateway`; schema/`STORE_DSN`-scaffold in `server.go` |
+| internal/store/domains_test.go | Go | **M13** StoreService round-trips (runs restart-survival · scenario→test promote · chats upsert · results · metrics query/trends · STORE_DSN-refuses), `-race` |
+| cmd/control-api/store.go | Go | **M13 / ADR-050** fail-open store-gateway client (`x-sentinel-store-token`) — persists `runs` on create/finish (survive restart) + `handleGetRun`/`ListRuns` restart-survival fallback; `newStoreClient` probes ListRuns to fail fast; `CONTROL_API_STORE_ADDR` wiring in `main.go` |
+| cmd/control-api/store_test.go | Go | **M13** real store-gateway on a unix socket — persist + restart-survival + no-store backward-compat + fail-fast |
+| tests/test_m13_chats_offline.py | Python | **M13** chats projection (`_project_chat`/`ChatProjector`) + GAP-M9-20 cap/summary (`_capped_history`) + GAP-M9-19 reverify→re-explore; in CI offline loop (`m13_chats`) |
+| proto/store.proto | proto3 | **M13 / ADR-050** `StoreService` (5 domains, 20 RPCs) beside legacy `PersistenceService` (same package/DB, reuses `Empty`); SQLite-first, Postgres via `STORE_DSN` deferred to M13-service |
+| docs/M13_CONTRACT.md / .en.md | Docs | **M13 / ADR-049/050** as-built contract: 5-domain store-gateway (SQLite-first) · chats-projection · GAP-M9-19/20 · Postgres/migrations/TCP → M13-service |
 ## Directory Structure
 ```
 agent_development/

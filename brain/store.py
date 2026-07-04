@@ -336,5 +336,45 @@ def make_store(local_path: str):
     return GrpcStore(addr) if addr else LocalStore(local_path)
 
 
+class ChatProjector:
+    """M13 (ADR-050): writes the browsable `chats` projection to the store-gateway's StoreService — a
+    lightweight index (conversation_id, target, turn_count, last_goal, rolling summary), NOT a duplicate
+    of the LangGraph checkpointer (state/conversations.db). Best-effort: a gateway error is swallowed
+    (the projection is telemetry; it must never fail a chat turn)."""
+
+    def __init__(self, addr: str) -> None:
+        import grpc
+        from .pb import store_pb2 as pbmsg, store_pb2_grpc as pbgrpc
+        self._pb = pbmsg
+        base = grpc.insecure_channel(f"unix:{addr}")
+        interceptors = [_trace_interceptor()]                # M8: W3C trace propagation
+        token = os.environ.get("STORE_TOKEN", "")
+        if token:
+            interceptors.append(_token_interceptor(token))   # #23: authN to the gateway
+        self._ch = grpc.intercept_channel(base, *interceptors)
+        self._stub = pbgrpc.StoreServiceStub(self._ch)
+
+    def upsert_chat(self, conversation_id, last_target="", turn_count=0, last_goal="", summary="") -> None:
+        try:
+            self._stub.UpsertChat(self._pb.ChatProjection(
+                conversation_id=conversation_id, last_target=last_target, turn_count=int(turn_count or 0),
+                last_goal=last_goal, summary=summary))
+        except Exception:  # best-effort projection — never break the run on a gateway hiccup
+            pass
+
+    def close(self) -> None:
+        try:
+            self._ch.close()
+        except Exception:
+            pass
+
+
+def make_chat_projector():
+    """M13: a ChatProjector when STORE_ADDR is set (persistent gateway), else None (offline/standalone
+    → the chats projection is simply not written; the checkpointer thread is still the source of truth)."""
+    addr = os.environ.get("STORE_ADDR")
+    return ChatProjector(addr) if addr else None
+
+
 # Backward-compatible alias: the offline test suite and existing imports use `Store`.
 Store = LocalStore
