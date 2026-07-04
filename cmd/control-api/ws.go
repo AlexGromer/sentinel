@@ -238,15 +238,10 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 	if session == "" || !validRunID(session) { // re-validate: only [A-Za-z0-9_-] (no path separators)
 		session = newRunID()
 	}
-	base := filepath.Join(s.repo, "runs")
-	dir := filepath.Clean(filepath.Join(base, "record-"+session))
-	// Path-traversal guard: the resumed ?session= id is user input. validRunID already bars separators;
-	// re-assert the resolved dir stays STRICTLY under runs/ before any filesystem use (defense-in-depth +
-	// an explicit barrier for static taint analysis). A miss falls back to a freshly-minted session.
-	if !strings.HasPrefix(dir, base+string(os.PathSeparator)) {
-		session = newRunID()
-		dir = filepath.Join(base, "record-"+session)
-	}
+	// The resumed ?session= id is user input. validRunID already bars path separators; filepath.Base
+	// strips any residual path components so record-<session> is always a single leaf under runs/ — a
+	// path-traversal barrier that the static taint analysis also recognizes (defense-in-depth).
+	dir := filepath.Join(s.repo, "runs", filepath.Base("record-"+session))
 	_ = os.MkdirAll(dir, 0o700)
 	f, ferr := os.OpenFile(filepath.Join(dir, "events.ndjson"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if ferr == nil {
