@@ -1,5 +1,14 @@
 # Sentinel Co-pilot (AG-UI / CopilotKit front) — `frontend/`
 
+> 🧊 **FROZEN — non-maintained reference (ADR-055, M14).** The sovereign single UI is now the in-house
+> **vanilla AG-UI co-pilot** in `docs/index.html` (Settings | Tests, live AG-UI timeline, `hitl_needed`
+> takeover/return, scenario/test library, conversation management — all air-gapped, zero-dep, `file://`-safe).
+> ADR-055 dropped CopilotKit from the delivery path: an npm/React + Node-runtime build-toolchain is
+> structurally incompatible with the "download a release → run offline" sovereignty bar (ADR-049/053), and
+> maintaining parity across two UIs is pure tax. This scaffold is kept as a **non-maintained reference** (not
+> deleted, not updated) — it also removes GAP-SEC-002 (the npm supply-chain surface) from the delivery path.
+> If you need the current co-pilot: open `docs/index.html` → **Tests** tab.
+
 A **rich co-pilot** front for Sentinel, built on **CopilotKit** + the **AG-UI** protocol, driving Sentinel through the OpenAI-compat shim (`POST /v1/chat/completions`, ADR-041). This is the "rich front on top" deferred from M12 (ADR-041) and scoped here as **ADR-044** — a runnable **skeleton**, not a finished product.
 
 > ⚠ **DEV-ONLY.** This is the first npm-built front in the repo. It is **not air-gapped**, **not served by GitHub Pages**, and **not built or tested in CI** (unlike the vanilla `docs/index.html` / `docs/chat/` / `docs/setup/` consoles, which stay the air-gapped path). It needs `npm install` (network). The air-gapped vanilla consoles remain the offline fallback.
@@ -50,7 +59,11 @@ CopilotChat (browser) ──▶ Copilot Runtime (/api/copilotkit, server)
                                           └─▶ one agentctl run → verdict
 ```
 
-## Roadmap
+## Roadmap (historical — superseded by ADR-055)
 
-- **Now:** chat co-pilot over the shim (one-shot per turn), matching the vanilla `docs/index.html#chat`.
-- **Next (M9.8-impl):** richer AG-UI events (tool calls, run progress, state) over the control-API **WebSocket** `/v1/stream` (ADR-043) once the MV3 recorder + takeover/return land — the duplex channel this scaffold will graduate onto.
+- **Was next (M9.8-impl):** richer AG-UI events (tool calls, run progress, state) over the control-API
+  **WebSocket** `/v1/stream` (ADR-043) once the MV3 recorder + takeover/return landed — the duplex channel
+  this scaffold was meant to graduate onto.
+- **What actually happened (M14, ADR-055):** that live AG-UI timeline + `hitl_needed` takeover/return banner
+  shipped in the vanilla `docs/index.html` co-pilot instead (Tests → Live), not here. This scaffold is frozen
+  at the "Now" line above and will not receive the WS graduation described in the previous paragraph.

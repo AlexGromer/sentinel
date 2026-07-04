@@ -162,6 +162,15 @@ func (s *Server) ListScenarios(_ context.Context, q *pb.ListScenariosReq) (*pb.S
 	return out, rows.Err()
 }
 
+// DeleteScenario removes a scenario (M14 wave W3: library management). Idempotent — deleting a
+// missing scenario_id is success, not an error, so a UI double-click/retry never surfaces a fault.
+func (s *Server) DeleteScenario(_ context.Context, id *pb.ScenarioId) (*pb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM scenarios WHERE scenario_id=?", id.ScenarioId)
+	return &pb.Empty{}, err
+}
+
 // PromoteTest freezes a scenario into a test (ADR-052: test = scenario + frozen plan_hash + golden +
 // optional schedule + history). `schedule` is stored, NOT executed (no scheduler in M13).
 func (s *Server) PromoteTest(_ context.Context, r *pb.PromoteReq) (*pb.TestRecord, error) {
@@ -233,6 +242,14 @@ func (s *Server) ListTests(_ context.Context, q *pb.ListTestsReq) (*pb.TestList,
 	return out, rows.Err()
 }
 
+// DeleteTest removes a test (M14 wave W3: library management). Idempotent, like DeleteScenario.
+func (s *Server) DeleteTest(_ context.Context, id *pb.TestId) (*pb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM tests WHERE test_id=?", id.TestId)
+	return &pb.Empty{}, err
+}
+
 // --- chats (BROWSABLE PROJECTION of conversations.db; not a duplicate) ------
 
 func (s *Server) UpsertChat(_ context.Context, c *pb.ChatProjection) (*pb.Empty, error) {
@@ -283,6 +300,16 @@ func (s *Server) ListChats(_ context.Context, q *pb.ListChatsReq) (*pb.ChatList,
 		out.Chats = append(out.Chats, c)
 	}
 	return out, rows.Err()
+}
+
+// DeleteChat removes a chat projection row (M14 wave W3: conversation management). Idempotent, like
+// DeleteScenario/DeleteTest. This deletes only the browsable projection row — the underlying
+// conversation thread (state/conversations.db) is untouched (chats here is a projection, not a duplicate).
+func (s *Server) DeleteChat(_ context.Context, id *pb.ConversationId) (*pb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM chats WHERE conversation_id=?", id.ConversationId)
+	return &pb.Empty{}, err
 }
 
 // --- results (index heal-report.json / report.json) -------------------------

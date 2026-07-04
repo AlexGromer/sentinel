@@ -140,6 +140,37 @@ body.lang-en [data-lang="ru"]{display:none !important}
 textarea{width:100%;background:var(--bg3);border:1px solid var(--line);color:var(--tx);
   border-radius:8px;padding:.5rem .6rem;font:inherit;resize:vertical;min-height:3rem}
 textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
+/* M14 — Settings|Tests top tabs + Tests sub-tabs (ADR-055 vanilla co-pilot) */
+.tabbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.3rem 0 1rem}
+.tab-btn{background:var(--bg3);color:var(--mut);border:1px solid var(--line);border-radius:8px;
+  padding:.5rem 1.1rem;cursor:pointer;font:inherit;font-weight:700}
+.tab-btn[aria-selected="true"]{background:var(--acc);color:#0b0b10;border-color:var(--acc);box-shadow:var(--glow)}
+.subtabbar{display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0}
+.subtab-btn{background:var(--bg3);color:var(--mut);border:1px solid var(--line);border-radius:6px;
+  padding:.32rem .7rem;cursor:pointer;font:inherit;font-size:.82rem}
+.subtab-btn[aria-selected="true"]{background:var(--acc2);color:#0b0b10;border-color:var(--acc2);font-weight:700}
+.subpanel{display:none}
+.subpanel.on{display:block}
+.stub{color:var(--mut);border:1px dashed var(--line);border-radius:8px;padding:1.1rem;text-align:center;font-size:.9rem}
+.libitem,.runitem,.chatitem{border:1px solid var(--line);border-radius:8px;padding:.55rem .7rem;
+  margin:.45rem 0;background:var(--bg2)}
+.libitem-row{display:flex;gap:.5rem;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.libmeta{color:var(--mut);font-size:.78rem}
+.pass{color:var(--ok);font-weight:700}
+.fail{color:var(--no);font-weight:700}
+.timeline{display:flex;flex-direction:column;gap:.3rem;max-height:26rem;overflow:auto;
+  background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.6rem}
+.tl-ev{border-left:3px solid var(--line);padding:.1rem .55rem;font-size:.82rem;word-break:break-word}
+.tl-ev.state{border-color:var(--acc2)}
+.tl-ev.tool{border-color:var(--warn)}
+.tl-ev.heal{border-color:var(--warn)}
+.tl-ev.verdict{border-color:var(--ok)}
+.tl-ev.err{border-color:var(--no)}
+.tl-ev.log{border-color:var(--line);color:var(--mut);font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.hitl-banner{background:rgba(255,176,0,.1);border:1px solid var(--warn);border-radius:8px;
+  padding:.6rem .8rem;margin:.5rem 0;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.mdcode{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.5rem;
+  overflow:auto;font-size:.8rem;margin:.3rem 0}
 </style>
 </head>
 <body class="lang-ru">
@@ -426,12 +457,26 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
   </section>
 
+  <!-- ============================ CO-PILOT: SETTINGS | TESTS (M14, ADR-055) ============================ -->
+  <section class="card" id="copilot">
+    <h2><span data-lang="ru">Co-pilot — суверенный vanilla UI</span><span data-lang="en">Co-pilot — sovereign vanilla UI</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Единый air-gapped co-pilot (ADR-055): <b>Settings</b> — подключение и конфигуратор прогона; <b>Tests</b> — библиотека сценариев/тестов, история прогонов, беседы и живой AG-UI-таймлайн с авто-HITL.</span>
+      <span data-lang="en">The single air-gapped co-pilot (ADR-055): <b>Settings</b> — connection and run configurator; <b>Tests</b> — scenario/test library, run history, conversations and the live AG-UI timeline with auto-HITL.</span>
+    </p>
+    <div class="tabbar" role="tablist" aria-label="Settings / Tests">
+      <button type="button" class="tab-btn" id="tab-btn-settings" role="tab" aria-selected="true" aria-controls="panel-settings">⚙ <span data-lang="ru">Настройки</span><span data-lang="en">Settings</span></button>
+      <button type="button" class="tab-btn" id="tab-btn-tests" role="tab" aria-selected="false" aria-controls="panel-tests">🧪 <span data-lang="ru">Тесты</span><span data-lang="en">Tests</span></button>
+    </div>
+  </section>
+
+  <div id="panel-settings" role="tabpanel" aria-labelledby="tab-btn-settings">
   <!-- ============================ CONNECT ============================ -->
   <section class="card" id="connect">
     <h2><span class="n">7</span><span data-lang="ru">Подключение к control-API</span><span data-lang="en">Control-API connection</span></h2>
     <p class="sub">
-      <span data-lang="ru">Укажи URL и токен локального control-API — тогда конфигуратор (#8) и консоль (#9) смогут запускать прогоны напрямую. Токен хранится только в памяти вкладки, никогда в <code>localStorage</code> или URL.</span>
-      <span data-lang="en">Enter your local control-API URL and bearer token — then the builder (#8) and console (#9) can launch runs directly. The token is kept only in this tab's memory, never in <code>localStorage</code> or the URL.</span>
+      <span data-lang="ru">Укажи URL и токен локального control-API — тогда конфигуратор (#8) и консоль (#9, вкладка «Тесты») смогут запускать прогоны напрямую. Токен хранится только в памяти вкладки, никогда в <code>localStorage</code> или URL.</span>
+      <span data-lang="en">Enter your local control-API URL and bearer token — then the builder (#8) and the console (#9, "Tests" tab) can launch runs directly. The token is kept only in this tab's memory, never in <code>localStorage</code> or the URL.</span>
     </p>
     <div class="grid g2">
       <div>
@@ -547,6 +592,12 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
             <input id="b-vision" type="checkbox" style="width:auto">LLM_VISION (<span data-lang="ru">нужна VLM</span><span data-lang="en">requires VLM</span>)
           </label>
+          <label for="b-temp" style="margin-top:.55rem">Temperature</label>
+          <input id="b-temp" type="number" value="0" disabled style="max-width:6rem">
+          <span class="hint">
+            <span data-lang="ru">Зафиксирована на 0 — детерминизм (ADR-042). Намеренно не редактируется.</span>
+            <span data-lang="en">Fixed at 0 — determinism (ADR-042). Intentionally not editable.</span>
+          </span>
         </div>
       </div>
     </details>
@@ -591,42 +642,112 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div id="b-verdict" style="margin-top:.5rem;font-weight:700"></div>
     <div id="b-arts" class="ctl-row" style="margin-top:.3rem"></div>
   </section>
+  </div><!-- /panel-settings -->
 
-  <!-- ============================ CHAT ============================ -->
+  <div id="panel-tests" role="tabpanel" aria-labelledby="tab-btn-tests" style="display:none">
+  <!-- ============================ CHAT / TESTS ============================ -->
   <section class="card" id="chat">
-    <h2><span class="n">9</span><span data-lang="ru">Консоль авторинга</span><span data-lang="en">Authoring console</span></h2>
+    <h2><span class="n">9</span><span data-lang="ru">Тесты — авторинг, библиотека, live-таймлайн</span><span data-lang="en">Tests — authoring, library, live timeline</span></h2>
     <p class="sub">
-      <span data-lang="ru">Опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> (мульти-тёрн-память server-side по <code>conversation_id</code>, ADR-048: turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта) → готовый <code>scenario.json</code> можно скачать. «Новый разговор» начинает свежий контекст; режим <code>explore</code> остаётся one-shot. Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot).</span>
-      <span data-lang="en">Describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> (server-side multi-turn memory keyed by <code>conversation_id</code>, ADR-048: turn-1 explores+authors, later turns refine over the same site map) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context; the <code>explore</code> mode stays one-shot. Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot).</span>
+      <span data-lang="ru">Опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> (мульти-тёрн-память server-side по <code>conversation_id</code>, ADR-048: turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта) → готовый <code>scenario.json</code> можно скачать. «Новый разговор» начинает свежий контекст; режим <code>explore</code> остаётся one-shot. Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot). Ниже — библиотека сценариев/тестов, история прогонов, беседы и живой AG-UI-таймлайн (<b>Live</b>, включая баннер «нужен человек»).</span>
+      <span data-lang="en">Describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> (server-side multi-turn memory keyed by <code>conversation_id</code>, ADR-048: turn-1 explores+authors, later turns refine over the same site map) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context; the <code>explore</code> mode stays one-shot. Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot). Below — the scenario/test library, run history, conversations and the live AG-UI timeline (<b>Live</b>, incl. the "human needed" banner).</span>
     </p>
-    <div class="grid g2">
-      <div>
-        <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
-        <select id="ch-mode">
-          <option value="describe" selected>describe — описание потока → сценарий · flow → scenario</option>
-          <option value="goal">goal — цель словами → сценарий · NL goal → scenario</option>
-          <option value="explore">explore — авто-исследование · auto-explore</option>
-        </select>
-      </div>
-      <div>
-        <label for="ch-target">Target URL</label>
-        <input id="ch-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
-      </div>
+
+    <div class="subtabbar" role="tablist" aria-label="Tests sub-views">
+      <button type="button" class="subtab-btn" data-subtab="author" role="tab" aria-selected="true">💬 <span data-lang="ru">Авторинг</span><span data-lang="en">Author</span></button>
+      <button type="button" class="subtab-btn" data-subtab="live" role="tab" aria-selected="false">📡 <span data-lang="ru">Live</span><span data-lang="en">Live</span></button>
+      <button type="button" class="subtab-btn" data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
+      <button type="button" class="subtab-btn" data-subtab="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
+      <button type="button" class="subtab-btn" data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
+      <button type="button" class="subtab-btn" data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
     </div>
-    <label for="ch-text"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
-    <textarea id="ch-text" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
-    <div class="ctl-row">
-      <button type="button" class="btn" id="ch-send" disabled
-        style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
-        ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
-      </button>
-      <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
-      <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
-      <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
-      <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7)</span><span data-lang="en">check the connection first (section #7)</span></span>
+
+    <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
+    <div class="subpanel on" data-subpanel="author">
+      <div class="grid g2">
+        <div>
+          <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
+          <select id="ch-mode">
+            <option value="describe" selected>describe — описание потока → сценарий · flow → scenario</option>
+            <option value="goal">goal — цель словами → сценарий · NL goal → scenario</option>
+            <option value="explore">explore — авто-исследование · auto-explore</option>
+          </select>
+        </div>
+        <div>
+          <label for="ch-target">Target URL</label>
+          <input id="ch-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+        </div>
+      </div>
+      <label for="ch-text"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
+      <textarea id="ch-text" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="ch-send" disabled
+          style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
+          ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
+        </button>
+        <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+        <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+        <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
+        <span class="hint"><span data-lang="ru">сначала проверьте подключение (Settings → #7)</span><span data-lang="en">check the connection first (Settings → #7)</span></span>
+      </div>
+      <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
     </div>
-    <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
+
+    <!-- ---- Live AG-UI timeline (M14 W2/§2): WS /v1/stream?run_id=, hitl_needed + takeover/return ---- -->
+    <div class="subpanel" data-subpanel="live">
+      <p class="sub">
+        <span data-lang="ru">Живой таймлайн событий прогона (WS <code>/v1/stream?run_id=</code>). Запусти прогон во вкладке «Авторинг» (run_id подставится сюда автоматически) или впиши его вручную.</span>
+        <span data-lang="en">Live per-run event timeline (WS <code>/v1/stream?run_id=</code>). Launch a run in the "Author" tab (its run_id is auto-filled here) or enter one manually.</span>
+      </p>
+      <div class="ctl-row">
+        <input id="live-runid" type="text" placeholder="run_id" style="max-width:14rem">
+        <button type="button" class="btn" id="live-connect">🔌 <span data-lang="ru">Подключить</span><span data-lang="en">Connect</span></button>
+        <button type="button" class="btn" id="live-disconnect" disabled>⏻ <span data-lang="ru">Отключить</span><span data-lang="en">Disconnect</span></button>
+        <span id="live-status" class="libmeta"><span data-lang="ru">офлайн</span><span data-lang="en">offline</span></span>
+      </div>
+      <div id="live-hitl" style="display:none"></div>
+      <div class="timeline" id="live-timeline"></div>
+    </div>
+
+    <!-- ---- Library: scenarios + tests (promote/rename/delete/search) ---- -->
+    <div class="subpanel" data-subpanel="library">
+      <div class="ctl-row">
+        <input id="lib-search" type="text" placeholder="search / поиск" style="max-width:16rem">
+        <button type="button" class="btn" id="lib-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+      </div>
+      <h3 style="font-size:.95rem;margin:.8rem 0 .3rem;color:var(--mut)"><span data-lang="ru">Сценарии</span><span data-lang="en">Scenarios</span> (<code>GET /v1/scenarios</code>)</h3>
+      <div id="lib-scenarios"></div>
+      <h3 style="font-size:.95rem;margin:1rem 0 .3rem;color:var(--mut)"><span data-lang="ru">Тесты</span><span data-lang="en">Tests</span> (<code>GET /v1/tests</code>)</h3>
+      <div id="lib-tests"></div>
+    </div>
+
+    <!-- ---- Run history: list + launcher ▶/🔁/📌 (reuses from_run handlers) ---- -->
+    <div class="subpanel" data-subpanel="runs">
+      <div class="ctl-row">
+        <button type="button" class="btn" id="runs-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+      </div>
+      <div id="runs-list"></div>
+    </div>
+
+    <!-- ---- Chats: conversation management (rename/delete/search) ---- -->
+    <div class="subpanel" data-subpanel="chats">
+      <div class="ctl-row">
+        <input id="chats-search" type="text" placeholder="search / поиск" style="max-width:16rem">
+        <button type="button" class="btn" id="chats-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+      </div>
+      <div id="chats-list"></div>
+    </div>
+
+    <!-- ---- results / metrics: labeled stubs (M15, ADR-051) ---- -->
+    <div class="subpanel" data-subpanel="results">
+      <div class="stub">📊 <span data-lang="ru">Результаты — придут в <b>M15</b> (нативные графики поверх домена <code>results</code>: verdict/coverage/duration).</span><span data-lang="en">Results — coming in <b>M15</b> (native charts over the <code>results</code> domain: verdict/coverage/duration).</span></div>
+    </div>
+    <div class="subpanel" data-subpanel="metrics">
+      <div class="stub">📈 <span data-lang="ru">Метрики — придут в <b>M15</b> (счётчики auto-HITL, <code>consecutive_heal_failures</code>, покрытие).</span><span data-lang="en">Metrics — coming in <b>M15</b> (auto-HITL counters, <code>consecutive_heal_failures</code>, coverage).</span></div>
+    </div>
   </section>
+  </div><!-- /panel-tests -->
 
   <footer>
     <p>Sentinel — Apache-2.0.
@@ -746,6 +867,49 @@ function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
 function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
+/* biPlain: bilingual text for NATIVE dialogs (prompt/confirm/alert) — those render plain OS text and
+   cannot carry data-lang spans, so both languages are shown together (RU / EN) instead of toggled. */
+function biPlain(ru, en){ return ru + ' / ' + en; }
+
+/* ---- M14: minimal hand-rolled markdown renderer (no CDN/lib) for the Tests console chat ----
+   Escapes ALL raw text via esc() BEFORE layering markup, so injected HTML/script in AUT-controlled
+   or user-typed text can never execute — only **bold**, *italic*, `code`, ```fenced code```` and
+   http(s) [text](url) links are recognized; everything else stays literal escaped text. */
+function mdRender(raw){
+  raw = String(raw == null ? '' : raw);
+  var blocks = [];
+  var withoutFences = raw.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, function(_, code){
+    var idx = blocks.length;
+    blocks.push('<pre class="mdcode"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+    return ' B' + idx + ' ';
+  });
+  var html = esc(withoutFences);                                             // escape everything else first
+  html = html.replace(/`([^`\n]+)`/g, function(_, code){ return '<code>' + code + '</code>'; });
+  html = html.replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(^|[^*])\*([^\n*]+?)\*(?!\*)/g, '$1<em>$2</em>');
+  html = html.replace(/\b_([^\n_]+?)_\b/g, '<em>$1</em>');
+  html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, function(_, text, url){
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+  });
+  html = html.replace(/\n/g, '<br>');
+  html = html.replace(/ B(\d+) /g, function(_, i){ return blocks[Number(i)]; });
+  return html;
+}
+
+/* ---- M14: Settings|Tests top-level tab switcher (persisted, air-gapped — localStorage only) ---- */
+function setTopTab(name){
+  var tests = name === 'tests';
+  $('panel-settings').style.display = tests ? 'none' : '';
+  $('panel-tests').style.display = tests ? '' : 'none';
+  $('tab-btn-settings').setAttribute('aria-selected', tests ? 'false' : 'true');
+  $('tab-btn-tests').setAttribute('aria-selected', tests ? 'true' : 'false');
+  try { localStorage.setItem('sentinel_tab', name); } catch (e) {}
+}
+function initTopTab(){
+  var t = 'settings';
+  try { t = localStorage.getItem('sentinel_tab') || 'settings'; } catch (e) {}
+  setTopTab(t === 'tests' ? 'tests' : 'settings');
+}
 
 /* effective tokens + cost for a cloud model given the workload total + state. */
 function modelCost(m, total, st){
@@ -1071,6 +1235,7 @@ function applyHw(){
 }
 function init(){
   initLang();
+  initTopTab();   // M14: restore last Settings|Tests tab (localStorage, air-gapped)
   buildPriceEditors();
   applyTask('small');
   applyHw();
@@ -1088,6 +1253,15 @@ function init(){
   ['P','S','R','V','mode','vram','tps','budget','monthly','split','priority','mp','mq']
     .forEach(function(id){ var el = $(id); if (el){ el.addEventListener('input', renderAll); el.addEventListener('change', renderAll); } });
   $('price-edit').addEventListener('input', renderAll);
+  // M14: top tab buttons + nav anchors into #connect/#build (Settings) and #chat (Tests) also flip the tab
+  $('tab-btn-settings').addEventListener('click', function(){ setTopTab('settings'); });
+  $('tab-btn-tests').addEventListener('click', function(){ setTopTab('tests'); });
+  document.querySelectorAll('.nav a[href="#connect"], .nav a[href="#build"]').forEach(function(a){
+    a.addEventListener('click', function(){ setTopTab('settings'); });
+  });
+  document.querySelectorAll('.nav a[href="#chat"]').forEach(function(a){
+    a.addEventListener('click', function(){ setTopTab('tests'); });
+  });
   renderAll();
   loadPricesJson();   // best-effort override; never blocks initial render
 }
@@ -1329,6 +1503,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (r.status!==202){ bRunLog('✗ HTTP '+r.status+': '+esc(j.error||JSON.stringify(j))); bSetControls(false); return; }
       id=j.run_id;
       bRunLog(bi('Запущен','Started')+' run_id='+esc(id)+'\n'+bi('артефакты:','artifacts:')+' '+esc(j.artifact_dir||''));
+      tFillLiveRunId(id);   // M14: hand the fresh run_id to the Live AG-UI timeline (no auto-connect)
     } catch(e){ bRunLog('✗ '+esc(e.message)); bSetControls(false); return; }
 
     var lastState=null;
@@ -1446,6 +1621,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       }
       id2=j2.run_id;
       addBubble('sys',bi('Запущен','Started')+' <code>run_id='+esc(id2)+'</code>',esc(j2.artifact_dir||''));
+      tFillLiveRunId(id2);   // M14: hand the fresh run_id to the Live AG-UI timeline (no auto-connect)
     } catch(e3){ addBubble('sys','✗ '+esc(e3.message)); chFinish(); return; }
 
     var lastState2=null;
@@ -1478,7 +1654,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       turnLabel=bi('тёрн ','turn ')+(++chTurnN)+' · ';
       convMeta=esc(target)+' · '+esc(chConvId);
     }
-    chRunFlow(body, turnLabel+esc(mode)+(text?' — '+esc(text):''), convMeta);
+    chRunFlow(body, turnLabel+esc(mode)+(text?' — '+mdRender(text):''), convMeta);  // M14: rich markdown render
   });
   ge('ch-rerun').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'replay', from_run:chLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
   ge('ch-baseline').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'baseline', from_run:chLastRunId }, '📌 '+bi('Зафиксировать эталон','Update baseline')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
@@ -1510,6 +1686,316 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       })(name,content);
     }
   }
+
+  /* ================================================================
+     M14 — TESTS PANEL: sub-tabs, Library, Run history, Chats, Live AG-UI
+     (docs/M14_CONTRACT.md §5; JSON field names verified against
+     cmd/control-api/main.go + internal/store/pb/store.pb.go — snake_case,
+     encoding/json, no protojson camelCase conversion.)
+     ================================================================ */
+
+  /* ---- sub-tab switcher (Author is the default; persisted like the top tab) ---- */
+  function tSubTab(name){
+    document.querySelectorAll('.subpanel[data-subpanel]').forEach(function(p){
+      p.classList.toggle('on', p.getAttribute('data-subpanel')===name);
+    });
+    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
+      b.setAttribute('aria-selected', b.getAttribute('data-subtab')===name ? 'true' : 'false');
+    });
+    try { localStorage.setItem('sentinel_subtab', name); } catch (e) {}
+    if (name==='library' && !tLibLoaded)  tLoadLibrary();
+    if (name==='runs'    && !tRunsLoaded) tLoadRuns();
+    if (name==='chats'   && !tChatsLoaded) tLoadChats();
+  }
+  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
+    b.addEventListener('click', function(){ tSubTab(b.getAttribute('data-subtab')); });
+  });
+  (function initSubTab(){
+    var s='author';
+    try { s = localStorage.getItem('sentinel_subtab') || 'author'; } catch (e) {}
+    tSubTab(s);
+  })();
+
+  /* ---- Library: scenarios + tests (GET /v1/scenarios, /v1/tests; POST /v1/tests/promote; DELETE) ---- */
+  var tLibLoaded=false, tLibScenarios=[], tLibTests=[];
+
+  async function tFetchScenarios(){
+    try {
+      var r=await fetch(capiBase()+'/v1/scenarios',{headers:authHdr()});
+      var j=await r.json();
+      tLibScenarios = j.scenarios || [];
+    } catch(e){ tLibScenarios=[]; }
+  }
+  async function tFetchTests(){
+    try {
+      var r=await fetch(capiBase()+'/v1/tests',{headers:authHdr()});
+      var j=await r.json();
+      tLibTests = j.tests || [];
+    } catch(e){ tLibTests=[]; }
+  }
+  async function tLoadLibrary(){
+    tLibLoaded=true;
+    ge('lib-scenarios').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    ge('lib-tests').innerHTML='';
+    await Promise.all([tFetchScenarios(), tFetchTests()]);
+    tRenderLibrary();
+  }
+  function tRenderLibrary(){
+    var q=(ge('lib-search').value||'').toLowerCase();
+    var sHtml='';
+    tLibScenarios.filter(function(s){
+      return !q || (s.name||'').toLowerCase().indexOf(q)>=0 || (s.target||'').toLowerCase().indexOf(q)>=0 || (s.scenario_id||'').toLowerCase().indexOf(q)>=0;
+    }).forEach(function(s){
+      sHtml+='<div class="libitem"><div class="libitem-row">'+
+        '<div><b>'+esc(s.name||s.scenario_id||'—')+'</b> <span class="libmeta">'+esc(s.run_mode||'')+' · '+esc(s.target||'')+'</span></div>'+
+        '<div class="ctl-row" style="margin:0">'+
+          '<button type="button" class="btn" data-promote="'+esc(s.scenario_id)+'">⇪ '+bi('В тест','Promote')+'</button>'+
+          '<button type="button" class="btn" data-del-scenario="'+esc(s.scenario_id)+'">🗑</button>'+
+        '</div></div>'+
+        '<div class="libmeta">id='+esc(s.scenario_id)+' · plan_hash='+esc((s.plan_hash||'').slice(0,12))+
+          ' · '+bi('несовпадений','unmatched')+'='+(s.unmatched||0)+
+          (s.created_at?' · '+esc(s.created_at):'')+'</div></div>';
+    });
+    ge('lib-scenarios').innerHTML = sHtml || '<p class="hint">'+bi('сценариев ещё нет — запусти explore/goal (scenario.json попадёт сюда на finish)','no scenarios yet — run explore/goal (scenario.json lands here on finish)')+'</p>';
+    document.querySelectorAll('#lib-scenarios [data-promote]').forEach(function(b){ b.addEventListener('click', function(){ tPromote(b.getAttribute('data-promote')); }); });
+    document.querySelectorAll('#lib-scenarios [data-del-scenario]').forEach(function(b){ b.addEventListener('click', function(){ tDeleteScenario(b.getAttribute('data-del-scenario')); }); });
+
+    var tHtml='';
+    tLibTests.filter(function(t){ return !q || (t.name||'').toLowerCase().indexOf(q)>=0 || (t.test_id||'').toLowerCase().indexOf(q)>=0; })
+      .forEach(function(t){
+        var st = t.last_status==='pass' ? '<span class="pass">✓ pass</span>'
+               : t.last_status==='fail' ? '<span class="fail">✗ fail</span>'
+               : '<span class="libmeta">— '+bi('не прогонялся','not run yet')+'</span>';
+        tHtml+='<div class="libitem"><div class="libitem-row">'+
+          '<div><b>'+esc(t.name||t.test_id)+'</b> '+st+'</div>'+
+          '<div class="ctl-row" style="margin:0">'+
+            (t.last_run_id ? '<button type="button" class="btn" data-rerun-test="'+esc(t.last_run_id)+'">🔁</button>' : '')+
+            '<button type="button" class="btn" data-rename-test="'+esc(t.test_id)+'" data-scenario="'+esc(t.scenario_id)+'">✎ '+bi('Переименовать','Rename')+'</button>'+
+            '<button type="button" class="btn" data-delete-test="'+esc(t.test_id)+'">🗑</button>'+
+          '</div></div>'+
+          '<div class="libmeta">id='+esc(t.test_id)+' · scenario_id='+esc(t.scenario_id)+
+            (t.last_run_id?' · last_run_id='+esc(t.last_run_id):'')+
+            (t.created_at?' · '+esc(t.created_at):'')+'</div></div>';
+      });
+    ge('lib-tests').innerHTML = tHtml || '<p class="hint">'+bi('тестов ещё нет — продвинь сценарий выше','no tests yet — promote a scenario above')+'</p>';
+    document.querySelectorAll('#lib-tests [data-rerun-test]').forEach(function(b){ b.addEventListener('click', function(){ tRunFromRunId(b.getAttribute('data-rerun-test'), 'replay'); }); });
+    document.querySelectorAll('#lib-tests [data-rename-test]').forEach(function(b){ b.addEventListener('click', function(){ tRenameTest(b.getAttribute('data-rename-test'), b.getAttribute('data-scenario')); }); });
+    document.querySelectorAll('#lib-tests [data-delete-test]').forEach(function(b){ b.addEventListener('click', function(){ tDeleteTest(b.getAttribute('data-delete-test')); }); });
+  }
+  ge('lib-search').addEventListener('input', tRenderLibrary);
+  ge('lib-refresh').addEventListener('click', tLoadLibrary);
+
+  async function tPromoteReq(scenarioId, name){
+    var hdr3={'Content-Type':'application/json'}; var ah3=authHdr();
+    if (ah3.Authorization) hdr3.Authorization=ah3.Authorization;
+    try {
+      var r=await fetch(capiBase()+'/v1/tests/promote',{method:'POST',headers:hdr3,body:JSON.stringify({scenario_id:scenarioId,name:name||''})});
+      var j; try { j=await r.json(); } catch(e){ j={}; }
+      if (!r.ok){ alert('✗ '+(j.error||('HTTP '+r.status))); return false; }
+      return true;
+    } catch(e){ alert('✗ '+e.message); return false; }
+  }
+  async function tPromote(scenarioId){
+    if (!scenarioId) return;
+    var name = prompt(biPlain('Имя теста','Test name')) || '';
+    if (await tPromoteReq(scenarioId, name)) await tLoadLibrary();
+  }
+  async function tRenameTest(testId, scenarioId){
+    // No dedicated rename RPC (M14_CONTRACT §3): "rename = re-save with a new label" — promote a fresh
+    // test record under the new name, then delete the old test_id so the library shows one renamed row
+    // instead of a duplicate. last_status/last_run_id history does NOT carry over to the new test_id
+    // (PromoteTest always INSERTs, internal/store/domains.go — there is no upsert-by-scenario_id).
+    if (!scenarioId){ alert(biPlain('Нет scenario_id у этого теста — переименование недоступно','No scenario_id on this test — rename unavailable')); return; }
+    var name = prompt(biPlain('Новое имя теста','New test name'));
+    if (!name) return;
+    if (await tPromoteReq(scenarioId, name)){
+      try { await fetch(capiBase()+'/v1/tests/'+encodeURIComponent(testId),{method:'DELETE',headers:authHdr()}); } catch(e){}
+      await tLoadLibrary();
+    }
+  }
+  async function tDeleteTest(testId){
+    if (!confirm(biPlain('Удалить тест?','Delete this test?'))) return;
+    try { await fetch(capiBase()+'/v1/tests/'+encodeURIComponent(testId),{method:'DELETE',headers:authHdr()}); } catch(e){}
+    await tLoadLibrary();
+  }
+  async function tDeleteScenario(scenarioId){
+    if (!confirm(biPlain('Удалить сценарий?','Delete this scenario?'))) return;
+    try { await fetch(capiBase()+'/v1/scenarios/'+encodeURIComponent(scenarioId),{method:'DELETE',headers:authHdr()}); } catch(e){}
+    await tLoadLibrary();
+  }
+
+  /* ---- Run history: GET /v1/runs + launcher (reuses chRunFlow's from_run replay/baseline) ---- */
+  var tRunsLoaded=false, tRuns=[];
+  async function tLoadRuns(){
+    tRunsLoaded=true;
+    ge('runs-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    try {
+      var r=await fetch(capiBase()+'/v1/runs',{headers:authHdr()});
+      var j=await r.json();
+      tRuns=(j.runs||[]).slice().sort(function(a,b){ return (b.started_at||'').localeCompare(a.started_at||''); });
+    } catch(e){ tRuns=[]; }
+    tRenderRuns();
+  }
+  function tRenderRuns(){
+    var html='';
+    tRuns.forEach(function(rn){
+      var badge = rn.state==='running' ? '<span class="libmeta">● '+bi('идёт','running')+'</span>'
+        : rn.exit_code===0 ? '<span class="pass">✓ 0</span>'
+        : rn.state==='failed' ? '<span class="fail">✖</span>'
+        : '<span class="libmeta">exit '+esc(rn.exit_code)+'</span>';
+      html+='<div class="runitem"><div class="libitem-row">'+
+        '<div><code>'+esc(rn.run_id)+'</code> '+badge+' <span class="libmeta">'+esc(rn.mode||'')+' · '+esc(rn.target||'')+'</span></div>'+
+        '<div class="ctl-row" style="margin:0">'+
+          (rn.state==='running' ? '<button type="button" class="btn" data-watch="'+esc(rn.run_id)+'">👁 '+bi('Наблюдать','Watch')+'</button>' : '')+
+          '<button type="button" class="btn" data-rerun="'+esc(rn.run_id)+'">🔁</button>'+
+          '<button type="button" class="btn" data-baseline="'+esc(rn.run_id)+'">📌</button>'+
+        '</div></div>'+
+        '<div class="libmeta">'+esc(rn.started_at||'')+(rn.error?' · err='+esc(rn.error):'')+'</div></div>';
+    });
+    ge('runs-list').innerHTML = html || '<p class="hint">'+bi('прогонов ещё нет','no runs yet')+'</p>';
+    document.querySelectorAll('#runs-list [data-watch]').forEach(function(b){ b.addEventListener('click', function(){ var id=b.getAttribute('data-watch'); tSubTab('live'); agConnect(id); }); });
+    document.querySelectorAll('#runs-list [data-rerun]').forEach(function(b){ b.addEventListener('click', function(){ tRunFromRunId(b.getAttribute('data-rerun'), 'replay'); }); });
+    document.querySelectorAll('#runs-list [data-baseline]').forEach(function(b){ b.addEventListener('click', function(){ tRunFromRunId(b.getAttribute('data-baseline'), 'baseline'); }); });
+  }
+  ge('runs-refresh').addEventListener('click', tLoadRuns);
+
+  /* shared launcher for Library/Runs rows: reuses chRunFlow (Author tab) so run/replay/baseline stay
+     ONE code path — switches to Author so the run log + artifact downloads show where they've always lived. */
+  function tRunFromRunId(runId, mode){
+    tSubTab('author');
+    var label = mode==='baseline'
+      ? '📌 '+bi('Эталон','Baseline')+' <code>from_run='+esc(runId)+'</code>'
+      : '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(runId)+'</code>';
+    chRunFlow({ mode: mode, from_run: runId }, label, '');
+  }
+
+  /* ---- Chats: GET /v1/chats, resume into Author, delete, search ---- */
+  var tChatsLoaded=false, tChats=[];
+  async function tLoadChats(){
+    tChatsLoaded=true;
+    ge('chats-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    try {
+      var r=await fetch(capiBase()+'/v1/chats',{headers:authHdr()});
+      var j=await r.json();
+      tChats=j.chats||[];
+    } catch(e){ tChats=[]; }
+    tRenderChats();
+  }
+  function tRenderChats(){
+    var q=(ge('chats-search').value||'').toLowerCase();
+    var html='';
+    tChats.filter(function(c){
+      return !q || (c.last_goal||'').toLowerCase().indexOf(q)>=0 || (c.last_target||'').toLowerCase().indexOf(q)>=0 || (c.conversation_id||'').toLowerCase().indexOf(q)>=0;
+    }).forEach(function(c){
+      html+='<div class="chatitem"><div class="libitem-row">'+
+        '<div><code>'+esc(c.conversation_id)+'</code> <span class="libmeta">'+(c.turn_count||0)+' '+bi('тёрнов','turns')+' · '+esc(c.last_target||'')+'</span></div>'+
+        '<div class="ctl-row" style="margin:0">'+
+          '<button type="button" class="btn" data-resume="'+esc(c.conversation_id)+'">▶ '+bi('Продолжить','Resume')+'</button>'+
+          '<button type="button" class="btn" data-del-chat="'+esc(c.conversation_id)+'">🗑</button>'+
+        '</div></div>'+
+        (c.last_goal ? '<div class="libmeta">'+bi('последняя цель','last goal')+': '+esc(c.last_goal)+'</div>' : '')+
+        (c.summary  ? '<div class="libmeta">'+esc(c.summary)+'</div>' : '')+
+        '<div class="libmeta">'+esc(c.last_active||'')+'</div></div>';
+    });
+    ge('chats-list').innerHTML = html || '<p class="hint">'+bi('бесед пока нет','no conversations yet')+'</p>';
+    document.querySelectorAll('#chats-list [data-resume]').forEach(function(b){ b.addEventListener('click', function(){ tResumeChat(b.getAttribute('data-resume')); }); });
+    document.querySelectorAll('#chats-list [data-del-chat]').forEach(function(b){ b.addEventListener('click', function(){ tDeleteChat(b.getAttribute('data-del-chat')); }); });
+  }
+  ge('chats-search').addEventListener('input', tRenderChats);
+  ge('chats-refresh').addEventListener('click', tLoadChats);
+  function tResumeChat(convId){
+    chConvId = convId; chTurnN = 0;   // reuses the Author section's own conversation_id state (M9.10, ADR-048)
+    tSubTab('author');
+    addBubble('sys', '— '+bi('возобновлён разговор','resumed conversation')+' <code>'+esc(convId)+'</code> —');
+  }
+  async function tDeleteChat(convId){
+    if (!confirm(biPlain('Удалить беседу?','Delete this conversation?'))) return;
+    try { await fetch(capiBase()+'/v1/chats/'+encodeURIComponent(convId),{method:'DELETE',headers:authHdr()}); } catch(e){}
+    await tLoadChats();
+  }
+
+  /* ---- Live AG-UI timeline: WS /v1/stream?run_id= (M14 W2/§2, ws.go) + hitl_needed banner + takeover/return ---- */
+  var agWS=null, agRunId=null;
+  function tFillLiveRunId(id){ if (id) ge('live-runid').value=id; }   // populate only — never auto-connects
+  function agSetStatus(html){ ge('live-status').innerHTML=html; }
+  function agAddEvent(cls, html){
+    var el=document.createElement('div'); el.className='tl-ev'+(cls?' '+cls:''); el.innerHTML=html;
+    ge('live-timeline').appendChild(el); el.scrollIntoView({block:'end'});
+  }
+  function agClassFor(type){
+    if (type==='state.transition') return 'state';
+    if (type==='tool.call') return 'tool';
+    if (type==='heal') return 'heal';
+    if (type==='verdict' || type==='run.finished') return 'verdict';
+    return '';
+  }
+  function agHitlBanner(show, reason, count){
+    var box=ge('live-hitl');
+    if (!show){ box.style.display='none'; box.innerHTML=''; return; }
+    box.className='hitl-banner'; box.style.display='';
+    box.innerHTML='<b>⚠ '+bi('нужен человек','human needed')+'</b>'+(reason?' — '+esc(reason):'')+
+      (count!=null?' ('+bi('попыток','attempts')+'='+esc(count)+')':'')+
+      ' <button type="button" class="btn" id="live-takeover">🖐 '+bi('Взять управление','Take over')+'</button>'+
+      ' <button type="button" class="btn" id="live-return">↩ '+bi('Вернуть','Return')+'</button>';
+    ge('live-takeover').addEventListener('click', function(){ agControl('takeover'); });
+    ge('live-return').addEventListener('click', function(){ agControl('return'); agHitlBanner(false); });
+  }
+  function agControl(action){
+    if (!agWS || agWS.readyState!==1 || !agRunId) return;
+    try { agWS.send(JSON.stringify({type:'control',action:action,run_id:agRunId})); } catch(e){}
+  }
+  function agHandle(p){
+    if (!p || !p.type) return;
+    if (p.type==='subscribed'){ agSetStatus('<span class="pass">● '+bi('подписан','subscribed')+'</span> run_id='+esc(p.run_id||agRunId)); return; }
+    if (p.type==='error'){ agAddEvent('err', '✗ '+esc(p.error||'error')); return; }
+    if (p.type==='control-ok'){ agAddEvent('verdict', '✓ control '+esc(p.action)); if (p.action==='return') agHitlBanner(false); return; }
+    if (p.type==='control-error'){ agAddEvent('err', '✗ control '+esc(p.action)+': '+esc(p.error||'')); return; }
+    if (p.type==='log'){ agAddEvent('log', esc((p.data && p.data.line) || '')); return; }
+    if (p.type==='hitl_needed'){
+      agAddEvent('heal', '⚠ hitl_needed '+esc(JSON.stringify(p.data||{})));
+      agHitlBanner(true, p.data && p.data.reason, p.data && p.data.count);
+      return;
+    }
+    if (p.type==='run.finished'){ agAddEvent('verdict', '⏹ run.finished exit_code='+esc(p.data && p.data.exit_code)); return; }
+    // run.started / state.transition / step.progress / tool.call / heal / verdict — generic timeline chip
+    agAddEvent(agClassFor(p.type), '<b>'+esc(p.type)+'</b> #'+esc(p.seq!=null?p.seq:'?')+' '+esc(JSON.stringify(p.data||{})));
+  }
+  function agDisconnect(){
+    if (agWS){ try { agWS.close(); } catch(e){} }
+    agWS=null;
+    ge('live-connect').disabled=false; ge('live-disconnect').disabled=true;
+    agSetStatus('<span class="libmeta">'+bi('отключено','disconnected')+'</span>');
+  }
+  function agConnect(runId){
+    runId = runId || ge('live-runid').value.trim();
+    if (!runId) return;
+    agDisconnect();
+    ge('live-runid').value=runId;
+    ge('live-timeline').innerHTML=''; agHitlBanner(false);
+    var base=capiBase();
+    if (!base){ agSetStatus('<span class="fail">✗ '+bi('укажи control-API URL в Settings','set the control-API URL in Settings')+'</span>'); return; }
+    var wsBase = base.replace(/^https/i,'wss').replace(/^http/i,'ws');
+    var protocols=['sentinel.recorder.v1'];
+    var tok=capiTok(); if (tok) protocols.push('bearer.'+tok);
+    agRunId=runId;
+    agSetStatus('<span class="libmeta">'+bi('подключение…','connecting…')+'</span>');
+    try {
+      agWS=new WebSocket(wsBase+'/v1/stream?run_id='+encodeURIComponent(runId), protocols);
+    } catch(e){ agSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); return; }
+    ge('live-connect').disabled=true; ge('live-disconnect').disabled=false;
+    agWS.addEventListener('open', function(){ agSetStatus('<span class="libmeta">'+bi('открыт, жду подтверждения…','open, awaiting ack…')+'</span>'); });
+    agWS.addEventListener('message', function(ev){
+      var p; try { p=JSON.parse(ev.data); } catch(e){ agAddEvent('log', esc(String(ev.data))); return; }
+      agHandle(p);
+    });
+    agWS.addEventListener('close', function(ev){
+      ge('live-connect').disabled=false; ge('live-disconnect').disabled=true;
+      agSetStatus('<span class="libmeta">'+bi('закрыто','closed')+' (code='+ev.code+')</span>');
+    });
+    agWS.addEventListener('error', function(){ agSetStatus('<span class="fail">✗ '+bi('ошибка сокета','socket error')+'</span>'); });
+  }
+  ge('live-connect').addEventListener('click', function(){ agConnect(); });
+  ge('live-disconnect').addEventListener('click', agDisconnect);
 
 })(); /* end m12 */
 

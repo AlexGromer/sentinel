@@ -115,6 +115,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_m13_chats_offline.py | Python | **M13** chats projection (`_project_chat`/`ChatProjector`) + GAP-M9-20 cap/summary (`_capped_history`) + GAP-M9-19 reverify→re-explore; in CI offline loop (`m13_chats`) |
 | proto/store.proto | proto3 | **M13 / ADR-050** `StoreService` (5 domains, 20 RPCs) beside legacy `PersistenceService` (same package/DB, reuses `Empty`); SQLite-first, Postgres via `STORE_DSN` deferred to M13-service |
 | docs/M13_CONTRACT.md / .en.md | Docs | **M13 / ADR-049/050** as-built contract: 5-domain store-gateway (SQLite-first) · chats-projection · GAP-M9-19/20 · Postgres/migrations/TCP → M13-service |
+| docs/M14_CONTRACT.md / .en.md | Docs | **M14 / ADR-052+055** contract (in-dev): AG-UI event-schema (`@@AGUI` over WS `/v1/stream` + `?run_id=` sub) · HTTP surface scenarios/tests/chats (+promote/+delete) · full auto-HITL (counters→`_takeover_armed`→`hitl_needed`) · vanilla co-pilot Settings\|Tests + parity-matrix (≥OpenWebUI+CopilotKit); **ADR-055** drops CopilotKit (vanilla sovereign, `frontend/` frozen). results/metrics = M15 stubs |
+| brain/agui.py | Python | **M14 W4** AG-UI event emitter: `emit(type,run_id,**data)` → `@@AGUI `+compact-JSON envelope (`{type,run_id,seq,ts,data}`) to stdout; module-level monotonic seq; secret-safe; consumed by control-API WS `?run_id=` (`ws.go wsAGUIFrame`) |
+| tests/test_m14_agui_offline.py | Python | **M14 W4** offline: agui envelope shape · heal-miss counter increment/reset · `SENTINEL_AUTO_HITL_THRESHOLD` arms `_takeover_armed`+`hitl_needed` · threshold=0 regression (no interrupt, `plan_hash` written) · R2/R3-harness no-regress. CI-loop `m14_agui` |
 ## Directory Structure
 ```
 agent_development/

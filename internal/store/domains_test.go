@@ -134,6 +134,59 @@ func TestMetricsIngestQueryTrends(t *testing.T) {
 	}
 }
 
+// TestDeleteScenarioTestChat covers the M14 wave W3 library-management RPCs: delete is idempotent
+// (deleting a missing id is success, not an error) and only removes the targeted row.
+func TestDeleteScenarioTestChat(t *testing.T) {
+	s := newDomServer(t)
+	ctx := context.Background()
+
+	if _, err := s.SaveScenario(ctx, &pb.Scenario{ScenarioId: "sc1", Name: "login", Target: "http://x", PlanHash: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveScenario(ctx, &pb.Scenario{ScenarioId: "sc2", Name: "logout", Target: "http://x", PlanHash: "def"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteScenario(ctx, &pb.ScenarioId{ScenarioId: "sc1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetScenario(ctx, &pb.ScenarioId{ScenarioId: "sc1"}); got.Found {
+		t.Fatal("DeleteScenario: sc1 still found")
+	}
+	if got, _ := s.GetScenario(ctx, &pb.ScenarioId{ScenarioId: "sc2"}); !got.Found {
+		t.Fatal("DeleteScenario: sc2 (untouched) must still be found")
+	}
+	if _, err := s.DeleteScenario(ctx, &pb.ScenarioId{ScenarioId: "nope"}); err != nil {
+		t.Fatalf("DeleteScenario of a missing id must be idempotent success, got %v", err)
+	}
+
+	tr, err := s.PromoteTest(ctx, &pb.PromoteReq{ScenarioId: "sc2", Name: "logout-test"})
+	if err != nil || !tr.Found {
+		t.Fatalf("PromoteTest = %+v, err=%v", tr, err)
+	}
+	if _, err := s.DeleteTest(ctx, &pb.TestId{TestId: tr.TestId}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetTest(ctx, &pb.TestId{TestId: tr.TestId}); got.Found {
+		t.Fatal("DeleteTest: test still found")
+	}
+	if _, err := s.DeleteTest(ctx, &pb.TestId{TestId: "nope"}); err != nil {
+		t.Fatalf("DeleteTest of a missing id must be idempotent success, got %v", err)
+	}
+
+	if _, err := s.UpsertChat(ctx, &pb.ChatProjection{ConversationId: "c1", TurnCount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteChat(ctx, &pb.ConversationId{ConversationId: "c1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetChat(ctx, &pb.ConversationId{ConversationId: "c1"}); got.Found {
+		t.Fatal("DeleteChat: chat still found")
+	}
+	if _, err := s.DeleteChat(ctx, &pb.ConversationId{ConversationId: "nope"}); err != nil {
+		t.Fatalf("DeleteChat of a missing id must be idempotent success, got %v", err)
+	}
+}
+
 func TestStoreDSNScaffoldRefuses(t *testing.T) {
 	t.Setenv("STORE_DSN", "postgres://user@host/db")
 	if _, err := New(filepath.Join(t.TempDir(), "s.db")); err == nil {

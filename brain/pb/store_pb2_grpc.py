@@ -65,6 +65,11 @@ class StoreServiceStub:
                 request_serializer=store__pb2.ListScenariosReq.SerializeToString,
                 response_deserializer=store__pb2.ScenarioList.FromString,
                 _registered_method=True)
+        self.DeleteScenario = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/DeleteScenario',
+                request_serializer=store__pb2.ScenarioId.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
+                _registered_method=True)
         self.PromoteTest = channel.unary_unary(
                 '/sentinel.persistence.v1.StoreService/PromoteTest',
                 request_serializer=store__pb2.PromoteReq.SerializeToString,
@@ -80,6 +85,11 @@ class StoreServiceStub:
                 request_serializer=store__pb2.ListTestsReq.SerializeToString,
                 response_deserializer=store__pb2.TestList.FromString,
                 _registered_method=True)
+        self.DeleteTest = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/DeleteTest',
+                request_serializer=store__pb2.TestId.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
+                _registered_method=True)
         self.UpsertChat = channel.unary_unary(
                 '/sentinel.persistence.v1.StoreService/UpsertChat',
                 request_serializer=store__pb2.ChatProjection.SerializeToString,
@@ -94,6 +104,11 @@ class StoreServiceStub:
                 '/sentinel.persistence.v1.StoreService/ListChats',
                 request_serializer=store__pb2.ListChatsReq.SerializeToString,
                 response_deserializer=store__pb2.ChatList.FromString,
+                _registered_method=True)
+        self.DeleteChat = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/DeleteChat',
+                request_serializer=store__pb2.ConversationId.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
                 _registered_method=True)
         self.SaveResult = channel.unary_unary(
                 '/sentinel.persistence.v1.StoreService/SaveResult',
@@ -168,6 +183,13 @@ class StoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DeleteScenario(self, request, context):
+        """M14 wave W3: library mgmt, idempotent (missing id -> success)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def PromoteTest(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -182,6 +204,13 @@ class StoreServiceServicer:
 
     def ListTests(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteTest(self, request, context):
+        """M14 wave W3
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -201,6 +230,13 @@ class StoreServiceServicer:
 
     def ListChats(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteChat(self, request, context):
+        """M14 wave W3
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -276,6 +312,11 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     request_deserializer=store__pb2.ListScenariosReq.FromString,
                     response_serializer=store__pb2.ScenarioList.SerializeToString,
             ),
+            'DeleteScenario': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteScenario,
+                    request_deserializer=store__pb2.ScenarioId.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
+            ),
             'PromoteTest': grpc.unary_unary_rpc_method_handler(
                     servicer.PromoteTest,
                     request_deserializer=store__pb2.PromoteReq.FromString,
@@ -291,6 +332,11 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     request_deserializer=store__pb2.ListTestsReq.FromString,
                     response_serializer=store__pb2.TestList.SerializeToString,
             ),
+            'DeleteTest': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteTest,
+                    request_deserializer=store__pb2.TestId.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
+            ),
             'UpsertChat': grpc.unary_unary_rpc_method_handler(
                     servicer.UpsertChat,
                     request_deserializer=store__pb2.ChatProjection.FromString,
@@ -305,6 +351,11 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     servicer.ListChats,
                     request_deserializer=store__pb2.ListChatsReq.FromString,
                     response_serializer=store__pb2.ChatList.SerializeToString,
+            ),
+            'DeleteChat': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteChat,
+                    request_deserializer=store__pb2.ConversationId.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
             ),
             'SaveResult': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveResult,
@@ -510,6 +561,33 @@ class StoreService:
             _registered_method=True)
 
     @staticmethod
+    def DeleteScenario(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/DeleteScenario',
+            store__pb2.ScenarioId.SerializeToString,
+            persistence__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def PromoteTest(request,
             target,
             options=(),
@@ -591,6 +669,33 @@ class StoreService:
             _registered_method=True)
 
     @staticmethod
+    def DeleteTest(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/DeleteTest',
+            store__pb2.TestId.SerializeToString,
+            persistence__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def UpsertChat(request,
             target,
             options=(),
@@ -661,6 +766,33 @@ class StoreService:
             '/sentinel.persistence.v1.StoreService/ListChats',
             store__pb2.ListChatsReq.SerializeToString,
             store__pb2.ChatList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteChat(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/DeleteChat',
+            store__pb2.ConversationId.SerializeToString,
+            persistence__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,

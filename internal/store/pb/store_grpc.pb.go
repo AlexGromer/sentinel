@@ -25,24 +25,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StoreService_UpsertRun_FullMethodName     = "/sentinel.persistence.v1.StoreService/UpsertRun"
-	StoreService_GetRun_FullMethodName        = "/sentinel.persistence.v1.StoreService/GetRun"
-	StoreService_ListRuns_FullMethodName      = "/sentinel.persistence.v1.StoreService/ListRuns"
-	StoreService_SaveScenario_FullMethodName  = "/sentinel.persistence.v1.StoreService/SaveScenario"
-	StoreService_GetScenario_FullMethodName   = "/sentinel.persistence.v1.StoreService/GetScenario"
-	StoreService_ListScenarios_FullMethodName = "/sentinel.persistence.v1.StoreService/ListScenarios"
-	StoreService_PromoteTest_FullMethodName   = "/sentinel.persistence.v1.StoreService/PromoteTest"
-	StoreService_GetTest_FullMethodName       = "/sentinel.persistence.v1.StoreService/GetTest"
-	StoreService_ListTests_FullMethodName     = "/sentinel.persistence.v1.StoreService/ListTests"
-	StoreService_UpsertChat_FullMethodName    = "/sentinel.persistence.v1.StoreService/UpsertChat"
-	StoreService_GetChat_FullMethodName       = "/sentinel.persistence.v1.StoreService/GetChat"
-	StoreService_ListChats_FullMethodName     = "/sentinel.persistence.v1.StoreService/ListChats"
-	StoreService_SaveResult_FullMethodName    = "/sentinel.persistence.v1.StoreService/SaveResult"
-	StoreService_GetResult_FullMethodName     = "/sentinel.persistence.v1.StoreService/GetResult"
-	StoreService_ListResults_FullMethodName   = "/sentinel.persistence.v1.StoreService/ListResults"
-	StoreService_IngestMetrics_FullMethodName = "/sentinel.persistence.v1.StoreService/IngestMetrics"
-	StoreService_QueryMetrics_FullMethodName  = "/sentinel.persistence.v1.StoreService/QueryMetrics"
-	StoreService_Trends_FullMethodName        = "/sentinel.persistence.v1.StoreService/Trends"
+	StoreService_UpsertRun_FullMethodName      = "/sentinel.persistence.v1.StoreService/UpsertRun"
+	StoreService_GetRun_FullMethodName         = "/sentinel.persistence.v1.StoreService/GetRun"
+	StoreService_ListRuns_FullMethodName       = "/sentinel.persistence.v1.StoreService/ListRuns"
+	StoreService_SaveScenario_FullMethodName   = "/sentinel.persistence.v1.StoreService/SaveScenario"
+	StoreService_GetScenario_FullMethodName    = "/sentinel.persistence.v1.StoreService/GetScenario"
+	StoreService_ListScenarios_FullMethodName  = "/sentinel.persistence.v1.StoreService/ListScenarios"
+	StoreService_DeleteScenario_FullMethodName = "/sentinel.persistence.v1.StoreService/DeleteScenario"
+	StoreService_PromoteTest_FullMethodName    = "/sentinel.persistence.v1.StoreService/PromoteTest"
+	StoreService_GetTest_FullMethodName        = "/sentinel.persistence.v1.StoreService/GetTest"
+	StoreService_ListTests_FullMethodName      = "/sentinel.persistence.v1.StoreService/ListTests"
+	StoreService_DeleteTest_FullMethodName     = "/sentinel.persistence.v1.StoreService/DeleteTest"
+	StoreService_UpsertChat_FullMethodName     = "/sentinel.persistence.v1.StoreService/UpsertChat"
+	StoreService_GetChat_FullMethodName        = "/sentinel.persistence.v1.StoreService/GetChat"
+	StoreService_ListChats_FullMethodName      = "/sentinel.persistence.v1.StoreService/ListChats"
+	StoreService_DeleteChat_FullMethodName     = "/sentinel.persistence.v1.StoreService/DeleteChat"
+	StoreService_SaveResult_FullMethodName     = "/sentinel.persistence.v1.StoreService/SaveResult"
+	StoreService_GetResult_FullMethodName      = "/sentinel.persistence.v1.StoreService/GetResult"
+	StoreService_ListResults_FullMethodName    = "/sentinel.persistence.v1.StoreService/ListResults"
+	StoreService_IngestMetrics_FullMethodName  = "/sentinel.persistence.v1.StoreService/IngestMetrics"
+	StoreService_QueryMetrics_FullMethodName   = "/sentinel.persistence.v1.StoreService/QueryMetrics"
+	StoreService_Trends_FullMethodName         = "/sentinel.persistence.v1.StoreService/Trends"
 )
 
 // StoreServiceClient is the client API for StoreService service.
@@ -57,13 +60,16 @@ type StoreServiceClient interface {
 	SaveScenario(ctx context.Context, in *Scenario, opts ...grpc.CallOption) (*Empty, error)
 	GetScenario(ctx context.Context, in *ScenarioId, opts ...grpc.CallOption) (*Scenario, error)
 	ListScenarios(ctx context.Context, in *ListScenariosReq, opts ...grpc.CallOption) (*ScenarioList, error)
+	DeleteScenario(ctx context.Context, in *ScenarioId, opts ...grpc.CallOption) (*Empty, error)
 	PromoteTest(ctx context.Context, in *PromoteReq, opts ...grpc.CallOption) (*TestRecord, error)
 	GetTest(ctx context.Context, in *TestId, opts ...grpc.CallOption) (*TestRecord, error)
 	ListTests(ctx context.Context, in *ListTestsReq, opts ...grpc.CallOption) (*TestList, error)
+	DeleteTest(ctx context.Context, in *TestId, opts ...grpc.CallOption) (*Empty, error)
 	// chats (projection)
 	UpsertChat(ctx context.Context, in *ChatProjection, opts ...grpc.CallOption) (*Empty, error)
 	GetChat(ctx context.Context, in *ConversationId, opts ...grpc.CallOption) (*ChatProjection, error)
 	ListChats(ctx context.Context, in *ListChatsReq, opts ...grpc.CallOption) (*ChatList, error)
+	DeleteChat(ctx context.Context, in *ConversationId, opts ...grpc.CallOption) (*Empty, error)
 	// results
 	SaveResult(ctx context.Context, in *ResultRecord, opts ...grpc.CallOption) (*Empty, error)
 	GetResult(ctx context.Context, in *RunId, opts ...grpc.CallOption) (*ResultRecord, error)
@@ -142,6 +148,16 @@ func (c *storeServiceClient) ListScenarios(ctx context.Context, in *ListScenario
 	return out, nil
 }
 
+func (c *storeServiceClient) DeleteScenario(ctx context.Context, in *ScenarioId, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_DeleteScenario_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storeServiceClient) PromoteTest(ctx context.Context, in *PromoteReq, opts ...grpc.CallOption) (*TestRecord, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TestRecord)
@@ -172,6 +188,16 @@ func (c *storeServiceClient) ListTests(ctx context.Context, in *ListTestsReq, op
 	return out, nil
 }
 
+func (c *storeServiceClient) DeleteTest(ctx context.Context, in *TestId, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_DeleteTest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storeServiceClient) UpsertChat(ctx context.Context, in *ChatProjection, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -196,6 +222,16 @@ func (c *storeServiceClient) ListChats(ctx context.Context, in *ListChatsReq, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ChatList)
 	err := c.cc.Invoke(ctx, StoreService_ListChats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) DeleteChat(ctx context.Context, in *ConversationId, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_DeleteChat_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -274,13 +310,16 @@ type StoreServiceServer interface {
 	SaveScenario(context.Context, *Scenario) (*Empty, error)
 	GetScenario(context.Context, *ScenarioId) (*Scenario, error)
 	ListScenarios(context.Context, *ListScenariosReq) (*ScenarioList, error)
+	DeleteScenario(context.Context, *ScenarioId) (*Empty, error)
 	PromoteTest(context.Context, *PromoteReq) (*TestRecord, error)
 	GetTest(context.Context, *TestId) (*TestRecord, error)
 	ListTests(context.Context, *ListTestsReq) (*TestList, error)
+	DeleteTest(context.Context, *TestId) (*Empty, error)
 	// chats (projection)
 	UpsertChat(context.Context, *ChatProjection) (*Empty, error)
 	GetChat(context.Context, *ConversationId) (*ChatProjection, error)
 	ListChats(context.Context, *ListChatsReq) (*ChatList, error)
+	DeleteChat(context.Context, *ConversationId) (*Empty, error)
 	// results
 	SaveResult(context.Context, *ResultRecord) (*Empty, error)
 	GetResult(context.Context, *RunId) (*ResultRecord, error)
@@ -317,6 +356,9 @@ func (UnimplementedStoreServiceServer) GetScenario(context.Context, *ScenarioId)
 func (UnimplementedStoreServiceServer) ListScenarios(context.Context, *ListScenariosReq) (*ScenarioList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListScenarios not implemented")
 }
+func (UnimplementedStoreServiceServer) DeleteScenario(context.Context, *ScenarioId) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteScenario not implemented")
+}
 func (UnimplementedStoreServiceServer) PromoteTest(context.Context, *PromoteReq) (*TestRecord, error) {
 	return nil, status.Error(codes.Unimplemented, "method PromoteTest not implemented")
 }
@@ -326,6 +368,9 @@ func (UnimplementedStoreServiceServer) GetTest(context.Context, *TestId) (*TestR
 func (UnimplementedStoreServiceServer) ListTests(context.Context, *ListTestsReq) (*TestList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTests not implemented")
 }
+func (UnimplementedStoreServiceServer) DeleteTest(context.Context, *TestId) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTest not implemented")
+}
 func (UnimplementedStoreServiceServer) UpsertChat(context.Context, *ChatProjection) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpsertChat not implemented")
 }
@@ -334,6 +379,9 @@ func (UnimplementedStoreServiceServer) GetChat(context.Context, *ConversationId)
 }
 func (UnimplementedStoreServiceServer) ListChats(context.Context, *ListChatsReq) (*ChatList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListChats not implemented")
+}
+func (UnimplementedStoreServiceServer) DeleteChat(context.Context, *ConversationId) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteChat not implemented")
 }
 func (UnimplementedStoreServiceServer) SaveResult(context.Context, *ResultRecord) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveResult not implemented")
@@ -482,6 +530,24 @@ func _StoreService_ListScenarios_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreService_DeleteScenario_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ScenarioId)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).DeleteScenario(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_DeleteScenario_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).DeleteScenario(ctx, req.(*ScenarioId))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StoreService_PromoteTest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PromoteReq)
 	if err := dec(in); err != nil {
@@ -536,6 +602,24 @@ func _StoreService_ListTests_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreService_DeleteTest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TestId)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).DeleteTest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_DeleteTest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).DeleteTest(ctx, req.(*TestId))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StoreService_UpsertChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ChatProjection)
 	if err := dec(in); err != nil {
@@ -586,6 +670,24 @@ func _StoreService_ListChats_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StoreServiceServer).ListChats(ctx, req.(*ListChatsReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_DeleteChat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConversationId)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).DeleteChat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_DeleteChat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).DeleteChat(ctx, req.(*ConversationId))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -730,6 +832,10 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StoreService_ListScenarios_Handler,
 		},
 		{
+			MethodName: "DeleteScenario",
+			Handler:    _StoreService_DeleteScenario_Handler,
+		},
+		{
 			MethodName: "PromoteTest",
 			Handler:    _StoreService_PromoteTest_Handler,
 		},
@@ -742,6 +848,10 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StoreService_ListTests_Handler,
 		},
 		{
+			MethodName: "DeleteTest",
+			Handler:    _StoreService_DeleteTest_Handler,
+		},
+		{
 			MethodName: "UpsertChat",
 			Handler:    _StoreService_UpsertChat_Handler,
 		},
@@ -752,6 +862,10 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListChats",
 			Handler:    _StoreService_ListChats_Handler,
+		},
+		{
+			MethodName: "DeleteChat",
+			Handler:    _StoreService_DeleteChat_Handler,
 		},
 		{
 			MethodName: "SaveResult",

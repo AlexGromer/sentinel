@@ -1953,21 +1953,26 @@ const file_store_proto_rawDesc = "" +
 	"\x05value\x18\x03 \x01(\x01R\x05value\"I\n" +
 	"\n" +
 	"TrendReply\x12;\n" +
-	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points2\xa9\f\n" +
+	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points2\xa6\x0e\n" +
 	"\fStoreService\x12O\n" +
 	"\tUpsertRun\x12\".sentinel.persistence.v1.RunRecord\x1a\x1e.sentinel.persistence.v1.Empty\x12L\n" +
 	"\x06GetRun\x12\x1e.sentinel.persistence.v1.RunId\x1a\".sentinel.persistence.v1.RunRecord\x12R\n" +
 	"\bListRuns\x12$.sentinel.persistence.v1.ListRunsReq\x1a .sentinel.persistence.v1.RunList\x12Q\n" +
 	"\fSaveScenario\x12!.sentinel.persistence.v1.Scenario\x1a\x1e.sentinel.persistence.v1.Empty\x12U\n" +
 	"\vGetScenario\x12#.sentinel.persistence.v1.ScenarioId\x1a!.sentinel.persistence.v1.Scenario\x12a\n" +
-	"\rListScenarios\x12).sentinel.persistence.v1.ListScenariosReq\x1a%.sentinel.persistence.v1.ScenarioList\x12W\n" +
+	"\rListScenarios\x12).sentinel.persistence.v1.ListScenariosReq\x1a%.sentinel.persistence.v1.ScenarioList\x12U\n" +
+	"\x0eDeleteScenario\x12#.sentinel.persistence.v1.ScenarioId\x1a\x1e.sentinel.persistence.v1.Empty\x12W\n" +
 	"\vPromoteTest\x12#.sentinel.persistence.v1.PromoteReq\x1a#.sentinel.persistence.v1.TestRecord\x12O\n" +
 	"\aGetTest\x12\x1f.sentinel.persistence.v1.TestId\x1a#.sentinel.persistence.v1.TestRecord\x12U\n" +
-	"\tListTests\x12%.sentinel.persistence.v1.ListTestsReq\x1a!.sentinel.persistence.v1.TestList\x12U\n" +
+	"\tListTests\x12%.sentinel.persistence.v1.ListTestsReq\x1a!.sentinel.persistence.v1.TestList\x12M\n" +
+	"\n" +
+	"DeleteTest\x12\x1f.sentinel.persistence.v1.TestId\x1a\x1e.sentinel.persistence.v1.Empty\x12U\n" +
 	"\n" +
 	"UpsertChat\x12'.sentinel.persistence.v1.ChatProjection\x1a\x1e.sentinel.persistence.v1.Empty\x12[\n" +
 	"\aGetChat\x12'.sentinel.persistence.v1.ConversationId\x1a'.sentinel.persistence.v1.ChatProjection\x12U\n" +
-	"\tListChats\x12%.sentinel.persistence.v1.ListChatsReq\x1a!.sentinel.persistence.v1.ChatList\x12S\n" +
+	"\tListChats\x12%.sentinel.persistence.v1.ListChatsReq\x1a!.sentinel.persistence.v1.ChatList\x12U\n" +
+	"\n" +
+	"DeleteChat\x12'.sentinel.persistence.v1.ConversationId\x1a\x1e.sentinel.persistence.v1.Empty\x12S\n" +
 	"\n" +
 	"SaveResult\x12%.sentinel.persistence.v1.ResultRecord\x1a\x1e.sentinel.persistence.v1.Empty\x12R\n" +
 	"\tGetResult\x12\x1e.sentinel.persistence.v1.RunId\x1a%.sentinel.persistence.v1.ResultRecord\x12[\n" +
@@ -2034,38 +2039,44 @@ var file_store_proto_depIdxs = []int32{
 	4,  // 11: sentinel.persistence.v1.StoreService.SaveScenario:input_type -> sentinel.persistence.v1.Scenario
 	5,  // 12: sentinel.persistence.v1.StoreService.GetScenario:input_type -> sentinel.persistence.v1.ScenarioId
 	6,  // 13: sentinel.persistence.v1.StoreService.ListScenarios:input_type -> sentinel.persistence.v1.ListScenariosReq
-	8,  // 14: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
-	10, // 15: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
-	11, // 16: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
-	13, // 17: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
-	14, // 18: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
-	15, // 19: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
-	17, // 20: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
-	1,  // 21: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
-	18, // 22: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
-	21, // 23: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
-	22, // 24: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
-	24, // 25: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
-	27, // 26: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
-	0,  // 27: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
-	3,  // 28: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
-	27, // 29: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
-	4,  // 30: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
-	7,  // 31: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
-	9,  // 32: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
-	9,  // 33: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
-	12, // 34: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
-	27, // 35: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
-	13, // 36: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
-	16, // 37: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
-	27, // 38: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
-	17, // 39: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
-	19, // 40: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
-	27, // 41: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
-	23, // 42: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
-	26, // 43: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
-	26, // [26:44] is the sub-list for method output_type
-	8,  // [8:26] is the sub-list for method input_type
+	5,  // 14: sentinel.persistence.v1.StoreService.DeleteScenario:input_type -> sentinel.persistence.v1.ScenarioId
+	8,  // 15: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
+	10, // 16: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
+	11, // 17: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
+	10, // 18: sentinel.persistence.v1.StoreService.DeleteTest:input_type -> sentinel.persistence.v1.TestId
+	13, // 19: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
+	14, // 20: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
+	15, // 21: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
+	14, // 22: sentinel.persistence.v1.StoreService.DeleteChat:input_type -> sentinel.persistence.v1.ConversationId
+	17, // 23: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
+	1,  // 24: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
+	18, // 25: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
+	21, // 26: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
+	22, // 27: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
+	24, // 28: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
+	27, // 29: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
+	0,  // 30: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
+	3,  // 31: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
+	27, // 32: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
+	4,  // 33: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
+	7,  // 34: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
+	27, // 35: sentinel.persistence.v1.StoreService.DeleteScenario:output_type -> sentinel.persistence.v1.Empty
+	9,  // 36: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
+	9,  // 37: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
+	12, // 38: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
+	27, // 39: sentinel.persistence.v1.StoreService.DeleteTest:output_type -> sentinel.persistence.v1.Empty
+	27, // 40: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
+	13, // 41: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
+	16, // 42: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
+	27, // 43: sentinel.persistence.v1.StoreService.DeleteChat:output_type -> sentinel.persistence.v1.Empty
+	27, // 44: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
+	17, // 45: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
+	19, // 46: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
+	27, // 47: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
+	23, // 48: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
+	26, // 49: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
+	29, // [29:50] is the sub-list for method output_type
+	8,  // [8:29] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name

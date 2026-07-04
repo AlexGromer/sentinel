@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -128,5 +130,242 @@ func TestStoreClientFailsFastWhenUnreachable(t *testing.T) {
 	// newStoreClient probes with ListRuns so a dead gateway is detected at startup (fail-open in main()).
 	if _, err := newStoreClient("unix:/nonexistent/definitely-not-a-store.sock", ""); err == nil {
 		t.Fatal("newStoreClient to a dead socket must error, not return a live client")
+	}
+}
+
+// --- M14 wave W3: scenarios/tests/chats HTTP surface + scenario-persist-on-finish ------------------
+
+// storeBackedTestServer is newTestServer() (main_test.go) wired to a real store-gateway.
+func storeBackedTestServer(sc *storeClient) *server {
+	s := newTestServer()
+	s.store = sc
+	return s
+}
+
+// doJSON drives a request through the real mux (route registration + s.authed gating, like the rest
+// of the suite) and decodes the JSON body into a map for loose field assertions.
+func doJSON(t *testing.T, s *server, method, path string, body []byte, token string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, path, bytes.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out) // best-effort: some responses (e.g. 403) still decode fine
+	return rec, out
+}
+
+func TestScenariosHTTPRoundTrip(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	sc.saveScenario(&storepb.Scenario{ScenarioId: "scn1", Name: "https://x", Target: "https://x",
+		RunMode: "goal", PlanHash: "hash-abc", SourceRunId: "run1"})
+
+	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/scenarios", nil, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("list scenarios without token: got %d want 403", rec.Code)
+	}
+
+	rec, body := doJSON(t, s, http.MethodGet, "/v1/scenarios", nil, s.token)
+	scenarios, _ := body["scenarios"].([]any)
+	if rec.Code != http.StatusOK || len(scenarios) != 1 {
+		t.Fatalf("list scenarios: code=%d body=%v", rec.Code, body)
+	}
+
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/scenarios/scn1", nil, s.token)
+	if rec.Code != http.StatusOK || body["plan_hash"] != "hash-abc" || body["source_run_id"] != "run1" {
+		t.Fatalf("get scenario: code=%d body=%v", rec.Code, body)
+	}
+
+	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/scenarios/nope", nil, s.token); rec.Code != http.StatusNotFound {
+		t.Fatalf("get missing scenario: got %d want 404", rec.Code)
+	}
+
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/scenarios/scn1", nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete scenario: got %d want 200", rec.Code)
+	}
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/scenarios", nil, s.token)
+	if scenarios, _ := body["scenarios"].([]any); rec.Code != http.StatusOK || len(scenarios) != 0 {
+		t.Fatalf("scenarios after delete: code=%d body=%v", rec.Code, body)
+	}
+	// delete-nonexistent is idempotent success, not an error
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/scenarios/nope", nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete nonexistent scenario: got %d want 200", rec.Code)
+	}
+}
+
+func TestTestsPromoteAndHTTPRoundTrip(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	sc.saveScenario(&storepb.Scenario{ScenarioId: "scn2", Name: "https://y", Target: "https://y",
+		RunMode: "describe", PlanHash: "frozen-hash-1"})
+
+	promoteBody, _ := json.Marshal(map[string]string{"scenario_id": "scn2", "name": "nightly smoke"})
+	rec, body := doJSON(t, s, http.MethodPost, "/v1/tests/promote", promoteBody, s.token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("promote: got %d body=%v", rec.Code, body)
+	}
+	testID, _ := body["test_id"].(string)
+	if testID == "" || body["plan_hash"] != "frozen-hash-1" || body["name"] != "nightly smoke" {
+		t.Fatalf("promote body: %v", body)
+	}
+
+	// the scenario's plan_hash changes AFTER promotion — the test's frozen plan_hash must NOT follow it
+	// (ADR-052: test = scenario + FROZEN plan_hash).
+	sc.saveScenario(&storepb.Scenario{ScenarioId: "scn2", Name: "https://y", Target: "https://y",
+		RunMode: "describe", PlanHash: "mutated-hash-2"})
+
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/tests", nil, s.token)
+	tests, _ := body["tests"].([]any)
+	if rec.Code != http.StatusOK || len(tests) != 1 {
+		t.Fatalf("list tests: code=%d body=%v", rec.Code, body)
+	}
+
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/tests/"+testID, nil, s.token)
+	if rec.Code != http.StatusOK || body["plan_hash"] != "frozen-hash-1" {
+		t.Fatalf("get test after scenario mutation: code=%d body=%v (plan_hash must stay frozen)", rec.Code, body)
+	}
+
+	// promoting an unknown scenario is 404-ish, never a 503 (M14_CONTRACT.md §3)
+	badPromote, _ := json.Marshal(map[string]string{"scenario_id": "does-not-exist"})
+	if rec, _ := doJSON(t, s, http.MethodPost, "/v1/tests/promote", badPromote, s.token); rec.Code != http.StatusNotFound {
+		t.Fatalf("promote unknown scenario: got %d want 404", rec.Code)
+	}
+
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/tests/"+testID, nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete test: got %d want 200", rec.Code)
+	}
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/tests", nil, s.token)
+	if tests, _ := body["tests"].([]any); rec.Code != http.StatusOK || len(tests) != 0 {
+		t.Fatalf("tests after delete: code=%d body=%v", rec.Code, body)
+	}
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/tests/"+testID, nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete nonexistent test: got %d want 200", rec.Code)
+	}
+}
+
+func TestChatsHTTPRoundTrip(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	// UpsertChat has no control-api wrapper (nothing calls it yet — GAP-M9-20); seed via the raw client.
+	if _, err := sc.cl.UpsertChat(context.Background(), &storepb.ChatProjection{
+		ConversationId: "conv1", LastTarget: "https://z", TurnCount: 3, LastGoal: "smoke test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, body := doJSON(t, s, http.MethodGet, "/v1/chats", nil, s.token)
+	chats, _ := body["chats"].([]any)
+	if rec.Code != http.StatusOK || len(chats) != 1 {
+		t.Fatalf("list chats: code=%d body=%v", rec.Code, body)
+	}
+
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/chats/conv1", nil, s.token)
+	if rec.Code != http.StatusOK || body["last_target"] != "https://z" || body["turn_count"] != float64(3) {
+		t.Fatalf("get chat: code=%d body=%v", rec.Code, body)
+	}
+
+	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/chats/nope", nil, s.token); rec.Code != http.StatusNotFound {
+		t.Fatalf("get missing chat: got %d want 404", rec.Code)
+	}
+
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/chats/conv1", nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete chat: got %d want 200", rec.Code)
+	}
+	rec, body = doJSON(t, s, http.MethodGet, "/v1/chats", nil, s.token)
+	if chats, _ := body["chats"].([]any); rec.Code != http.StatusOK || len(chats) != 0 {
+		t.Fatalf("chats after delete: code=%d body=%v", rec.Code, body)
+	}
+	if rec, _ := doJSON(t, s, http.MethodDelete, "/v1/chats/nope", nil, s.token); rec.Code != http.StatusOK {
+		t.Fatalf("delete nonexistent chat: got %d want 200", rec.Code)
+	}
+}
+
+// TestPersistScenarioOnFinish exercises the finish-goroutine wiring (main.go's persistScenario): a
+// scenario.json artifact must be indexed with the plan_hash READ from the artifact, never recomputed.
+func TestPersistScenarioOnFinish(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	dir := t.TempDir()
+	artifact := `{"plan_id":"run9-scenario","plan_hash":"frozen-from-artifact","target_url":"https://persisted.example",` +
+		`"run_mode":"scenario","mode":"goal","unmatched":0,"steps":[{"step_id":1,"action":"click"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "scenario.json"), []byte(artifact), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &run{ID: "run9", Target: "https://persisted.example", ArtifactDir: dir}
+	s.persistScenario(rec)
+
+	got, ok := sc.getScenario("run9-scenario")
+	if !ok {
+		t.Fatal("persistScenario: scenario not indexed")
+	}
+	if got.PlanHash != "frozen-from-artifact" {
+		t.Fatalf("persistScenario: plan_hash = %q, want the artifact's own value (must not be recomputed)", got.PlanHash)
+	}
+	if got.SourceRunId != "run9" || got.Target != "https://persisted.example" || got.RunMode != "goal" {
+		t.Fatalf("persistScenario record = %+v", got)
+	}
+
+	// no scenario.json in the artifact dir -> silent no-op, never an error
+	rec2 := &run{ID: "run10", ArtifactDir: t.TempDir()}
+	s.persistScenario(rec2)
+	if _, ok := sc.getScenario("run10-scenario"); ok {
+		t.Fatal("persistScenario: indexed something without a scenario.json artifact")
+	}
+
+	// no store configured -> must not panic (fail-open)
+	storeless := newTestServer()
+	storeless.persistScenario(rec)
+}
+
+// TestScenariosTestsChatsFailOpenNoStore mirrors TestControlAPINoStoreStaysInMemory for the new
+// domains: with no store-gateway configured, reads degrade to empty/404, writes stay idempotent-safe,
+// and nothing 503s or panics (M14_CONTRACT.md §3).
+func TestScenariosTestsChatsFailOpenNoStore(t *testing.T) {
+	s := newTestServer() // s.store is nil
+
+	for _, path := range []string{"/v1/scenarios", "/v1/tests", "/v1/chats"} {
+		if rec, _ := doJSON(t, s, http.MethodGet, path, nil, s.token); rec.Code != http.StatusOK {
+			t.Fatalf("list %s with no store: got %d want 200 (graceful empty)", path, rec.Code)
+		}
+	}
+	for _, path := range []string{"/v1/scenarios/x", "/v1/tests/x", "/v1/chats/x"} {
+		if rec, _ := doJSON(t, s, http.MethodGet, path, nil, s.token); rec.Code != http.StatusNotFound {
+			t.Fatalf("get %s with no store: got %d want 404", path, rec.Code)
+		}
+	}
+	for _, path := range []string{"/v1/scenarios/x", "/v1/tests/x", "/v1/chats/x"} {
+		if rec, _ := doJSON(t, s, http.MethodDelete, path, nil, s.token); rec.Code != http.StatusOK {
+			t.Fatalf("delete %s with no store: got %d want 200 (idempotent)", path, rec.Code)
+		}
+	}
+	promoteBody, _ := json.Marshal(map[string]string{"scenario_id": "x"})
+	if rec, _ := doJSON(t, s, http.MethodPost, "/v1/tests/promote", promoteBody, s.token); rec.Code != http.StatusNotFound {
+		t.Fatalf("promote with no store: got %d want 404", rec.Code)
 	}
 }
