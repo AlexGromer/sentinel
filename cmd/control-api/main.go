@@ -25,6 +25,10 @@
 // M9.10 (ADR-048): POST /v1/runs also accepts conversation_id:<id> — a multi-turn chat turn. The id is the
 // resumable thread key (conversation_id→thread_id; charset/length-validated); turn-1 explores+authors,
 // turn-N refines over the persisted site map. spawnRun adds `agentctl run --mode chat --conversation-id`.
+// M14 wave W3 (ADR-055, M14_CONTRACT.md §3): GET/DELETE /v1/scenarios[/{id}] · GET/DELETE /v1/tests[/{id}] ·
+// POST /v1/tests/promote · GET/DELETE /v1/chats[/{id}] — all token-gated, over the fail-open store-gateway
+// client (store.go). A finished run whose artifact_dir has scenario.json is indexed into the scenarios
+// domain (persistScenario), wiring it to a real caller for the first time.
 package main
 
 import (
@@ -43,6 +47,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
 const version = "0.1.0"
@@ -396,10 +402,54 @@ func (s *server) spawnRun(req runRequest) *run {
 		if s.store != nil { // M13: persist the terminal state (done/failed + exit_code + finished_at)
 			s.store.upsertRun(rec)
 		}
-		lw.flush()          // emit any trailing partial line
-		rec.stream.finish() // release SSE subscribers
+		s.persistScenario(rec) // M14 wave W3: wire the scenarios domain to a real caller (no-op if no scenario.json)
+		lw.flush()             // emit any trailing partial line
+		rec.stream.finish()    // release SSE subscribers
 	}()
 	return rec
+}
+
+// scenarioArtifact mirrors the fields of scenario.json that the scenarios domain needs
+// (brain/__main__.py:_write_scenario, ~line 46). Unknown/extra artifact fields are ignored.
+type scenarioArtifact struct {
+	PlanID    string          `json:"plan_id"`
+	PlanHash  string          `json:"plan_hash"`
+	TargetURL string          `json:"target_url"`
+	Mode      string          `json:"mode"` // goal | describe -> Scenario.RunMode ("goal | describe" per proto)
+	Unmatched int64           `json:"unmatched"`
+	Steps     json.RawMessage `json:"steps"`
+}
+
+// persistScenario wires the `scenarios` domain to a real caller (M14_CONTRACT.md §3): if the run's
+// artifact dir carries a scenario.json, index it as a Scenario record. plan_hash is read from the
+// artifact (brain writes it, never recomputed here). Fail-open + best-effort, like upsertRun — a
+// missing/malformed artifact just means there's nothing to persist, never a run-time error.
+func (s *server) persistScenario(rec *run) {
+	if s.store == nil {
+		return
+	}
+	raw, ok := s.readArtifact(rec, "scenario.json")
+	if !ok {
+		return
+	}
+	var art scenarioArtifact
+	if err := json.Unmarshal([]byte(raw), &art); err != nil || art.PlanID == "" {
+		return // malformed/partial artifact — nothing safe to index
+	}
+	target := art.TargetURL
+	if target == "" {
+		target = rec.Target
+	}
+	s.store.saveScenario(&storepb.Scenario{
+		ScenarioId:  art.PlanID, // brain: f"{run_id}-scenario" — stable, so a re-finish upserts in place
+		Name:        target,
+		Target:      target,
+		RunMode:     art.Mode,
+		PlanHash:    art.PlanHash,
+		StepsJson:   string(art.Steps),
+		Unmatched:   art.Unmatched,
+		SourceRunId: rec.ID,
+	})
 }
 
 func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -617,6 +667,175 @@ func (s *server) readArtifact(rec *run, name string) (string, bool) {
 		return "", false
 	}
 	return string(b), true
+}
+
+// --- M14 wave W3: scenarios/tests/chats HTTP surface (library + conversation management) ---------
+// All token-gated, over the fail-open store-gateway client (cmd/control-api/store.go). Unlike runs,
+// these domains have no in-memory fallback — a gateway error degrades to an empty list / 404-ish
+// response, never a 503 (M14_CONTRACT.md §3).
+
+func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var scenarios []*storepb.Scenario
+	var total int64
+	if s.store != nil {
+		if sl, ok := s.store.listScenarios(r.URL.Query().Get("target")); ok {
+			scenarios, total = sl.Scenarios, sl.Total
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scenarios": scenarios, "total": total})
+}
+
+func (s *server) handleGetScenario(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var sc *storepb.Scenario
+	var ok bool
+	if s.store != nil {
+		sc, ok = s.store.getScenario(r.PathValue("id"))
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such scenario"})
+		return
+	}
+	writeJSON(w, http.StatusOK, sc)
+}
+
+func (s *server) handleDeleteScenario(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	if s.store != nil {
+		s.store.deleteScenario(r.PathValue("id"))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent: missing id (or no store) is still success
+}
+
+func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var tests []*storepb.TestRecord
+	var total int64
+	if s.store != nil {
+		if tl, ok := s.store.listTests(); ok {
+			tests, total = tl.Tests, tl.Total
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tests": tests, "total": total})
+}
+
+func (s *server) handleGetTest(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var t *storepb.TestRecord
+	var ok bool
+	if s.store != nil {
+		t, ok = s.store.getTest(r.PathValue("id"))
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such test"})
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *server) handleDeleteTest(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	if s.store != nil {
+		s.store.deleteTest(r.PathValue("id"))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent
+}
+
+type promoteRequest struct {
+	ScenarioID string `json:"scenario_id"`
+	Name       string `json:"name"`
+	Schedule   string `json:"schedule"` // reserved: stored, NOT executed (no scheduler in M13/M14)
+}
+
+// handlePromoteTest freezes a saved scenario into a test (ADR-052). No in-memory fallback exists for
+// a brand-new test record, so an unreachable/absent store surfaces as 404 (same "404-ish, not 503"
+// fail-open shape as the reads above), same as promoting an unknown scenario_id.
+func (s *server) handlePromoteTest(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var req promoteRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
+		return
+	}
+	if req.ScenarioID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scenario_id is required"})
+		return
+	}
+	var t *storepb.TestRecord
+	var ok bool
+	if s.store != nil {
+		t, ok = s.store.promoteTest(&storepb.PromoteReq{ScenarioId: req.ScenarioID, Name: req.Name, Schedule: req.Schedule})
+	}
+	if !ok || !t.Found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such scenario to promote (or store-gateway unavailable)"})
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *server) handleListChats(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var chats []*storepb.ChatProjection
+	var total int64
+	if s.store != nil {
+		if cl, ok := s.store.listChats(); ok {
+			chats, total = cl.Chats, cl.Total
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chats": chats, "total": total})
+}
+
+func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var c *storepb.ChatProjection
+	var ok bool
+	if s.store != nil {
+		c, ok = s.store.getChat(r.PathValue("id"))
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such chat"})
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	if s.store != nil {
+		s.store.deleteChat(r.PathValue("id"))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent
 }
 
 // --- OpenAI-compatible chat-completions shim (ADR-041) -------------------------------------------
@@ -867,6 +1086,17 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
 	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
 	m.HandleFunc("GET /v1/stream", s.handleStream)
+	// M14 wave W3: scenarios/tests/chats HTTP surface (library + conversation management)
+	m.HandleFunc("GET /v1/scenarios", s.handleListScenarios)
+	m.HandleFunc("GET /v1/scenarios/{id}", s.handleGetScenario)
+	m.HandleFunc("DELETE /v1/scenarios/{id}", s.handleDeleteScenario)
+	m.HandleFunc("GET /v1/tests", s.handleListTests)
+	m.HandleFunc("GET /v1/tests/{id}", s.handleGetTest)
+	m.HandleFunc("POST /v1/tests/promote", s.handlePromoteTest)
+	m.HandleFunc("DELETE /v1/tests/{id}", s.handleDeleteTest)
+	m.HandleFunc("GET /v1/chats", s.handleListChats)
+	m.HandleFunc("GET /v1/chats/{id}", s.handleGetChat)
+	m.HandleFunc("DELETE /v1/chats/{id}", s.handleDeleteChat)
 	return s.cors(m)
 }
 

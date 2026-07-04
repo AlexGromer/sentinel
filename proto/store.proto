@@ -137,13 +137,16 @@ service StoreService {
   rpc SaveScenario(Scenario) returns (Empty);
   rpc GetScenario(ScenarioId) returns (Scenario);
   rpc ListScenarios(ListScenariosReq) returns (ScenarioList);
+  rpc DeleteScenario(ScenarioId) returns (Empty); // M14 wave W3: library mgmt, idempotent (missing id -> success)
   rpc PromoteTest(PromoteReq) returns (TestRecord);
   rpc GetTest(TestId) returns (TestRecord);
   rpc ListTests(ListTestsReq) returns (TestList);
+  rpc DeleteTest(TestId) returns (Empty); // M14 wave W3
   // chats (projection)
   rpc UpsertChat(ChatProjection) returns (Empty);
   rpc GetChat(ConversationId) returns (ChatProjection);
   rpc ListChats(ListChatsReq) returns (ChatList);
+  rpc DeleteChat(ConversationId) returns (Empty); // M14 wave W3
   // results
   rpc SaveResult(ResultRecord) returns (Empty);
   rpc GetResult(RunId) returns (ResultRecord);

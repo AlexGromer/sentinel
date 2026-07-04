@@ -4,6 +4,8 @@
 // working purely in-memory (the standalone/offline path is unchanged). The in-memory map stays the
 // authoritative source for LIVE runs (it owns the SSE stream); the gateway persists metadata + serves
 // historical runs from prior processes.
+// M14 wave W3: also fronts the `scenarios`/`tests`/`chats` domains, which have NO in-memory fallback
+// (unlike runs) — a gateway error there degrades to an empty list / not-found response (main.go handlers).
 package main
 
 import (
@@ -122,4 +124,133 @@ func (c *storeClient) listRuns() ([]*run, bool) {
 		out = append(out, recordToRun(rec))
 	}
 	return out, true
+}
+
+// --- scenarios / tests / chats (M14 wave W3: HTTP surface + library/conversation management) -----
+// Same best-effort, fail-open style as the runs helpers above: a gateway error is logged and
+// swallowed; the caller degrades to an empty result (list) or a not-found response (get/promote).
+
+// saveScenario persists a scenario (best-effort; logs + continues on error). Used by the finish-
+// goroutine to wire the scenarios domain to a real caller (M14_CONTRACT.md §3).
+func (c *storeClient) saveScenario(sc *storepb.Scenario) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.SaveScenario(ctx, sc); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store SaveScenario(%s): %v (scenario not persisted)\n", sc.ScenarioId, err)
+	}
+}
+
+func (c *storeClient) getScenario(id string) (*storepb.Scenario, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	sc, err := c.cl.GetScenario(ctx, &storepb.ScenarioId{ScenarioId: id})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetScenario(%s): %v\n", id, err)
+		return nil, false
+	}
+	if !sc.Found {
+		return nil, false
+	}
+	return sc, true
+}
+
+// listScenarios returns (nil,false) on gateway error; target=="" lists all scenarios.
+func (c *storeClient) listScenarios(target string) (*storepb.ScenarioList, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	sl, err := c.cl.ListScenarios(ctx, &storepb.ListScenariosReq{Limit: 1000, Target: target})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store ListScenarios: %v (falling back to empty)\n", err)
+		return nil, false
+	}
+	return sl, true
+}
+
+// deleteScenario is best-effort; a gateway error is logged, not surfaced (delete stays idempotent
+// from the HTTP caller's point of view — see handleDeleteScenario).
+func (c *storeClient) deleteScenario(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.DeleteScenario(ctx, &storepb.ScenarioId{ScenarioId: id}); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store DeleteScenario(%s): %v\n", id, err)
+	}
+}
+
+// promoteTest freezes a scenario into a test. Returns (nil,false) on gateway error; the returned
+// record's Found is false when the scenario_id doesn't exist (nothing to promote).
+func (c *storeClient) promoteTest(req *storepb.PromoteReq) (*storepb.TestRecord, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	t, err := c.cl.PromoteTest(ctx, req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store PromoteTest(%s): %v\n", req.ScenarioId, err)
+		return nil, false
+	}
+	return t, true
+}
+
+func (c *storeClient) getTest(id string) (*storepb.TestRecord, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	t, err := c.cl.GetTest(ctx, &storepb.TestId{TestId: id})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetTest(%s): %v\n", id, err)
+		return nil, false
+	}
+	if !t.Found {
+		return nil, false
+	}
+	return t, true
+}
+
+func (c *storeClient) listTests() (*storepb.TestList, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	tl, err := c.cl.ListTests(ctx, &storepb.ListTestsReq{Limit: 1000})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store ListTests: %v (falling back to empty)\n", err)
+		return nil, false
+	}
+	return tl, true
+}
+
+func (c *storeClient) deleteTest(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.DeleteTest(ctx, &storepb.TestId{TestId: id}); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store DeleteTest(%s): %v\n", id, err)
+	}
+}
+
+func (c *storeClient) getChat(id string) (*storepb.ChatProjection, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	ch, err := c.cl.GetChat(ctx, &storepb.ConversationId{ConversationId: id})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetChat(%s): %v\n", id, err)
+		return nil, false
+	}
+	if !ch.Found {
+		return nil, false
+	}
+	return ch, true
+}
+
+func (c *storeClient) listChats() (*storepb.ChatList, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	cl, err := c.cl.ListChats(ctx, &storepb.ListChatsReq{Limit: 1000})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store ListChats: %v (falling back to empty)\n", err)
+		return nil, false
+	}
+	return cl, true
+}
+
+func (c *storeClient) deleteChat(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.DeleteChat(ctx, &storepb.ConversationId{ConversationId: id}); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store DeleteChat(%s): %v\n", id, err)
+	}
 }
