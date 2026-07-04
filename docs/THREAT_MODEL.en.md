@@ -2,7 +2,7 @@
 
 > 🌐 [Русский](THREAT_MODEL.md) · **English**
 
-> **Version**: 1.0 | **Date**: 2026-06-27 | **Authors**: appsec-engineer (auto), @AlexGromer
+> **Version**: 1.1 | **Date**: 2026-07-04 | **Authors**: appsec-engineer (auto), @AlexGromer
 > **Methodology**: STRIDE-lite | **Scope**: whitebox, static analysis of source code
 
 ---
@@ -97,7 +97,7 @@ Boundary points ❶–❼ correspond to rows in the table below.
 >
 > **Planned in-tool surfaces (ADR-046):** (a) **replay/baseline control-API endpoint** (M9.9/R1) — re-opens a boundary-❶-class spawn surface → mitigation: `from_run:<run_id>` + the artifact whitelist+traversal-guard only (never an arbitrary path). **[R1a ✅ shipped in `cmd/control-api`: `resolveFromRun` (guards `/`,`\`,`..` + `{plan.json\|scenario.json}` whitelist) + httptests for traversal/missing-plan.]** (b) **multi-turn conversation-state** (M9.10/R2) — a new asset: confidentiality of accumulated AUT context + DoS via unbounded state → mitigation: per-session cap + 0700 isolation. (c) **AG-UI npm front** (`frontend/`, ADR-044) — npm supply-chain (compounds GAP-SEC-002) + a browser token → mitigation: dev-only/not-air-gapped, token server-side in the Runtime.
 >
-> **Rich-UI/Persistence/Metrics epic surfaces (M13-15, ADR-049..053):** (d) **persistence DB with user content** (scenarios/chats/results — accumulated AUT context / possible PII) → confidentiality + at-rest + access-control: reuse `0700`/per-run token/SO_PEERCRED (SQLite, standalone), Postgres → standard authn + a secret via `secretKeyRef` (ADR-035); DoS via unbounded state → per-conversation/per-domain cap + retention. (e) **always-on control-plane bind** (service profile) → reuse ADR-032 (localhost-default + bearer + CORS allowlist); a public bind = opt-in+warn; the service mode adds an authN/RBAC consideration on the CRUD endpoints. (f) **self-contained metrics** (ADR-051) — metrics in our own DB + native render ⇒ **reduces** the surface vs a Grafana embed (no external render / iframe trust). (g) **rich AG-UI over WS** (M14) → reuse the ADR-043 WS token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, a not-air-gapped dev build).
+> **Rich-UI/Persistence/Metrics epic surfaces (M13-15, ADR-049..053):** (d) **persistence DB with user content** (scenarios/chats/results — accumulated AUT context / possible PII) → confidentiality + at-rest + access-control: reuse `0700`/per-run token/SO_PEERCRED (SQLite, standalone), Postgres → standard authn + a secret via `secretKeyRef` (ADR-035); DoS via unbounded state → **cap+summary shipped (M13 w5, GAP-M9-20 ✅: `_capped_history`/`_rolling_summary`)**; retention → M13-service. (e) **always-on control-plane bind** (service profile) → reuse ADR-032 (localhost-default + bearer + CORS allowlist); a public bind = opt-in+warn; the service mode adds an authN/RBAC consideration on the CRUD endpoints. (f) **self-contained metrics** (ADR-051) — metrics in our own DB + native render ⇒ **reduces** the surface vs a Grafana embed (no external render / iframe trust). (g) **rich AG-UI over WS** (M14) → reuse the ADR-043 WS token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, a not-air-gapped dev build). (h) **recorder session-resume `/v1/stream?session=`** (M13 R3-hardening, ✅ shipped) — user input into a write-path construction → mitigated by `filepath.Base`+the `validRunID` charset (2 CodeQL `go/path-injection` alerts dismissed as false-positive, the sanitizer kept as defense-in-depth); Origin fail-closed on a public bind.
 
 ---
 
