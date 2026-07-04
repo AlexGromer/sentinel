@@ -13,6 +13,7 @@ import json
 import sys
 
 from .otel import prompt_hash, set_llm_tokens, span
+from .sanitize import safe_json, safe_text
 
 # Per-strategy base priors (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
 PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
@@ -113,9 +114,9 @@ class HealingEngine:
             prompt = (
                 "A UI locator broke after a DOM change. Choose the current element matching the "
                 "intent and return a precise CSS selector.\n"
-                f"intent: {ctx.get('intent')}\n"
-                f"original_locator: {json.dumps(ctx.get('attempted_locator'))}\n"
-                f"current_elements: {json.dumps(ctx.get('interactives', []))[:3000]}\n"
+                f"intent: {safe_text(ctx.get('intent'))}\n"
+                f"original_locator: {json.dumps(safe_json(ctx.get('attempted_locator')))}\n"
+                f"current_elements: {json.dumps(safe_json(ctx.get('interactives', [])))[:3000]}\n"
                 'Reply with ONLY JSON: {"css": "<selector>"} or {"none": true}.'
             )
             with span("heal.llm", model=self._backend.model, prompt_hash=prompt_hash(prompt)) as _sp:
@@ -162,8 +163,8 @@ class HealingEngine:
             menu = [{"mark": m["mark"], "role": m.get("role"), "name": m.get("name")} for m in marks]
             prompt = (
                 "Numbered red marks overlay interactive UI elements. Pick the mark number for the "
-                f"element matching this intent: {ctx.get('intent')}\n"
-                f"marks: {json.dumps(menu)}\n"
+                f"element matching this intent: {safe_text(ctx.get('intent'))}\n"
+                f"marks: {json.dumps(safe_json(menu))}\n"
                 'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.')
             result = self._backend.complete_vision(prompt, b64, max_tokens=100, temperature=0)
             budget.tracker().add("heal", result)

@@ -20,6 +20,7 @@ import json
 from typing import Optional, Protocol
 
 from .executor import log
+from .sanitize import safe_json, safe_text
 
 
 class Planner(Protocol):
@@ -78,10 +79,10 @@ class LLMPlanner:
                 "You are an autonomous UI explorer. Choose the single best next action to "
                 "maximize coverage of distinct interactive elements, or stop if exploration is "
                 "complete.\n"
-                f"current_url: {state.get('current_url')}\n"
+                f"current_url: {safe_text(state.get('current_url'))}\n"
                 f"coverage_achieved: {state.get('coverage_achieved', 0.0):.2f} "
                 f"target: {state.get('coverage_target')}\n"
-                f"candidates: {json.dumps(menu)}\n"
+                f"candidates: {json.dumps(safe_json(menu))}\n"
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
             result = self._backend.complete(prompt, max_tokens=200, temperature=0)
@@ -137,9 +138,9 @@ class GoalPlanner:
                 "action from the candidate list to advance the goal, or stop when the goal is achieved "
                 "or unreachable.\n"
                 f"goal: {self.goal}\n"
-                f"current_url: {state.get('current_url')}\n"
+                f"current_url: {safe_text(state.get('current_url'))}\n"
                 f"steps_taken: {state.get('current_step', 0)} of max {state.get('max_steps')}\n"
-                f"candidates: {json.dumps(menu)}\n"
+                f"candidates: {json.dumps(safe_json(menu))}\n"
                 'Reply with ONLY JSON: {"index": <int>} to take that candidate action, or '
                 '{"done": true, "reason": "<why the goal is met or unreachable>"}.'
             )
@@ -187,7 +188,7 @@ class GoalPlanner:
                 "real elements discovered across the whole site. Output the ordered actions.\n"
                 f"goal: {goal}\n"
                 + convo
-                + f"elements: {json.dumps(menu)[:8000]}\n"
+                + f"elements: {json.dumps(safe_json(menu))[:8000]}\n"
                 + 'Reply with ONLY JSON: {"steps": [{"ref": "<semantic_id from elements>", '
                 '"verb": "click|fill|type|select|press|assert", "value": "<optional>"}]}. '
                 "Use only refs present in elements; omit anything not present."

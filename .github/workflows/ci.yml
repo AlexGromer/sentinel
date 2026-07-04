@@ -77,12 +77,12 @@ jobs:
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
-      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge — FakeBackend/FakeExecutor, no network)
+      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize — FakeBackend/FakeExecutor, no network)
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -e
-          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge; do
+          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize; do
             echo "== test_${t}_offline =="
             .venv/bin/python tests/test_${t}_offline.py
           done
