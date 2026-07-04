@@ -235,10 +235,18 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 // resumeSession (validated by the caller) appends to an existing session; empty mints a new one.
 func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession string) {
 	session := resumeSession
-	if session == "" || !validRunID(session) { // defense-in-depth: re-validate before using in a path
+	if session == "" || !validRunID(session) { // re-validate: only [A-Za-z0-9_-] (no path separators)
 		session = newRunID()
 	}
-	dir := filepath.Join(s.repo, "runs", "record-"+session)
+	base := filepath.Join(s.repo, "runs")
+	dir := filepath.Clean(filepath.Join(base, "record-"+session))
+	// Path-traversal guard: the resumed ?session= id is user input. validRunID already bars separators;
+	// re-assert the resolved dir stays STRICTLY under runs/ before any filesystem use (defense-in-depth +
+	// an explicit barrier for static taint analysis). A miss falls back to a freshly-minted session.
+	if !strings.HasPrefix(dir, base+string(os.PathSeparator)) {
+		session = newRunID()
+		dir = filepath.Join(base, "record-"+session)
+	}
 	_ = os.MkdirAll(dir, 0o700)
 	f, ferr := os.OpenFile(filepath.Join(dir, "events.ndjson"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if ferr == nil {
