@@ -146,24 +146,26 @@ export LLM_VISION=1
 
 ---
 
-### 3.4 Облачные модели — ориентировочные цены (⚠ verify, cutoff Jan-2026)
+### 3.4 Облачные модели — ориентировочные цены (⚠ verify; cloud-цены re-verified 2026-07-04)
 
 Источник цен для cost-explorer (`docs/index.html`). **Редактируемые, ориентировочные** — не утверждение об
 актуальной стоимости (облачные цены дрейфуют). Claude — из claude-api skill (2026-06-04); остальные —
-исследование 2026-06-28 по страницам провайдеров. Обновляются: CI `prices-refresh.yml` (еженедельно, через
+исследование 2026-06-28, **cloud-цены re-verified 2026-07-04** (WebFetch первичных pricing-страниц). Обновляются: CI `prices-refresh.yml` (еженедельно, через
 OpenRouter → PR) + кнопка «Обновить из OpenRouter» на странице. **Пригодность (fit)** для structured-JSON
 Sentinel — **мнение**, не бенчмарк.
 
 | Модель | $/1M вход | $/1M выход | Контекст | reasoning | vision | fit | Источник |
 |---|---|---|---|---|---|---|---|
 | Claude Opus 4.8 | 5 | 25 | 1M | ✓ | ✓ | high | [anthropic](https://www.anthropic.com/pricing) (skill 06-04) |
-| Claude Sonnet 4.6 | 3 | 15 | 1M | ✓ | ✓ | high | anthropic (skill 06-04) |
+| Claude Sonnet 5 | 2 | 10 | 1M | ✓ | ✓ | high | anthropic (verified 07-04; intro 2/10 → 3/15 с 09-01) |
 | Claude Haiku 4.5 | 1 | 5 | 200K | — | ✓ | high | anthropic (skill 06-04) |
-| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | [openai](https://openai.com/api/pricing/) ⚠ |
+| GPT-5.5 (флагман) | 5 | 30 | 1M | ✓ | ✓ | high | [openai](https://developers.openai.com/api/docs/pricing) (verified 07-04) |
+| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | openai (verified 07-04) |
 | GPT-5.4-mini | 0.75 | 4.5 | 400K | — | ✓ | high | openai ⚠ |
 | OpenAI o3 | 2 | 8 | 200K | ✓ | — | med | openai ⚠ (vision не подтверждён) |
 | xAI Grok 4.3 | 1.25 | 2.5 | 1M | — | ✓ | med | [x.ai](https://docs.x.ai/developers/models) ⚠ |
-| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) ⚠ |
+| Zhipu GLM-5.2 | 1.4 | 4.4 | — | ✓ | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) (verified 07-04; MIT-claim не проверен) |
+| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | z.ai (verified 07-04) |
 | Zhipu GLM-4.7 | 0.6 | 2.2 | — | — | — | med | z.ai ⚠ |
 | DeepSeek-V4-flash | 0.14 | 0.28 | 1M | ✓ | — | high | [deepseek](https://api-docs.deepseek.com/quick_start/pricing) ⚠ |
 | DeepSeek-V4-pro | 0.435 | 0.87 | 1M | ✓ | — | high | deepseek ⚠ (вторичный источник спорит — проверьте) |
