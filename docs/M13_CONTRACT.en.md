@@ -45,7 +45,7 @@ All methods inherit the existing `TokenAuthInterceptor` (`internal/store/auth.go
 `cmd/control-api` stops being the sole owner of `runs` state:
 - `spawnRun`/finish goroutine → `UpsertRun` to the gateway on **state transitions** (running/done/failed), NOT per stdout line (chattiness). `run.ConversationID` is now stored.
 - `handleListRuns`/`handleGetRun` → read from the gateway (`ListRuns`/`GetRun`); the in-memory `runs` map stays a write-through cache for the live `runStream` (SSE is ephemeral — not persisted).
-- **Fallback**: gateway unreachable → control-API degrades (log + 503 on persistence-dependent routes), does NOT crash. A live run (spawn+SSE) works without the gateway.
+- **Fallback (fail-open, actual behavior)**: gateway unreachable → warn-log at startup (`newStoreClient` fail-fast), run persistence is silently skipped, reads (list/get) transparently fall back to the in-memory map (**200 OK, NOT 503**); the control-API does NOT crash. A live run (spawn+SSE) works without the gateway.
 - `results`: control-API (or report-mode brain) sends `SaveResult` on completion; `metrics`: `IngestMetrics` from `report.json`/`metrics.prom`.
 
 ## 4. GAP-M9-20 / GAP-M9-19 (in M13 scope per BACKLOG)
@@ -62,7 +62,7 @@ Postgres driver (`pgx`) + dialect abstraction · `golang-migrate` (today only `C
 
 ## 7. Acceptance criteria
 - [x] `proto/store.proto` + regenerated Go+Python stubs (same toolchain).
-- [x] 5 domains persisted through the gateway (SQLite), single-writer (ADR-007) preserved; `STORE_DSN` scaffold present (refuses Postgres).
+- [x] 5-domain gateway ready (SQLite), single-writer (ADR-007) preserved, `STORE_DSN` scaffold (refuses Postgres). **Wired from real callers: `runs` + `chats`**; `results`/`metrics`/`scenarios`/`tests` — RPCs + schema + unit tests exist, but NOT yet wired to a production writer (await wiring in M14/M15).
 - [x] control-API `runs` survive restart (via the gateway, fail-open); `conversation_id` stored; fallback when gateway unreachable.
 - [x] chats projection browsable (`ChatProjector`), NOT a duplicate of conversations.db.
 - [~] **GAP-M9-20** cap+summary ✅ (`_capped_history`); `conversations.db` retention → M13-service. **GAP-M9-19** reverify flag ✅ (`SENTINEL_REFINE_REVERIFY`); auto-detect (a11y probe) → **M9-LIVE**.

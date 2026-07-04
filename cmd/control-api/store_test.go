@@ -94,6 +94,36 @@ func TestControlAPINoStoreStaysInMemory(t *testing.T) {
 	}
 }
 
+// TestConcurrentRunReadDuringMutationNoRace exercises the M13 verify fix: handleGetRun/handleListRuns
+// must snapshot a live run's mutable fields UNDER s.mu, not marshal them after releasing the lock while
+// the completion goroutine writes them. Run under -race: the pre-fix code (marshal after RUnlock) trips
+// the detector; the snapshot-under-lock version is clean.
+func TestConcurrentRunReadDuringMutationNoRace(t *testing.T) {
+	s := &server{runs: map[string]*run{}}
+	rec := &run{ID: "r", State: "running", stream: newRunStream()}
+	s.mu.Lock()
+	s.runs["r"] = rec
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() { // mimic spawnRun's completion goroutine writing mutable fields under s.mu
+		for i := 0; i < 500; i++ {
+			s.mu.Lock()
+			rec.State, rec.ExitCode, rec.FinishedAt, rec.Error = "done", i, "2026-07-04T00:00:00Z", "e"
+			s.mu.Unlock()
+		}
+		close(done)
+	}()
+	for i := 0; i < 500; i++ { // concurrent reads must be race-free (snapshot under the lock)
+		g := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/runs/r", nil)
+		req.SetPathValue("id", "r")
+		s.handleGetRun(g, req)
+		s.handleListRuns(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/runs", nil))
+	}
+	<-done
+}
+
 func TestStoreClientFailsFastWhenUnreachable(t *testing.T) {
 	// newStoreClient probes with ListRuns so a dead gateway is detected at startup (fail-open in main()).
 	if _, err := newStoreClient("unix:/nonexistent/definitely-not-a-store.sock", ""); err == nil {

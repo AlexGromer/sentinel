@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -178,6 +179,21 @@ func newRunID() string {
 		return "local"
 	}
 	return hex.EncodeToString(b)
+}
+
+// isLocalBind reports whether addr binds a loopback host (127.0.0.0/8, ::1, or "localhost"). Used to
+// keep the /v1/stream Origin check dev-permissive on a local bind and fail-closed on a public one (M13).
+func isLocalBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -435,10 +451,10 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	live := make(map[string]bool, len(s.runs))
-	out := make([]*run, 0, len(s.runs))
+	out := make([]run, 0, len(s.runs)) // VALUE copies: snapshot mutable fields under the lock (race-free marshal)
 	for id, rr := range s.runs {
 		live[id] = true
-		out = append(out, rr)
+		out = append(out, *rr)
 	}
 	s.mu.RUnlock()
 	// M13 (ADR-050): fold in persisted runs from the gateway (e.g. from before a restart). The in-memory
@@ -447,7 +463,7 @@ func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 		if stored, ok := s.store.listRuns(); ok {
 			for _, rr := range stored {
 				if !live[rr.ID] {
-					out = append(out, rr)
+					out = append(out, *rr)
 				}
 			}
 		}
@@ -459,17 +475,21 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mu.RLock()
 	rec, ok := s.runs[id]
+	var snap run
+	if ok {
+		snap = *rec // snapshot under the lock — the completion goroutine writes State/ExitCode/etc. under s.mu
+	}
 	s.mu.RUnlock()
 	if !ok && s.store != nil { // M13: a run from a prior control-API process survives in the gateway
 		if hist, found := s.store.getRun(id); found {
-			rec, ok = hist, true
+			snap, ok = *hist, true
 		}
 	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
 		return
 	}
-	writeJSON(w, http.StatusOK, rec)
+	writeJSON(w, http.StatusOK, &snap)
 }
 
 // artifactWhitelist limits artifact-fetch to known run outputs (no arbitrary file reads).
@@ -870,7 +890,7 @@ func main() {
 		token:      os.Getenv("CONTROL_API_TOKEN"),
 		corsAllow:  map[string]bool{},
 		orchAddr:   os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
-		publicBind: !strings.HasPrefix(addr, "127.0.0.1") && !strings.HasPrefix(addr, "localhost"),
+		publicBind: !isLocalBind(addr),
 		runs:       map[string]*run{},
 	}
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {

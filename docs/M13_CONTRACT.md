@@ -45,7 +45,7 @@ Store-gateway расширяется новым сервисом (`StoreService`
 `cmd/control-api` перестаёт быть единственным владельцем `runs`-состояния:
 - `spawnRun`/finish-горутина → `UpsertRun` в gateway на **сменах состояния** (running/done/failed), НЕ на каждую stdout-строку (chattiness). `run.ConversationID` теперь хранится.
 - `handleListRuns`/`handleGetRun` → читают из gateway (`ListRuns`/`GetRun`); in-memory `runs`-map остаётся как write-through кэш для live `runStream` (SSE эфемерен — не персистим).
-- **Fallback**: gateway недоступен → control-API деградирует (лог + 503 на persistence-зависимых ручках), НЕ падает. Live-прогон (spawn+SSE) работает и без gateway.
+- **Fallback (fail-open, реальное поведение)**: gateway недоступен → warn-лог на старте (`newStoreClient` fail-fast), персист прогонов молча пропускается, чтения (list/get) прозрачно падают обратно на in-memory-карту (**200 OK, НЕ 503**); control-API НЕ падает. Live-прогон (spawn+SSE) работает и без gateway.
 - `results`: control-API (или report-mode brain) шлёт `SaveResult` по завершении; `metrics`: `IngestMetrics` из `report.json`/`metrics.prom`.
 
 ## 4. GAP-M9-20 / GAP-M9-19 (в scope M13 по BACKLOG)
@@ -62,7 +62,7 @@ Postgres-драйвер (`pgx`) + dialect-абстракция · `golang-migrat
 
 ## 7. Критерии приёмки
 - [x] `proto/store.proto` + регенерированные Go+Python стабы (тот же тулчейн).
-- [x] 5 доменов персистятся через gateway (SQLite), single-writer (ADR-007) сохранён; `STORE_DSN`-скаффолд на месте (refuse-Postgres).
+- [x] 5-доменный gateway готов (SQLite), single-writer (ADR-007) сохранён, `STORE_DSN`-скаффолд (refuse-Postgres). **Подключены от реальных вызывающих: `runs` + `chats`**; `results`/`metrics`/`scenarios`/`tests` — RPC+схема+unit-тесты есть, но пока НЕ подключены к production-writer (ждут wiring в M14/M15).
 - [x] control-API `runs` переживают рестарт (через gateway, fail-open); `conversation_id` хранится; fallback при недоступном gateway.
 - [x] chats-проекция browsable (`ChatProjector`), НЕ дубль conversations.db.
 - [~] **GAP-M9-20** cap+summary ✅ (`_capped_history`); retention `conversations.db` → M13-service. **GAP-M9-19** reverify-flag ✅ (`SENTINEL_REFINE_REVERIFY`); auto-detect (a11y-probe) → **M9-LIVE**.
