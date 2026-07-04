@@ -15,6 +15,9 @@
 // M9.3-tail (ADR-040): GET /v1/runs/{id}/events (SSE, token-gated) · GET /v1/runs/{id}/artifact (token-gated whitelist)
 // M12 (ADR-041): POST /v1/chat/completions (OpenAI-compat shim — one chat turn → one run, token-gated)
 // M9.8-prep (ADR-043): GET /v1/stream (hand-rolled WebSocket recorder ingest — client→server, token via subprotocol; see ws.go)
+// M9.8 F4 (ADR-054): the SAME /v1/stream socket also accepts {"type":"takeover|return","run_id":"<id>"} control
+// frames, forwarded to the RunControl orchestrator (CONTROL_API_ORCH_ADDR) as Takeover/Return RPCs so an
+// in-flight brain pauses (interrupt+persist) / resumes. Everything else on the socket is a recorder event (ws.go).
 // M9.9 (ADR-047): POST /v1/runs also accepts mode=replay|baseline + from_run:<prior run_id> — an in-tool
 // re-run / golden-baseline update of a PRIOR run's frozen plan. from_run resolves under runs/control-<id>/
 // to a whitelisted plan (plan.json|scenario.json), path-traversal-guarded — never an arbitrary --plan path.
@@ -159,6 +162,7 @@ type server struct {
 	agentctl  string
 	token     string
 	corsAllow map[string]bool
+	orchAddr  string // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
 	mu        sync.RWMutex
 	runs      map[string]*run
 }
@@ -834,6 +838,7 @@ func main() {
 		agentctl:  envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),
 		token:     os.Getenv("CONTROL_API_TOKEN"),
 		corsAllow: map[string]bool{},
+		orchAddr:  os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
 		runs:      map[string]*run{},
 	}
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {

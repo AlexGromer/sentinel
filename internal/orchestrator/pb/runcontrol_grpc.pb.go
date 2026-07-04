@@ -28,6 +28,8 @@ const (
 	RunControl_StartRun_FullMethodName    = "/sentinel.runcontrol.v1.RunControl/StartRun"
 	RunControl_ReportEvent_FullMethodName = "/sentinel.runcontrol.v1.RunControl/ReportEvent"
 	RunControl_Abort_FullMethodName       = "/sentinel.runcontrol.v1.RunControl/Abort"
+	RunControl_Takeover_FullMethodName    = "/sentinel.runcontrol.v1.RunControl/Takeover"
+	RunControl_Return_FullMethodName      = "/sentinel.runcontrol.v1.RunControl/Return"
 )
 
 // RunControlClient is the client API for RunControl service.
@@ -36,10 +38,18 @@ const (
 type RunControlClient interface {
 	// Register a run (limits set by the orchestrator from config/env).
 	StartRun(ctx context.Context, in *StartRunRequest, opts ...grpc.CallOption) (*StartRunReply, error)
-	// brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade.
+	// brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade
+	// (M9.8 F4, ADR-054: or to PAUSE for an operator takeover via Control.takeover).
 	ReportEvent(ctx context.Context, in *RunEvent, opts ...grpc.CallOption) (*Control, error)
 	// External abort (operator / deadline).
 	Abort(ctx context.Context, in *AbortRequest, opts ...grpc.CallOption) (*AbortReply, error)
+	// M9.8 F4 (ADR-054): operator co-pilot takeover/return. Takeover sets a per-run flag; the next
+	// ReportEvent reply then carries Control.takeover=true, so the brain interrupt()s + persists at its
+	// superstep boundary (paused; the human drives the live browser via CDP). Return clears the flag, and
+	// the brain resumes the same checkpointer thread from exactly where it paused. External (UI/operator),
+	// forwarded by the control-API over its WebSocket — modelled on Abort.
+	Takeover(ctx context.Context, in *TakeoverRequest, opts ...grpc.CallOption) (*TakeoverReply, error)
+	Return(ctx context.Context, in *ReturnRequest, opts ...grpc.CallOption) (*ReturnReply, error)
 }
 
 type runControlClient struct {
@@ -80,16 +90,44 @@ func (c *runControlClient) Abort(ctx context.Context, in *AbortRequest, opts ...
 	return out, nil
 }
 
+func (c *runControlClient) Takeover(ctx context.Context, in *TakeoverRequest, opts ...grpc.CallOption) (*TakeoverReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TakeoverReply)
+	err := c.cc.Invoke(ctx, RunControl_Takeover_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runControlClient) Return(ctx context.Context, in *ReturnRequest, opts ...grpc.CallOption) (*ReturnReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReturnReply)
+	err := c.cc.Invoke(ctx, RunControl_Return_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunControlServer is the server API for RunControl service.
 // All implementations must embed UnimplementedRunControlServer
 // for forward compatibility.
 type RunControlServer interface {
 	// Register a run (limits set by the orchestrator from config/env).
 	StartRun(context.Context, *StartRunRequest) (*StartRunReply, error)
-	// brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade.
+	// brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade
+	// (M9.8 F4, ADR-054: or to PAUSE for an operator takeover via Control.takeover).
 	ReportEvent(context.Context, *RunEvent) (*Control, error)
 	// External abort (operator / deadline).
 	Abort(context.Context, *AbortRequest) (*AbortReply, error)
+	// M9.8 F4 (ADR-054): operator co-pilot takeover/return. Takeover sets a per-run flag; the next
+	// ReportEvent reply then carries Control.takeover=true, so the brain interrupt()s + persists at its
+	// superstep boundary (paused; the human drives the live browser via CDP). Return clears the flag, and
+	// the brain resumes the same checkpointer thread from exactly where it paused. External (UI/operator),
+	// forwarded by the control-API over its WebSocket — modelled on Abort.
+	Takeover(context.Context, *TakeoverRequest) (*TakeoverReply, error)
+	Return(context.Context, *ReturnRequest) (*ReturnReply, error)
 	mustEmbedUnimplementedRunControlServer()
 }
 
@@ -108,6 +146,12 @@ func (UnimplementedRunControlServer) ReportEvent(context.Context, *RunEvent) (*C
 }
 func (UnimplementedRunControlServer) Abort(context.Context, *AbortRequest) (*AbortReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Abort not implemented")
+}
+func (UnimplementedRunControlServer) Takeover(context.Context, *TakeoverRequest) (*TakeoverReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Takeover not implemented")
+}
+func (UnimplementedRunControlServer) Return(context.Context, *ReturnRequest) (*ReturnReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method Return not implemented")
 }
 func (UnimplementedRunControlServer) mustEmbedUnimplementedRunControlServer() {}
 func (UnimplementedRunControlServer) testEmbeddedByValue()                    {}
@@ -184,6 +228,42 @@ func _RunControl_Abort_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunControl_Takeover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TakeoverRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunControlServer).Takeover(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunControl_Takeover_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunControlServer).Takeover(ctx, req.(*TakeoverRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunControl_Return_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReturnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunControlServer).Return(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunControl_Return_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunControlServer).Return(ctx, req.(*ReturnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunControl_ServiceDesc is the grpc.ServiceDesc for RunControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -202,6 +282,14 @@ var RunControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Abort",
 			Handler:    _RunControl_Abort_Handler,
+		},
+		{
+			MethodName: "Takeover",
+			Handler:    _RunControl_Takeover_Handler,
+		},
+		{
+			MethodName: "Return",
+			Handler:    _RunControl_Return_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

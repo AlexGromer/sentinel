@@ -49,6 +49,16 @@ class RunControlStub:
                 request_serializer=runcontrol__pb2.AbortRequest.SerializeToString,
                 response_deserializer=runcontrol__pb2.AbortReply.FromString,
                 _registered_method=True)
+        self.Takeover = channel.unary_unary(
+                '/sentinel.runcontrol.v1.RunControl/Takeover',
+                request_serializer=runcontrol__pb2.TakeoverRequest.SerializeToString,
+                response_deserializer=runcontrol__pb2.TakeoverReply.FromString,
+                _registered_method=True)
+        self.Return = channel.unary_unary(
+                '/sentinel.runcontrol.v1.RunControl/Return',
+                request_serializer=runcontrol__pb2.ReturnRequest.SerializeToString,
+                response_deserializer=runcontrol__pb2.ReturnReply.FromString,
+                _registered_method=True)
 
 
 class RunControlServicer:
@@ -62,7 +72,8 @@ class RunControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def ReportEvent(self, request, context):
-        """brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade.
+        """brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade
+        (M9.8 F4, ADR-054: or to PAUSE for an operator takeover via Control.takeover).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -71,6 +82,23 @@ class RunControlServicer:
     def Abort(self, request, context):
         """External abort (operator / deadline).
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Takeover(self, request, context):
+        """M9.8 F4 (ADR-054): operator co-pilot takeover/return. Takeover sets a per-run flag; the next
+        ReportEvent reply then carries Control.takeover=true, so the brain interrupt()s + persists at its
+        superstep boundary (paused; the human drives the live browser via CDP). Return clears the flag, and
+        the brain resumes the same checkpointer thread from exactly where it paused. External (UI/operator),
+        forwarded by the control-API over its WebSocket — modelled on Abort.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Return(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -92,6 +120,16 @@ def add_RunControlServicer_to_server(servicer, server):
                     servicer.Abort,
                     request_deserializer=runcontrol__pb2.AbortRequest.FromString,
                     response_serializer=runcontrol__pb2.AbortReply.SerializeToString,
+            ),
+            'Takeover': grpc.unary_unary_rpc_method_handler(
+                    servicer.Takeover,
+                    request_deserializer=runcontrol__pb2.TakeoverRequest.FromString,
+                    response_serializer=runcontrol__pb2.TakeoverReply.SerializeToString,
+            ),
+            'Return': grpc.unary_unary_rpc_method_handler(
+                    servicer.Return,
+                    request_deserializer=runcontrol__pb2.ReturnRequest.FromString,
+                    response_serializer=runcontrol__pb2.ReturnReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -175,6 +213,60 @@ class RunControl:
             '/sentinel.runcontrol.v1.RunControl/Abort',
             runcontrol__pb2.AbortRequest.SerializeToString,
             runcontrol__pb2.AbortReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Takeover(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.runcontrol.v1.RunControl/Takeover',
+            runcontrol__pb2.TakeoverRequest.SerializeToString,
+            runcontrol__pb2.TakeoverReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Return(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.runcontrol.v1.RunControl/Return',
+            runcontrol__pb2.ReturnRequest.SerializeToString,
+            runcontrol__pb2.ReturnReply.FromString,
             options,
             channel_credentials,
             insecure,

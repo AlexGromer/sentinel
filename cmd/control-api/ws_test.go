@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -12,7 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"google.golang.org/grpc"
+
+	pb "github.com/AlexGromer/sentinel/internal/orchestrator/pb"
 )
 
 // rfcSampleKey is the RFC6455 §1.3 worked-example client nonce ("the sample nonce", base64). Computed
@@ -207,5 +213,221 @@ func TestStreamHandshakeAndIngest(t *testing.T) {
 	}
 	if !strings.Contains(string(data), event) {
 		t.Fatalf("ingest file missing event; got %q", string(data))
+	}
+}
+
+// --- M9.8 F4 (ADR-054): takeover/return control frames on /v1/stream -> orchestrator RPCs ---
+
+func TestParseControlFrame(t *testing.T) {
+	cases := []struct {
+		in, action, run string
+		ok              bool
+	}{
+		{`{"type":"control","action":"takeover","run_id":"r1"}`, "takeover", "r1", true},
+		{`{"type":"control","action":"return","run_id":"r1"}`, "return", "r1", true},
+		{`{"type":"control","action":"takeover"}`, "takeover", "", true},           // envelope ok; empty run_id rejected downstream
+		{`{"type":"control","action":"weird","run_id":"r1"}`, "weird", "r1", true}, // envelope ok; unknown action rejected downstream
+		{`{"type":"return","run_id":"r1"}`, "", "", false},                         // bare verb is a RECORDER event now, not a control frame
+		{`{"type":"takeover","key":"Enter"}`, "", "", false},                       // recorder DOM event that happens to type "takeover"
+		{`{"type":"click","selector":"#login"}`, "", "", false},
+		{`not json`, "", "", false},
+	}
+	for _, c := range cases {
+		a, r, ok := parseControlFrame([]byte(c.in))
+		if ok != c.ok || a != c.action || r != c.run {
+			t.Errorf("parseControlFrame(%q) = (%q,%q,%v); want (%q,%q,%v)", c.in, a, r, ok, c.action, c.run, c.ok)
+		}
+	}
+}
+
+func TestForwardControlNoOrchestrator(t *testing.T) {
+	s := newTestServer() // orchAddr == ""
+	if err := s.forwardControl("takeover", "r1"); err == nil {
+		t.Fatal("forwardControl must error (fail-closed) when no orchestrator is wired")
+	}
+}
+
+// fakeRunControl is a minimal RunControl server that records the Takeover/Return run_ids it receives.
+type fakeRunControl struct {
+	pb.UnimplementedRunControlServer
+	mu        sync.Mutex
+	takeovers []string
+	returns   []string
+}
+
+func (f *fakeRunControl) Takeover(_ context.Context, r *pb.TakeoverRequest) (*pb.TakeoverReply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.takeovers = append(f.takeovers, r.RunId)
+	return &pb.TakeoverReply{Ok: true}, nil
+}
+
+func (f *fakeRunControl) Return(_ context.Context, r *pb.ReturnRequest) (*pb.ReturnReply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.returns = append(f.returns, r.RunId)
+	return &pb.ReturnReply{Ok: true}, nil
+}
+
+// startFakeOrch listens on a unix socket and returns the recorder + the gRPC target for orchAddr.
+func startFakeOrch(t *testing.T) (*fakeRunControl, string) {
+	t.Helper()
+	sock := filepath.Join(t.TempDir(), "orch.sock")
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunControl{}
+	g := grpc.NewServer()
+	pb.RegisterRunControlServer(g, f)
+	go func() { _ = g.Serve(lis) }()
+	t.Cleanup(g.Stop)
+	return f, "unix:" + sock
+}
+
+// wsDialAndGreet opens a /v1/stream socket, completes the handshake, and consumes the session greeting.
+func wsDialAndGreet(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	host := strings.TrimPrefix(ts.URL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := "GET /v1/stream HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: " + rfcSampleKey + "\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: sentinel.recorder.v1, bearer.secret-tok\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	for { // drain status line + handshake headers
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			break
+		}
+	}
+	if _, _, err := readServerFrame(br); err != nil { // session greeting
+		t.Fatalf("greeting: %v", err)
+	}
+	return conn, br
+}
+
+func TestStreamTakeoverReturnForwardsToOrchestrator(t *testing.T) {
+	s, repo := newRunServer(t)
+	fake, target := startFakeOrch(t)
+	s.orchAddr = target
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialAndGreet(t, ts)
+	defer conn.Close()
+
+	sendCtl := func(frame, wantAction string) {
+		t.Helper()
+		if _, err := conn.Write(wsClientFrame(wsOpText, []byte(frame))); err != nil {
+			t.Fatal(err)
+		}
+		op, payload, err := readServerFrame(br)
+		if err != nil || op != wsOpText {
+			t.Fatalf("control reply op=%d err=%v", op, err)
+		}
+		var reply map[string]string
+		if err := json.Unmarshal(payload, &reply); err != nil {
+			t.Fatalf("control reply unmarshal: %v (%s)", err, payload)
+		}
+		if reply["type"] != "control-ok" || reply["action"] != wantAction || reply["run_id"] != "runX" {
+			t.Fatalf("control reply = %v; want control-ok %s runX", reply, wantAction)
+		}
+	}
+	sendCtl(`{"type":"control","action":"takeover","run_id":"runX"}`, "takeover")
+	sendCtl(`{"type":"control","action":"return","run_id":"runX"}`, "return")
+
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.takeovers) != 1 || fake.takeovers[0] != "runX" {
+		t.Fatalf("orchestrator takeovers = %v; want [runX]", fake.takeovers)
+	}
+	if len(fake.returns) != 1 || fake.returns[0] != "runX" {
+		t.Fatalf("orchestrator returns = %v; want [runX]", fake.returns)
+	}
+	// control frames are forwarded, never persisted as recorder events.
+	matches, _ := filepath.Glob(filepath.Join(repo, "runs", "record-*", "events.ndjson"))
+	for _, p := range matches {
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), "takeover") || strings.Contains(string(b), "return") {
+			t.Fatalf("control frame leaked into recorder ingest %s: %q", p, string(b))
+		}
+	}
+}
+
+func TestStreamTakeoverMissingRunID(t *testing.T) {
+	s, _ := newRunServer(t)
+	fake, target := startFakeOrch(t)
+	s.orchAddr = target
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialAndGreet(t, ts)
+	defer conn.Close()
+
+	if _, err := conn.Write(wsClientFrame(wsOpText, []byte(`{"type":"control","action":"takeover"}`))); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, err := readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("reply op=%d err=%v", op, err)
+	}
+	var reply map[string]string
+	_ = json.Unmarshal(payload, &reply)
+	if reply["type"] != "control-error" {
+		t.Fatalf("missing run_id reply = %v; want control-error", reply)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.takeovers) != 0 {
+		t.Fatalf("a run_id-less takeover must NOT reach the orchestrator; got %v", fake.takeovers)
+	}
+}
+
+// Regression (finding 1): a recorder DOM event that happens to use type "return"/"takeover" (e.g. an
+// Enter-key capture) must be PERSISTED as an event, not swallowed as a control frame. The control
+// channel is namespaced under type:"control", so bare-verb frames stay recorder events.
+func TestStreamRecorderEventTypedReturnPersists(t *testing.T) {
+	s, repo := newRunServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialAndGreet(t, ts)
+	defer conn.Close()
+
+	event := `{"type":"return","selector":"#search","key":"Enter"}`
+	if _, err := conn.Write(wsClientFrame(wsOpText, []byte(event))); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, err := readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("ack op=%d err=%v", op, err)
+	}
+	var ack map[string]any
+	if err := json.Unmarshal(payload, &ack); err != nil || ack["type"] != "ack" {
+		t.Fatalf("a bare-verb recorder event must be acked as an event, got %v (err=%v)", ack, err)
+	}
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+
+	matches, _ := filepath.Glob(filepath.Join(repo, "runs", "record-*", "events.ndjson"))
+	found := false
+	for _, p := range matches {
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), event) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("recorder event typed %q was swallowed, not persisted to events.ndjson", event)
 	}
 }

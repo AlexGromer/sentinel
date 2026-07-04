@@ -20,6 +20,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/base64"
@@ -33,6 +34,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/AlexGromer/sentinel/internal/orchestrator/pb"
 )
 
 const (
@@ -51,6 +57,8 @@ const (
 	wsMaxRecordEvents = 10000            // per-session event cap (bounds an unbounded/hostile client)
 	wsIdleTimeout     = 5 * time.Minute  // close an idle recorder socket
 	wsWriteTimeout    = 10 * time.Second // bound a slow client blocking a server-frame write
+
+	wsCtlForwardTimeout = 5 * time.Second // M9.8 F4 (ADR-054): bound a Takeover/Return RPC to the orchestrator
 )
 
 // wsAccept computes the RFC6455 Sec-WebSocket-Accept for a client key.
@@ -220,7 +228,7 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader) {
 		_ = wsWriteFrame(conn, wsOpText, ack)
 	}
 
-	events := 0
+	events, ctlFrames := 0, 0
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(wsIdleTimeout))
 		opcode, payload, fin, err := wsReadClientFrame(br)
@@ -249,6 +257,19 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader) {
 			if line == "" {
 				continue
 			}
+			// M9.8 F4 (ADR-054): a takeover/return control frame is forwarded to the orchestrator and is
+			// NOT persisted as a recorder event; everything else is a recorder DOM event (events.ndjson).
+			// Control frames get their OWN per-session cap (each dials the orchestrator) so an authed
+			// client can't loop them unboundedly — the recorder-event cap below doesn't bound this branch.
+			if action, runID, isCtl := parseControlFrame(payload); isCtl {
+				s.handleControlFrame(conn, action, runID)
+				ctlFrames++
+				if ctlFrames >= wsMaxRecordEvents {
+					_ = wsWriteFrame(conn, wsOpClose, closePayload(1009, "control-frame cap reached"))
+					return
+				}
+				continue
+			}
 			if ferr == nil {
 				_, _ = f.WriteString(line + "\n")
 			}
@@ -272,4 +293,95 @@ func closePayload(code uint16, reason string) []byte {
 	binary.BigEndian.PutUint16(b, code)
 	copy(b[2:], reason)
 	return b
+}
+
+// parseControlFrame recognises an M9.8 F4 control frame on the /v1/stream socket (ADR-054):
+//
+//	{"type":"control","action":"takeover|return","run_id":"<id>"}
+//
+// The dedicated `type:"control"` envelope NAMESPACES these so they cannot collide with a recorder DOM
+// event's own `type` vocabulary — a key-capture recorder can legitimately emit `type:"return"` (Enter
+// key) or `type:"takeover"`, which must still persist as events. Returns (action, run_id, true) for a
+// well-formed control envelope (action validated downstream); any other frame is a recorder event
+// (ok=false), persisted to events.ndjson as before.
+func parseControlFrame(payload []byte) (action, runID string, ok bool) {
+	var f struct {
+		Type   string `json:"type"`
+		Action string `json:"action"`
+		RunID  string `json:"run_id"`
+	}
+	if json.Unmarshal(payload, &f) != nil || f.Type != "control" {
+		return "", "", false
+	}
+	return f.Action, f.RunID, true
+}
+
+// validRunID bounds a run_id forwarded to the orchestrator (M9.8 F4). run_ids are hex (the orchestrator's
+// newRunID is 16 hex chars); we accept a safe charset + length so a hostile control frame can't inject a
+// control-char / huge string as an orchestrator map key. NOTE: this is a format guard only — binding a
+// run_id to the WS session (cross-run authorization) lands with the M9-LIVE per-run socket wiring; until
+// then any authed /v1/stream client can address any run_id (documented in THREAT_MODEL ❾).
+func validRunID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		ok := r == '-' || r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// handleControlFrame validates a control envelope, forwards takeover/return to the orchestrator, and acks
+// the result over the socket (control-ok / control-error). An unknown action, a missing/invalid run_id,
+// or an unconfigured orchestrator is reported to the client, never persisted.
+func (s *server) handleControlFrame(conn net.Conn, action, runID string) {
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	reply := func(m map[string]string) {
+		if b, e := json.Marshal(m); e == nil {
+			_ = wsWriteFrame(conn, wsOpText, b)
+		}
+	}
+	if action != "takeover" && action != "return" {
+		reply(map[string]string{"type": "control-error", "action": action, "error": "unknown control action (want takeover|return)"})
+		return
+	}
+	if !validRunID(runID) {
+		reply(map[string]string{"type": "control-error", "action": action, "error": "missing/invalid run_id"})
+		return
+	}
+	if err := s.forwardControl(action, runID); err != nil {
+		reply(map[string]string{"type": "control-error", "action": action, "run_id": runID, "error": err.Error()})
+		return
+	}
+	reply(map[string]string{"type": "control-ok", "action": action, "run_id": runID})
+}
+
+// forwardControl dials the RunControl orchestrator (CONTROL_API_ORCH_ADDR — any gRPC target, e.g.
+// "unix:/abs/state/sentinel-orch-<id>.sock") and issues the Takeover/Return RPC for run_id (M9.8 F4,
+// ADR-054). A fresh connection per call: takeover/return are low-frequency operator signals, not the
+// per-event recorder path. Fail-closed when no orchestrator is wired.
+func (s *server) forwardControl(action, runID string) error {
+	if s.orchAddr == "" {
+		return errors.New("no orchestrator wired (set CONTROL_API_ORCH_ADDR)")
+	}
+	conn, err := grpc.NewClient(s.orchAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), wsCtlForwardTimeout)
+	defer cancel()
+	cl := pb.NewRunControlClient(conn)
+	switch action {
+	case "takeover":
+		_, err = cl.Takeover(ctx, &pb.TakeoverRequest{RunId: runID, Reason: "operator (control-api /v1/stream)"})
+	case "return":
+		_, err = cl.Return(ctx, &pb.ReturnRequest{RunId: runID})
+	default:
+		err = errors.New("unknown control action: " + action)
+	}
+	return err
 }

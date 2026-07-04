@@ -13,6 +13,7 @@ import traceback
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from . import runcontrol
 from .executor import log, make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
@@ -55,6 +56,33 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe)
     if is_describe and unmatched:
         return 1
     return 0 if sc else 1
+
+
+def _resume_through_takeovers(app, final, cfg, rc, run_id):
+    """M9.8 F4 (ADR-054): drive a graph through any operator takeovers.
+
+    If the graph paused for a takeover, app.invoke() returns with `__interrupt__` (brain/graph.py:
+    checkpoint). Wait for the orchestrator's Return — poll() drops from "takeover" back to "continue" —
+    then resume the SAME checkpointer thread with Command(resume=...). Loop until the graph completes
+    (no more interrupts) or the takeover exceeds SENTINEL_TAKEOVER_TIMEOUT seconds (default 1800; 0 =
+    wait indefinitely). A pure no-op on the common path (nothing interrupted) and whenever no
+    orchestrator is wired (poll() is a no-op → "continue" → `final` never carries `__interrupt__`)."""
+    import time
+    from langgraph.types import Command
+    try:
+        timeout = float(os.environ.get("SENTINEL_TAKEOVER_TIMEOUT", "1800"))
+    except ValueError:
+        timeout = 1800.0
+    while final.get("__interrupt__"):
+        log("explore: paused for operator takeover; awaiting return (Command(resume) on Return)")
+        deadline = None if timeout <= 0 else time.monotonic() + timeout
+        while rc.poll(run_id, "checkpoint") == runcontrol.TAKEOVER:
+            if deadline is not None and time.monotonic() > deadline:
+                log("explore: takeover exceeded SENTINEL_TAKEOVER_TIMEOUT -> resuming anyway")
+                break
+            time.sleep(0.5)
+        final = app.invoke(Command(resume={"returned": True}), config=cfg)
+    return final
 
 
 def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
@@ -103,11 +131,13 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
         }
         ckpt = str((out / "checkpoint.db").resolve())
+        rc = runcontrol.make_client()  # M8/M9.8 F4: shared by the graph's checkpoint gate + the resume loop
+        cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": run_id}}
         with _checkpointer(ckpt) as saver:
-            app = build_graph(ex, planner, tx_write, scenario_head=scenario_head).compile(checkpointer=saver)
-            final = app.invoke(init_state,
-                               config={"recursion_limit": max(60, max_steps * 8),
-                                       "configurable": {"thread_id": run_id}})
+            app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
+            final = app.invoke(init_state, config=cfg)
+            # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
+            final = _resume_through_takeovers(app, final, cfg, rc, run_id)
         ex.call("browser.traceStop", path=trace_path)
         ex.call("shutdown")
         steps = final.get("exploration_plan", [])
@@ -176,6 +206,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
     planner = HeuristicPlanner()    # the explore walk stays deterministic; authoring is the scenario head
     user_msg = {"role": "user", "content": goal or describe}
     cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": conversation_id}}
+    rc = runcontrol.make_client()  # M9.8 F4: shared by the graph's checkpoint gate + the cold-turn resume loop
     tx = open(out / "llm-transcript.jsonl", "w")
 
     def tx_write(rec: dict) -> None:
@@ -190,7 +221,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 # get_state always returns a StateSnapshot — on a brand-new thread its .values is {} (not
                 # None), so the guard + .get keep a cold turn-1 from being mistaken for a resume.
                 probe = build_graph(_NoBrowser(), planner, tx_write,
-                                    scenario_head=scenario_head).compile(checkpointer=saver)
+                                    scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
                 snap = probe.get_state(cfg)
                 warm = bool(snap and snap.values and snap.values.get("site_map"))
                 if warm:
@@ -226,8 +257,11 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                             "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
                         }
                         app = build_graph(ex, planner, tx_write,
-                                          scenario_head=scenario_head).compile(checkpointer=saver)
+                                          scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
                         final = app.invoke(init, config=cfg)
+                        # M9.8 F4 (ADR-054): a takeover during the cold turn pauses here too — await Return
+                        # and resume BEFORE tearing down the browser (mirror _run_explore).
+                        final = _resume_through_takeovers(app, final, cfg, rc, run_id)
                         ex.call("browser.traceStop", path=trace_path)
                         ex.call("shutdown")
                     finally:

@@ -18,6 +18,7 @@ import os
 import sys
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import interrupt
 
 from . import runcontrol
 from .otel import span
@@ -94,13 +95,17 @@ def _user_turns(messages: list) -> list:
     return out
 
 
-def build_graph(ex, planner, tx_write, scenario_head=None):
+def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
     M9.2b (ADR-028): when `scenario_head` (a GoalPlanner or DescribePlanner) is wired, a `scenario` node
     runs once after the explore converges — it authors a grounded scenario over the COMPLETE site map.
-    Pure explore (scenario_head=None) routes straight through scenario as a no-op to report."""
-    rc = runcontrol.make_client()  # M8: report token deltas to the Go orchestrator (no-op if ORCH_ADDR unset)
+    Pure explore (scenario_head=None) routes straight through scenario as a no-op to report.
+
+    M9.8 F4 (ADR-054): `rc` is the RunControl client (orchestrator link). Defaults to make_client()
+    (no-op unless ORCH_ADDR is set) — injectable so the offline takeover test drives interrupt/resume
+    with a fake orchestrator. Production behaviour is unchanged when rc is left None."""
+    rc = rc if rc is not None else runcontrol.make_client()  # M8: token deltas to the Go orchestrator (no-op if ORCH_ADDR unset)
 
     def perceive(state: RunState) -> dict:
         """Snapshot the current page (URL + accessibility tree). No LLM."""
@@ -183,7 +188,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
         tx_write({"step": sid, "planner": planner.name, "model": planner.model,
                   "decision": a["intent"], "reason": decision.get("reason", ""),
                   "prompt_tokens": tok.get("prompt"), "completion_tokens": tok.get("completion")})
-        if rc.report(state.get("run_id", ""), "plan", tok.get("prompt"), tok.get("completion")):
+        if rc.report(state.get("run_id", ""), "plan", tok.get("prompt"),
+                     tok.get("completion")) == runcontrol.ABORT:
             log("plan: orchestrator budget abort -> converging")
             return {"exploration_complete": True}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + [planned],
@@ -236,8 +242,37 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
         return {}
 
     def checkpoint(state: RunState) -> dict:
-        """LangGraph's checkpointer persists at each superstep boundary; nothing explicit here."""
+        """LangGraph persists at each superstep boundary.
+
+        M9.8 F4 (ADR-054): operator-takeover gate. A 0-token poll to the orchestrator; if a takeover is
+        pending, ARM it (a state latch) — the actual pause runs in the dedicated `takeover` node next
+        superstep. The decision is latched into STATE (not re-derived from the volatile poll) so the
+        interrupting node's interrupt() is reached identically on the resume re-run.
+
+        abort > takeover: if the orchestrator ABORTS (budget breach / external Abort) while or after a
+        takeover, converge immediately instead of resuming the walk. This node is re-entered on resume
+        (bypassing plan()'s own abort check), so it must honour abort here too. No-op / no arm when no
+        orchestrator is wired (poll() -> "continue"), so the standalone/offline path is byte-identical."""
+        verb = rc.poll(state.get("run_id", ""), "checkpoint")
+        if verb == runcontrol.ABORT:
+            log("checkpoint: orchestrator abort -> converging (abort > takeover)")
+            return {"exploration_complete": True, "_takeover_armed": False}
+        if verb == runcontrol.TAKEOVER:
+            log("checkpoint: operator takeover pending -> arming pause")
+            return {"_takeover_armed": True}
         return {}
+
+    def takeover(state: RunState) -> dict:
+        """M9.8 F4 (ADR-054): paused for an operator takeover. interrupt() yields the live browser to the
+        human (CDP, M9-LIVE) and persists the partial run; app.invoke() returns with `__interrupt__`. On
+        the orchestrator's Return the brain resumes this thread (Command(resume=...)), re-enters here where
+        interrupt() now RETURNS the resume payload, clears the arm, and records the return. The interrupt()
+        is UNCONDITIONAL — the decision was latched by checkpoint, so this node re-runs cleanly on resume.
+        Edge back to checkpoint re-polls (handles a not-yet-propagated Return) before the run continues."""
+        payload = interrupt({"reason": "operator_takeover", "run_id": state.get("run_id", "")})
+        log(f"takeover: resumed from operator takeover -> {payload!r}")
+        return {"_takeover_armed": False,
+                "takeover_returns": list(state.get("takeover_returns", [])) + [payload]}
 
     def scenario(state: RunState) -> dict:
         """M9.2b (ADR-028): phase-2 head — author a grounded scenario over the COMPLETE site map.
@@ -295,6 +330,12 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
         return "checkpoint" if state.get("_verify_ok", True) else "heal"
 
     def route_checkpoint(state: RunState) -> str:
+        # M9.8 F4 (ADR-054): abort during a takeover converges (abort > takeover); an armed takeover
+        # diverts to the pause node before the run continues.
+        if state.get("exploration_complete"):
+            return "scenario"
+        if state.get("_takeover_armed"):
+            return "takeover"
         return "scenario" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
 
     def route_entry(state: RunState) -> str:
@@ -314,7 +355,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
     b = StateGraph(RunState)
     for name, fn in [("perceive", perceive), ("ground", ground), ("plan", plan),
                      ("act", act), ("verify", verify), ("heal", heal),
-                     ("checkpoint", checkpoint), ("scenario", scenario), ("report", report)]:
+                     ("checkpoint", checkpoint), ("takeover", takeover),
+                     ("scenario", scenario), ("report", report)]:
         b.add_node(name, _traced(name, fn))
     # M9.10 (ADR-048): conditional entry — resume a warm multi-turn thread straight into `scenario`,
     # else the normal cold/one-shot `perceive` walk. (Was an unconditional START->perceive edge.)
@@ -325,7 +367,11 @@ def build_graph(ex, planner, tx_write, scenario_head=None):
     b.add_edge("act", "verify")
     b.add_conditional_edges("verify", route_verify, {"checkpoint": "checkpoint", "heal": "heal"})
     b.add_edge("heal", "checkpoint")
-    b.add_conditional_edges("checkpoint", route_checkpoint, {"perceive": "perceive", "scenario": "scenario"})
+    # M9.8 F4 (ADR-054): an armed takeover routes to the pause node, which loops back to checkpoint after
+    # the operator returns (re-poll handles a not-yet-propagated Return) before the run continues.
+    b.add_conditional_edges("checkpoint", route_checkpoint,
+                            {"perceive": "perceive", "scenario": "scenario", "takeover": "takeover"})
+    b.add_edge("takeover", "checkpoint")
     b.add_edge("scenario", "report")  # M9.2b: scenario node (no-op in pure explore) -> report
     b.add_edge("report", END)
     return b

@@ -12,10 +12,18 @@ option go_package = "github.com/AlexGromer/sentinel/internal/orchestrator/pb;pb"
 service RunControl {
   // Register a run (limits set by the orchestrator from config/env).
   rpc StartRun (StartRunRequest) returns (StartRunReply);
-  // brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade.
+  // brain -> orchestrator, once per node-step; the reply may instruct the brain to abort / degrade
+  // (M9.8 F4, ADR-054: or to PAUSE for an operator takeover via Control.takeover).
   rpc ReportEvent (RunEvent) returns (Control);
   // External abort (operator / deadline).
   rpc Abort (AbortRequest) returns (AbortReply);
+  // M9.8 F4 (ADR-054): operator co-pilot takeover/return. Takeover sets a per-run flag; the next
+  // ReportEvent reply then carries Control.takeover=true, so the brain interrupt()s + persists at its
+  // superstep boundary (paused; the human drives the live browser via CDP). Return clears the flag, and
+  // the brain resumes the same checkpointer thread from exactly where it paused. External (UI/operator),
+  // forwarded by the control-API over its WebSocket — modelled on Abort.
+  rpc Takeover (TakeoverRequest) returns (TakeoverReply);
+  rpc Return (ReturnRequest) returns (ReturnReply);
 }
 
 message StartRunRequest {
@@ -36,6 +44,9 @@ message RunEvent {
 message Control {
   bool abort = 1;
   string reason = 2;
+  // M9.8 F4 (ADR-054): pause for an operator takeover. DISTINCT from abort — the run is not killed; it
+  // interrupt()s and persists, then resumes on Return. abort takes precedence (a hard stop beats a pause).
+  bool takeover = 3;
 }
 
 message AbortRequest {
@@ -43,3 +54,15 @@ message AbortRequest {
   string reason = 2;
 }
 message AbortReply { bool ok = 1; }
+
+// M9.8 F4 (ADR-054): operator takeover/return signals (external), modelled on Abort.
+message TakeoverRequest {
+  string run_id = 1;
+  string reason = 2;
+}
+message TakeoverReply { bool ok = 1; }
+
+message ReturnRequest {
+  string run_id = 1;
+}
+message ReturnReply { bool ok = 1; }

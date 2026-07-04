@@ -44,10 +44,15 @@ class RunState(TypedDict, total=False):
     exploration_complete: bool
     executed_actions: list
     errors: list
+    # M9.8 F4 (ADR-054): operator-takeover resume payloads, appended each time the checkpoint node
+    # resumes from an interrupt() (one entry per takeover→return cycle). Observability only — not in
+    # plan.json/scenario.json, so plan_hash is unaffected.
+    takeover_returns: list
     # transient channels (must be declared so LangGraph keeps them across nodes)
     _pending: dict
     _last_ok: bool
     _verify_ok: bool
+    _takeover_armed: bool         # M9.8 F4 (ADR-054): latched by checkpoint when a takeover is pending; drives the pause node
 
 
 def normalize_url(u: str) -> str:
