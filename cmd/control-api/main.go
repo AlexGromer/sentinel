@@ -48,14 +48,17 @@ const version = "0.1.0"
 
 // run is the tracked state of a spawned agentctl run.
 type run struct {
-	ID          string `json:"run_id"`
-	State       string `json:"state"` // running | done | failed
-	ExitCode    int    `json:"exit_code"`
-	Target      string `json:"target"`
-	ArtifactDir string `json:"artifact_dir"`
-	StartedAt   string `json:"started_at"`
-	FinishedAt  string `json:"finished_at,omitempty"`
-	Error       string `json:"error,omitempty"`
+	ID             string `json:"run_id"`
+	State          string `json:"state"` // running | done | failed
+	ExitCode       int    `json:"exit_code"`
+	Target         string `json:"target"`
+	Mode           string `json:"mode,omitempty"`            // M13: persisted for the runs domain
+	Planner        string `json:"planner,omitempty"`         // M13
+	ConversationID string `json:"conversation_id,omitempty"` // M13: the runs<->chats join (ADR-050)
+	ArtifactDir    string `json:"artifact_dir"`
+	StartedAt      string `json:"started_at"`
+	FinishedAt     string `json:"finished_at,omitempty"`
+	Error          string `json:"error,omitempty"`
 
 	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
 }
@@ -162,7 +165,8 @@ type server struct {
 	agentctl  string
 	token     string
 	corsAllow map[string]bool
-	orchAddr  string // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
+	orchAddr  string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
+	store     *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
 	mu        sync.RWMutex
 	runs      map[string]*run
 }
@@ -307,10 +311,15 @@ func (s *server) resolveFromRun(fromRun string) (planPath, planTarget string, er
 func (s *server) spawnRun(req runRequest) *run {
 	id := newRunID()
 	artDir := filepath.Join(s.repo, "runs", "control-"+id)
-	rec := &run{ID: id, State: "running", Target: req.Target, ArtifactDir: artDir, StartedAt: time.Now().UTC().Format(time.RFC3339), stream: newRunStream()}
+	rec := &run{ID: id, State: "running", Target: req.Target, Mode: req.Mode, Planner: req.Planner,
+		ConversationID: req.ConversationID, ArtifactDir: artDir,
+		StartedAt: time.Now().UTC().Format(time.RFC3339), stream: newRunStream()}
 	s.mu.Lock()
 	s.runs[id] = rec
 	s.mu.Unlock()
+	if s.store != nil { // M13: persist the run at "running" so it survives a control-API restart
+		s.store.upsertRun(rec)
+	}
 
 	// Build agentctl args from the request (no shell — args are passed directly, no injection).
 	// req.plan is server-resolved (resolveFromRun); req.Target for replay/baseline is the effective
@@ -367,6 +376,9 @@ func (s *server) spawnRun(req runRequest) *run {
 			rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
 		}
 		s.mu.Unlock()
+		if s.store != nil { // M13: persist the terminal state (done/failed + exit_code + finished_at)
+			s.store.upsertRun(rec)
+		}
 		lw.flush()          // emit any trailing partial line
 		rec.stream.finish() // release SSE subscribers
 	}()
@@ -421,11 +433,24 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
+	live := make(map[string]bool, len(s.runs))
 	out := make([]*run, 0, len(s.runs))
-	for _, rr := range s.runs {
+	for id, rr := range s.runs {
+		live[id] = true
 		out = append(out, rr)
 	}
 	s.mu.RUnlock()
+	// M13 (ADR-050): fold in persisted runs from the gateway (e.g. from before a restart). The in-memory
+	// copy wins for a run that's both live and stored — it has the freshest state + the live stream.
+	if s.store != nil {
+		if stored, ok := s.store.listRuns(); ok {
+			for _, rr := range stored {
+				if !live[rr.ID] {
+					out = append(out, rr)
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
 }
 
@@ -434,6 +459,11 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	rec, ok := s.runs[id]
 	s.mu.RUnlock()
+	if !ok && s.store != nil { // M13: a run from a prior control-API process survives in the gateway
+		if hist, found := s.store.getRun(id); found {
+			rec, ok = hist, true
+		}
+	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
 		return
@@ -844,6 +874,17 @@ func main() {
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {
 		if o = strings.TrimSpace(o); o != "" {
 			s.corsAllow[o] = true
+		}
+	}
+	// M13 (ADR-050): connect to a persistent store-gateway if configured; else runs stay in-memory
+	// (standalone/offline path, unchanged). Fail-open — an unreachable gateway only warns.
+	if sa := os.Getenv("CONTROL_API_STORE_ADDR"); sa != "" {
+		if sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN")); err != nil {
+			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q unreachable: %v (runs stay in-memory, lost on restart)\n", sa, err)
+		} else {
+			s.store = sc
+			defer sc.close()
+			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
 		}
 	}
 	if s.token == "" {
