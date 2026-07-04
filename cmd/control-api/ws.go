@@ -16,6 +16,13 @@
 // the protocol name `sentinel.recorder.v1` AND `bearer.<token>` — and the server validates the token
 // (constant-time) but echoes back ONLY the non-secret protocol name, never the token. Reuses the same
 // 127.0.0.1 bind + token + Origin allowlist as the rest of the control-API (ADR-032).
+//
+// M14 W2: the SAME endpoint also serves the server→client half — `GET /v1/stream?run_id=<id>` subscribes
+// a browser to a live run's AG-UI event stream (replayed from the run's runStream ring buffer, then
+// pushed as new lines arrive). `?session=` (recorder ingest) and `?run_id=` (event subscription) are
+// mutually exclusive modes on the same hijacked socket; a run subscription still answers ping/control
+// frames from the read loop while a second goroutine pushes events, so every server→client write funnels
+// through wsConn's mutex (see below) to keep the two goroutines from interleaving frame writes.
 package main
 
 import (
@@ -33,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -83,6 +91,29 @@ func (s *server) wsAuthed(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// wsConn synchronizes every server→client frame write for one /v1/stream connection. Before M14 a
+// single goroutine (the read loop) did all writes, so no lock was needed. The M14 run-subscription
+// mode adds a SECOND goroutine — the event pusher (streamRunEvents) — writing concurrently with the
+// read loop's pong/control-ack replies. Two goroutines calling wsWriteFrame on the same net.Conn
+// without synchronization could interleave a frame's header bytes with another frame's payload,
+// corrupting the stream for the client. Every server→client write (greet, ack, pong, control reply,
+// pushed event) MUST go through wc.writeFrame — this mutex is the load-bearing fix for that race.
+type wsConn struct {
+	conn net.Conn
+	mu   sync.Mutex
+}
+
+func newWSConn(conn net.Conn) *wsConn { return &wsConn{conn: conn} }
+
+// writeFrame writes one server→client frame under the connection's write mutex, bounding the write
+// with wsWriteTimeout so a slow/stalled client can't hang the writer holding the lock indefinitely.
+func (c *wsConn) writeFrame(opcode byte, payload []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	return wsWriteFrame(c.conn, opcode, payload)
 }
 
 // wsWriteFrame writes a single unmasked server→client frame (server frames are never masked, RFC6455 §5.1).
@@ -162,8 +193,9 @@ func wsReadClientFrame(br *bufio.Reader) (opcode byte, payload []byte, fin bool,
 	return
 }
 
-// handleStream upgrades GET /v1/stream to a WebSocket and ingests recorder events (ADR-043). The
-// pre-hijack guards (handshake/auth/origin) return JSON errors; only the 101 path hijacks.
+// handleStream upgrades GET /v1/stream to a WebSocket and either ingests recorder events (ADR-043,
+// ?session=) or subscribes to a run's AG-UI event stream (M14 W2, ?run_id=). The pre-hijack guards
+// (handshake/auth/origin) return JSON errors; only the 101 path hijacks.
 func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") ||
 		!strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
@@ -199,8 +231,20 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// mid-recording reconnect appends to the SAME runs/record-<id>/events.ndjson instead of fragmenting
 	// into a fresh dir. Validated to a bare session id (no path traversal); empty => a new session.
 	resumeSession := r.URL.Query().Get("session")
-	if resumeSession != "" && !validRunID(resumeSession) {
+	// M14 W2: ?run_id= subscribes this socket to a live run's AG-UI events instead of ingesting recorder
+	// events — a distinct mode from ?session=, never both on the same connection. Same charset/length
+	// guard as the recorder session id (validRunID); run_id here is used as an s.runs map key and echoed
+	// in JSON, not as a filesystem path component, so no filepath.Base sanitizer is needed on this arm.
+	runIDParam := r.URL.Query().Get("run_id")
+	switch {
+	case resumeSession != "" && runIDParam != "":
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session and run_id are mutually exclusive (?session= resumes recorder ingest; ?run_id= subscribes to run events)"})
+		return
+	case resumeSession != "" && !validRunID(resumeSession):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session must be a bare recorder session id"})
+		return
+	case runIDParam != "" && !validRunID(runIDParam):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run_id must be a bare run id"})
 		return
 	}
 	hj, ok := w.(http.Hijacker)
@@ -227,6 +271,10 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if runIDParam != "" {
+		s.streamRunEvents(conn, brw.Reader, runIDParam)
+		return
+	}
 	s.streamRecord(conn, brw.Reader, resumeSession)
 }
 
@@ -234,6 +282,7 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 // events.ndjson, answer pings, and stop on close / idle / cap. Split out so a test can drive it.
 // resumeSession (validated by the caller) appends to an existing session; empty mints a new one.
 func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession string) {
+	wc := newWSConn(conn)
 	session := resumeSession
 	if session == "" || !validRunID(session) { // re-validate: only [A-Za-z0-9_-] (no path separators)
 		session = newRunID()
@@ -249,9 +298,8 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 	}
 
 	// Greet the client with its session id (server→client text frame).
-	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 	if ack, e := json.Marshal(map[string]string{"type": "session", "session": session}); e == nil {
-		_ = wsWriteFrame(conn, wsOpText, ack)
+		_ = wc.writeFrame(wsOpText, ack)
 	}
 
 	events, ctlFrames := 0, 0
@@ -261,22 +309,21 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 		if err != nil {
 			return
 		}
-		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)) // bound each server-side write
 		switch opcode {
 		case wsOpClose:
-			_ = wsWriteFrame(conn, wsOpClose, nil)
+			_ = wc.writeFrame(wsOpClose, nil)
 			return
 		case wsOpPing:
-			_ = wsWriteFrame(conn, wsOpPong, payload)
+			_ = wc.writeFrame(wsOpPong, payload)
 		case wsOpContinuation:
 			// We never send a fragmented message, so a standalone continuation is a protocol error.
-			_ = wsWriteFrame(conn, wsOpClose, closePayload(1002, "unexpected continuation frame"))
+			_ = wc.writeFrame(wsOpClose, closePayload(1002, "unexpected continuation frame"))
 			return
 		case wsOpText, wsOpBinary:
 			if !fin {
 				// Fragmented messages aren't reassembled here — the recorder must send one event
 				// per frame. Close with 1003 (unsupported data) rather than corrupt the NDJSON.
-				_ = wsWriteFrame(conn, wsOpClose, closePayload(1003, "one event per frame"))
+				_ = wc.writeFrame(wsOpClose, closePayload(1003, "one event per frame"))
 				return
 			}
 			line := strings.TrimRight(string(payload), "\r\n")
@@ -288,10 +335,10 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 			// Control frames get their OWN per-session cap (each dials the orchestrator) so an authed
 			// client can't loop them unboundedly — the recorder-event cap below doesn't bound this branch.
 			if action, runID, isCtl := parseControlFrame(payload); isCtl {
-				s.handleControlFrame(conn, action, runID)
+				s.handleControlFrame(wc, action, runID)
 				ctlFrames++
 				if ctlFrames >= wsMaxRecordEvents {
-					_ = wsWriteFrame(conn, wsOpClose, closePayload(1009, "control-frame cap reached"))
+					_ = wc.writeFrame(wsOpClose, closePayload(1009, "control-frame cap reached"))
 					return
 				}
 				continue
@@ -301,16 +348,153 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 			}
 			events++
 			if ack, e := json.Marshal(map[string]any{"type": "ack", "n": events}); e == nil {
-				_ = wsWriteFrame(conn, wsOpText, ack)
+				_ = wc.writeFrame(wsOpText, ack)
 			}
 			if events >= wsMaxRecordEvents {
-				_ = wsWriteFrame(conn, wsOpClose, closePayload(1009, "event cap reached"))
+				_ = wc.writeFrame(wsOpClose, closePayload(1009, "event cap reached"))
 				return
 			}
 		default:
 			// pong / reserved opcodes — ignore
 		}
 	}
+}
+
+// streamRunEvents subscribes conn to a live run's AG-UI event stream (M14 W2, ?run_id=). The read loop
+// (this goroutine) still answers ping/control-frames/close on the socket exactly like streamRecord;
+// a second goroutine drains the run's runStream and pushes events, synchronized against the read loop
+// through wc's write mutex. run_id (charset-validated by the caller) must name a KNOWN live run — an
+// unknown run_id gets a graceful error + close, never a panic.
+func (s *server) streamRunEvents(conn net.Conn, br *bufio.Reader, runID string) {
+	wc := newWSConn(conn)
+
+	s.mu.RLock()
+	rec, ok := s.runs[runID]
+	s.mu.RUnlock()
+	if !ok {
+		if b, e := json.Marshal(map[string]string{"type": "error", "run_id": runID, "error": "no such run"}); e == nil {
+			_ = wc.writeFrame(wsOpText, b)
+		}
+		_ = wc.writeFrame(wsOpClose, closePayload(1008, "no such run"))
+		return
+	}
+	if ack, e := json.Marshal(map[string]string{"type": "subscribed", "run_id": runID}); e == nil {
+		_ = wc.writeFrame(wsOpText, ack)
+	}
+
+	// subscribe() replays the buffered ring + hands us a channel of future lines (nil+finished if the
+	// run already completed before we subscribed — then the snapshot is the whole history and there is
+	// nothing left to push). done stops the pusher goroutine on our way out; wg lets us wait for it to
+	// actually exit before returning (no goroutine leak past the life of this connection).
+	snapshot, ch, finished := rec.stream.subscribe()
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	if !finished {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, line := range snapshot {
+				if wc.writeFrame(wsOpText, wsAGUIFrame(runID, line)) != nil {
+					return
+				}
+			}
+			for {
+				select {
+				case line, open := <-ch:
+					if !open { // rec.stream.finish() closed us — run completed, nothing more to push
+						return
+					}
+					if wc.writeFrame(wsOpText, wsAGUIFrame(runID, line)) != nil {
+						return
+					}
+				case <-done: // connection is tearing down — stop pushing
+					return
+				}
+			}
+		}()
+	} else {
+		for _, line := range snapshot {
+			if wc.writeFrame(wsOpText, wsAGUIFrame(runID, line)) != nil {
+				break
+			}
+		}
+	}
+	defer func() {
+		close(done)
+		if !finished {
+			// Idempotent against a concurrent rec.stream.finish(): unsubscribe is a no-op if finish()
+			// already deleted+closed this channel (see runStream.unsubscribe in main.go).
+			rec.stream.unsubscribe(ch)
+		}
+		wg.Wait() // don't return (and let the caller conn.Close()) until the pusher has actually exited
+	}()
+
+	// The read loop: a run-subscription socket doesn't ingest recorder DOM events, but a subscriber may
+	// still send ping/close, or a takeover/return control frame (M9.8 F4) on the same connection.
+	ctlFrames := 0
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(wsIdleTimeout))
+		opcode, payload, fin, err := wsReadClientFrame(br)
+		if err != nil {
+			return
+		}
+		switch opcode {
+		case wsOpClose:
+			_ = wc.writeFrame(wsOpClose, nil)
+			return
+		case wsOpPing:
+			_ = wc.writeFrame(wsOpPong, payload)
+		case wsOpContinuation:
+			_ = wc.writeFrame(wsOpClose, closePayload(1002, "unexpected continuation frame"))
+			return
+		case wsOpText, wsOpBinary:
+			if !fin {
+				_ = wc.writeFrame(wsOpClose, closePayload(1003, "one event per frame"))
+				return
+			}
+			line := strings.TrimRight(string(payload), "\r\n")
+			if line == "" {
+				continue
+			}
+			if action, ctlRunID, isCtl := parseControlFrame(payload); isCtl {
+				s.handleControlFrame(wc, action, ctlRunID)
+				ctlFrames++
+				if ctlFrames >= wsMaxRecordEvents {
+					_ = wc.writeFrame(wsOpClose, closePayload(1009, "control-frame cap reached"))
+					return
+				}
+			}
+			// Anything else on a subscription socket is not a recorder event and has nowhere to go —
+			// ignored (no ack), unlike streamRecord's ingest path.
+		default:
+			// pong / reserved opcodes — ignore
+		}
+	}
+}
+
+// wsAGUIPrefix marks a runStream line as a pre-formed AG-UI JSON event (emitted by brain, M14 W4) to be
+// forwarded to a subscriber verbatim, rather than wrapped as a generic "log" line.
+const wsAGUIPrefix = "@@AGUI "
+
+// wsAGUIFrame returns the payload to push for one runStream line: the raw @@AGUI JSON payload verbatim
+// if it looks well-formed, else the line wrapped as a typed "log" event. We deliberately do NOT parse
+// or validate the @@AGUI JSON beyond stripping the prefix and checking it starts with '{' — that's
+// enough to tell a real envelope from a spoofed prefix (e.g. a recorder DOM event whose text happens to
+// start with "@@AGUI "), without taking on a JSON-schema dependency here. A spoofed/malformed payload
+// falls back to the log envelope using the ORIGINAL line, so it's never silently dropped.
+func wsAGUIFrame(runID, line string) []byte {
+	if rest, ok := strings.CutPrefix(line, wsAGUIPrefix); ok {
+		if rest = strings.TrimSpace(rest); strings.HasPrefix(rest, "{") {
+			return []byte(rest)
+		}
+	}
+	// Fixed shape of string values only — json.Marshal cannot fail here (mirrors sendLog in main.go).
+	b, _ := json.Marshal(map[string]any{
+		"type":   "log",
+		"run_id": runID,
+		"data":   map[string]string{"line": line},
+	})
+	return b
 }
 
 // closePayload builds an RFC6455 close-frame body: 2-byte big-endian status code + UTF-8 reason.
@@ -363,11 +547,10 @@ func validRunID(id string) bool {
 // handleControlFrame validates a control envelope, forwards takeover/return to the orchestrator, and acks
 // the result over the socket (control-ok / control-error). An unknown action, a missing/invalid run_id,
 // or an unconfigured orchestrator is reported to the client, never persisted.
-func (s *server) handleControlFrame(conn net.Conn, action, runID string) {
-	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+func (s *server) handleControlFrame(wc *wsConn, action, runID string) {
 	reply := func(m map[string]string) {
 		if b, e := json.Marshal(m); e == nil {
-			_ = wsWriteFrame(conn, wsOpText, b)
+			_ = wc.writeFrame(wsOpText, b)
 		}
 	}
 	if action != "takeover" && action != "return" {
