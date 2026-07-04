@@ -61,12 +61,12 @@ Store-gateway расширяется новым сервисом (`StoreService`
 Postgres-драйвер (`pgx`) + dialect-абстракция · `golang-migrate` (сегодня только `CREATE TABLE IF NOT EXISTS` + ad-hoc ALTER) · TCP/mTLS-listener (сегодня UDS+SO_PEERCRED, single-host). В M13 — только `STORE_DSN`-env-ветка в `store.New()` (по образцу `CHECKPOINT_DSN` в `brain/__main__.py:_checkpointer`) + портируемый SQL (`ON CONFLICT DO UPDATE`, без `INSERT OR REPLACE`/pragma-зависимостей в новых доменах).
 
 ## 7. Критерии приёмки
-- [ ] `proto/store.proto` + регенерированные Go+Python стабы (тот же тулчейн; hash-assert расширен).
-- [ ] 5 доменов персистятся через gateway (SQLite), single-writer (ADR-007) сохранён; `STORE_DSN`-скаффолд на месте.
-- [ ] control-API `runs` переживают рестарт (через gateway); `conversation_id` хранится; fallback при недоступном gateway.
-- [ ] chats-проекция browsable, НЕ дубль conversations.db.
-- [ ] GAP-M9-20 (cap+summary+retention) + GAP-M9-19 (staleness-detect) закрыты.
-- [ ] Гейты зелёные (go build/vet/race/gofmt · pytest · bilingual · gitleaks); adversarial-verify пройден.
-- [ ] Docs sync: этот контракт + `MEMORY_PERSISTENCE.md` (сверить с реальностью: golang-migrate/Postgres пока **аспирационны**) + ARCHITECTURE §6 + FILEMAP + GAPS + BACKLOG + COPILOT — bilingual.
+- [x] `proto/store.proto` + регенерированные Go+Python стабы (тот же тулчейн).
+- [x] 5 доменов персистятся через gateway (SQLite), single-writer (ADR-007) сохранён; `STORE_DSN`-скаффолд на месте (refuse-Postgres).
+- [x] control-API `runs` переживают рестарт (через gateway, fail-open); `conversation_id` хранится; fallback при недоступном gateway.
+- [x] chats-проекция browsable (`ChatProjector`), НЕ дубль conversations.db.
+- [~] **GAP-M9-20** cap+summary ✅ (`_capped_history`); retention `conversations.db` → M13-service. **GAP-M9-19** reverify-flag ✅ (`SENTINEL_REFINE_REVERIFY`); auto-detect (a11y-probe) → **M9-LIVE**.
+- [x] Гейты зелёные (go build/vet/race/gofmt · pytest 16 · bilingual · gitleaks); **adversarial-verify (sonnet)** — wave 7.
+- [x] Docs sync: контракт + `MEMORY_PERSISTENCE`(реконсилирован) + ARCHITECTURE §6 + FILEMAP + GAPS + BACKLOG + COPILOT — bilingual (wave 7).
 
 > **Анти-галлюцинации:** `MEMORY_PERSISTENCE.md` сегодня утверждает про golang-migrate + Postgres-совместимость — это **аспирация**, в коде только `CREATE TABLE IF NOT EXISTS` + один `ALTER` (`ensureGoldenMacColumn`). M13 приводит доку в соответствие: SQLite-first сейчас, Postgres — M13-service.

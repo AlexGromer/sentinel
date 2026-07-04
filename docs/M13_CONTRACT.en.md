@@ -61,12 +61,12 @@ All methods inherit the existing `TokenAuthInterceptor` (`internal/store/auth.go
 Postgres driver (`pgx`) + dialect abstraction · `golang-migrate` (today only `CREATE TABLE IF NOT EXISTS` + ad-hoc ALTER) · TCP/mTLS listener (today UDS+SO_PEERCRED, single-host). M13 lays only the `STORE_DSN` env branch in `store.New()` (mirroring `CHECKPOINT_DSN` in `brain/__main__.py:_checkpointer`) + portable SQL (`ON CONFLICT DO UPDATE`, no `INSERT OR REPLACE`/pragma dependence in the new domains).
 
 ## 7. Acceptance criteria
-- [ ] `proto/store.proto` + regenerated Go+Python stubs (same toolchain; hash-assert extended).
-- [ ] 5 domains persisted through the gateway (SQLite), single-writer (ADR-007) preserved; `STORE_DSN` scaffold present.
-- [ ] control-API `runs` survive restart (via the gateway); `conversation_id` stored; fallback when gateway unreachable.
-- [ ] chats projection browsable, NOT a duplicate of conversations.db.
-- [ ] GAP-M9-20 (cap+summary+retention) + GAP-M9-19 (staleness-detect) closed.
-- [ ] Gates green (go build/vet/race/gofmt · pytest · bilingual · gitleaks); adversarial-verify passed.
-- [ ] Docs sync: this contract + `MEMORY_PERSISTENCE.md` (reconcile with reality: golang-migrate/Postgres are still **aspirational**) + ARCHITECTURE §6 + FILEMAP + GAPS + BACKLOG + COPILOT — bilingual.
+- [x] `proto/store.proto` + regenerated Go+Python stubs (same toolchain).
+- [x] 5 domains persisted through the gateway (SQLite), single-writer (ADR-007) preserved; `STORE_DSN` scaffold present (refuses Postgres).
+- [x] control-API `runs` survive restart (via the gateway, fail-open); `conversation_id` stored; fallback when gateway unreachable.
+- [x] chats projection browsable (`ChatProjector`), NOT a duplicate of conversations.db.
+- [~] **GAP-M9-20** cap+summary ✅ (`_capped_history`); `conversations.db` retention → M13-service. **GAP-M9-19** reverify flag ✅ (`SENTINEL_REFINE_REVERIFY`); auto-detect (a11y probe) → **M9-LIVE**.
+- [x] Gates green (go build/vet/race/gofmt · pytest 16 · bilingual · gitleaks); **adversarial-verify (sonnet)** — wave 7.
+- [x] Docs sync: this contract + `MEMORY_PERSISTENCE` (reconciled) + ARCHITECTURE §6 + FILEMAP + GAPS + BACKLOG + COPILOT — bilingual (wave 7).
 
 > **Anti-hallucination:** `MEMORY_PERSISTENCE.md` today claims golang-migrate + Postgres compatibility — this is **aspirational**; the code only has `CREATE TABLE IF NOT EXISTS` + one `ALTER` (`ensureGoldenMacColumn`). M13 reconciles the doc: SQLite-first now, Postgres = M13-service.

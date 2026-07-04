@@ -75,8 +75,13 @@ store-gateway.
   Ни один компонент Python или TypeScript никогда не открывает прямое соединение с БД.
 - **Параллельные читатели:** `report-service` и `agentctl` могут читать параллельно
   в режиме SQLite WAL без блокировки писателя.
-- **Миграции схемы:** управляются `golang-migrate` внутри `store-gateway`.
-  Миграции запускаются при старте; схема совместима с Postgres.
+- **Миграции схемы (реальность на M13):** сегодня — идемпотентный `CREATE TABLE
+  IF NOT EXISTS` (+ разовые `ALTER`) в `store-gateway` при старте, для heal/trust-
+  таблиц и **5 доменов M13** (runs·scenarios/tests·chats·results·metrics, ADR-050).
+  SQL написан портируемо (`ON CONFLICT DO UPDATE`, без SQLite-only-синтаксиса в M13-
+  доменах). `golang-migrate` + Postgres-бэкенд (за `STORE_DSN`) — **аспирация,
+  отложено в M13-service** (M11/ADR-053); `STORE_DSN` сейчас распознаётся и
+  отклоняется (fail-loud), а не молча падает на SQLite.
 
 ### Таблицы
 

@@ -77,8 +77,13 @@ Long-term state is owned **exclusively** by the Go `store-gateway` component.
   connection.
 - **Concurrent readers:** `report-service` and `agentctl` may read concurrently
   under SQLite WAL mode without blocking the writer.
-- **Schema migrations:** managed by `golang-migrate` inside `store-gateway`.
-  Migrations run at startup; the schema is Postgres-compatible.
+- **Schema migrations (reality as of M13):** today — idempotent `CREATE TABLE
+  IF NOT EXISTS` (+ one-off `ALTER`s) in `store-gateway` at startup, for the
+  heal/trust tables and the **5 M13 domains** (runs·scenarios/tests·chats·results·
+  metrics, ADR-050). The SQL is written portably (`ON CONFLICT DO UPDATE`, no
+  SQLite-only syntax in the M13 domains). `golang-migrate` + a Postgres backend
+  (behind `STORE_DSN`) are **aspirational, deferred to M13-service** (M11/ADR-053);
+  `STORE_DSN` is currently recognized and refused (fail-loud), not silently SQLite.
 
 ### Tables
 
