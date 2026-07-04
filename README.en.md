@@ -33,7 +33,13 @@ Russian is the primary, authoritative documentation; English copies live in `*.e
 | **M9.3 — Control-API (non-MCP)** | ✅ done (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); chat front + CI templates remain (GAP-M9-03), ADR-023/032 |
 | **M9.4 + M9.5 — Tabs + backend correlation** | ✅ done (offline, Wave A) — in-app tabs (`[role=tab]`) + browser tabs (multi-page) + `traceparent` injection into requests, ADR-022/024 |
 | **M9.6 — Browser modes** | ✅ done (offline, Wave D) — headed + CDP-attach (env toggle `PW_HEADLESS=0` / `PW_CDP_ENDPOINT`); **Chromium-only by design**, ADR-036/037 |
+| **M9.7 — Pluggable adapters** | 🔶 partial — model/backend via the LiteLLM router (ADR-045); auth/deploy adapters remain (GAP-M9-08) |
+| **M9.8-R3 — Co-pilot takeover (brain-side)** | ✅ done — takeover/return over RunControl gRPC (`interrupt()`/`Command(resume)`, abort>takeover), ADR-054; MV3 extension → @0xCoDSnet |
+| **M9.9 — Replay-in-UI (R1)** | ✅ done — ▶/🔁/📌 run/replay/baseline + verdict across the vanilla consoles (`mode=replay\|baseline`, `from_run`), ADR-047 |
+| **M9.10 — Multi-turn authoring (R2)** | ✅ done — multi-turn dialogue (`conversation_id` → checkpointer resume, `messages` channel), ADR-048 |
 | **M11.x — Distribution/Pages** | ✅ partial — docker-compose · Helm/Flux + Secret plumbing (M11.3) · GitHub Pages hub + calculators (M11.6/b). Details — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M12 — OpenAI-compat shim + unified console** | ✅ done — `POST /v1/chat/completions` (1 turn→1 run) + unified `docs/index.html` (#connect/#build/#chat), ADR-041 |
+| **M13 — Persistence / 5-domain store-gateway** | ✅ done — store-gateway across 5 domains (SQLite-first), `runs`+`chats` persisted; `scenarios`/`tests`/`results`/`metrics` = schema+RPC (wiring → M14/M15), ADR-049/050 |
 
 Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -46,7 +52,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (47 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (54 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Browser modes (M9.6):** own-headless by default; `PW_HEADLESS=0` — headed (visible), `PW_CDP_ENDPOINT` — CDP-attach to the user's existing Chrome. The engine is **Chromium-only by design** (ADR-036); deterministic golden replay is headless-only (see [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 

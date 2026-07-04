@@ -117,7 +117,8 @@ All fields are checkpointed at each `checkpoint` node invocation.
 
 ## 3. Nodes
 
-There are **8 named nodes** plus the two implicit LangGraph built-in nodes (`START`, `END`).
+There are **9 named nodes** (8 core + `takeover`, M9.8-R3/ADR-054) plus the two implicit LangGraph built-in nodes (`START`, `END`).
+The `checkpoint` node, when `_takeover_armed` is set, routes to the dedicated `takeover` node (unconditional `interrupt()` → pause, operator takes over → `Command(resume)`; precedence **abort > takeover**).
 The framework wires `START` → first node and `END` as the graph terminal automatically.
 
 ### Node summary

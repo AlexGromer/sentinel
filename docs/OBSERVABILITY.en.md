@@ -4,6 +4,8 @@
 
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
 
+> **M13 (2026-07-04):** the store-gateway gained a `metrics` domain (time-series schema + RPC, ADR-050) — today it is schema+RPC only (population from a real writer + native metrics-in-UI charts = **M15**, ADR-051). The Prometheus/Pushgateway export (below) is untouched — it stays optional.
+
 ---
 
 ## Overview

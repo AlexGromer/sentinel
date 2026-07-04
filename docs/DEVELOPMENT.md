@@ -114,7 +114,7 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 
 ```bash
 # offline-набор (без сети/бинарей): весь регресс M3..M9
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do .venv/bin/python tests/test_${t}_offline.py; done
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism m13_chats; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Проводные контракты (где определены границы)

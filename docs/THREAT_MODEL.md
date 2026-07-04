@@ -2,7 +2,7 @@
 
 > 🌐 **Русский** (основная версия) · [English](THREAT_MODEL.en.md)
 
-> **Версия**: 1.0 | **Дата**: 2026-06-27 | **Авторы**: appsec-engineer (auto), @AlexGromer
+> **Версия**: 1.1 | **Дата**: 2026-07-04 | **Авторы**: appsec-engineer (auto), @AlexGromer
 > **Методология**: STRIDE-lite | **Scope**: whitebox, static analysis по исходному коду
 
 ---
@@ -97,7 +97,7 @@
 >
 > **Планируемые in-tool-поверхности (ADR-046):** (a) **replay/baseline control-API-endpoint** (M9.9/R1) — re-открывает spawn-поверхность ❶-класса → мера: только `from_run:<run_id>` + artifact-whitelist+traversal-guard (не произвольный путь). **[R1a ✅ реализовано в `cmd/control-api`: `resolveFromRun` (guard `/`,`\`,`..` + `{plan.json\|scenario.json}`-whitelist) + httptest на traversal/missing-plan.]** (b) **multi-turn conversation-state** (M9.10/R2) — новый ассет: конфиденциальность накопленного AUT-контекста + DoS unbounded-state → мера: per-session cap + 0700-изоляция. (c) **AG-UI npm-фронт** (`frontend/`, ADR-044) — npm supply-chain (усиливает GAP-SEC-002) + browser-токен → мера: dev-only/не-air-gapped, токен server-side в Runtime.
 >
-> **Поверхности эпика Rich-UI/Persistence/Metrics (M13-15, ADR-049..053):** (d) **persistence-БД с user-content** (scenarios/chats/results — накопленный AUT-контекст/возможный PII) → конфиденциальность + at-rest + access-control: reuse `0700`/per-run-token/SO_PEERCRED (SQLite, standalone), Postgres → стандартный authn + секрет через `secretKeyRef` (ADR-035); DoS unbounded-state → per-conversation/per-домен cap + retention. (e) **always-on control-plane bind** (service-профиль) → reuse ADR-032 (localhost-default + bearer + CORS-allowlist); публичный bind = opt-in+warn; service-режим добавляет рассмотрение authN/RBAC на CRUD-эндпоинты. (f) **self-contained metrics** (ADR-051) — метрики в нашей БД + native-рендер ⇒ **снижает** поверхность vs Grafana-embed (нет внешнего рендера/iframe-доверия). (g) **rich AG-UI поверх WS** (M14) → reuse ADR-043 WS-token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, не-air-gapped dev-сборка).
+> **Поверхности эпика Rich-UI/Persistence/Metrics (M13-15, ADR-049..053):** (d) **persistence-БД с user-content** (scenarios/chats/results — накопленный AUT-контекст/возможный PII) → конфиденциальность + at-rest + access-control: reuse `0700`/per-run-token/SO_PEERCRED (SQLite, standalone), Postgres → стандартный authn + секрет через `secretKeyRef` (ADR-035); DoS unbounded-state → **cap+summary реализованы (M13 w5, GAP-M9-20 ✅: `_capped_history`/`_rolling_summary`)**; retention → M13-service. (e) **always-on control-plane bind** (service-профиль) → reuse ADR-032 (localhost-default + bearer + CORS-allowlist); публичный bind = opt-in+warn; service-режим добавляет рассмотрение authN/RBAC на CRUD-эндпоинты. (f) **self-contained metrics** (ADR-051) — метрики в нашей БД + native-рендер ⇒ **снижает** поверхность vs Grafana-embed (нет внешнего рендера/iframe-доверия). (g) **rich AG-UI поверх WS** (M14) → reuse ADR-043 WS-token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, не-air-gapped dev-сборка). (h) **recorder session-resume `/v1/stream?session=`** (M13 R3-hardening, ✅ реализовано) — user-input в конструкцию пути записи → митигировано `filepath.Base`+charset `validRunID` (2 CodeQL `go/path-injection` разобраны как false-positive, sanitizer оставлен defense-in-depth); Origin fail-closed на публичном bind.
 
 ---
 
