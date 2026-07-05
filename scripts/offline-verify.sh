@@ -79,15 +79,15 @@ verify_local() {
     || fail "agentctl produced no usage output under --network none (binary failed to execute)"
   pass "agentctl runs with no network"
 
-  info "LLM-free demo explore under --network none (heuristic planner)"
-  runs_dir="$(mktemp -d -t sentinel-runs-XXXXXX)"
-  docker run --rm --network none -v "$runs_dir:/app/runs" "$IMAGE" \
-    run --target "file:///app/testdata/site/index.html" --planner heuristic --artifact-dir /app/runs/demo \
-    || fail "offline demo explore failed"
-  plan="$runs_dir/demo/plan.json"
-  [ -s "$plan" ] || fail "demo produced no plan.json"
-  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$plan" || fail "plan.json is not valid JSON"
-  rm -rf "$runs_dir" 2>/dev/null || sudo rm -rf "$runs_dir" 2>/dev/null || true
+  # agentctl chmods the artifact dir to 0700 owned by the in-container root (#26 trace-PII hardening),
+  # so plan.json is validated INSIDE the container — a host-side readback by the non-root CI runner
+  # cannot traverse a root:0700 dir and would spuriously fail even though the explore succeeded.
+  info "LLM-free demo explore under --network none (heuristic planner; plan.json validated in-container)"
+  docker run --rm --network none --entrypoint /bin/sh "$IMAGE" -c '
+    /app/bin/agentctl run --target "file:///app/testdata/site/index.html" --planner heuristic --artifact-dir /app/runs/demo \
+      && test -s /app/runs/demo/plan.json \
+      && /app/.venv/bin/python -c "import json; json.load(open(\"/app/runs/demo/plan.json\"))"' \
+    || fail "offline demo explore did not produce a valid plan.json"
   pass "demo explore completed offline -> valid plan.json"
 
   info "bundled docs present in the image (/app/docs/index.html)"

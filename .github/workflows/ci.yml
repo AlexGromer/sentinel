@@ -362,7 +362,7 @@ jobs:
       # tests the verify mechanism, not the air-gapped runtime. Skipped on FORK PRs (no id-token there).
       - name: Install cosign (mechanism self-test)
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4   # v3 CANNOT install cosign v3.x (installs a stale v2.x) — v4 required
       - name: Cosign sign + OFFLINE verify-blob round-trip
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |

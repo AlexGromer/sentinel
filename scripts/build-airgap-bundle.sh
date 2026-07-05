@@ -108,8 +108,8 @@ EOF
 # 6c) Sigstore trust root snapshot — lets offline-verify.sh --bundle validate cert chains on a fresh
 #     air-gapped host with NO TUF CDN fetch (generated here, online, shipped in the bundle).
 say "capturing the Sigstore trust root (trusted-root.json)"
-cosign trusted-root create --out "$OUT/trusted-root.json" 2>/dev/null \
-  || say "WARN: 'cosign trusted-root create' unavailable — offline verify may need 'cosign initialize' on the target host"
+cosign trusted-root create --with-default-services --out "$OUT/trusted-root.json" 2>/dev/null \
+  || say "WARN: 'cosign trusted-root create' unavailable (needs cosign v2.5+/v3) — offline verify may need 'cosign initialize' on the target host"
 
 # 7) MANIFEST = superset checksum over EVERY DISTINCT bundle artifact. `*.tar.gz` already covers the
 #    release archives AND ollama-models.tar.gz, so neither is listed again (no duplicate lines).
