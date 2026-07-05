@@ -90,6 +90,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
 
     M9.2b (ADR-028): goal/describe modes run a deterministic heuristic walk (phase 1) + a one-shot
     scenario head (phase 2) that authors a grounded scenario.json over the complete site map."""
+    from . import budget  # M15.1: isolate per-run token totals — the mcp-server reuses one process across runs
+    budget.tracker().reset()
     trace_path = str((out / "trace.zip").resolve())
     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
     goal = os.environ.get("GOAL", "").strip()            # M9.2a goal-mode
@@ -211,6 +213,8 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
     site_map) RESUMES straight into the `scenario` node (conditional entry, brain/graph.py:route_entry)
     and re-authors over the persisted map using the prior conversation as refine context — NO browser.
     The deliverable each turn is scenario.json (renumbered from 1)."""
+    from . import budget  # M15.1: isolate per-run token totals (server reuses the process across turns)
+    budget.tracker().reset()
     goal = os.environ.get("GOAL", "").strip()
     describe = os.environ.get("DESCRIBE", "").strip()
     if goal and describe:
@@ -312,6 +316,8 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
     from .store import make_store
     from .healing import HealingEngine
     from .replay import run_replay
+    from . import budget  # M15.1: isolate per-run token totals (server reuses the process across runs)
+    budget.tracker().reset()
 
     if not plan_file or not pathlib.Path(plan_file).exists():
         log(f"FATAL: --plan file not found: {plan_file}")

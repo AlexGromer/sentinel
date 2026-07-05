@@ -454,6 +454,13 @@ func (s *server) persistScenario(rec *run) {
 	})
 }
 
+// tokensBlock mirrors the M15.1 `tokens` summary the brain writes into plan.json / heal-report.json.
+type tokensBlock struct {
+	Prompt     float64 `json:"prompt"`
+	Completion float64 `json:"completion"`
+	Total      float64 `json:"total"`
+}
+
 // resultArtifact mirrors the heal-report.json / baseline-report.json fields the results domain needs
 // (brain/replay.py). Authoring/explore runs have no heal-report — coverage comes from plan.json below.
 type resultArtifact struct {
@@ -462,12 +469,41 @@ type resultArtifact struct {
 	Failed      int64             `json:"failed"`
 	Steps       []json.RawMessage `json:"steps"`
 	Regressions []json.RawMessage `json:"regressions"`
+	Tokens      *tokensBlock      `json:"tokens"`  // M15.1
+	Models      map[string]string `json:"models"`  // M15.1: {heal: <model id>}
 }
 
 // planCoverage mirrors the plan.json coverage field written by the explore report node (brain/graph.py).
 type planCoverage struct {
-	PlanID           string  `json:"plan_id"`
-	CoverageAchieved float64 `json:"coverage_achieved"`
+	PlanID           string            `json:"plan_id"`
+	CoverageAchieved float64           `json:"coverage_achieved"`
+	Tokens           *tokensBlock      `json:"tokens"` // M15.1
+	Models           map[string]string `json:"models"` // M15.1: {plan: <model id>}
+}
+
+// metricKV is a name/value pair for a metric point.
+type metricKV struct {
+	n string
+	v float64
+}
+
+// modelPrices maps a model ID (as the brain reports it) to {input,output} USD per 1M tokens. Best-effort
+// SUBSET — the calibrated Claude defaults; other priced cloud backends (gpt/glm/deepseek/qwen/grok/o3) and
+// all local models (Ollama etc.) are absent -> cost 0 (token counts stay exact). Extend as backends are
+// configured; a later pass may load docs/prices.json as the single source of truth. M15.1.
+var modelPrices = map[string][2]float64{
+	"claude-opus-4-8":   {5, 25},
+	"claude-sonnet-4-6": {2, 10},
+	"claude-haiku-4-5":  {1, 5},
+}
+
+// costUSD prices a run best-effort; an unknown/local model (or empty) returns 0.
+func costUSD(model string, promptTok, completionTok float64) float64 {
+	p, ok := modelPrices[model]
+	if !ok {
+		return 0
+	}
+	return (promptTok*p[0] + completionTok*p[1]) / 1e6
 }
 
 // verdictEnum maps the structured exit code to ResultRecord.verdict (proto: pass|problem|regression|integrity).
@@ -522,6 +558,8 @@ func (s *server) persistResult(rec *run) {
 		ExitCode: int64(exit), DurationMs: durationMs(startedAt, finishedAt),
 	}
 	var stepN, regN int64
+	var tok *tokensBlock // M15.1: per-run token totals, from whichever report the run produced
+	costModel := ""
 	// Replay/baseline runs carry a heal-report; authoring/explore runs don't (they carry plan.json).
 	raw, ok := s.readArtifact(rec, "heal-report.json")
 	if !ok {
@@ -538,6 +576,9 @@ func (s *server) persistResult(rec *run) {
 			if b, e := json.Marshal(art.Regressions); e == nil {
 				rr.RegressionsJson = string(b)
 			}
+			if art.Tokens != nil { // M15.1: replay heal-LLM tokens + model (for cost)
+				tok, costModel = art.Tokens, art.Models["heal"]
+			}
 		}
 	}
 	if praw, pok := s.readArtifact(rec, "plan.json"); pok { // authoring/explore: coverage_achieved
@@ -547,25 +588,31 @@ func (s *server) persistResult(rec *run) {
 			if rr.PlanId == "" {
 				rr.PlanId = pc.PlanID
 			}
+			if tok == nil && pc.Tokens != nil { // M15.1: authoring planner-LLM tokens (heal-report takes precedence)
+				tok, costModel = pc.Tokens, pc.Models["plan"]
+			}
 		}
 	}
 	s.store.saveResult(rr)
 
 	// Ingest the same values as metric points (trends). labels_json = the org/project tagging seam (ADR-056).
 	ts := float64(time.Now().Unix())
-	labelsB, _ := json.Marshal(map[string]string{"mode": mode, "target": target})
+	labelsB, _ := json.Marshal(map[string]string{"mode": mode, "target": target, "model": costModel})
 	labels := string(labelsB)
 	pass := 0.0
 	if exit == 0 {
 		pass = 1.0
 	}
-	pts := []struct {
-		n string
-		v float64
-	}{
+	pts := []metricKV{
 		{"pass", pass}, {"coverage", rr.Coverage}, {"healed", float64(rr.Healed)},
 		{"failed", float64(rr.Failed)}, {"regressions", float64(regN)}, {"steps", float64(stepN)},
 		{"duration_ms", float64(rr.DurationMs)},
+	}
+	if tok != nil { // M15.1: exact token counts + best-effort cost (local/unknown model -> 0)
+		pts = append(pts,
+			metricKV{"tokens_total", tok.Total}, metricKV{"tokens_prompt", tok.Prompt},
+			metricKV{"tokens_completion", tok.Completion},
+			metricKV{"cost_usd", costUSD(costModel, tok.Prompt, tok.Completion)})
 	}
 	batch := &storepb.MetricsBatch{Points: make([]*storepb.MetricPoint, 0, len(pts))}
 	for _, p := range pts {

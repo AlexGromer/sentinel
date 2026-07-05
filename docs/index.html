@@ -1769,7 +1769,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     {k:'healed',ru:'Вылечено',en:'Healed'},
     {k:'failed',ru:'Провалов',en:'Failed'},
     {k:'regressions',ru:'Регрессий',en:'Regressions'},
-    {k:'duration_ms',ru:'Длительность',en:'Duration',dur:true}
+    {k:'duration_ms',ru:'Длительность',en:'Duration',dur:true},
+    {k:'tokens_total',ru:'Токены',en:'Tokens'},
+    {k:'cost_usd',ru:'Стоимость',en:'Cost',money:true}
   ];
   async function tLoadMetrics(){
     tMetricsLoaded=true;
@@ -1791,7 +1793,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var lastStr;
       if(s.m.rate){ var sum=vals.reduce(function(a,b){return a+b;},0); lastStr=vals.length?Math.round(sum/vals.length*100)+'%':'—'; }
       else if(!vals.length){ lastStr='—'; }
-      else { var last=vals[vals.length-1]; lastStr=s.m.pct?Math.round(last*100)+'%':s.m.dur?fmtDur(last):String(Math.round(last)); }
+      else { var last=vals[vals.length-1]; lastStr=s.m.pct?Math.round(last*100)+'%':s.m.dur?fmtDur(last):s.m.money?money(last):grp(last); }
       html+='<div class="runitem" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">'+
         '<div><b>'+bi(s.m.ru,s.m.en)+'</b> <span class="libmeta">'+esc(s.m.k)+' · '+vals.length+' '+bi('прогонов','runs')+'</span></div>'+
         '<div style="display:flex;align-items:center;gap:.6rem">'+svgSpark(vals,{label:s.m.k})+'<b style="min-width:3.5rem;text-align:right">'+lastStr+'</b></div>'+

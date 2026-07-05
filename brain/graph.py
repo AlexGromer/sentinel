@@ -409,6 +409,9 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "interactive_seen": len(state.get("interactive_seen", [])),
                     "interactive_exercised": len(state.get("interactive_exercised", [])),
                     "steps": steps}
+        from . import budget  # M15.1: per-run token totals -> persistResult ingests tokens_* + cost_usd
+        plan_obj["tokens"] = budget.tracker().summary()
+        plan_obj["models"] = {"plan": getattr(planner, "model", None)}
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:
             json.dump(plan_obj, f, indent=2)
         # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen

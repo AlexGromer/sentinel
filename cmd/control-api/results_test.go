@@ -27,6 +27,13 @@ func TestVerdictEnumAndDuration(t *testing.T) {
 	if d := durationMs("2026-07-05T00:00:05Z", "2026-07-05T00:00:00Z"); d != 0 {
 		t.Fatalf("durationMs(negative)=%d want 0 (clamped)", d)
 	}
+	// M15.1 costUSD: a known cloud model is priced; an unknown/local model -> 0 (free / not priced)
+	if c := costUSD("claude-opus-4-8", 200000, 40000); c != 2.0 { // (200000*5 + 40000*25)/1e6
+		t.Fatalf("costUSD(opus)=%v want 2.0", c)
+	}
+	if c := costUSD("ollama-qwen3", 1000, 200); c != 0 {
+		t.Fatalf("costUSD(local)=%v want 0 (unknown model not priced)", c)
+	}
 }
 
 // TestPersistResultOnFinish exercises the finish-goroutine wiring (main.go's persistResult, M15):
@@ -43,7 +50,8 @@ func TestPersistResultOnFinish(t *testing.T) {
 	dir := t.TempDir()
 	// replay run: heal-report.json carries steps/heal/fail/regressions
 	heal := `{"plan_id":"run7-plan","mode":"replay","exit_code":2,"healed":1,"failed":0,` +
-		`"steps":[{"step_id":1},{"step_id":2}],"regressions":[{"kinds":["visual"]}]}`
+		`"steps":[{"step_id":1},{"step_id":2}],"regressions":[{"kinds":["visual"]}],` +
+		`"tokens":{"prompt":1000,"completion":200,"total":1200},"models":{"heal":"claude-opus-4-8"}}`
 	if err := os.WriteFile(filepath.Join(dir, "heal-report.json"), []byte(heal), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -83,16 +91,22 @@ func TestPersistResultOnFinish(t *testing.T) {
 	}
 	for name, want := range map[string]float64{
 		"pass": 0, "coverage": 0.75, "healed": 1, "failed": 0, "regressions": 1, "steps": 2, "duration_ms": 4000,
+		"tokens_total": 1200, "tokens_prompt": 1000, "tokens_completion": 200, // M15.1: exact counts
 	} {
 		if got := mval(name); got != want {
 			t.Fatalf("metric %q = %v want %v", name, got, want)
 		}
 	}
-	// the coverage point carries labels_json {mode,target} (the ADR-056 commercial-BI seam)
+	// M15.1: cost = opus 5/25 on 1000 prompt + 200 completion = 0.01 USD (best-effort; float tolerance)
+	if c := mval("cost_usd"); c < 0.0099 || c > 0.0101 {
+		t.Fatalf("cost_usd = %v want ~0.01 (opus 5/25 on 1000/200 tokens)", c)
+	}
+	// the coverage point carries labels_json {mode,target,model} (the ADR-056 commercial-BI seam)
 	ms, _ := sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: "coverage"})
 	var lbl map[string]string
-	if json.Unmarshal([]byte(ms.Points[0].LabelsJson), &lbl) != nil || lbl["mode"] != "replay" || lbl["target"] != "https://app.example" {
-		t.Fatalf("labels_json = %q (want {mode:replay,target:https://app.example})", ms.Points[0].LabelsJson)
+	if json.Unmarshal([]byte(ms.Points[0].LabelsJson), &lbl) != nil || lbl["mode"] != "replay" ||
+		lbl["target"] != "https://app.example" || lbl["model"] != "claude-opus-4-8" {
+		t.Fatalf("labels_json = %q (want {mode:replay,target:…,model:claude-opus-4-8})", ms.Points[0].LabelsJson)
 	}
 	// the Trends RPC (SPA sparkline feed) returns the coverage series chronologically
 	if tr, ok := sc.trends("coverage", 10); !ok || len(tr.Points) != 1 || tr.Points[0].Value != 0.75 {
@@ -118,6 +132,53 @@ func TestPersistResultOnFinish(t *testing.T) {
 
 	// no store configured -> must not panic (fail-open)
 	newTestServer().persistResult(rec)
+}
+
+// TestPersistResultAuthoringTokens exercises the M15.1 authoring path: tokens come from plan.json (no
+// heal-report), priced via the plan model. Covers the pc.Tokens/pc.Models["plan"] branch + the model label.
+func TestPersistResultAuthoringTokens(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	dir := t.TempDir()
+	// authoring/goal run: ONLY plan.json (no heal-report) — coverage + tokens + plan model
+	plan := `{"plan_id":"a1-plan","coverage_achieved":0.6,` +
+		`"tokens":{"prompt":2000,"completion":500,"total":2500},"models":{"plan":"claude-sonnet-4-6"}}`
+	if err := os.WriteFile(filepath.Join(dir, "plan.json"), []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &run{ID: "a1", State: "done", Mode: "goal", Target: "https://x", ExitCode: 0,
+		StartedAt: "2026-07-05T00:00:00Z", FinishedAt: "2026-07-05T00:00:02Z", ArtifactDir: dir}
+	s.persistResult(rec)
+
+	mval := func(name string) float64 {
+		ms, err := sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: name})
+		if err != nil || len(ms.Points) != 1 {
+			t.Fatalf("QueryMetrics(%s) = %+v err=%v", name, ms, err)
+		}
+		return ms.Points[0].Value
+	}
+	for name, want := range map[string]float64{
+		"tokens_total": 2500, "tokens_prompt": 2000, "tokens_completion": 500, "coverage": 0.6,
+	} {
+		if got := mval(name); got != want {
+			t.Fatalf("metric %q = %v want %v", name, got, want)
+		}
+	}
+	// cost = sonnet 2/10 on 2000 prompt + 500 completion = (2000*2 + 500*10)/1e6 = 0.009 (best-effort)
+	if c := mval("cost_usd"); c < 0.0089 || c > 0.0091 {
+		t.Fatalf("cost_usd = %v want ~0.009 (sonnet 2/10)", c)
+	}
+	// the model label is the plan model (resolved from plan.json models.plan)
+	ms, _ := sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: "tokens_total"})
+	var lbl map[string]string
+	if json.Unmarshal([]byte(ms.Points[0].LabelsJson), &lbl) != nil || lbl["model"] != "claude-sonnet-4-6" {
+		t.Fatalf("labels model = %q want claude-sonnet-4-6", ms.Points[0].LabelsJson)
+	}
 }
 
 // TestResultsTrendsHTTP drives the /v1/results + /v1/trends surface through the real mux (auth gating).

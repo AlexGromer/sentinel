@@ -61,7 +61,7 @@ ADR-045 (adapters/SPI) → ADR-056 (module-registry).
 
 ## 7. Отложено
 
-- token-cost ($) → **M15.1** (brain-эмиссия токен-тоталов + price-таблица; validated live = RISK-003).
+- token-cost ($) — **✅ доставлено в M15.1**: brain эмитит per-run токен-тоталы (`budget.summary()`) в `plan.json`/`heal-report.json`; control-API ингестит `tokens_total/prompt/completion`+`cost_usd` (best-effort: локальные модели → $0, счётчики точны); SPA — тренд-спарклайны Tokens+Cost. Снимает RISK-003.
 - Sub-second duration (сейчас RFC3339 секундная точность → duration кратна 1000 мс).
 - `QueryMetrics` окно-по-времени в UI (RPC есть; UI использует `Trends`).
 
