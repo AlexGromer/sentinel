@@ -176,8 +176,8 @@ verify_bundle() {
   # Probe the OpenAI-compat /v1/models from a sentinel PEER on the internal airgap network (no host
   # port exists — internal networks can't publish ports; a peer proves the endpoint answers offline).
   if docker compose -f "$COMPOSE" run --rm --entrypoint /app/.venv/bin/python sentinel \
-       -c "import urllib.request,sys; d=urllib.request.urlopen('http://ollama:11434/v1/models', timeout=15).read().decode(); print(d[:200]); sys.exit(0 if '\"object\"' in d or 'data' in d else 1)"; then
-    pass "Ollama /v1/models responds offline over the airgap network"
+       -c "import urllib.request,json,sys; d=json.loads(urllib.request.urlopen('http://ollama:11434/v1/models', timeout=15).read()); m=d.get('data') or []; print('models:',[x.get('id') for x in m][:5]); sys.exit(0 if m else 1)"; then
+    pass "Ollama /v1/models responds offline with the preloaded model over the airgap network"
   elif [ -n "$have_model" ]; then
     docker compose -f "$COMPOSE" down -v || true
     fail "Ollama /v1/models did not respond — the preloaded model volume is not attached correctly"

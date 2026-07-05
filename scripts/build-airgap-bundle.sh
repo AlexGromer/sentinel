@@ -28,6 +28,12 @@ say() { printf '\033[1;34m==\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
 
 for t in docker gh cosign curl; do command -v "$t" >/dev/null 2>&1 || die "missing required tool: $t"; done
+# cosign v3.0+ is REQUIRED: v3 makes the Sigstore bundle format the DEFAULT for `sign-blob --bundle`
+# (there is no --new-bundle-format flag in v3), which is what lets offline-verify.sh --bundle verify with
+# `--trusted-root` on the air-gapped host; v3 also adds `trusted-root create --with-default-services`.
+# A v2.x cosign would silently produce legacy-format bundles + an empty trust root and break offline verify.
+cver="$(cosign version 2>/dev/null | grep -oiE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+[ "${cver%%.*}" -ge 3 ] 2>/dev/null || die "cosign v3.0+ required (found '${cver:-none}') — install cosign v3 (the Sigstore bundle format + trusted-root defaults it needs are v3-only)"
 gh release view "$TAG" >/dev/null 2>&1 || die "no GitHub Release '$TAG' — cut the release first (release.yml)"
 
 mkdir -p "$OUTDIR"
@@ -108,8 +114,13 @@ EOF
 # 6c) Sigstore trust root snapshot — lets offline-verify.sh --bundle validate cert chains on a fresh
 #     air-gapped host with NO TUF CDN fetch (generated here, online, shipped in the bundle).
 say "capturing the Sigstore trust root (trusted-root.json)"
-cosign trusted-root create --with-default-services --out "$OUT/trusted-root.json" 2>/dev/null \
-  || say "WARN: 'cosign trusted-root create' unavailable (needs cosign v2.5+/v3) — offline verify may need 'cosign initialize' on the target host"
+if cosign trusted-root create --with-default-services --out "$OUT/trusted-root.json" 2>/dev/null \
+   && python3 -c "import json,sys; d=json.load(open('$OUT/trusted-root.json')); sys.exit(0 if (d.get('certificateAuthorities') or d.get('tlogs')) else 1)" 2>/dev/null; then
+  say "trusted-root.json captured (Fulcio CA + tlog keys present)"
+else
+  rm -f "$OUT/trusted-root.json"   # never ship an empty stub — offline-verify.sh's fallback-warn engages instead
+  say "WARN: could not capture a populated Sigstore trust root (needs cosign v3+ with --with-default-services) — the air-gapped host will need 'cosign initialize' while briefly connected"
+fi
 
 # 7) MANIFEST = superset checksum over EVERY DISTINCT bundle artifact. `*.tar.gz` already covers the
 #    release archives AND ollama-models.tar.gz, so neither is listed again (no duplicate lines).
