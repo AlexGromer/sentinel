@@ -111,7 +111,7 @@ docker compose run --rm sentinel run \
 
 ## §3 M11.1 — GitHub Releases: мульти-OS/arch бинарники + Docker + подписи
 
-**Статус:** не начат. Предпосылки: Foundation CI-гейты (DONE).
+**Статус:** реализовано — `.github/workflows/release.yml` в репо (M11.1); E2E-релиз (публикация/подпись) — на первом `v*`-теге мейнтейнера, `workflow_dispatch` = build/SBOM dry-run. Предпосылки: Foundation CI-гейты (DONE).
 
 ### Что поставляется
 
