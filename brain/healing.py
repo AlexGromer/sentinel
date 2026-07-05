@@ -12,8 +12,15 @@ from __future__ import annotations
 import json
 import sys
 
+from .llm import complete_structured, extract_json
 from .otel import prompt_hash, set_llm_tokens, span
 from .sanitize import safe_json, safe_text
+
+# Structured-output schema for the text re-grounding call (css selector | none). Vision heal stays on
+# extract_json (native vision+structured is the least-portable provider combo — deferred).
+_SCHEMA_CSS = {"type": "object", "properties": {
+    "css": {"type": "string", "description": "a precise CSS selector for the current element"},
+    "none": {"type": "boolean", "description": "true if no element matches the intent"}}}
 
 # Per-strategy base priors (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
 PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
@@ -120,12 +127,12 @@ class HealingEngine:
                 'Reply with ONLY JSON: {"css": "<selector>"} or {"none": true}.'
             )
             with span("heal.llm", model=self._backend.model, prompt_hash=prompt_hash(prompt)) as _sp:
-                result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+                result = complete_structured(self._backend, prompt, _SCHEMA_CSS,
+                                             max_tokens=200, temperature=0)
                 budget.tracker().add("heal", result)
                 set_llm_tokens(_sp, result)
-            text = result.text
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
-            if j.get("css"):
+            j = result.data
+            if j is not None and j.get("css"):  # j None on unparseable reply -> fall through to None
                 return ("css", {"css": j["css"]}, PRIORS["css"] * 0.90)  # overconfidence discount
         except Exception as e:
             log("llm reground error:", e)
@@ -168,8 +175,7 @@ class HealingEngine:
                 'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.')
             result = self._backend.complete_vision(prompt, b64, max_tokens=100, temperature=0)
             budget.tracker().add("heal", result)
-            text = result.text
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            j = extract_json(result.text)
             if j.get("none"):
                 return None
             chosen = next((m for m in marks if m["mark"] == int(j["mark"])), None)

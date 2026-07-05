@@ -20,7 +20,34 @@ import json
 from typing import Optional, Protocol
 
 from .executor import log
+from .llm import complete_structured
 from .sanitize import safe_json, safe_text
+
+# JSON schemas for the structured-output planners (ADR-057). Rich-guiding: they encode the real
+# artifact contract (verb enum, required ref/index, step shape) so a capable backend emits conformant
+# steps BY CONSTRUCTION — on the native path (Anthropic tool_use / OpenAI json_schema, NON-strict for
+# cross-provider portability). The fallback (`extract_json`) ignores the schema; grounding (ADR-022,
+# scenario.ground_scenario/reconcile) stays the final validator and the index/done union is enforced
+# in Python. Tighter schemas also cut verb/shape variance → steadier LLM-authoring plan_hash.
+_VERBS = ["click", "fill", "type", "select", "press", "assert"]
+_SCHEMA_PICK = {"type": "object", "properties": {
+    "index": {"type": "integer", "description": "0-based index into the candidate list to act on"},
+    "done": {"type": "boolean", "description": "true to stop (goal met or exploration complete)"},
+    "reason": {"type": "string", "description": "why, when done"}}}
+_SCHEMA_STEPS = {"type": "object", "properties": {"steps": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "ref": {"type": "string", "description": "semantic_id of a real element from the map"},
+        "verb": {"type": "string", "enum": _VERBS},
+        "value": {"type": "string", "description": "value for fill/type/select"}},
+    "required": ["ref", "verb"]}}}, "required": ["steps"]}
+_SCHEMA_DRAFT = {"type": "object", "properties": {"steps": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "verb": {"type": "string", "enum": _VERBS},
+        "intent": {"type": "string", "description": "short goal of this step"},
+        "hypothesized_target": {"type": "object", "properties": {
+            "role": {"type": "string"}, "name": {"type": "string"}, "text": {"type": "string"}}},
+        "value": {"type": "string"}},
+    "required": ["verb", "intent"]}}}, "required": ["steps"]}
 
 
 class Planner(Protocol):
@@ -85,11 +112,13 @@ class LLMPlanner:
                 f"candidates: {json.dumps(safe_json(menu))}\n"
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
-            result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+            result = complete_structured(self._backend, prompt, _SCHEMA_PICK,
+                                         max_tokens=200, temperature=0)
             budget.tracker().add("plan", result)
-            text = result.text
             tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            j = result.data
+            if j is None:  # no parseable structured output -> deterministic explore (budget charged)
+                return self._fallback.propose(state, candidates)
             if j.get("done"):
                 return {"action": None, "done": True, "reason": "llm: done", "tokens": tokens}
             idx = int(j["index"])
@@ -144,11 +173,13 @@ class GoalPlanner:
                 'Reply with ONLY JSON: {"index": <int>} to take that candidate action, or '
                 '{"done": true, "reason": "<why the goal is met or unreachable>"}.'
             )
-            result = self._backend.complete(prompt, max_tokens=200, temperature=0)
+            result = complete_structured(self._backend, prompt, _SCHEMA_PICK,
+                                         max_tokens=200, temperature=0)
             budget.tracker().add("plan", result)
-            text = result.text
             tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            j = result.data
+            if j is None:  # no parseable structured output -> deterministic explore (budget charged)
+                return self._fallback.propose(state, candidates)
             if j.get("done"):
                 return {"action": None, "done": True,
                         "reason": f"goal: {j.get('reason', 'done')}", "tokens": tokens}
@@ -193,10 +224,12 @@ class GoalPlanner:
                 '"verb": "click|fill|type|select|press|assert", "value": "<optional>"}]}. '
                 "Use only refs present in elements; omit anything not present."
             )
-            result = self._backend.complete(prompt, max_tokens=800, temperature=0)
+            result = complete_structured(self._backend, prompt, _SCHEMA_STEPS,
+                                         max_tokens=800, temperature=0)
             budget.tracker().add("plan", result)
-            text = result.text
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            j = result.data
+            if j is None:  # no parseable structured output -> author nothing (budget charged)
+                return {"refs": [], "tokens": None}
             refs = [r for r in (j.get("steps") or j.get("refs") or []) if isinstance(r, dict) and r.get("ref")]
             return {"refs": refs,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
@@ -245,10 +278,12 @@ class DescribePlanner:
                 '"intent": "<short>", "hypothesized_target": {"role": "<opt>", "name": "<opt>", '
                 '"text": "<opt>"}, "value": "<opt>"}]}.'
             )
-            result = self._backend.complete(prompt, max_tokens=800, temperature=0)
+            result = complete_structured(self._backend, prompt, _SCHEMA_DRAFT,
+                                         max_tokens=800, temperature=0)
             budget.tracker().add("plan", result)
-            text = result.text
-            j = json.loads(text[text.find("{"): text.rfind("}") + 1])
+            j = result.data
+            if j is None:  # no parseable structured output -> empty draft (budget charged)
+                return {"draft": [], "tokens": None}
             draft = [d for d in (j.get("steps") or j.get("draft") or []) if isinstance(d, dict)]
             return {"draft": draft,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
