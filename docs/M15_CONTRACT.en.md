@@ -61,7 +61,7 @@ Generalizes ADR-045 (adapters/SPI) → ADR-056 (module-registry).
 
 ## 7. Deferred
 
-- token-cost ($) → **M15.1** (brain token-total emission + price table; validated live = RISK-003).
+- token-cost ($) — **✅ delivered in M15.1**: brain emits per-run token totals (`budget.summary()`) into `plan.json`/`heal-report.json`; the control-API ingests `tokens_total/prompt/completion`+`cost_usd` (best-effort: local models → $0, counts exact); the SPA shows Tokens+Cost trend sparklines. Unblocks RISK-003.
 - Sub-second duration (RFC3339 is second-precision → duration is a multiple of 1000 ms).
 - `QueryMetrics` time-window in the UI (the RPC exists; the UI uses `Trends`).
 

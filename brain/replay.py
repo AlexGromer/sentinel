@@ -230,5 +230,8 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         report["exit_code"] = 0
     else:
         report["exit_code"] = 2 if regressions else (1 if failures else 0)
+    from . import budget  # M15.1: per-run token totals (heal LLM) -> persistResult ingests tokens_* + cost_usd
+    report["tokens"] = budget.tracker().summary()
+    report["models"] = {"heal": getattr(getattr(heal, "_backend", None), "model", None)}
     _write(report, run_dir)
     return report
