@@ -6,6 +6,8 @@
 // historical runs from prior processes.
 // M14 wave W3: also fronts the `scenarios`/`tests`/`chats` domains, which have NO in-memory fallback
 // (unlike runs) — a gateway error there degrades to an empty list / not-found response (main.go handlers).
+// M15 (ADR-051): also fronts the `results`/`metrics` domains (persistResult on finish → SaveResult +
+// IngestMetrics; read by /v1/results and /v1/trends for the SPA native charts).
 package main
 
 import (
@@ -253,4 +255,70 @@ func (c *storeClient) deleteChat(id string) {
 	if _, err := c.cl.DeleteChat(ctx, &storepb.ConversationId{ConversationId: id}); err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store DeleteChat(%s): %v\n", id, err)
 	}
+}
+
+// --- results / metrics (M15, ADR-051: metrics-in-UI) -------------------------------------------
+// Written by the finish-goroutine (persistResult); read by the /v1/results and /v1/trends handlers.
+// Same best-effort, fail-open style: a gateway error is logged and swallowed. The metrics domain is
+// the base data substrate a commercial enterprise-BI module reads as a pure consumer (ADR-056 seam).
+
+// saveResult persists a run's result record (best-effort; logs + continues on error).
+func (c *storeClient) saveResult(rr *storepb.ResultRecord) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.SaveResult(ctx, rr); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store SaveResult(%s): %v (result not persisted)\n", rr.RunId, err)
+	}
+}
+
+// getResult fetches one run's result. Returns (nil,false) on miss or gateway error.
+func (c *storeClient) getResult(id string) (*storepb.ResultRecord, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	rr, err := c.cl.GetResult(ctx, &storepb.RunId{RunId: id})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetResult(%s): %v\n", id, err)
+		return nil, false
+	}
+	if !rr.Found {
+		return nil, false
+	}
+	return rr, true
+}
+
+// listResults returns (nil,false) on gateway error; the caller degrades to an empty list.
+func (c *storeClient) listResults(limit, offset int64) (*storepb.ResultList, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	rl, err := c.cl.ListResults(ctx, &storepb.ListResultsReq{Limit: limit, Offset: offset})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store ListResults: %v (falling back to empty)\n", err)
+		return nil, false
+	}
+	return rl, true
+}
+
+// ingestMetrics writes a batch of metric points (best-effort). An empty/nil batch is a no-op.
+func (c *storeClient) ingestMetrics(b *storepb.MetricsBatch) {
+	if b == nil || len(b.Points) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.IngestMetrics(ctx, b); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store IngestMetrics(%d pts): %v (metrics not persisted)\n", len(b.Points), err)
+	}
+}
+
+// trends returns the last `window` points of a metric (chronological), for the SPA sparklines.
+// Returns (nil,false) on gateway error; the caller degrades to an empty series.
+func (c *storeClient) trends(metric string, window int64) (*storepb.TrendReply, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	tr, err := c.cl.Trends(ctx, &storepb.TrendReq{Metric: metric, Window: window})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store Trends(%s): %v (falling back to empty)\n", metric, err)
+		return nil, false
+	}
+	return tr, true
 }
