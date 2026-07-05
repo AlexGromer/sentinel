@@ -44,6 +44,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -403,6 +404,7 @@ func (s *server) spawnRun(req runRequest) *run {
 			s.store.upsertRun(rec)
 		}
 		s.persistScenario(rec) // M14 wave W3: wire the scenarios domain to a real caller (no-op if no scenario.json)
+		s.persistResult(rec)   // M15 (ADR-051): wire the results + metrics domains (no-op if no store/artifacts)
 		lw.flush()             // emit any trailing partial line
 		rec.stream.finish()    // release SSE subscribers
 	}()
@@ -450,6 +452,128 @@ func (s *server) persistScenario(rec *run) {
 		Unmatched:   art.Unmatched,
 		SourceRunId: rec.ID,
 	})
+}
+
+// resultArtifact mirrors the heal-report.json / baseline-report.json fields the results domain needs
+// (brain/replay.py). Authoring/explore runs have no heal-report — coverage comes from plan.json below.
+type resultArtifact struct {
+	PlanID      string            `json:"plan_id"`
+	Healed      int64             `json:"healed"`
+	Failed      int64             `json:"failed"`
+	Steps       []json.RawMessage `json:"steps"`
+	Regressions []json.RawMessage `json:"regressions"`
+}
+
+// planCoverage mirrors the plan.json coverage field written by the explore report node (brain/graph.py).
+type planCoverage struct {
+	PlanID           string  `json:"plan_id"`
+	CoverageAchieved float64 `json:"coverage_achieved"`
+}
+
+// verdictEnum maps the structured exit code to ResultRecord.verdict (proto: pass|problem|regression|integrity).
+func verdictEnum(exit int) string {
+	switch exit {
+	case 0:
+		return "pass"
+	case 2:
+		return "regression"
+	case 3:
+		return "integrity"
+	default:
+		return "problem" // exit 1 (or any other non-success): the run found a problem
+	}
+}
+
+// durationMs is finish-minus-start in ms from two RFC3339 stamps (second precision); 0 if unparseable/negative.
+func durationMs(startedAt, finishedAt string) int64 {
+	st, e1 := time.Parse(time.RFC3339, startedAt)
+	fi, e2 := time.Parse(time.RFC3339, finishedAt)
+	if e1 != nil || e2 != nil {
+		return 0
+	}
+	if d := fi.Sub(st).Milliseconds(); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// persistResult wires the `results` + `metrics` domains to a real caller (M15, ADR-051): on run finish it
+// assembles a ResultRecord from the heal-report (replay/baseline: steps/heal/fail/regressions) and/or
+// plan.json (authoring: coverage), plus verdict (exit enum) + duration, then ingests the same values as
+// metric points for trends. Fail-open + best-effort — a missing/malformed artifact just means less data,
+// never a run-time error. Metric points carry labels_json={mode,target} (the ADR-056 commercial-BI seam:
+// a commercial enterprise-BI module rolls up on these labels as a pure consumer of the store, no core fork).
+func (s *server) persistResult(rec *run) {
+	if s.store == nil {
+		return
+	}
+	s.mu.RLock()
+	state, exit, startedAt, finishedAt, mode, target := rec.State, rec.ExitCode, rec.StartedAt, rec.FinishedAt, rec.Mode, rec.Target
+	s.mu.RUnlock()
+	// A run that never executed (State="failed": agentctl couldn't spawn) has no real exit code — its
+	// zero-value ExitCode 0 would map verdictEnum→"pass" and inflate the pass-rate. Skip it: the runs
+	// domain already records the failure (state+error); it must not pollute the results/metrics substrate.
+	if state != "done" {
+		return
+	}
+
+	rr := &storepb.ResultRecord{
+		RunId: rec.ID, Mode: mode, Verdict: verdictEnum(exit),
+		ExitCode: int64(exit), DurationMs: durationMs(startedAt, finishedAt),
+	}
+	var stepN, regN int64
+	// Replay/baseline runs carry a heal-report; authoring/explore runs don't (they carry plan.json).
+	raw, ok := s.readArtifact(rec, "heal-report.json")
+	if !ok {
+		raw, ok = s.readArtifact(rec, "baseline-report.json")
+	}
+	if ok {
+		var art resultArtifact
+		if json.Unmarshal([]byte(raw), &art) == nil {
+			rr.PlanId, rr.Healed, rr.Failed = art.PlanID, art.Healed, art.Failed
+			stepN, regN = int64(len(art.Steps)), int64(len(art.Regressions))
+			if b, e := json.Marshal(art.Steps); e == nil {
+				rr.StepsJson = string(b)
+			}
+			if b, e := json.Marshal(art.Regressions); e == nil {
+				rr.RegressionsJson = string(b)
+			}
+		}
+	}
+	if praw, pok := s.readArtifact(rec, "plan.json"); pok { // authoring/explore: coverage_achieved
+		var pc planCoverage
+		if json.Unmarshal([]byte(praw), &pc) == nil {
+			rr.Coverage = pc.CoverageAchieved
+			if rr.PlanId == "" {
+				rr.PlanId = pc.PlanID
+			}
+		}
+	}
+	s.store.saveResult(rr)
+
+	// Ingest the same values as metric points (trends). labels_json = the org/project tagging seam (ADR-056).
+	ts := float64(time.Now().Unix())
+	labelsB, _ := json.Marshal(map[string]string{"mode": mode, "target": target})
+	labels := string(labelsB)
+	pass := 0.0
+	if exit == 0 {
+		pass = 1.0
+	}
+	pts := []struct {
+		n string
+		v float64
+	}{
+		{"pass", pass}, {"coverage", rr.Coverage}, {"healed", float64(rr.Healed)},
+		{"failed", float64(rr.Failed)}, {"regressions", float64(regN)}, {"steps", float64(stepN)},
+		{"duration_ms", float64(rr.DurationMs)},
+	}
+	batch := &storepb.MetricsBatch{Points: make([]*storepb.MetricPoint, 0, len(pts))}
+	for _, p := range pts {
+		batch.Points = append(batch.Points, &storepb.MetricPoint{
+			RunId: rec.ID, Ts: ts, Name: p.n, Value: p.v, LabelsJson: labels,
+		})
+	}
+	s.store.ingestMetrics(batch)
 }
 
 func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
@@ -1075,6 +1199,71 @@ func (s *server) blockingChat(w http.ResponseWriter, rec *run, id string, create
 	writeJSON(w, http.StatusOK, chatCompletion(id, created, model, content))
 }
 
+// parseIntQuery reads a non-negative int query param, or def when absent/invalid.
+func parseIntQuery(r *http.Request, key string, def int64) int64 {
+	if v := r.URL.Query().Get(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// --- M15 (ADR-051): results + metrics-trends HTTP surface (native charts in the SPA) --------------
+// Token-gated, over the fail-open store-gateway client. Like scenarios/tests/chats, these have no
+// in-memory fallback — a gateway error / no store degrades to an empty list, never a 503.
+
+func (s *server) handleListResults(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var results []*storepb.ResultRecord
+	var total int64
+	if s.store != nil {
+		if rl, ok := s.store.listResults(parseIntQuery(r, "limit", 200), parseIntQuery(r, "offset", 0)); ok {
+			results, total = rl.Results, rl.Total
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "total": total})
+}
+
+func (s *server) handleGetResult(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	var rr *storepb.ResultRecord
+	var ok bool
+	if s.store != nil {
+		rr, ok = s.store.getResult(r.PathValue("id"))
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such result"})
+		return
+	}
+	writeJSON(w, http.StatusOK, rr)
+}
+
+func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
+	if !s.authed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
+		return
+	}
+	metric := r.URL.Query().Get("metric")
+	if metric == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "metric query param required (e.g. pass, coverage, duration_ms, healed, failed, regressions, steps)"})
+		return
+	}
+	var points []*storepb.TrendPoint
+	if s.store != nil {
+		if tr, ok := s.store.trends(metric, parseIntQuery(r, "window", 50)); ok {
+			points = tr.Points
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"metric": metric, "points": points})
+}
+
 func (s *server) mux() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", s.handleHealthz)
@@ -1097,6 +1286,10 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/chats", s.handleListChats)
 	m.HandleFunc("GET /v1/chats/{id}", s.handleGetChat)
 	m.HandleFunc("DELETE /v1/chats/{id}", s.handleDeleteChat)
+	// M15 (ADR-051): results + metrics-trends surface for the SPA native charts
+	m.HandleFunc("GET /v1/results", s.handleListResults)
+	m.HandleFunc("GET /v1/results/{id}", s.handleGetResult)
+	m.HandleFunc("GET /v1/trends", s.handleTrends)
 	return s.cors(m)
 }
 

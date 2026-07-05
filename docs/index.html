@@ -739,12 +739,22 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <div id="chats-list"></div>
     </div>
 
-    <!-- ---- results / metrics: labeled stubs (M15, ADR-051) ---- -->
+    <!-- ---- Results: per-run outcomes + native SVG charts (M15, ADR-051) ---- -->
     <div class="subpanel" data-subpanel="results">
-      <div class="stub">📊 <span data-lang="ru">Результаты — придут в <b>M15</b> (нативные графики поверх домена <code>results</code>: verdict/coverage/duration).</span><span data-lang="en">Results — coming in <b>M15</b> (native charts over the <code>results</code> domain: verdict/coverage/duration).</span></div>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="results-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <span class="hint"><span data-lang="ru">verdict · покрытие · длительность на прогон (<code>GET /v1/results</code>)</span><span data-lang="en">verdict · coverage · duration per run (<code>GET /v1/results</code>)</span></span>
+      </div>
+      <div id="results-charts"></div>
+      <div id="results-list"></div>
     </div>
+    <!-- ---- Metrics: trend sparklines over recent runs (M15, ADR-051) ---- -->
     <div class="subpanel" data-subpanel="metrics">
-      <div class="stub">📈 <span data-lang="ru">Метрики — придут в <b>M15</b> (счётчики auto-HITL, <code>consecutive_heal_failures</code>, покрытие).</span><span data-lang="en">Metrics — coming in <b>M15</b> (auto-HITL counters, <code>consecutive_heal_failures</code>, coverage).</span></div>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="metrics-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <span class="hint"><span data-lang="ru">тренды по последним прогонам (<code>GET /v1/trends</code>)</span><span data-lang="en">trends over recent runs (<code>GET /v1/trends</code>)</span></span>
+      </div>
+      <div id="metrics-trends"></div>
     </div>
   </section>
   </div><!-- /panel-tests -->
@@ -1694,6 +1704,103 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      encoding/json, no protojson camelCase conversion.)
      ================================================================ */
 
+  /* ---- M15 (ADR-051): Results + Metrics — native inline-SVG charts (no CDN/canvas; CSP-safe).
+     SVG colours go through style="fill:var(--x)" (CSS custom props do NOT resolve in the `fill`/`stroke`
+     presentation attribute, only in a CSS property). Feeds: GET /v1/results, GET /v1/trends. ---- */
+  function verdictColor(v){ return v==='pass'?'var(--ok,#36d399)':v==='regression'?'var(--no,#ff4d6d)':v==='integrity'?'#9c6ade':'var(--warn,#ffb000)'; }
+  function verdictIcon(v){ return v==='pass'?'✓':v==='regression'?'▲':v==='integrity'?'✖':'⚠'; }
+  function fmtDur(ms){ ms=+ms||0; return ms<1000?ms+'ms':(ms/1000).toFixed(ms<10000?1:0)+'s'; }
+  function svgSpark(vals, opts){
+    opts=opts||{}; var w=opts.w||220, h=opts.h||34, pad=3;
+    if(!vals.length) return '<span class="libmeta">'+bi('нет данных','no data')+'</span>';
+    var mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals), rng=(mx-mn)||1, n=vals.length;
+    var xy=vals.map(function(v,i){ var x=pad+(n===1?(w-2*pad)/2:i*(w-2*pad)/(n-1)); var y=h-pad-((v-mn)/rng)*(h-2*pad); return [x,y]; });
+    var poly=xy.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ');
+    var lp=xy[n-1], col=opts.color||'var(--acc2,#ff6b88)';
+    return '<svg viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'" preserveAspectRatio="none" role="img" aria-label="'+esc(opts.label||'trend')+'">'+
+      '<polyline points="'+poly+'" style="fill:none;stroke:'+col+';stroke-width:1.5"/>'+
+      '<circle cx="'+lp[0].toFixed(1)+'" cy="'+lp[1].toFixed(1)+'" r="2" style="fill:'+col+'"/></svg>';
+  }
+  function svgBars(items, opts){
+    opts=opts||{}; var h=opts.h||90, bw=opts.bw||16, gap=opts.gap||6, pad=4;
+    if(!items.length) return '<span class="libmeta">'+bi('нет данных','no data')+'</span>';
+    var w=pad*2+items.length*bw+(items.length-1)*gap, bars='';
+    items.forEach(function(it,i){
+      var x=pad+i*(bw+gap), bh=Math.max(1,(it.value||0)*(h-2*pad)), y=h-pad-bh;
+      bars+='<rect x="'+x+'" y="'+y.toFixed(1)+'" width="'+bw+'" height="'+bh.toFixed(1)+'" rx="1" style="fill:'+(it.color||'var(--acc2,#ff6b88)')+'"><title>'+esc(it.title||'')+'</title></rect>';
+    });
+    return '<svg viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'" role="img" aria-label="'+esc(opts.label||'bars')+'">'+bars+'</svg>';
+  }
+
+  var tResultsLoaded=false, tResults=[];
+  async function tLoadResults(){
+    tResultsLoaded=true;
+    ge('results-charts').innerHTML='';
+    ge('results-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    try { var r=await fetch(capiBase()+'/v1/results',{headers:authHdr()}); var j=await r.json(); tResults=j.results||[]; }
+    catch(e){ tResults=[]; }
+    tRenderResults();
+  }
+  function tRenderResults(){
+    if(!tResults.length){ ge('results-charts').innerHTML=''; ge('results-list').innerHTML='<p class="hint">'+bi('результатов пока нет — запусти прогон','no results yet — run a test')+'</p>'; return; }
+    var chrono=tResults.slice().reverse();  // /v1/results is newest-first (created_at DESC) -> oldest→newest for the chart
+    // Coverage only exists for authoring runs (plan.json); replay/baseline carry coverage=0 (n/a), so
+    // exclude them from the coverage chart rather than drawing misleading 0%-height bars.
+    var bars=chrono.filter(function(rr){ return (rr.coverage||0) > 0; }).slice(-24).map(function(rr){ return { value: rr.coverage||0, color: verdictColor(rr.verdict), title: (rr.run_id||'')+' · '+(rr.verdict||'')+' · cov '+Math.round((rr.coverage||0)*100)+'%' }; });
+    ge('results-charts').innerHTML=
+      '<h3 style="font-size:.9rem;margin:.6rem 0 .3rem;color:var(--mut)">'+bi('Покрытие по прогонам','Coverage per run')+'</h3>'+
+      svgBars(bars,{label:'coverage per run'})+
+      '<div class="libmeta" style="margin-top:.3rem">'+bi('цвет = verdict','colour = verdict')+': <span style="color:var(--ok,#36d399)">✓ pass</span> · <span style="color:var(--warn,#ffb000)">⚠ problem</span> · <span style="color:var(--no,#ff4d6d)">▲ regression</span> · <span style="color:#9c6ade">✖ integrity</span></div>';
+    var html='';
+    tResults.forEach(function(rr){
+      html+='<div class="runitem"><div class="libitem-row">'+
+        '<div><code>'+esc(rr.run_id)+'</code> <span style="color:'+verdictColor(rr.verdict)+'">'+verdictIcon(rr.verdict)+' '+esc(rr.verdict||'')+'</span> <span class="libmeta">'+esc(rr.mode||'')+'</span></div>'+
+        '<div class="libmeta">'+(rr.coverage?'cov '+Math.round(rr.coverage*100)+'% · ':'')+(rr.duration_ms?fmtDur(rr.duration_ms)+' · ':'')+'heal '+(rr.healed||0)+' · fail '+(rr.failed||0)+'</div>'+
+        '</div></div>';
+    });
+    ge('results-list').innerHTML=html;
+  }
+  ge('results-refresh').addEventListener('click', tLoadResults);
+
+  var tMetricsLoaded=false;
+  var TREND_METRICS=[
+    {k:'pass',ru:'Доля успехов',en:'Pass rate',rate:true},
+    {k:'coverage',ru:'Покрытие',en:'Coverage',pct:true},
+    {k:'healed',ru:'Вылечено',en:'Healed'},
+    {k:'failed',ru:'Провалов',en:'Failed'},
+    {k:'regressions',ru:'Регрессий',en:'Regressions'},
+    {k:'duration_ms',ru:'Длительность',en:'Duration',dur:true}
+  ];
+  async function tLoadMetrics(){
+    tMetricsLoaded=true;
+    ge('metrics-trends').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    var out=[];
+    for(var i=0;i<TREND_METRICS.length;i++){
+      var m=TREND_METRICS[i], pts=[];
+      try { var r=await fetch(capiBase()+'/v1/trends?metric='+encodeURIComponent(m.k)+'&window=50',{headers:authHdr()}); var j=await r.json(); pts=j.points||[]; }
+      catch(e){ pts=[]; }
+      out.push({m:m,pts:pts});
+    }
+    tRenderMetrics(out);
+  }
+  function tRenderMetrics(series){
+    if(!series.some(function(s){ return s.pts.length; })){ ge('metrics-trends').innerHTML='<p class="hint">'+bi('метрик пока нет — запусти прогон','no metrics yet — run a test')+'</p>'; return; }
+    var html='';
+    series.forEach(function(s){
+      var vals=s.pts.map(function(p){ return p.value||0; });
+      var lastStr;
+      if(s.m.rate){ var sum=vals.reduce(function(a,b){return a+b;},0); lastStr=vals.length?Math.round(sum/vals.length*100)+'%':'—'; }
+      else if(!vals.length){ lastStr='—'; }
+      else { var last=vals[vals.length-1]; lastStr=s.m.pct?Math.round(last*100)+'%':s.m.dur?fmtDur(last):String(Math.round(last)); }
+      html+='<div class="runitem" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">'+
+        '<div><b>'+bi(s.m.ru,s.m.en)+'</b> <span class="libmeta">'+esc(s.m.k)+' · '+vals.length+' '+bi('прогонов','runs')+'</span></div>'+
+        '<div style="display:flex;align-items:center;gap:.6rem">'+svgSpark(vals,{label:s.m.k})+'<b style="min-width:3.5rem;text-align:right">'+lastStr+'</b></div>'+
+        '</div>';
+    });
+    ge('metrics-trends').innerHTML=html;
+  }
+  ge('metrics-refresh').addEventListener('click', tLoadMetrics);
+
   /* ---- sub-tab switcher (Author is the default; persisted like the top tab) ---- */
   function tSubTab(name){
     document.querySelectorAll('.subpanel[data-subpanel]').forEach(function(p){
@@ -1706,6 +1813,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (name==='library' && !tLibLoaded)  tLoadLibrary();
     if (name==='runs'    && !tRunsLoaded) tLoadRuns();
     if (name==='chats'   && !tChatsLoaded) tLoadChats();
+    if (name==='results' && !tResultsLoaded) tLoadResults();
+    if (name==='metrics' && !tMetricsLoaded) tLoadMetrics();
   }
   document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
     b.addEventListener('click', function(){ tSubTab(b.getAttribute('data-subtab')); });
