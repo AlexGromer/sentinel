@@ -51,6 +51,8 @@ if os.path.isfile(compose_path):
           "ollama image tag is parameterized (${OLLAMA_IMAGE_TAG}, pinned at bundle time)")
     check(not re.search(r"image:\s*ollama/ollama:latest\b", compose),
           "ollama image is not a hardcoded floating :latest")
+    check("name: sentinel_ollama-models" in compose,
+          "ollama volume name is pinned (restore target matches the compose-mounted volume)")
 
 # --- scripts --------------------------------------------------------------------------------------
 for rel in ("scripts/offline-verify.sh", "scripts/build-airgap-bundle.sh"):

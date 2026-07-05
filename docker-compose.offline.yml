@@ -11,7 +11,13 @@
 #     docker compose -f docker-compose.offline.yml --profile demo run --rm demo    # zero-dep smoke
 #     docker compose -f docker-compose.offline.yml --profile ollama up -d ollama   # local model endpoint
 #     docker compose -f docker-compose.offline.yml run --rm sentinel run --target <URL>   # a real run
-#     docker compose -f docker-compose.offline.yml --profile webui up              # docs at :8088
+#
+# Browsing the bundled docs offline (the files are baked into the image at /app/docs): a webui service
+# is intentionally NOT in this stack — a container whose ONLY network is `internal: true` cannot publish
+# host ports (Docker drops the mapping), so a webui here would be unreachable. Serve them with a single
+# throwaway container on the default bridge instead (a passive file server that initiates no egress):
+#     docker run --rm -p 127.0.0.1:8088:8088 --entrypoint /app/.venv/bin/python \
+#       sentinel:local -m http.server 8088 --directory /app/docs   # -> http://localhost:8088/
 #
 # Unlike docker-compose.yml, the offline base anchor carries NO `build:` key on purpose — a true
 # air-gapped host has no base images to build FROM, so every service must resolve ONLY from a
@@ -27,8 +33,9 @@ x-sentinel-offline-base: &sentinel-offline
 
 services:
   # Primary agent. Reaches the bundled local model over the internal-only `airgap` network
-  # (ollama:11434). With the LLM_* block commented, runs fall back to the deterministic heuristic
-  # planner / L1–L6 heal — still fully offline. ENTRYPOINT is /app/bin/agentctl; append subcommands.
+  # (ollama:11434 by service name — no host port needed). With the LLM_* block commented, runs fall
+  # back to the deterministic heuristic planner / L1–L6 heal — still fully offline. ENTRYPOINT is
+  # /app/bin/agentctl; append subcommands.
   sentinel:
     <<: *sentinel-offline
     command: ["--help"]
@@ -59,10 +66,13 @@ services:
       - "--artifact-dir"
       - "/app/runs/demo"
 
-  # Local, offline model endpoint (OpenAI-compatible at http://ollama:11434/v1). The image is
-  # docker-load'ed from the bundle; OLLAMA_IMAGE_TAG pins the EXACT tag that build-airgap-bundle.sh
-  # saved (recorded in MANIFEST.sha256 + the generated .env — never a floating :latest at deploy).
-  # The model blobs are restored into the named volume; OLLAMA_NOPRUNE keeps hand-placed blobs.
+  # Local, offline model endpoint (OpenAI-compatible at http://ollama:11434/v1, reachable by sentinel
+  # over the airgap network). The image is docker-load'ed from the bundle; OLLAMA_IMAGE_TAG pins the
+  # EXACT tag that build-airgap-bundle.sh saved (recorded in MANIFEST.sha256 + the generated .env —
+  # never a floating :latest at deploy). The model blobs are restored into the named volume
+  # `sentinel_ollama-models` (pinned via `name:` so it matches regardless of the compose project name);
+  # OLLAMA_NOPRUNE keeps hand-placed blobs. No host `ports:` — verification probes it via
+  # `docker compose exec` (a published port would not work on the internal network anyway).
   ollama:
     image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
     pull_policy: never
@@ -78,24 +88,18 @@ services:
       timeout: 5s
       retries: 12
 
-  # Offline docs: the setup-WebUI, calculators, and the hub landing page (with its inline chat) baked
-  # into /app/docs (air-gapped, static, no network). Published to host localhost only (ingress DNAT —
-  # does not grant the internal network any egress). Satisfies "docs static copy accessible offline".
-  #   docker compose -f docker-compose.offline.yml --profile webui up  ->  http://localhost:8088/
-  webui:
-    <<: *sentinel-offline
-    profiles: ["webui"]
-    entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
-    networks: [airgap]
-    ports:
-      - "127.0.0.1:8088:8088"
-
 networks:
   # internal: true => Docker creates no gateway / NAT / masquerade rule for this bridge, so attached
   # containers resolve each other by service name but CANNOT reach any external host. This is the
   # structural enforcement of "zero external calls" (stronger than relying on --network none per run).
+  # Trade-off: an internal network also cannot publish host ports (verified) — hence no webui service
+  # and no ollama host port; inter-service comms use service names, host checks use `docker compose exec`.
   airgap:
     internal: true
 
 volumes:
+  # `name:` pins the real Docker volume name so a bundle extracted into ANY directory (compose derives
+  # the project name from the dir basename) still mounts the SAME volume the bundle restores the model
+  # into — without this, `<dirname>_ollama-models` would be an empty, wrong volume (M11.4 review C1).
   ollama-models:
+    name: sentinel_ollama-models

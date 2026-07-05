@@ -376,7 +376,7 @@ A complete package for installing Sentinel in a network without internet access:
 
 ### What was implemented (M11.4)
 
-- `docker-compose.offline.yml` — `internal: true` network (zero egress), `pull_policy: never`, an offline anchor with no `build:`, `demo`=`network_mode: none`; `ollama`/`webui` profiles.
+- `docker-compose.offline.yml` — `internal: true` network (zero egress), `pull_policy: never`, an offline anchor with no `build:`, `demo`=`network_mode: none`, an `ollama-models` volume with a pinned `name:`; the `ollama` profile (docs are browsed via a separate `http.server` container — an internal network can't publish ports).
 - `scripts/offline-verify.sh` — a single verifier: `--local` (build→save/load→`--network none` demo+docs+negative-DNS — the CI gate) and `--bundle <dir>` (checksums + `cosign verify-blob --bundle` offline + stack up + `/v1/models`).
 - `scripts/build-airgap-bundle.sh` — maintainer assembler (run on a connected machine): `gh release download`, **verify the GHCR image before `docker save`**, export the ollama model, self-signed `MANIFEST.sha256`.
 - CI `airgap` job + `tests/test_m11_4_offline.py`; fixed `.dockerignore` (`!docs/index.html`).

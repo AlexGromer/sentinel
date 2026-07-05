@@ -376,7 +376,7 @@ ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, существует с M
 
 ### Что реализовано (M11.4)
 
-- `docker-compose.offline.yml` — сеть `internal: true` (ноль egress), `pull_policy: never`, offline-anchor без `build:`, `demo`=`network_mode: none`; профили `ollama`/`webui`.
+- `docker-compose.offline.yml` — сеть `internal: true` (ноль egress), `pull_policy: never`, offline-anchor без `build:`, `demo`=`network_mode: none`, том `ollama-models` с pinned `name:`; профиль `ollama` (docs браузятся отдельным `http.server`-контейнером — internal-сеть не публикует порты).
 - `scripts/offline-verify.sh` — единый верификатор: `--local` (build→save/load→`--network none` demo+docs+negative-DNS — гейт CI) и `--bundle <dir>` (checksums + `cosign verify-blob --bundle` offline + подъём стека + `/v1/models`).
 - `scripts/build-airgap-bundle.sh` — maintainer-ассемблер (на связанной машине): `gh release download`, **verify образа GHCR до `docker save`**, экспорт ollama-модели, самоподписанный `MANIFEST.sha256`.
 - CI `airgap`-job + `tests/test_m11_4_offline.py`; фикс `.dockerignore` (`!docs/index.html`).

@@ -54,18 +54,20 @@ docker save sentinel:local -o "$OUT/sentinel.image.tar"
 
 # 3) Ollama runtime image — pin the EXACT pulled tag into .env (never a floating :latest at deploy) --
 say "pulling + saving the Ollama runtime image ($OLLAMA_IMAGE)"
+case "$OLLAMA_IMAGE" in *:latest) say "WARN: OLLAMA_IMAGE is :latest — pass OLLAMA_IMAGE=ollama/ollama:<version> for a reproducible pin" ;; esac
 docker pull "$OLLAMA_IMAGE"
 OLLAMA_TAG="${OLLAMA_IMAGE##*:}"; [ "$OLLAMA_TAG" = "$OLLAMA_IMAGE" ] && OLLAMA_TAG="latest"
+OLLAMA_DIGEST="$(docker inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$OLLAMA_IMAGE" 2>/dev/null || true)"
 docker tag "$OLLAMA_IMAGE" "ollama/ollama:${OLLAMA_TAG}"
 docker save "ollama/ollama:${OLLAMA_TAG}" -o "$OUT/ollama.image.tar"
-printf 'OLLAMA_IMAGE_TAG=%s\n' "$OLLAMA_TAG" > "$OUT/.env"
+{ printf 'OLLAMA_IMAGE_TAG=%s\n' "$OLLAMA_TAG"; [ -n "$OLLAMA_DIGEST" ] && printf '# ollama digest (reproducibility): %s\n' "$OLLAMA_DIGEST"; } > "$OUT/.env"
 
 # 4) Preload the model + export the ollama models volume ------------------------------------------
 say "preloading model '$MODEL' and exporting the volume"
 docker volume create sentinel_ollama-bundle >/dev/null
 docker run -d --name sentinel-ollama-bundle -v sentinel_ollama-bundle:/root/.ollama \
   "ollama/ollama:${OLLAMA_TAG}" >/dev/null
-trap 'docker rm -f sentinel-ollama-bundle >/dev/null 2>&1 || true' EXIT
+trap 'docker rm -f sentinel-ollama-bundle >/dev/null 2>&1 || true; docker volume rm sentinel_ollama-bundle >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 1 30); do docker exec sentinel-ollama-bundle ollama list >/dev/null 2>&1 && break; sleep 2; done
 docker exec sentinel-ollama-bundle ollama pull "$MODEL" || die "ollama pull '$MODEL' failed"
 docker run --rm -v sentinel_ollama-bundle:/data -v "$OUT:/backup" alpine \
@@ -103,10 +105,21 @@ docker compose -f docker-compose.offline.yml --profile ollama up -d ollama   # l
 Model: $MODEL · Ollama image tag (pinned in .env): $OLLAMA_TAG
 EOF
 
-# 7) MANIFEST = superset checksum over EVERY bundle artifact (image/model tars + carried release) ---
+# 6c) Sigstore trust root snapshot — lets offline-verify.sh --bundle validate cert chains on a fresh
+#     air-gapped host with NO TUF CDN fetch (generated here, online, shipped in the bundle).
+say "capturing the Sigstore trust root (trusted-root.json)"
+cosign trusted-root create --out "$OUT/trusted-root.json" 2>/dev/null \
+  || say "WARN: 'cosign trusted-root create' unavailable — offline verify may need 'cosign initialize' on the target host"
+
+# 7) MANIFEST = superset checksum over EVERY DISTINCT bundle artifact. `*.tar.gz` already covers the
+#    release archives AND ollama-models.tar.gz, so neither is listed again (no duplicate lines).
 say "writing MANIFEST.sha256 over the whole bundle"
-( cd "$OUT" && sha256sum sentinel.image.tar ollama.image.tar ollama-models.tar.gz \
-    *.tar.gz sbom.cdx.json docker-compose.offline.yml .env > MANIFEST.sha256 )
+(
+  cd "$OUT"
+  files=(sentinel.image.tar ollama.image.tar sbom.cdx.json docker-compose.offline.yml .env)
+  [ -f trusted-root.json ] && files+=(trusted-root.json)
+  sha256sum "${files[@]}" ./*.tar.gz > MANIFEST.sha256   # *.tar.gz covers release archives + ollama-models
+)
 
 # 8) Sign the manifest — INTERACTIVE keyless (opens a browser / device-code flow; not unattended) ---
 say "signing MANIFEST.sha256 (Cosign keyless — follow the browser/device prompt)"
