@@ -126,6 +126,10 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/results_test.go | Go | **M15** results/metrics wiring: `persistResult`-on-finish round-trip (verdict-enum · coverage[plan.json] · duration · `labels_json` seam) + `/v1/results`·`/trends` HTTP (token-gated) + fail-open-no-store + `verdictEnum`/`durationMs` units; real store-gateway on a unix socket |
 | docs/M15_CONTRACT.md / .en.md | Docs | **M15 / ADR-051** contract: wire M13 `results`+`metrics` domains (control-API `persistResult`+`ingestMetrics` on finish) + `GET /v1/results`·`/results/{id}`·`/trends` + SPA native inline-SVG (bars+sparklines); token-cost($)→M15.1; `labels_json={mode,target}` = ADR-056 commercial-BI seam; all base/Apache |
 | .github/workflows/release.yml | Configuration | — |
+| docker-compose.offline.yml | Configuration | air-gapped offline stack (M11.4): `internal:true` net (zero egress) + `pull_policy:never` + no-`build:` offline anchor; sentinel/demo/ollama/webui profiles; consumed by scripts/offline-verify.sh --bundle |
+| scripts/offline-verify.sh | Shell script | single-source offline verifier (M11.4): --local (build→save/load→--network none demo+docs+negative-DNS — CI airgap-job) / --bundle <dir> (checksums + cosign verify-blob --bundle offline + stack up + /v1/models) |
+| scripts/build-airgap-bundle.sh | Shell script | maintainer air-gapped bundle assembler (M11.4, tag-gated): gh release download + verify-before-save GHCR image + docker save + ollama model export + self-signed MANIFEST.sha256 |
+| tests/test_m11_4_offline.py | Python | M11.4 offline structural test (ci.yml build offline-loop): asserts docker-compose.offline.yml invariants (no build:, internal:true, pull_policy:never, network_mode:none, pinned ollama tag) + scripts executable + .dockerignore hub-page fix |
 ## Directory Structure
 ```
 agent_development/

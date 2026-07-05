@@ -88,12 +88,12 @@ jobs:
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
-      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize + m13_chats + m14_agui + m_structured_out — FakeBackend/FakeExecutor, no network)
+      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize + m13_chats + m14_agui + m_structured_out + m11_4 — FakeBackend/FakeExecutor, no network)
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -e
-          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m_structured_out; do
+          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m_structured_out m11_4; do
             echo "== test_${t}_offline =="
             .venv/bin/python tests/test_${t}_offline.py
           done
@@ -320,3 +320,55 @@ jobs:
 
       - name: Check bilingual docs parity
         run: python3 scripts/check_bilingual.py
+
+  # ---------------------------------------------------------------------------
+  # airgap: M11.4 — the FIRST job to exercise the Dockerfile in CI. Builds sentinel:local, round-trips
+  # it through `docker save`/`docker load`, and proves the RUNTIME makes zero external calls via
+  # scripts/offline-verify.sh --local (agentctl under --network none, the LLM-free demo explores, the
+  # bundled docs are present, and a DNS lookup from the isolated container FAILS). Runs the byte-identical
+  # verifier a maintainer runs. amd64/native only — arm64 + the full model bundle stay release-time
+  # (release.yml precedent). No needs: (the multi-stage Dockerfile self-compiles from source).
+  # ---------------------------------------------------------------------------
+  airgap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # cosign keyless self-test (same-repo only; see the guarded step below)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx (GHA layer cache for the multi-stage build)
+        uses: docker/setup-buildx-action@v3
+
+      # build-push-action wires the GHA cache token; load:true puts amd64 sentinel:local in the daemon.
+      - name: Build sentinel:local (cached, amd64, loaded — not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: sentinel:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Offline runtime verification (save/load -> --network none, no external calls)
+        env:
+          AIRGAP_SKIP_BUILD: "1"   # reuse the image built above instead of rebuilding
+        run: scripts/offline-verify.sh --local
+
+      # Cosign verify-blob MECHANISM self-test (M11.4 criterion 5, "mechanism verified"): sign a
+      # throwaway blob keyless with THIS run's OIDC identity, then verify it OFFLINE via --bundle (no
+      # Rekor call). Exercises the exact verify flag shape used against real release bundles — it would
+      # have caught the cosign `--offline`-flag removal. The SIGN half needs network (Sigstore); this
+      # tests the verify mechanism, not the air-gapped runtime. Skipped on FORK PRs (no id-token there).
+      - name: Install cosign (mechanism self-test)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: sigstore/cosign-installer@v3
+      - name: Cosign sign + OFFLINE verify-blob round-trip
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euo pipefail
+          echo "m11.4 airgap self-test ${GITHUB_SHA}" > /tmp/probe.txt
+          cosign sign-blob --yes --bundle /tmp/probe.cosign.bundle /tmp/probe.txt
+          cosign verify-blob /tmp/probe.txt --bundle /tmp/probe.cosign.bundle \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/ci.yml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"

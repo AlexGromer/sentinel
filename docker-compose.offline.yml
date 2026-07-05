@@ -1,0 +1,101 @@
+# Sentinel — air-gapped offline stack (M11.4, ADR-030; standalone half of ADR-053).
+#
+# ZERO external calls at RUNTIME. The bundle is ASSEMBLED ONCE on a connected machine
+# (scripts/build-airgap-bundle.sh — that step DOES pull images/models from the network), then
+# physically transferred to the isolated host, where `docker load` + this file bring the stack up
+# with no registry / DNS / internet access at any point.
+#
+#   Air-gapped host bring-up (after transferring the bundle + `docker load` of every image tar):
+#     echo "OLLAMA_IMAGE_TAG=<tag from MANIFEST.sha256>" > .env    # the exact tag docker save'd
+#     docker volume create sentinel_ollama-models                  # restore the model tar into it
+#     docker compose -f docker-compose.offline.yml --profile demo run --rm demo    # zero-dep smoke
+#     docker compose -f docker-compose.offline.yml --profile ollama up -d ollama   # local model endpoint
+#     docker compose -f docker-compose.offline.yml run --rm sentinel run --target <URL>   # a real run
+#     docker compose -f docker-compose.offline.yml --profile webui up              # docs at :8088
+#
+# Unlike docker-compose.yml, the offline base anchor carries NO `build:` key on purpose — a true
+# air-gapped host has no base images to build FROM, so every service must resolve ONLY from a
+# docker-load'ed image (`pull_policy: never` fails closed if an image is missing, never reaches out).
+
+x-sentinel-offline-base: &sentinel-offline
+  image: sentinel:local          # loaded via `docker load` from the bundle — NOT built here
+  pull_policy: never             # never contact a registry; fail closed if the image is absent
+  volumes:
+    - ./runs:/app/runs           # plan.json / transcript / heal-report / scenario.json / trace.zip
+    - ./state:/app/state         # locator/golden/quarantine SQLite + store-gateway socket
+    - ./config:/config           # mount a RunConfig YAML or plan.json (--run-config /config/run.yaml)
+
+services:
+  # Primary agent. Reaches the bundled local model over the internal-only `airgap` network
+  # (ollama:11434). With the LLM_* block commented, runs fall back to the deterministic heuristic
+  # planner / L1–L6 heal — still fully offline. ENTRYPOINT is /app/bin/agentctl; append subcommands.
+  sentinel:
+    <<: *sentinel-offline
+    command: ["--help"]
+    networks: [airgap]
+    environment:
+      ANTHROPIC_API_KEY: ""        # explicitly empty — no cloud path exists in an air-gapped deploy
+      # --- Local model via the bundled `ollama` service (uncomment to enable LLM heal) -----------
+      # LLM_BACKEND: openai
+      # LLM_BASE_URL: http://ollama:11434/v1
+      # LLM_MODEL: qwen2.5-vl:7b     # the model preloaded into the bundle (docs/LOCAL_MODELS.md §3)
+      # LLM_API_KEY: noauth          # Ollama ignores the key; the SDK requires a non-empty value
+      # LLM_VISION: "1"              # qwen2.5-vl is vision-capable (set-of-marks heal re-grounding)
+
+  # Zero-external-dependency demo: deterministic explore against a bundled file:// fixture. Needs NO
+  # network at all, so it runs FULLY isolated (`network_mode: none`) — a strictly stronger guarantee
+  # than the internal airgap bridge. NOTE: `network_mode` cannot be combined with a `networks:` list,
+  # which is exactly why the shared anchor above declares no networks (each service opts in).
+  demo:
+    <<: *sentinel-offline
+    profiles: ["demo"]
+    network_mode: none
+    command:
+      - "run"
+      - "--target"
+      - "file:///app/testdata/site/index.html"
+      - "--planner"
+      - "heuristic"
+      - "--artifact-dir"
+      - "/app/runs/demo"
+
+  # Local, offline model endpoint (OpenAI-compatible at http://ollama:11434/v1). The image is
+  # docker-load'ed from the bundle; OLLAMA_IMAGE_TAG pins the EXACT tag that build-airgap-bundle.sh
+  # saved (recorded in MANIFEST.sha256 + the generated .env — never a floating :latest at deploy).
+  # The model blobs are restored into the named volume; OLLAMA_NOPRUNE keeps hand-placed blobs.
+  ollama:
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
+    pull_policy: never
+    profiles: ["ollama"]
+    environment:
+      OLLAMA_NOPRUNE: "1"          # don't prune "orphan" blobs restored from the bundle tar
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [airgap]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Offline docs: the setup-WebUI, calculators, and the hub landing page (with its inline chat) baked
+  # into /app/docs (air-gapped, static, no network). Published to host localhost only (ingress DNAT —
+  # does not grant the internal network any egress). Satisfies "docs static copy accessible offline".
+  #   docker compose -f docker-compose.offline.yml --profile webui up  ->  http://localhost:8088/
+  webui:
+    <<: *sentinel-offline
+    profiles: ["webui"]
+    entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
+    networks: [airgap]
+    ports:
+      - "127.0.0.1:8088:8088"
+
+networks:
+  # internal: true => Docker creates no gateway / NAT / masquerade rule for this bridge, so attached
+  # containers resolve each other by service name but CANNOT reach any external host. This is the
+  # structural enforcement of "zero external calls" (stronger than relying on --network none per run).
+  airgap:
+    internal: true
+
+volumes:
+  ollama-models:

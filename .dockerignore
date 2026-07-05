@@ -12,6 +12,7 @@ deploy
 docs/**
 !docs/setup/**
 !docs/calculators/**
+!docs/index.html
 !docs/index.md
 !docs/_config.yml
 !docs/LOCAL_MODELS.md

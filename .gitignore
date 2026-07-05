@@ -1139,6 +1139,10 @@ artifacts/
 # Docker (extended)
 docker-compose.override.yml
 docker-compose.*.yml
+# Exception: docker-compose.offline.yml is a deliberate PUBLIC deliverable (M11.4 air-gapped
+# bundle stack; consumed by scripts/offline-verify.sh --bundle). Un-ignore it — the wildcard
+# above is for local/secret compose overrides (e.g. docker-compose.secrets.yml), not this.
+!docker-compose.offline.yml
 .dockerignore.local
 
 # VirtualBox
