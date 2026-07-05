@@ -1,0 +1,166 @@
+# Sentinel release pipeline (M11.1, ADR-030) — closes the GAP-SEC-002 signed-release tail.
+#
+# On a `v*` tag: build 5 Go binaries × 5 platforms (25), a multi-arch Docker image (GHCR), a CycloneDX
+# SBOM, Cosign KEYLESS signatures (Sigstore OIDC — no long-lived key/secret), and a GitHub Release with
+# every asset attached. `workflow_dispatch` runs a build/SBOM DRY-RUN (no push / no sign / no release), so
+# the pipeline can be smoke-tested without cutting a tag.
+#
+# NOTE: repo convention is SHA-pinned actions. The @vN tags below should be SHA-pinned by a
+# Dependabot / hardening pass (kept as version tags here — SHAs are not invented).
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/alexgromer/sentinel
+
+jobs:
+  binaries:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Build + package binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then TAG="${GITHUB_REF_NAME}"; else TAG="dev-${GITHUB_SHA::7}"; fi
+          out="sentinel-${TAG}-${GOOS}-${GOARCH}"
+          mkdir -p "dist/${out}"
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          for c in agentctl control-api orchestrator report-service store-gateway; do
+            go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o "dist/${out}/${c}${ext}" "./cmd/${c}"
+          done
+          cp LICENSE README.md "dist/${out}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  image:
+    name: docker + sbom
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # GHCR push (tag only)
+      id-token: write   # cosign keyless
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve tag / push mode / image tags
+        id: meta
+        run: |
+          set -euo pipefail
+          # PUBLISH only on a real tag PUSH. A workflow_dispatch (even if 'Run workflow' selects a tag
+          # ref -> GITHUB_REF_TYPE=tag) MUST stay a dry-run, so gate on the EVENT, not just the ref.
+          if [ "${GITHUB_EVENT_NAME}" = push ] && [ "${GITHUB_REF_TYPE}" = tag ]; then
+            TAG="${GITHUB_REF_NAME}"; PUSH=true
+          else
+            TAG="dev-${GITHUB_SHA::7}"; PUSH=false
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "push=${PUSH}" >> "$GITHUB_OUTPUT"
+          # image tags: always the version; :latest ONLY for a non-prerelease (no '-' in the tag), so an
+          # RC (v1.0.0-rc1) or a backdated hotfix tag never clobbers the stable :latest channel.
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:${TAG}"
+            case "${TAG}" in *-*) : ;; *) echo "${IMAGE}:latest" ;; esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        if: steps.meta.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (+ push on tag) multi-arch image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # dry-run builds a single arch (fast Dockerfile smoke); a tag builds + pushes both.
+          platforms: ${{ steps.meta.outputs.push == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ steps.meta.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+      - name: Install cosign
+        if: steps.meta.outputs.push == 'true'
+        uses: sigstore/cosign-installer@v3
+      - name: Sign image (keyless)
+        if: steps.meta.outputs.push == 'true'
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: SBOM (CycloneDX — the pushed image on a tag, else the source tree)
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.meta.outputs.push }}" = true ]; then
+            syft scan "${IMAGE}@${{ steps.build.outputs.digest }}" -o cyclonedx-json=sbom.cdx.json
+          else
+            syft scan dir:. -o cyclonedx-json=sbom.cdx.json
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          if-no-files-found: error
+
+  release:
+    name: github release
+    needs: [binaries, image]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the Release
+      id-token: write   # cosign keyless sign-blob
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+          merge-multiple: true
+      - name: Gather assets + checksums
+        run: |
+          set -euo pipefail
+          mkdir -p rel
+          find art -name '*.tar.gz' -exec cp {} rel/ \;
+          find art -name 'sbom.cdx.json' -exec cp {} rel/ \;
+          cd rel && sha256sum *.tar.gz sbom.cdx.json > checksums.sha256
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign archives + checksums (keyless)
+        working-directory: rel
+        run: |
+          set -euo pipefail
+          for f in *.tar.gz sbom.cdx.json checksums.sha256; do
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+          done
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" --generate-notes --repo "${GITHUB_REPOSITORY}" \
+            rel/*.tar.gz rel/checksums.sha256 rel/*.cosign.bundle rel/sbom.cdx.json

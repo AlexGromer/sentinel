@@ -111,7 +111,7 @@ Fixtures directory: `testdata/fixtures/l1..l5.html` — see `testdata/fixtures/R
 
 ## §3 M11.1 — GitHub Releases: multi-OS/arch binaries + Docker + signatures
 
-**Status:** not started. Prerequisites: Foundation CI gates (DONE).
+**Status:** implemented — `.github/workflows/release.yml` landed (M11.1); the E2E signed release (publish/sign) happens on the first maintainer `v*` tag, `workflow_dispatch` is a build/SBOM dry-run. Prerequisites: Foundation CI gates (DONE).
 
 ### What is delivered
 

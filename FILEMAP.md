@@ -72,6 +72,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | pw-executor/src/otel.ts | TS | M8 gated OTel tracer (NodeSDK + OTLP-grpc) + spanForTool (extracts W3C `_meta`); no-op without OTEL endpoint (ADR-021); **M9.5** `currentTraceparent()` (W3C for browser-request injection) |
 | tests/test_*_offline.py (m3/m4/m4b/m5/b1/m7/m8/m9/m9_2/m9_2b) | Python | offline suites: trust/heal, M4 generators, OTel, visual-heal, LLM backend, MCP sampling/server, budget+W3C+interceptor, **m9** fill/type/select/assert + secret-non-leak + determinism + heal-reuse, **m9_2** GoalPlanner grounding/routing/RunConfig, **m9_2b** site-map + two-phase scenario grounding/cross-page-navigate + describe reconcile + rich RunConfig (fake executor/backend/session) |
 | .github/workflows/ci.yml | CI | build (+`go vet`/`go test` + offline suite m3..m9_2b) → **security** (gitleaks/govulncheck/pip-audit/npm audit) → replay matrix → explore (manual) |
+| .github/workflows/release.yml | CI | **M11.1 / ADR-030** release pipeline (tag `v*` + `workflow_dispatch` dry-run): 5 Go-бинарей×5 платформ (25) `.tar.gz` + multi-arch Docker→GHCR + **Cosign-keyless** (image + sign-blob) + **syft** CycloneDX SBOM + `checksums.sha256` + `gh release create`. E2E = maintainer tag |
 | .github/workflows/pages.yml | CI | GitHub Pages deploy (actions/deploy-pages) from docs/ on push to main |
 | docker-compose.yml | Container | one-command quickstart: `sentinel` + `demo` (zero-dep fixture) + `ollama` (local model) + `litellm` (opt. model-router :4000, ADR-045) + `webui` (setup-WebUI/calculators :8088) + `control-api` (HTTP control-plane :8090) profiles |
 | Dockerfile | Container | multi-stage runtime image (Go bins + TS pw-executor + Playwright + Python brain); pip deps mirror pyproject (incl. `openai`+`pyyaml`) |
@@ -124,6 +125,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/M_STRUCTURED_OUT_CONTRACT.md / .en.md | Docs | **M-STRUCTURED-OUT / ADR-057** contract: layered structured output (native tool_use/json_schema + robust `extract_json` fallback) · 6 migrated `find('{')` sites (planner×4 · heal×2) · opt-in `LLM_STRUCTURED` · byte-identical prompts · grounding/`plan_hash`/budget preserved |
 | cmd/control-api/results_test.go | Go | **M15** results/metrics wiring: `persistResult`-on-finish round-trip (verdict-enum · coverage[plan.json] · duration · `labels_json` seam) + `/v1/results`·`/trends` HTTP (token-gated) + fail-open-no-store + `verdictEnum`/`durationMs` units; real store-gateway on a unix socket |
 | docs/M15_CONTRACT.md / .en.md | Docs | **M15 / ADR-051** contract: wire M13 `results`+`metrics` domains (control-API `persistResult`+`ingestMetrics` on finish) + `GET /v1/results`·`/results/{id}`·`/trends` + SPA native inline-SVG (bars+sparklines); token-cost($)→M15.1; `labels_json={mode,target}` = ADR-056 commercial-BI seam; all base/Apache |
+| .github/workflows/release.yml | Configuration | — |
 ## Directory Structure
 ```
 agent_development/
