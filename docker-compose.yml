@@ -27,7 +27,7 @@ x-sentinel-base: &sentinel-base
     # --- Local model via the optional `ollama` service (uncomment to enable) -------------------
     # LLM_BACKEND: openai
     # LLM_BASE_URL: http://ollama:11434/v1
-    # LLM_MODEL: ${LLM_MODEL:-}          # pick one from docs/LOCAL_MODELS.md §5c
+    # LLM_MODEL: ${LLM_MODEL:-}          # pick one from docs/LOCAL_MODELS.md §3
     # LLM_API_KEY: noauth                # Ollama ignores the key; the SDK requires a non-empty value
     # LLM_VISION: ${LLM_VISION:-0}       # set 1 only for a vision-capable heal model
     # --- or via the optional `litellm` multi-provider router (ADR-045; see docs/ADAPTERS.md) ----

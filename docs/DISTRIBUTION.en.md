@@ -76,7 +76,7 @@ ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 # Local model (activate by uncommenting):
 # LLM_BACKEND: openai
 # LLM_BASE_URL: http://ollama:11434/v1
-# LLM_MODEL: qwen2.5:7b           # from the docs/LOCAL_MODELS.md §5c catalog
+# LLM_MODEL: qwen2.5:7b           # from the docs/LOCAL_MODELS.md §3 catalog
 # LLM_API_KEY: noauth             # Ollama ignores the key; SDK requires a non-empty value
 # LLM_VISION: 0                   # 1 only for a vision-capable heal model
 ```
@@ -352,7 +352,7 @@ ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, exists from M5) — comme
 
 ## §6 M11.4 — Air-gapped bundle
 
-**Status:** not started. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
+**Status:** implemented — offline compose + verify/bundle scripts + CI `airgap` job (the core is verified on every push/PR). The full bundle E2E (real GHCR image + model + signatures) is assembled by the maintainer on the first `v*` tag, same as M11.1. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
 
 ### Goal
 
@@ -367,12 +367,21 @@ A complete package for installing Sentinel in a network without internet access:
 |---|---|---|
 | Docker image | OCI tar (`docker save`) | `ghcr.io/alexgromer/sentinel:<tag>` (linux/amd64 + linux/arm64) |
 | `agentctl` (native) | `.tar.gz` from M11.1 Release | GitHub Release |
-| Ollama + selected model | Ollama `ollama pull --model-dir` export | configurable from LOCAL_MODELS §5c catalog |
+| Ollama + selected model | pull on a connected machine → tar the `OLLAMA_MODELS` volume (or `ollama create` from a GGUF+Modelfile) | configurable from the LOCAL_MODELS §3 catalog |
 | Python wheels | pre-installed in image (uv.lock) | no PyPI at runtime |
 | pw-executor dist | included in image (dist/ at build) | no npm registry at runtime |
 | `docker-compose.offline.yml` | separate file | repository |
 | Documentation (GitHub Pages) | static HTML from docs/ | HTML copy (offline bundle) |
 | Checksums + Cosign bundle | `.sha256` + `cosign.bundle` | M11.1 |
+
+### What was implemented (M11.4)
+
+- `docker-compose.offline.yml` — `internal: true` network (zero egress), `pull_policy: never`, an offline anchor with no `build:`, `demo`=`network_mode: none`, an `ollama-models` volume with a pinned `name:`; the `ollama` profile (docs are browsed via a separate `http.server` container — an internal network can't publish ports).
+- `scripts/offline-verify.sh` — a single verifier: `--local` (build→save/load→`--network none` demo+docs+negative-DNS — the CI gate) and `--bundle <dir>` (checksums + `cosign verify-blob --bundle` offline + stack up + `/v1/models`).
+- `scripts/build-airgap-bundle.sh` — maintainer assembler (run on a connected machine): `gh release download`, **verify the GHCR image before `docker save`**, export the ollama model, self-signed `MANIFEST.sha256`.
+- CI `airgap` job + `tests/test_m11_4_offline.py`; fixed `.dockerignore` (`!docs/index.html`).
+
+**Important:** "zero external calls" refers to bundle CONSUMPTION. Building the bundle (`build-airgap-bundle.sh`) runs on a connected machine and pulls images/model/release — that's expected, same as the CI/release pipeline itself not being air-gapped. `docker save`/`load` does NOT carry the image's cosign signature, so the image is verified on the connected machine BEFORE saving, and bundle integrity rests on the cosign-signed `MANIFEST.sha256`.
 
 ### `docker-compose.offline.yml`
 
@@ -406,12 +415,14 @@ docker compose -f docker-compose.offline.yml --profile demo up
 
 ### Acceptance criteria M11.4
 
-- [ ] `docker compose -f docker-compose.offline.yml up` makes no external DNS requests (verified via tcpdump or network namespace isolation)
-- [ ] `demo` profile completes explore successfully offline (heuristic planner, LLM-free)
-- [ ] Ollama endpoint `http://ollama:11434/v1` responds to `/v1/models` without internet connectivity
-- [ ] All checksums verify offline (`sha256sum -c`)
-- [ ] Cosign bundle verifies without contacting Rekor (offline bundle mode)
-- [ ] Documentation (GitHub Pages static copy) is accessible without network
+| # | Criterion | Status |
+|---|---|---|
+| 2 | demo completes explore offline (heuristic, LLM-free) | ✅ **verified in CI** (`airgap` job) |
+| 6 | static docs copy is available offline | ✅ **verified in CI** (after the `.dockerignore` fix) |
+| 1 | `compose up` with no external DNS | ◐ **mechanism** — `internal:true` + a negative-DNS probe for sentinel/demo; the full stack — at the tag |
+| 5 | cosign bundle verifies without Rekor | ◐ **mechanism** — a live self-signed `--bundle` round-trip in CI; the real release identity — at the tag |
+| 3 | Ollama `/v1/models` responds offline | ☐ **open** — at the tag (requires a real model bundle) |
+| 4 | checksums verify offline (`sha256sum -c`) | ☐ **open** — the logic self-tests; real checksums — at the tag |
 
 ---
 

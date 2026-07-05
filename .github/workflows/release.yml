@@ -110,7 +110,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
       - name: Install cosign
         if: steps.meta.outputs.push == 'true'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.2   # v3 cannot install cosign v3.x (stale v2.x); v4 installs current cosign
       - name: Sign image (keyless)
         if: steps.meta.outputs.push == 'true'
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
@@ -150,7 +150,7 @@ jobs:
           find art -name '*.tar.gz' -exec cp {} rel/ \;
           find art -name 'sbom.cdx.json' -exec cp {} rel/ \;
           cd rel && sha256sum *.tar.gz sbom.cdx.json > checksums.sha256
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4.1.2   # v3 cannot install cosign v3.x (stale v2.x); v4 installs current cosign
       - name: Sign archives + checksums (keyless)
         working-directory: rel
         run: |
