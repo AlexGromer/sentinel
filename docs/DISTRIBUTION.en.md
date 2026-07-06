@@ -456,8 +456,8 @@ curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh
 **2. setup-WebUI → a stepped wizard** (rewrites `docs/setup/index.html`, ADR-031→ADR-059)
 - Steps: **Runtime → Model&Auth → Run params → Review** (reuses the `.tabbar`/`.subtabbar` pattern from `docs/index.html`).
 - **A runtime dropdown of presets** (see the table below) → conditional per-backend fields (base_url/model/api_key). NB: the runtime choice ≠ the RunConfig `mode` (explore/goal/describe), which lives in the Run-params step.
-- **Schema-driven**: the form renders from `GET /v1/config-schema` (extended with LLM-backend fields) — a single
-  source of truth, `brain/runconfig.py`, with no hardcoded drift.
+- **Schema-driven**: the form renders from `GET /v1/config-schema` (extended with LLM-backend fields) — the single
+  source of truth: `brain/runconfig.py` for RunConfig fields, `brain/llm.py` `make_backend` for the LLM-backend fields (ADR-060), with no hardcoded drift.
 - **Validation**: required fields (target), budget ranges, error highlighting, re-ask on a problem.
 - **Draft persistence**: a configuration draft + the control-API URL in `localStorage` (the token is NEVER stored); on
   relaunch — prefill and re-validation (the re-run state machine). Bilingual (`data-lang`), air-gapped (no CDN).
@@ -496,7 +496,7 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 
 - [ ] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
 - [x] **PR-2 (this PR):** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container (fake release + tamper negative). *(full E2E = maintainer `v*` tag, as with M11.1)*
-- [ ] **PR-3:** `/v1/config-schema` covers the LLM-backend surface; `backend-presets.json` parses and matches `runconfig.py`.
+- [x] **PR-3 (this PR):** `/v1/config-schema` covers the LLM-backend surface (`backends`/`roles`/`llm` descriptors from `brain/llm.py`; `api_key`=secret-with-no-value); `backend-presets.json` (9 presets) parses and every `backend` ⊆ the schema enum (gate `TestBackendPresetsParseAndMatchSchema`). *(env source of truth = `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig core, no LLM_* there)*
 - [ ] **PR-4:** the wizard is stepped, schema-driven, validates input, persists a draft, is bilingual, air-gapped (`node --check`, `file://`).
 - [ ] **PR-5:** the `config` domain lands in the store-gateway; `/readyz` → `503` until dependencies are ready, `200` once ready.
 - [ ] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`.

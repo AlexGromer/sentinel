@@ -457,7 +457,7 @@ curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh
 - Шаги: **Runtime → Model&Auth → Run-params → Review** (переиспользует `.tabbar`/`.subtabbar`-паттерн `docs/index.html`).
 - **Runtime-дропдаун пресетов** (см. таблицу ниже) → условные поля per-backend (base_url/model/api_key). NB: выбор рантайма ≠ RunConfig-`mode` (explore/goal/describe), который живёт в шаге Run-params.
 - **Schema-driven**: форма рендерится из `GET /v1/config-schema` (расширенного LLM-backend-полями) — единый источник
-  правды `brain/runconfig.py`, без хардкод-дрейфа.
+  правды: `brain/runconfig.py` для RunConfig-полей, `brain/llm.py` `make_backend` для LLM-backend-полей (ADR-060), без хардкод-дрейфа.
 - **Валидация**: обязательные поля (target), диапазоны бюджетов, подсветка ошибок, re-ask при проблеме.
 - **Draft-persist**: черновик конфигурации + control-API URL в `localStorage` (токен — НИКОГДА не хранится); на
   relaunch — предзаполнение и ре-валидация (re-run state-machine). Двуязычие (`data-lang`), air-gapped (no-CDN).
@@ -496,7 +496,7 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 
 - [ ] **PR-1 (этот freeze):** ADR-059 + переписанный §7 + bilingual-parity. *(docs, проверяемо сейчас)*
 - [x] **PR-2 (этот PR):** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере (fake-release + tamper-negative). *(полный E2E = maintainer `v*`-tag, как M11.1)*
-- [ ] **PR-3:** `/v1/config-schema` покрывает LLM-backend-поверхность; `backend-presets.json` парсится и совпадает с `runconfig.py`.
+- [x] **PR-3 (этот PR):** `/v1/config-schema` покрывает LLM-backend-поверхность (`backends`/`roles`/`llm`-дескрипторы из `brain/llm.py`; `api_key`=secret-без-значения); `backend-presets.json` (9 пресетов) парсится и каждый `backend` ⊆ enum схемы (гейт `TestBackendPresetsParseAndMatchSchema`). *(env-истина — `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig-ядро, LLM_* там нет)*
 - [ ] **PR-4:** wizard пошаговый, schema-driven, валидирует ввод, персистит черновик, двуязычный, air-gapped (`node --check`, `file://`).
 - [ ] **PR-5:** `config`-домен в store-gateway; `/readyz` → `503` до готовности зависимостей, `200` когда готов.
 - [ ] Новый пользователь с Docker завершает первый explore за ≤ 10 минут по `docs/QUICKSTART.md`.

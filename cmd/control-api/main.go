@@ -245,12 +245,18 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": version, "runs": n})
 }
 
-// configSchema mirrors the RunConfig surface (brain/runconfig.py + agentctl flags) so the WebUI can
-// render the form from one source of truth. Keys/defaults match the loader.
+// configSchema mirrors the RunConfig surface (brain/runconfig.py + agentctl flags) plus the
+// LLM-backend surface (brain/llm.py make_backend) so the WebUI can render the whole form from one
+// source of truth. Keys/defaults match the loaders. Secrets are DESCRIBED (api_key.secret) but never
+// VALUED — actual keys live in the control-api process env, never in this payload (M11.5 PR-3, ADR-060).
 func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
+	// single source for the backend enum so the top-level list and llm.backend.enum can't drift apart
+	backends := []string{"anthropic", "openai", "sampling"} // mirrors brain/llm.py make_backend; "sampling" = MCP host-supplied (mcp-server mode), not a wizard preset
 	writeJSON(w, http.StatusOK, map[string]any{
-		"modes":   []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
-		"planner": []string{"heuristic", "llm", "goal"},
+		"modes":    []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
+		"planner":  []string{"heuristic", "llm", "goal"},
+		"backends": backends,
+		"roles":    []string{"planner", "heal"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
 		"fields": map[string]any{
 			"target":          map[string]any{"type": "string", "required": true},
 			"goal":            map[string]any{"type": "string"},
@@ -261,6 +267,17 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			"plan_budget":     map[string]any{"type": "int", "default": 50000},
 			"heal_budget":     map[string]any{"type": "int", "default": 20000},
 			"total_budget":    map[string]any{"type": "int", "default": 0},
+		},
+		// M11.5 PR-3 (ADR-060): LLM-backend descriptors from brain/llm.py make_backend. Descriptors ONLY —
+		// api_key is flagged secret and NEVER valued here. role_split: field also honours LLM_<KEY>_PLANNER/_HEAL.
+		// vision/structured default false for every openai backend (opt-in LLM_VISION=1/LLM_STRUCTURED=1); anthropic is natively both.
+		"llm": map[string]any{
+			"backend":    map[string]any{"env": "LLM_BACKEND", "type": "enum", "enum": backends, "default": "anthropic", "role_split": true},
+			"model":      map[string]any{"env": "LLM_MODEL", "type": "string", "role_split": true, "note": "required for backend=openai; anthropic defaults planner=claude-opus-4-8 / heal=claude-sonnet-4-6"},
+			"base_url":   map[string]any{"env": "LLM_BASE_URL", "type": "string", "role_split": true, "note": "OpenAI-compatible /v1 endpoint; see docs/backend-presets.json"},
+			"api_key":    map[string]any{"env": "LLM_API_KEY", "type": "string", "secret": true, "role_split": true, "note": "never returned in this payload; anthropic->ANTHROPIC_API_KEY, openai->OPENAI_API_KEY"},
+			"vision":     map[string]any{"env": "LLM_VISION", "type": "bool", "default": false, "role_split": true, "note": "opt-in ('1'); openai backends default off (many are text-only, e.g. DeepSeek); anthropic always vision-capable"},
+			"structured": map[string]any{"env": "LLM_STRUCTURED", "type": "bool", "default": false, "role_split": true, "note": "opt-in ('1'); openai backends default off (many local endpoints reject json_schema); anthropic always structured"},
 		},
 		"note": "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
 	})
@@ -469,8 +486,8 @@ type resultArtifact struct {
 	Failed      int64             `json:"failed"`
 	Steps       []json.RawMessage `json:"steps"`
 	Regressions []json.RawMessage `json:"regressions"`
-	Tokens      *tokensBlock      `json:"tokens"`  // M15.1
-	Models      map[string]string `json:"models"`  // M15.1: {heal: <model id>}
+	Tokens      *tokensBlock      `json:"tokens"` // M15.1
+	Models      map[string]string `json:"models"` // M15.1: {heal: <model id>}
 }
 
 // planCoverage mirrors the plan.json coverage field written by the explore report node (brain/graph.py).
