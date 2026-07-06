@@ -428,53 +428,78 @@ docker compose -f docker-compose.offline.yml --profile demo up
 
 ## §7 M11.5 — Zero-level onboarding
 
-**Статус:** не начат. Зависит от: M11.1 + M11.2 + M11.4.
+**Статус:** docs-first freeze (ADR-059). Расширен сверх исходного тонкого спека до **guided onboarding** —
+управляемой state-machine. Реализуется 5 последовательными PR: docs (этот freeze) → installer → config-schema+пресеты
+→ wizard → config-домен+`/readyz`. Зависит от: M11.1 (Release-ассеты) + M11.2 (setup-WebUI) + M11.4 (offline-путь).
 
 ### Целевой пользователь
 
-QA или devops-инженер, у которого есть Docker, но нет Go/Python/Node build toolchain. Цель: от нуля до первого успешного explore-прогона за ≤ 10 минут.
+QA или devops-инженер, у которого есть Docker, но нет Go/Python/Node build toolchain. Цель: от нуля до первого
+успешного explore-прогона за ≤ 10 минут, **без ручного редактирования YAML** и без чтения полной документации.
 
-### Компоненты
+### Видение: онбординг = управляемая state-machine (ADR-059)
 
-**1. `install.sh` — single-command installer**
+Не плоская форма + «подложи YAML руками», а пошаговый мастер, который знает про режимы работы и сам собирает
+корректную конфигурацию, персистит её и переиспользует при повторном запуске.
 
+**1. `install.sh` — single-command installer** (POSIX `sh`)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexgromer/sentinel/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
+- `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}` (Windows — через Docker/WSL, не через этот installer);
+- резолвит последний GitHub Release, качает `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
+- **`sha256sum -c`** (ненулевой код при несовпадении) → **`cosign verify-blob`** с **pinned identity** (тот же
+  regex/issuer, что `scripts/offline-verify.sh`; если `cosign` нет — громкое предупреждение, не жёсткий фейл);
+- кладёт `agentctl` в `~/.local/bin` (default, **без root**) или `/usr/local/bin` (opt-in); проверяет `$PATH`;
+- post-install `agentctl --version` (sanity) + указатель на setup-WebUI и `docs/QUICKSTART.md`; опц. качает `docker-compose.yml`.
 
-Что делает:
-- определяет платформу (uname -m / os)
-- скачивает нужный бинарник `agentctl` из последнего GitHub Release
-- верифицирует checksum (`sha256sum -c`)
-- верифицирует Cosign подпись (если cosign установлен; предупреждение если нет)
-- кладёт бинарник в `~/.local/bin/agentctl` или `/usr/local/bin/agentctl`
-- опционально скачивает `docker-compose.yml` в текущую директорию
+**2. setup-WebUI → пошаговый wizard** (переписывает `docs/setup/index.html`, ADR-031→ADR-059)
+- Шаги: **Runtime → Model&Auth → Run-params → Review** (переиспользует `.tabbar`/`.subtabbar`-паттерн `docs/index.html`).
+- **Runtime-дропдаун пресетов** (см. таблицу ниже) → условные поля per-backend (base_url/model/api_key). NB: выбор рантайма ≠ RunConfig-`mode` (explore/goal/describe), который живёт в шаге Run-params.
+- **Schema-driven**: форма рендерится из `GET /v1/config-schema` (расширенного LLM-backend-полями) — единый источник
+  правды `brain/runconfig.py`, без хардкод-дрейфа.
+- **Валидация**: обязательные поля (target), диапазоны бюджетов, подсветка ошибок, re-ask при проблеме.
+- **Draft-persist**: черновик конфигурации + control-API URL в `localStorage` (токен — НИКОГДА не хранится); на
+  relaunch — предзаполнение и ре-валидация (re-run state-machine). Двуязычие (`data-lang`), air-gapped (no-CDN).
 
-**2. `docs/QUICKSTART.md` — step-by-step guide**
+**3. Пресеты рантаймов (open-core, config-only seam ADR-019).** Все — `LLM_BACKEND=openai` + разный `LLM_BASE_URL`/`LLM_MODEL`
+(машиночитаемо → `docs/backend-presets.json`; источник — `docs/LOCAL_MODELS.md`):
 
-Структура (целевой объём: ≤ 2 страницы):
-1. Предварительные требования (Docker ≥ 24)
-2. Установка (`curl | sh`)
-3. Генерация конфигурации (ссылка на setup-WebUI M11.2)
-4. Первый запуск: `docker compose run --rm sentinel run --target <URL>`
-5. Интерпретация результата: `runs/<id>/plan.json` + exit codes
-6. Следующий шаг: `docs/TESTING.md` для полного руководства
+| Пресет | `LLM_BACKEND` | `LLM_BASE_URL` (default) | Заметка |
+|---|---|---|---|
+| Cloud — Anthropic | `anthropic` | — (native) | `ANTHROPIC_API_KEY` |
+| Cloud — OpenAI-совместимый (OpenAI/DeepSeek/OpenRouter) | `openai` | провайдерский `/v1` | реальный API-ключ |
+| Ollama | `openai` | `http://ollama:11434/v1` | ключ игнорируется, SDK требует непустой (`noauth`) |
+| vLLM | `openai` | `http://vllm:8000/v1` | GPU/throughput |
+| llama.cpp / llamafile | `openai` | `http://host:8080/v1` | edge/минимум зависимостей |
+| LM Studio | `openai` | `http://host:1234/v1` | dev-воркстейшн |
+| LocalAI | `openai` | `http://localai:8080/v1` | мульти-бэкенд |
+| LiteLLM (роутер) | `openai` | `http://litellm:4000/v1` | роутер многих провайдеров (ADR-045; образ в `deploy/litellm`) |
+| HuggingFace TGI | `openai` | `http://host:<PORT>/v1` | порт задаёт оператор (нет дефолта) |
 
-**3. Интеграция с setup-WebUI (M11.2)**
+**4. Tiered config-персистенция** (профиль = топология, ADR-049):
+- **standalone**: конфиг = файл (RunConfig YAML / `.env`), идемпотентно перечитывается (`brain/runconfig.py` — уже готов, не менять);
+- **service**: новый `config`-домен store-gateway (по паттерну ADR-050) — control-API читает конфиг на старте / пишет из wizard.
 
-QUICKSTART ссылается на setup-WebUI для генерации RunConfig YAML без ручного редактирования.
+**5. `/readyz`** (поверх существующего `/healthz`-liveness): проверяет реальные зависимости — доступность
+store-gateway-сокета · LLM-эндпоинт (`/v1/models`) · наличие конфига → `503` пока не готов, `200` когда готов (k8s-shaped).
 
-**4. Offline-путь (M11.4)**
+**6. `docs/QUICKSTART.md`** (≤ 2 страницы): prereqs (Docker ≥ 24) → install (`curl|sh`) → конфигурация (setup-WebUI) →
+первый запуск → интерпретация `runs/<id>/plan.json` + exit-codes → offline-путь (M11.4) → полное руководство `docs/TESTING.md`.
 
-QUICKSTART содержит раздел «Установка без доступа к интернету»: скачать bundle, `docker load`, `docker compose -f docker-compose.offline.yml`.
+### Граница open-core / enterprise (ADR-056)
 
-### Критерии приёмки M11.5
+Wizard + **все** пресеты рантаймов + file/DB-config + health-пробы = **open-core** (open-core обязан быть полезным,
+не crippleware). Enterprise = managed/EMS-provisioning · license-issuing · multi-tenancy · SSO/RBAC/Vault · advanced-BI.
 
-- [ ] Новый пользователь с Docker завершает первый explore за ≤ 10 минут, следуя `docs/QUICKSTART.md`
-- [ ] `install.sh` верифицирует checksum перед установкой; завершается с ненулевым кодом при несовпадении
-- [ ] Все шаги QUICKSTART.md воспроизводятся в чистом Docker окружении (проверяется в GitHub Actions)
-- [ ] Offline-путь описан и верифицируется (зависит от M11.4)
-- [ ] `install.sh` не требует root при установке в `~/.local/bin`
+### Критерии приёмки M11.5 (honest, по PR)
+
+- [ ] **PR-1 (этот freeze):** ADR-059 + переписанный §7 + bilingual-parity. *(docs, проверяемо сейчас)*
+- [ ] **PR-2:** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере. *(полный E2E = maintainer `v*`-tag, как M11.1)*
+- [ ] **PR-3:** `/v1/config-schema` покрывает LLM-backend-поверхность; `backend-presets.json` парсится и совпадает с `runconfig.py`.
+- [ ] **PR-4:** wizard пошаговый, schema-driven, валидирует ввод, персистит черновик, двуязычный, air-gapped (`node --check`, `file://`).
+- [ ] **PR-5:** `config`-домен в store-gateway; `/readyz` → `503` до готовности зависимостей, `200` когда готов.
+- [ ] Новый пользователь с Docker завершает первый explore за ≤ 10 минут по `docs/QUICKSTART.md`.
 
 ---
 

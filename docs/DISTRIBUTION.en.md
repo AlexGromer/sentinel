@@ -428,53 +428,78 @@ docker compose -f docker-compose.offline.yml --profile demo up
 
 ## §7 M11.5 — Zero-level onboarding
 
-**Status:** not started. Depends on: M11.1 + M11.2 + M11.4.
+**Status:** docs-first freeze (ADR-059). Expanded beyond the original thin spec into **guided onboarding** — a
+guided state machine. Delivered across 5 sequential PRs: docs (this freeze) → installer → config-schema+presets
+→ wizard → config-domain+`/readyz`. Depends on: M11.1 (release assets) + M11.2 (setup-WebUI) + M11.4 (the offline path).
 
 ### Target user
 
-A QA or DevOps engineer who has Docker but no Go/Python/Node build toolchain. Goal: from zero to a first successful explore run in ≤ 10 minutes.
+A QA or DevOps engineer who has Docker but no Go/Python/Node build toolchain. Goal: from zero to a first
+successful explore run in ≤ 10 minutes, **with no manual YAML editing** and no need to read the full documentation.
 
-### Components
+### Vision: onboarding as a guided state machine (ADR-059)
 
-**1. `install.sh` — single-command installer**
+Not a flat form plus "drop in a YAML file by hand", but a stepped wizard that understands the runtime modes,
+assembles a correct configuration itself, persists it, and reuses it on the next launch.
 
+**1. `install.sh` — single-command installer** (POSIX `sh`)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexgromer/sentinel/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
+- `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}` (Windows goes through Docker/WSL, not through this installer);
+- resolves the latest GitHub Release, downloads `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
+- **`sha256sum -c`** (non-zero exit on mismatch) → **`cosign verify-blob`** with a **pinned identity** (the same
+  regex/issuer as `scripts/offline-verify.sh`; if `cosign` is missing — a loud warning, not a hard failure);
+- installs `agentctl` into `~/.local/bin` (default, **no root**) or `/usr/local/bin` (opt-in); checks `$PATH`;
+- post-install `agentctl --version` (sanity check) + a pointer to setup-WebUI and `docs/QUICKSTART.md`; optionally downloads `docker-compose.yml`.
 
-What it does:
-- detects platform (uname -m / os)
-- downloads the appropriate `agentctl` binary from the latest GitHub Release
-- verifies checksum (`sha256sum -c`)
-- verifies Cosign signature (if cosign is installed; warns if not)
-- places the binary in `~/.local/bin/agentctl` or `/usr/local/bin/agentctl`
-- optionally downloads `docker-compose.yml` to the current directory
+**2. setup-WebUI → a stepped wizard** (rewrites `docs/setup/index.html`, ADR-031→ADR-059)
+- Steps: **Runtime → Model&Auth → Run params → Review** (reuses the `.tabbar`/`.subtabbar` pattern from `docs/index.html`).
+- **A runtime dropdown of presets** (see the table below) → conditional per-backend fields (base_url/model/api_key). NB: the runtime choice ≠ the RunConfig `mode` (explore/goal/describe), which lives in the Run-params step.
+- **Schema-driven**: the form renders from `GET /v1/config-schema` (extended with LLM-backend fields) — a single
+  source of truth, `brain/runconfig.py`, with no hardcoded drift.
+- **Validation**: required fields (target), budget ranges, error highlighting, re-ask on a problem.
+- **Draft persistence**: a configuration draft + the control-API URL in `localStorage` (the token is NEVER stored); on
+  relaunch — prefill and re-validation (the re-run state machine). Bilingual (`data-lang`), air-gapped (no CDN).
 
-**2. `docs/QUICKSTART.md` — step-by-step guide**
+**3. Runtime presets (open-core, the config-only seam of ADR-019).** All of them are `LLM_BACKEND=openai` + a different
+`LLM_BASE_URL`/`LLM_MODEL` (machine-readable → `docs/backend-presets.json`; source of truth — `docs/LOCAL_MODELS.md`):
 
-Structure (target length: ≤ 2 pages):
-1. Prerequisites (Docker ≥ 24)
-2. Installation (`curl | sh`)
-3. Configuration generation (link to setup-WebUI M11.2)
-4. First run: `docker compose run --rm sentinel run --target <URL>`
-5. Interpreting results: `runs/<id>/plan.json` + exit codes
-6. Next step: `docs/TESTING.md` for the full guide
+| Preset | `LLM_BACKEND` | `LLM_BASE_URL` (default) | Note |
+|---|---|---|---|
+| Cloud — Anthropic | `anthropic` | — (native) | `ANTHROPIC_API_KEY` |
+| Cloud — OpenAI-compatible (OpenAI/DeepSeek/OpenRouter) | `openai` | the provider's `/v1` | a real API key |
+| Ollama | `openai` | `http://ollama:11434/v1` | the key is ignored, the SDK requires a non-empty value (`noauth`) |
+| vLLM | `openai` | `http://vllm:8000/v1` | GPU/throughput |
+| llama.cpp / llamafile | `openai` | `http://host:8080/v1` | edge/minimal dependencies |
+| LM Studio | `openai` | `http://host:1234/v1` | dev workstation |
+| LocalAI | `openai` | `http://localai:8080/v1` | multi-backend |
+| LiteLLM (router) | `openai` | `http://litellm:4000/v1` | multi-provider router (ADR-045; image in `deploy/litellm`) |
+| HuggingFace TGI | `openai` | `http://host:<PORT>/v1` | the operator sets the port (no default) |
 
-**3. Integration with setup-WebUI (M11.2)**
+**4. Tiered config persistence** (profile = topology, ADR-049):
+- **standalone**: the config is a file (RunConfig YAML / `.env`), read back idempotently (`brain/runconfig.py` — already in place, unchanged);
+- **service**: a new `config` domain in the store-gateway (following the ADR-050 pattern) — control-API reads the config at startup / writes it from the wizard.
 
-QUICKSTART links to setup-WebUI for generating RunConfig YAML without manual editing.
+**5. `/readyz`** (on top of the existing `/healthz` liveness probe): checks real dependencies — the store-gateway
+socket reachable · the LLM endpoint (`/v1/models`) · a config present → `503` while not ready, `200` once ready (k8s-shaped).
 
-**4. Offline path (M11.4)**
+**6. `docs/QUICKSTART.md`** (≤ 2 pages): prerequisites (Docker ≥ 24) → install (`curl|sh`) → configuration (setup-WebUI) →
+the first run → interpreting `runs/<id>/plan.json` + exit codes → the offline path (M11.4) → the full guide, `docs/TESTING.md`.
 
-QUICKSTART includes an "Installation without internet access" section: download bundle, `docker load`, `docker compose -f docker-compose.offline.yml`.
+### Open-core / enterprise boundary (ADR-056)
 
-### Acceptance criteria M11.5
+The wizard + **all** runtime presets + file/DB config + health probes = **open-core** (open-core must be useful,
+not crippleware). Enterprise = managed/EMS provisioning · license issuing · multi-tenancy · SSO/RBAC/Vault · advanced BI.
 
-- [ ] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`
-- [ ] `install.sh` verifies the checksum before installation; exits with a non-zero code on mismatch
-- [ ] All QUICKSTART.md steps are reproducible in a clean Docker environment (verified in GitHub Actions)
-- [ ] Offline path is documented and verified (depends on M11.4)
-- [ ] `install.sh` does not require root when installing to `~/.local/bin`
+### Acceptance criteria M11.5 (honest, per PR)
+
+- [ ] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
+- [ ] **PR-2:** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container. *(full E2E = maintainer `v*` tag, as with M11.1)*
+- [ ] **PR-3:** `/v1/config-schema` covers the LLM-backend surface; `backend-presets.json` parses and matches `runconfig.py`.
+- [ ] **PR-4:** the wizard is stepped, schema-driven, validates input, persists a draft, is bilingual, air-gapped (`node --check`, `file://`).
+- [ ] **PR-5:** the `config` domain lands in the store-gateway; `/readyz` → `503` until dependencies are ready, `200` once ready.
+- [ ] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`.
 
 ---
 
