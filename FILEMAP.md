@@ -130,6 +130,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | scripts/offline-verify.sh | Shell script | single-source offline verifier (M11.4): --local (build→save/load→--network none demo+docs+negative-DNS — CI airgap-job) / --bundle <dir> (checksums + cosign verify-blob --bundle offline + stack up + /v1/models) |
 | scripts/build-airgap-bundle.sh | Shell script | maintainer air-gapped bundle assembler (M11.4, tag-gated): gh release download + verify-before-save GHCR image + docker save + ollama model export + self-signed MANIFEST.sha256 |
 | tests/test_m11_4_offline.py | Python | M11.4 offline structural test (ci.yml build offline-loop): asserts docker-compose.offline.yml invariants (no build:, internal:true, pull_policy:never, network_mode:none, pinned ollama tag) + scripts executable + .dockerignore hub-page fix |
+| install.sh | Shell script | M11.5 single-command installer (POSIX sh): uname→latest Release→download+`sha256sum -c` (hard fail)+cosign `verify-blob` pinned-identity→`agentctl` into `~/.local/bin` (no root); `SENTINEL_*` env overrides drive the ci.yml install-smoke against a local fake release |
+| docs/QUICKSTART.md | Documentation | M11.5 zero-level onboarding guide (≤2 pp): requirements → `curl\|sh` install → configure (setup-WebUI) → first run → interpret plan.json+exit-codes → offline path (§6) |
+| docs/QUICKSTART.en.md | Documentation | EN mirror of docs/QUICKSTART.md |
 ## Directory Structure
 ```
 agent_development/

@@ -372,3 +372,45 @@ jobs:
           cosign verify-blob /tmp/probe.txt --bundle /tmp/probe.cosign.bundle \
             --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/ci.yml@.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+  # ---------------------------------------------------------------------------
+  # install-smoke: M11.5 — exercises install.sh end-to-end against a LOCALLY-built fake release
+  # (build agentctl -> package tar + checksums -> serve over http -> run install.sh -> assert the
+  # binary + --version; then a tampered checksum must fail non-zero). No real Release needed — the
+  # real signed-release install E2E is maintainer-gated on the first v* tag (like M11.1). cosign is
+  # not installed here, so install.sh takes its documented warn-and-continue path (cosign verify is
+  # tag-time). No needs: (independent of the build artifact).
+  # ---------------------------------------------------------------------------
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26 (build the fake-release agentctl)
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: shellcheck install.sh
+        run: shellcheck install.sh
+      - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"; tag=v0.0.0-citest; out="sentinel-$tag-linux-amd64"
+          mkdir -p "$stage/$tag/$out"
+          go build -ldflags "-X main.version=$tag" -o "$stage/$tag/$out/agentctl" ./cmd/agentctl
+          cp LICENSE "$stage/$tag/$out/" 2>/dev/null || true
+          tar -C "$stage/$tag" -czf "$stage/$tag/$out.tar.gz" "$out"
+          ( cd "$stage/$tag" && rm -rf "$out" && sha256sum "$out.tar.gz" > checksums.sha256 )
+          ( cd "$stage" && python3 -m http.server 8099 >/dev/null 2>&1 & echo $! > "$stage/srv.pid" )
+          sleep 1
+          # positive: download -> checksum -> install -> --version
+          SENTINEL_VERSION="$tag" SENTINEL_BASE_URL="http://localhost:8099" SENTINEL_BIN_DIR="$stage/bin" sh install.sh
+          test -x "$stage/bin/agentctl"
+          [ "$("$stage/bin/agentctl" --version)" = "$tag" ] || { echo "::error::agentctl --version mismatch"; exit 1; }
+          # negative: a tampered checksum MUST make install.sh exit non-zero (acceptance criterion)
+          printf '%064d  %s\n' 0 "$out.tar.gz" > "$stage/$tag/checksums.sha256"
+          if SENTINEL_VERSION="$tag" SENTINEL_BASE_URL="http://localhost:8099" SENTINEL_BIN_DIR="$stage/bin2" sh install.sh >/dev/null 2>&1; then
+            kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
+            echo "::error::install.sh accepted a tampered checksum"; exit 1
+          fi
+          kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
+          echo "install-smoke: OK (positive install + tampered-checksum rejection)"

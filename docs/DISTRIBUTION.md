@@ -495,7 +495,7 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 ### Критерии приёмки M11.5 (honest, по PR)
 
 - [ ] **PR-1 (этот freeze):** ADR-059 + переписанный §7 + bilingual-parity. *(docs, проверяемо сейчас)*
-- [ ] **PR-2:** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере. *(полный E2E = maintainer `v*`-tag, как M11.1)*
+- [x] **PR-2 (этот PR):** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере (fake-release + tamper-negative). *(полный E2E = maintainer `v*`-tag, как M11.1)*
 - [ ] **PR-3:** `/v1/config-schema` покрывает LLM-backend-поверхность; `backend-presets.json` парсится и совпадает с `runconfig.py`.
 - [ ] **PR-4:** wizard пошаговый, schema-driven, валидирует ввод, персистит черновик, двуязычный, air-gapped (`node --check`, `file://`).
 - [ ] **PR-5:** `config`-домен в store-gateway; `/readyz` → `503` до готовности зависимостей, `200` когда готов.
