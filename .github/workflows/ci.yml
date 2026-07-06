@@ -468,3 +468,32 @@ jobs:
           } finally {
             Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
           }
+
+  # ---------------------------------------------------------------------------
+  # lint: ADVISORY (M11-DIST PR-B, from the 2026-07-06 CI audit) — golangci-lint (Go) + ruff (Python
+  # brain/tests). NON-BLOCKING by design: these run on an existing codebase and surface findings as
+  # annotations without reddening the PR (job `continue-on-error` + golangci `--issues-exit-code=0` +
+  # ruff `|| true`). Making them blocking is a follow-up after a cleanup pass. If a golangci-lint
+  # release lags the repo's Go toolchain, this job is advisory-only — that's acceptable here.
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      # golangci-lint's latest release (v1.64.x) is still built with an older Go and REFUSES to lint a
+      # go1.26 target ("Go version go1.24 ... lower than 1.26", exit 3). Wired here for when golangci
+      # ships a go1.26 build; step-level continue-on-error keeps the job GREEN and lets ruff still run.
+      - name: golangci-lint (advisory)
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --issues-exit-code=0
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: ruff (advisory — brain + tests)
+        run: uvx ruff check brain/ tests/ || true
