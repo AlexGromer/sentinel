@@ -50,14 +50,13 @@ docker compose --profile webui up           # → http://localhost:8088/setup/
 
 ## 5. Опционально: нативный CLI `agentctl`
 
-Для управления из командной строки (без полного прогона — прогон всё равно через Docker-образ):
+Для управления из командной строки (без полного прогона — прогон всё равно через Docker-образ). Установщик
+проверяет **checksum** (жёсткий отказ при несовпадении) + **Cosign-подпись** (если `cosign` установлен) и кладёт
+бинарь в пользовательский каталог (**без root/admin**). Проверка: `agentctl version`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
-```
-
-Установщик проверяет **checksum** (жёсткий отказ при несовпадении) + **Cosign-подпись** (если `cosign` установлен) и
-кладёт `agentctl` в `~/.local/bin` (**без root**). Проверка: `agentctl version`.
+- **Linux / macOS:** `curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh` → `~/.local/bin`
+- **Windows (PowerShell):** `iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex` → `%LOCALAPPDATA%\Programs\sentinel`
+- **macOS (Homebrew):** `brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel && brew install sentinel` *(работает после первого подписанного релиза)*
 
 ## 6. Установка без доступа к интернету (air-gapped)
 

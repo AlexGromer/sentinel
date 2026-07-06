@@ -50,14 +50,13 @@ Artifacts land in `runs/<id>/`: `plan.json` (the frozen plan), `transcript`, `he
 
 ## 5. Optional: the native `agentctl` CLI
 
-For command-line control (not a full run — a run still goes through the Docker image):
+For command-line control (not a full run — a run still goes through the Docker image). The installer verifies the
+**checksum** (hard fail on mismatch) + the **Cosign signature** (if `cosign` is installed) and places the binary in a
+user directory (**no root/admin**). Check with `agentctl version`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
-```
-
-The installer verifies the **checksum** (hard fail on mismatch) + the **Cosign signature** (if `cosign` is installed) and
-places `agentctl` in `~/.local/bin` (**no root**). Check with `agentctl version`.
+- **Linux / macOS:** `curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh` → `~/.local/bin`
+- **Windows (PowerShell):** `iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex` → `%LOCALAPPDATA%\Programs\sentinel`
+- **macOS (Homebrew):** `brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel && brew install sentinel` *(works after the first signed release)*
 
 ## 6. Install with no internet access (air-gapped)
 

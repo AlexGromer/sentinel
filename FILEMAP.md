@@ -133,6 +133,9 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | install.sh | Shell script | M11.5 single-command installer (POSIX sh): uname→latest Release→download+`sha256sum -c` (hard fail)+cosign `verify-blob` pinned-identity→`agentctl` into `~/.local/bin` (no root); `SENTINEL_*` env overrides drive the ci.yml install-smoke against a local fake release |
 | docs/QUICKSTART.md | Documentation | M11.5 zero-level onboarding guide (≤2 pp): requirements → `curl\|sh` install → configure (setup-WebUI) → first run → interpret plan.json+exit-codes → offline path (§6) |
 | docs/QUICKSTART.en.md | Documentation | EN mirror of docs/QUICKSTART.md |
+| install.ps1 | PowerShell | M11-DIST Windows installer (peer of install.sh): PROCESSOR_ARCHITECTURE→latest Release→`Get-FileHash` checksum (hard fail)+cosign `verify-blob`→`agentctl.exe` into `%LOCALAPPDATA%\Programs\sentinel` (no admin); `SENTINEL_*` overrides drive the ci.yml install-ps1-smoke (windows-latest) |
+| Formula/sentinel.rb | Ruby (Homebrew) | M11-DIST Homebrew formula — repo doubles as its own tap (`brew tap AlexGromer/sentinel <repo>`); placeholder (v0.0.0/zero-sha) auto-bumped by release.yml `homebrew` job on each v* tag (tag-gated) |
+| scripts/gen-brew-formula.sh | Shell script | M11-DIST — regenerates Formula/sentinel.rb from `<vTAG> <amd64-sha> <arm64-sha>`; called by release.yml `homebrew` job (heredoc in a file → no YAML-indent pain) |
 ## Directory Structure
 ```
 agent_development/

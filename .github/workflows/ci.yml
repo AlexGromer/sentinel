@@ -389,8 +389,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.26'
-      - name: shellcheck install.sh
-        run: shellcheck install.sh
+      - name: shellcheck all shell scripts
+        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh
       - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
         run: |
           set -euo pipefail
@@ -414,3 +414,57 @@ jobs:
           fi
           kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
           echo "install-smoke: OK (positive install + tampered-checksum rejection)"
+
+  # ---------------------------------------------------------------------------
+  # install-ps1-smoke: M11-DIST — the Windows peer of install-smoke. Cross-builds agentctl.exe,
+  # packages a fake windows release, serves it, runs install.ps1 (positive) + a tampered-checksum
+  # negative (must exit non-zero). windows-latest has go/python/tar.exe/pwsh. cosign absent ->
+  # install.ps1 takes its warn-and-continue path. Real signed-release E2E = maintainer v* tag.
+  # ---------------------------------------------------------------------------
+  install-ps1-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: install.ps1 e2e vs a local fake release (+ tampered-checksum negative)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v0.0.0-citest'; $out = "sentinel-$tag-windows-amd64"
+          $stage = Join-Path $env:RUNNER_TEMP 'stage'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "$tag/$out") | Out-Null
+          $env:GOOS='windows'; $env:GOARCH='amd64'
+          go build -ldflags "-X main.version=$tag" -o (Join-Path $stage "$tag/$out/agentctl.exe") ./cmd/agentctl
+          Copy-Item LICENSE (Join-Path $stage "$tag/$out/") -ErrorAction SilentlyContinue
+          Remove-Item Env:\GOOS, Env:\GOARCH
+          tar.exe -C (Join-Path $stage $tag) -czf (Join-Path $stage "$tag/$out.tar.gz") $out
+          Push-Location (Join-Path $stage $tag)
+          Remove-Item -Recurse -Force $out
+          $hash = (Get-FileHash -Algorithm SHA256 "$out.tar.gz").Hash.ToLower()
+          "$hash  $out.tar.gz" | Out-File -Encoding ascii -NoNewline checksums.sha256
+          Pop-Location
+          $srv = Start-Process python -ArgumentList '-m','http.server','8099' -WorkingDirectory $stage -PassThru
+          Start-Sleep -Seconds 2
+          try {
+            $env:SENTINEL_VERSION = $tag
+            $env:SENTINEL_BASE_URL = 'http://localhost:8099'
+            $env:SENTINEL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'bin'
+            # positive
+            $p = Start-Process pwsh -ArgumentList '-NoProfile','-File','./install.ps1' -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "install.ps1 (positive) exited $($p.ExitCode)" }
+            $bin = Join-Path $env:SENTINEL_BIN_DIR 'agentctl.exe'
+            if (-not (Test-Path $bin)) { throw "agentctl.exe not installed" }
+            $v = & $bin --version
+            if ($v -ne $tag) { throw "agentctl --version mismatch: '$v' != '$tag'" }
+            # negative: tampered checksum MUST make install.ps1 exit non-zero
+            ('0' * 64 + "  $out.tar.gz") | Out-File -Encoding ascii -NoNewline (Join-Path $stage "$tag/checksums.sha256")
+            $env:SENTINEL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'bin2'
+            $n = Start-Process pwsh -ArgumentList '-NoProfile','-File','./install.ps1' -Wait -PassThru -NoNewWindow
+            if ($n.ExitCode -eq 0) { throw "install.ps1 accepted a tampered checksum" }
+            Write-Host "install-ps1-smoke: OK (positive install + tampered-checksum rejection)"
+          } finally {
+            Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          }
