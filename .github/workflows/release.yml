@@ -33,6 +33,7 @@ jobs:
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
           - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -164,3 +165,35 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" --generate-notes --repo "${GITHUB_REPOSITORY}" \
             rel/*.tar.gz rel/checksums.sha256 rel/*.cosign.bundle rel/sbom.cdx.json
+
+  # Bump the Homebrew formula (macOS) to the released darwin archives. Tag-only, non-blocking: a
+  # protected default branch (PR-only) will reject the direct push — then the tap is bumped by hand.
+  # This repo doubles as its own tap: `brew tap AlexGromer/sentinel <repo> && brew install sentinel`.
+  homebrew:
+    name: bump homebrew formula
+    needs: release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write   # commit the bumped formula back to the default branch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+          merge-multiple: true
+      - name: Regenerate Formula/sentinel.rb from the darwin archives + commit
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          amd="$(sha256sum "art/sentinel-${TAG}-darwin-amd64.tar.gz" | cut -d' ' -f1)"
+          arm="$(sha256sum "art/sentinel-${TAG}-darwin-arm64.tar.gz" | cut -d' ' -f1)"
+          sh scripts/gen-brew-formula.sh "$TAG" "$amd" "$arm"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/sentinel.rb
+          git commit -m "chore(brew): bump sentinel formula to ${TAG}" || { echo "no formula change"; exit 0; }
+          git push origin HEAD:main
