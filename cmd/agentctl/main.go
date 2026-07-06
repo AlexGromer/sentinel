@@ -26,6 +26,9 @@ import (
 	"time"
 )
 
+// version is stamped at release build via -ldflags "-X main.version=<tag>" (release.yml); "dev" otherwise.
+var version = "dev"
+
 func newRunID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
@@ -54,6 +57,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
+	fmt.Fprintln(os.Stderr, "  agentctl version")
 }
 
 func boolEnv(b bool) string {
@@ -460,6 +464,10 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
+	}
+	if a := os.Args[1]; a == "version" || a == "--version" {
+		fmt.Println(version) // no cwd/brain needed — a plain sanity check for install.sh (M11.5)
+		os.Exit(0)
 	}
 	repo, err := os.Getwd()
 	if err != nil {

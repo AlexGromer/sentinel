@@ -495,7 +495,7 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 ### Acceptance criteria M11.5 (honest, per PR)
 
 - [ ] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
-- [ ] **PR-2:** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container. *(full E2E = maintainer `v*` tag, as with M11.1)*
+- [x] **PR-2 (this PR):** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container (fake release + tamper negative). *(full E2E = maintainer `v*` tag, as with M11.1)*
 - [ ] **PR-3:** `/v1/config-schema` covers the LLM-backend surface; `backend-presets.json` parses and matches `runconfig.py`.
 - [ ] **PR-4:** the wizard is stepped, schema-driven, validates input, persists a draft, is bilingual, air-gapped (`node --check`, `file://`).
 - [ ] **PR-5:** the `config` domain lands in the store-gateway; `/readyz` → `503` until dependencies are ready, `200` once ready.
