@@ -1406,7 +1406,7 @@ func main() {
 			s.store = sc
 			defer sc.close()
 			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
-			s.loadStartupConfig() // M11.5 PR-5 (ADR-062): read the service-tier config once, before serving
+			go s.loadStartupConfig() // M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe
 		}
 	}
 	if s.token == "" {

@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -149,6 +150,19 @@ func (s *server) probeLLM(base string) readyCheck {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return readyCheck{Status: "error", Detail: fmt.Sprintf("base_url must be an absolute http(s) URL, got %q", base)}
 	}
+	// A base_url of the form https://user:sk-live@host/v1 buries a credential in a value the name-based
+	// guard cannot see, and probing it would SEND that credential outbound. Refuse it: OpenAI-compatible
+	// endpoints authenticate with LLM_API_KEY, never with URL userinfo.
+	if u.User != nil {
+		return readyCheck{Status: "error", Detail: "base_url must not embed credentials (user:pass@); use LLM_API_KEY"}
+	}
+	// /readyz is unauthenticated, so refuse to let it probe the cloud-metadata address (169.254.169.254 /
+	// fe80::/10). Only a LITERAL link-local IP is blocked: RFC1918 (a homelab `ollama`/`vllm` on 10.x/172.x/
+	// 192.168.x) and loopback (a local llama.cpp) are legitimate targets and stay allowed. A hostname is not
+	// resolved here — this blocks the common single case, not DNS-rebinding.
+	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLinkLocalUnicast() {
+		return readyCheck{Status: "error", Detail: "base_url must not point at a link-local address (169.254.0.0/16)"}
+	}
 	resp, err := s.client().Get(base + "/models")
 	if err != nil {
 		return readyCheck{Status: "error", Detail: err.Error()}
@@ -249,9 +263,19 @@ func (s *server) invalidateReadiness() {
 	s.ready.mu.Unlock()
 }
 
-// loadStartupConfig reads the persisted config once at boot (ADR-059 §7.4: "control-API reads the
-// config at start"). Bounded by the store client's own timeout, so an unreachable gateway delays the
-// listener by at most that, never indefinitely.
+// loadStartupConfig reads the persisted config once at boot (ADR-059 §7.4: "the control-API reads the
+// config at start"). It is INFORMATIONAL — it logs what was found; readiness re-reads the document live
+// on every probe, so nothing downstream depends on this completing. It therefore runs in the background:
+// blocking ListenAndServe on a second store RPC (newStoreClient already spent up to its timeout dialing)
+// could delay /healthz and /readyz past a tight k8s startupProbe. Startup ordering is not a correctness
+// dependency here — the fail-open philosophy ("runs stay in-memory") extends to "start serving, let
+// /readyz reflect eventual consistency".
+//
+// NOTE (ADR-062 boundary): the stored config is the persistence substrate + the /readyz signal. It is
+// NOT yet materialized into `agentctl run` spawns — spawnRun still uses the control-API process env
+// (os.Environ()). Wiring stored-config -> run env introduces env-vs-store precedence questions and is
+// deliberately deferred; "Save to server" changes what survives a restart and what /readyz sees, not
+// (yet) live run behaviour.
 func (s *server) loadStartupConfig() {
 	if s.store == nil {
 		return

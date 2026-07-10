@@ -2,11 +2,18 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+
+	"github.com/AlexGromer/sentinel/internal/store"
+	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
 // readyBody decodes /readyz into (httpStatus, overallStatus, checks).
@@ -157,6 +164,50 @@ func TestReadyzLLMProbeRejectsNon2xxAndBadScheme(t *testing.T) {
 	}
 }
 
+// A base_url with embedded credentials must be refused BEFORE any request is issued: probing it would
+// exfiltrate the credential to the configured host.
+func TestReadyzLLMProbeRefusesEmbeddedCredentials(t *testing.T) {
+	var reached bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	// splice userinfo into the httptest URL: http://user:sk-secret@127.0.0.1:port
+	withCreds := strings.Replace(srv.URL, "http://", "http://user:sk-secret@", 1)
+
+	s := newTestServer()
+	s.llmBaseURL = withCreds
+	code, _, checks := readyBody(t, s, "secret-tok")
+	if reached {
+		t.Fatal("the probe sent a request to a URL carrying credentials")
+	}
+	if code != http.StatusServiceUnavailable || checks["llm"].Status != "error" {
+		t.Fatalf("a credential-bearing base_url must fail readiness, got %d/%q", code, checks["llm"].Status)
+	}
+	if !strings.Contains(checks["llm"].Detail, "credential") {
+		t.Fatalf("detail should explain the refusal, got %q", checks["llm"].Detail)
+	}
+}
+
+// The cloud-metadata address is refused (an unauthenticated /readyz must not be an SSRF probe against
+// 169.254.169.254), while a homelab RFC1918 host and loopback stay legitimate targets.
+func TestReadyzLLMProbeBlocksLinkLocalButNotPrivate(t *testing.T) {
+	s := newTestServer()
+	s.llmBaseURL = "http://169.254.169.254/v1"
+	if _, _, checks := readyBody(t, s, "secret-tok"); checks["llm"].Status != "error" ||
+		!strings.Contains(checks["llm"].Detail, "link-local") {
+		t.Fatalf("link-local must be refused, got %q / %q", checks["llm"].Status, checks["llm"].Detail)
+	}
+	// An RFC1918 host must NOT be blocked outright — it is a homelab ollama/vllm. It fails here only
+	// because nothing is listening, i.e. a connection error, not a policy refusal.
+	s.invalidateReadiness()
+	s.llmBaseURL = "http://10.1.2.3:11434/v1"
+	if _, _, checks := readyBody(t, s, "secret-tok"); strings.Contains(checks["llm"].Detail, "link-local") {
+		t.Fatalf("an RFC1918 base_url must not be treated as link-local: %q", checks["llm"].Detail)
+	}
+}
+
 // The probe must not follow a redirect: /readyz would otherwise forward a request wherever the
 // configured endpoint points it.
 func TestReadyzLLMProbeDoesNotFollowRedirects(t *testing.T) {
@@ -258,6 +309,45 @@ func TestConfigHTTPRoundTripAndSecretRefusal(t *testing.T) {
 	}
 	if cfg["llm"].(map[string]any)["base_url"] != "http://ollama:11434/v1" {
 		t.Fatal("a rejected write mutated the stored document")
+	}
+}
+
+// A gateway that dialed OK at startup but then died must not make PUT look like it succeeded, and
+// /readyz must report it as an error. newStoreClient's dial-time probe only proves reachability at boot;
+// nothing in the request path re-proves it, so this exercises the failure that outlives startup.
+func TestConfigHTTPAndReadyzWhenGatewayDies(t *testing.T) {
+	// Bring up a gateway we own (so we can stop it mid-test), dial it, then kill it hard.
+	sock := filepath.Join(t.TempDir(), "store.sock")
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := store.New(filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := grpc.NewServer()
+	storepb.RegisterStoreServiceServer(g, srv)
+	go func() { _ = g.Serve(lis) }()
+
+	sc, err := newStoreClient("unix:"+sock, "")
+	if err != nil {
+		t.Fatalf("newStoreClient: %v", err)
+	}
+	t.Cleanup(sc.close)
+	s := storeBackedTestServer(sc)
+
+	g.Stop() // the gateway is now gone; the client still holds a (now-dead) conn
+	_ = srv.Close()
+
+	// PUT must surface the failure as a 5xx — never a 200 that silently dropped the write.
+	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(`{"llm":{"backend":"anthropic"}}`), "secret-tok"); rec.Code == http.StatusOK || rec.Code < 500 {
+		t.Fatalf("PUT against a dead gateway = %d, want a 5xx (must not look saved)", rec.Code)
+	}
+	// readyz must report store as an error and go 503.
+	code, status, checks := readyBody(t, s, "secret-tok")
+	if code != http.StatusServiceUnavailable || status != "not_ready" || checks["store"].Status != "error" {
+		t.Fatalf("readyz against a dead gateway = %d/%q store=%q", code, status, checks["store"].Status)
 	}
 }
 
