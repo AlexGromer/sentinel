@@ -34,9 +34,14 @@ const MIME = {
 
 /* ------------------------------------------------------------------ tiny harness */
 const results = [];
+// Uncaught page exceptions are COLLECTED, not thrown from the listener: a throw inside an EventEmitter
+// callback never reaches the awaiting check() — it escapes as an unhandled rejection instead.
+const pageErrors = [];
 async function check(name, fn) {
+  pageErrors.length = 0;   // per-check, so one broken page does not poison every later check
   try {
     await fn();
+    if (pageErrors.length) throw new Error(`uncaught page error(s): ${pageErrors.join(' | ')}`);
     results.push({ name, ok: true });
     console.log(`  ok   ${name}`);
   } catch (e) {
@@ -121,12 +126,15 @@ const allStorage = (page) => page.evaluate(() =>
 async function freshPage(browser, base) {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
-  page.on('pageerror', (e) => { throw new Error(`uncaught page error: ${e.message}`); });
+  page.on('pageerror', (e) => pageErrors.push(e.message));
   await page.goto(`${base}/setup/`, { waitUntil: 'load' });
-  // the wizard's boot() ends with a best-effort fetch('../backend-presets.json'); wait for it to land
-  await page.waitForFunction(() => document.getElementById('srcbadge').textContent.length > 0);
+  await settled(page);
   return { ctx, page };
 }
+// boot() calls setSrcBadge() synchronously, so a non-empty #srcbadge does NOT mean the trailing
+// fetch('../backend-presets.json') has resolved. `presetsSrc` flipping to 'file' does. Waiting on the
+// weaker signal would race every preset assertion against that fetch.
+const settled = (page) => page.waitForFunction(() => window.presetsSrc === 'file', null, { timeout: 15000 });
 
 /* ------------------------------------------------------------------ main */
 const staticSrv = await startStatic();
@@ -241,7 +249,7 @@ try {
     ok(!('capitok' in d), 'draft must not carry a capitok field');
 
     await page.reload({ waitUntil: 'load' });
-    await page.waitForFunction(() => document.getElementById('srcbadge').textContent.length > 0);
+    await settled(page);
     eq(await page.inputValue('#target'), 'https://app.example', 'target restored');
     eq(await page.inputValue('#m-planner'), 'qwen3:14b', 'role model restored');
     eq(await page.inputValue('#f-max_steps'), '17', 'generated numeric field restored');
@@ -261,11 +269,11 @@ try {
     await page.click('button[data-next="review"]');
     eq(await step(page), 'review', 'parked on review');
     await page.reload({ waitUntil: 'load' });
-    await page.waitForFunction(() => document.getElementById('srcbadge').textContent.length > 0);
+    await settled(page);
     eq(await step(page), 'review', 'reload restores the step');
 
     await page.click('#draftclear');
-    await page.waitForFunction(() => document.getElementById('srcbadge').textContent.length > 0);
+    await settled(page);
     eq(await draft(page), null, 'draft removed');
     eq(await step(page), 'runtime', 'Reset lands on step 1');
     await ctx.close();
