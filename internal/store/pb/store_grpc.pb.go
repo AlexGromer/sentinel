@@ -46,6 +46,10 @@ const (
 	StoreService_IngestMetrics_FullMethodName  = "/sentinel.persistence.v1.StoreService/IngestMetrics"
 	StoreService_QueryMetrics_FullMethodName   = "/sentinel.persistence.v1.StoreService/QueryMetrics"
 	StoreService_Trends_FullMethodName         = "/sentinel.persistence.v1.StoreService/Trends"
+	StoreService_PutConfig_FullMethodName      = "/sentinel.persistence.v1.StoreService/PutConfig"
+	StoreService_GetConfig_FullMethodName      = "/sentinel.persistence.v1.StoreService/GetConfig"
+	StoreService_ListConfig_FullMethodName     = "/sentinel.persistence.v1.StoreService/ListConfig"
+	StoreService_DeleteConfig_FullMethodName   = "/sentinel.persistence.v1.StoreService/DeleteConfig"
 )
 
 // StoreServiceClient is the client API for StoreService service.
@@ -78,6 +82,11 @@ type StoreServiceClient interface {
 	IngestMetrics(ctx context.Context, in *MetricsBatch, opts ...grpc.CallOption) (*Empty, error)
 	QueryMetrics(ctx context.Context, in *MetricsQuery, opts ...grpc.CallOption) (*MetricsSeries, error)
 	Trends(ctx context.Context, in *TrendReq, opts ...grpc.CallOption) (*TrendReply, error)
+	// config (M11.5 PR-5)
+	PutConfig(ctx context.Context, in *ConfigRecord, opts ...grpc.CallOption) (*Empty, error)
+	GetConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*ConfigRecord, error)
+	ListConfig(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ConfigList, error)
+	DeleteConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type storeServiceClient struct {
@@ -298,6 +307,46 @@ func (c *storeServiceClient) Trends(ctx context.Context, in *TrendReq, opts ...g
 	return out, nil
 }
 
+func (c *storeServiceClient) PutConfig(ctx context.Context, in *ConfigRecord, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_PutConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) GetConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*ConfigRecord, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigRecord)
+	err := c.cc.Invoke(ctx, StoreService_GetConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) ListConfig(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ConfigList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigList)
+	err := c.cc.Invoke(ctx, StoreService_ListConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) DeleteConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_DeleteConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StoreServiceServer is the server API for StoreService service.
 // All implementations must embed UnimplementedStoreServiceServer
 // for forward compatibility.
@@ -328,6 +377,11 @@ type StoreServiceServer interface {
 	IngestMetrics(context.Context, *MetricsBatch) (*Empty, error)
 	QueryMetrics(context.Context, *MetricsQuery) (*MetricsSeries, error)
 	Trends(context.Context, *TrendReq) (*TrendReply, error)
+	// config (M11.5 PR-5)
+	PutConfig(context.Context, *ConfigRecord) (*Empty, error)
+	GetConfig(context.Context, *ConfigKey) (*ConfigRecord, error)
+	ListConfig(context.Context, *Empty) (*ConfigList, error)
+	DeleteConfig(context.Context, *ConfigKey) (*Empty, error)
 	mustEmbedUnimplementedStoreServiceServer()
 }
 
@@ -400,6 +454,18 @@ func (UnimplementedStoreServiceServer) QueryMetrics(context.Context, *MetricsQue
 }
 func (UnimplementedStoreServiceServer) Trends(context.Context, *TrendReq) (*TrendReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Trends not implemented")
+}
+func (UnimplementedStoreServiceServer) PutConfig(context.Context, *ConfigRecord) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutConfig not implemented")
+}
+func (UnimplementedStoreServiceServer) GetConfig(context.Context, *ConfigKey) (*ConfigRecord, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetConfig not implemented")
+}
+func (UnimplementedStoreServiceServer) ListConfig(context.Context, *Empty) (*ConfigList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListConfig not implemented")
+}
+func (UnimplementedStoreServiceServer) DeleteConfig(context.Context, *ConfigKey) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteConfig not implemented")
 }
 func (UnimplementedStoreServiceServer) mustEmbedUnimplementedStoreServiceServer() {}
 func (UnimplementedStoreServiceServer) testEmbeddedByValue()                      {}
@@ -800,6 +866,78 @@ func _StoreService_Trends_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreService_PutConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigRecord)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).PutConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_PutConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).PutConfig(ctx, req.(*ConfigRecord))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_GetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigKey)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).GetConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_GetConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).GetConfig(ctx, req.(*ConfigKey))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_ListConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).ListConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_ListConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).ListConfig(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_DeleteConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigKey)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).DeleteConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_DeleteConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).DeleteConfig(ctx, req.(*ConfigKey))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StoreService_ServiceDesc is the grpc.ServiceDesc for StoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -890,6 +1028,22 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Trends",
 			Handler:    _StoreService_Trends_Handler,
+		},
+		{
+			MethodName: "PutConfig",
+			Handler:    _StoreService_PutConfig_Handler,
+		},
+		{
+			MethodName: "GetConfig",
+			Handler:    _StoreService_GetConfig_Handler,
+		},
+		{
+			MethodName: "ListConfig",
+			Handler:    _StoreService_ListConfig_Handler,
+		},
+		{
+			MethodName: "DeleteConfig",
+			Handler:    _StoreService_DeleteConfig_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
