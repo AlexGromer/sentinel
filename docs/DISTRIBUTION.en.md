@@ -494,10 +494,10 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 
 ### Acceptance criteria M11.5 (honest, per PR)
 
-- [ ] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
+- [x] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
 - [x] **PR-2 (this PR):** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container (fake release + tamper negative). *(full E2E = maintainer `v*` tag, as with M11.1)*
 - [x] **PR-3 (this PR):** `/v1/config-schema` covers the LLM-backend surface (`backends`/`roles`/`llm` descriptors from `brain/llm.py`; `api_key`=secret-with-no-value); `backend-presets.json` (9 presets) parses and every `backend` ⊆ the schema enum (gate `TestBackendPresetsParseAndMatchSchema`). *(env source of truth = `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig core, no LLM_* there)*
-- [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(an interactive browser run is manual; CI holds the syntax + 2 anti-drift gates)*
+- [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(the DOM run is automated — `scripts/wizard-dom-check.mjs`, 11 checks in headless Chromium in CI; the syntax gate covers all 6 `docs/` pages; + 2 anti-drift gates)*
 - [ ] **PR-5:** the `config` domain lands in the store-gateway; `/readyz` → `503` until dependencies are ready, `200` once ready.
 - [ ] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`.
 

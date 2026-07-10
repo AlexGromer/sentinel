@@ -680,6 +680,7 @@ function firstBrokenStep() {
 
 /* ----------------------------- steps ----------------------------- */
 var STEPS = ['runtime', 'model', 'params', 'review'];
+var STEP_KEY = 'sentinel_setup_step';
 function showStep(name) {
   document.querySelectorAll('.subpanel[data-subpanel]').forEach(function (p) {
     p.classList.toggle('on', p.getAttribute('data-subpanel') === name);
@@ -687,7 +688,7 @@ function showStep(name) {
   document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function (b) {
     b.setAttribute('aria-selected', b.getAttribute('data-subtab') === name ? 'true' : 'false');
   });
-  try { localStorage.setItem('sentinel_setup_step', name); } catch (e) {}
+  try { localStorage.setItem(STEP_KEY, name); } catch (e) {}
   if (name === 'review') renderReview();
 }
 /* Moving FORWARD validates every earlier step and stops at the first broken one (the §7 "re-ask" loop). */
@@ -732,8 +733,11 @@ function loadDraft() {
   });
   return true;
 }
+/* Reset drops the step too: leaving `sentinel_setup_step` behind reloaded a freshly-defaulted form
+   straight onto Review, so "Сбросить" did not reset the wizard, only its values. Language is a user
+   preference, not draft state, and survives. */
 function clearDraft() {
-  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  try { localStorage.removeItem(DRAFT_KEY); localStorage.removeItem(STEP_KEY); } catch (e) {}
   location.reload();
 }
 
@@ -966,7 +970,7 @@ document.querySelectorAll('.dl').forEach(function (b) {
 
   /* re-run state machine (ADR-059): a restored draft is re-validated and lands on the first broken step */
   var step = 'runtime';
-  try { step = localStorage.getItem('sentinel_setup_step') || 'runtime'; } catch (e) {}
+  try { step = localStorage.getItem(STEP_KEY) || 'runtime'; } catch (e) {}
   if (STEPS.indexOf(step) < 0) step = 'runtime';
   var broken = restored ? firstBrokenStep() : null;
   if (broken) { paintErrors(allErrors()); showStep(broken); } else { showStep(step); }
