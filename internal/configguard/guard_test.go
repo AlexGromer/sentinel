@@ -10,16 +10,21 @@ func TestSecretishWordBoundaries(t *testing.T) {
 		"api_key", "apiKey", "LLM_API_KEY", "ANTHROPIC_API_KEY", "key", "llm_key",
 		"token", "bearer_token", "token_value", "auth_bearer", "password", "passwd",
 		"client_secret", "private_key", "credentials", "Credential",
+		// separator variants that a substring-only rule missed (the HIGH bypass)
+		"api-key", "api key", "api.key", "API-KEY", "x-api-key", "bearer token",
+		"auth-token", "private-key", "client secret", "OpenAI-API-Key",
 	}
 	for _, n := range secret {
 		if !Secretish(n) {
 			t.Errorf("Secretish(%q) = false, want true", n)
 		}
 	}
-	// counters and ordinary config names that merely contain a secret-ish substring
+	// counters and ordinary config names that merely contain a secret-ish substring, incl. separator
+	// variants (canonicalization must not turn max-tokens/total tokens into false positives)
 	clean := []string{
 		"max_tokens", "total_tokens", "tokens", "plan_budget", "base_url", "backend",
 		"structured", "vision", "storage_state", "pw_no_trace", "monkey", "keyboard",
+		"max-tokens", "total tokens", "base-url", "base url", "run.mode", "keyboard-layout",
 	}
 	for _, n := range clean {
 		if Secretish(n) {

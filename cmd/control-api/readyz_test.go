@@ -344,11 +344,45 @@ func TestConfigHTTPAndReadyzWhenGatewayDies(t *testing.T) {
 	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(`{"llm":{"backend":"anthropic"}}`), "secret-tok"); rec.Code == http.StatusOK || rec.Code < 500 {
 		t.Fatalf("PUT against a dead gateway = %d, want a 5xx (must not look saved)", rec.Code)
 	}
+	// GET must NOT answer 404 "no config stored" for a gateway failure — that would hide a real config
+	// behind a false not-found. It must be a 5xx.
+	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/config", nil, "secret-tok"); rec.Code != http.StatusBadGateway {
+		t.Fatalf("GET against a dead gateway = %d, want 502 (not a false 404)", rec.Code)
+	}
 	// readyz must report store as an error and go 503.
 	code, status, checks := readyBody(t, s, "secret-tok")
 	if code != http.StatusServiceUnavailable || status != "not_ready" || checks["store"].Status != "error" {
 		t.Fatalf("readyz against a dead gateway = %d/%q store=%q", code, status, checks["store"].Status)
 	}
+}
+
+// The MEDIUM fix: a config write (which calls invalidateReadiness) must NOT be blocked behind a
+// slow-but-live readiness probe. Before the single-flight refactor, both took s.ready.mu and the probe
+// held it across the outbound GET, so invalidateReadiness stalled for the probe's duration.
+func TestReadinessProbeDoesNotBlockInvalidate(t *testing.T) {
+	// an LLM stub that answers /models slowly (live, not down)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+
+	s := newTestServer()
+	s.llmBaseURL = slow.URL
+
+	probeReturned := make(chan struct{})
+	go func() { s.readiness(); close(probeReturned) }() // acquires the probe, blocks in the slow GET
+
+	// give the probe time to be mid-flight in the outbound GET
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	s.invalidateReadiness() // the exact call the PUT path makes
+	blocked := time.Since(start)
+	if blocked > 200*time.Millisecond {
+		t.Fatalf("invalidateReadiness blocked for %v while a probe was in flight — the lock still spans I/O", blocked)
+	}
+	<-probeReturned // let the probe finish so the test is clean
 }
 
 func TestConfigHTTPRejectsOversizedBody(t *testing.T) {

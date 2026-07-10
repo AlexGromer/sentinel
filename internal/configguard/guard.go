@@ -18,6 +18,10 @@ import (
 	"strings"
 )
 
+// MaxConfigBytes bounds a config document. It is a form, not a payload. Enforced at BOTH the gateway
+// (the trust boundary, reachable by any STORE_TOKEN holder) and the control-API's HTTP layer.
+const MaxConfigBytes = 64 << 10
+
 // secretNameParts are matched as substrings of a lower-cased JSON member name.
 var secretNameParts = []string{
 	"password", "passwd", "secret", "credential", "api_key", "apikey", "private_key", "bearer",
@@ -25,19 +29,51 @@ var secretNameParts = []string{
 
 // Secretish reports whether a JSON member name looks like a credential.
 //
-// The `token` and `key` families are matched on word boundaries rather than as substrings: `max_tokens`
-// and `total_tokens` are ordinary counters, and a substring rule would refuse a legitimate document.
+// The name is first canonicalized: lower-cased, and every run of non-alphanumeric separators (`-`, ` `,
+// `.`, etc.) collapsed to a single `_`. Without this, `api-key`, `api key` and `api.key` would each slip
+// past the `api_key` substring test (they contain no underscore) — a real credential-smuggling hole.
+//
+// The `token` and `key` families are then matched on `_`-delimited word boundaries rather than as
+// substrings: `max_tokens` and `total_tokens` are ordinary counters, and a substring rule would refuse a
+// legitimate document.
 func Secretish(name string) bool {
-	n := strings.ToLower(name)
+	n := canonName(name)
 	for _, part := range secretNameParts {
 		if strings.Contains(n, part) {
 			return true
 		}
 	}
-	if n == "token" || strings.HasSuffix(n, "_token") || strings.HasPrefix(n, "token_") {
+	if hasWord(n, "token") || hasWord(n, "key") {
 		return true
 	}
-	return n == "key" || strings.HasSuffix(n, "_key")
+	return false
+}
+
+// canonName lower-cases and collapses every maximal run of non-[a-z0-9] characters to one `_`, trimming
+// leading/trailing `_`. "API-Key" -> "api_key", "api . key" -> "api_key", "apiKey" -> "apikey".
+func canonName(name string) string {
+	var b strings.Builder
+	prevSep := false
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevSep = false
+		} else if !prevSep {
+			b.WriteByte('_')
+			prevSep = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+// hasWord reports whether `word` appears as a whole `_`-delimited token in an already-canonical name.
+func hasWord(canon, word string) bool {
+	for _, seg := range strings.Split(canon, "_") {
+		if seg == word {
+			return true
+		}
+	}
+	return false
 }
 
 // FindSecretKey walks a decoded JSON document and returns the dotted path of the first secret-shaped
@@ -78,6 +114,9 @@ func FindSecretKey(v any, path string) string {
 // A non-object document is refused outright: a bare JSON string ("sk-live-…") carries no member names
 // for a name-based guard to inspect, so accepting one would be a hole straight through the guard.
 func Validate(valueJSON string) error {
+	if len(valueJSON) > MaxConfigBytes {
+		return fmt.Errorf("config: value_json is %d bytes, over the %d-byte limit", len(valueJSON), MaxConfigBytes)
+	}
 	var doc any
 	if err := json.Unmarshal([]byte(valueJSON), &doc); err != nil {
 		return fmt.Errorf("config: value_json is not valid JSON: %w", err)

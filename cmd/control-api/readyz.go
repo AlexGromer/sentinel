@@ -53,8 +53,9 @@ const (
 	readyProbeTimeout = 2 * time.Second
 	// readyCacheTTL bounds how often an unauthenticated caller can drive a real probe.
 	readyCacheTTL = 3 * time.Second
-	// maxConfigBytes bounds a PUT /v1/config body. The document is a form, not a payload.
-	maxConfigBytes = 64 << 10
+	// maxConfigBytes bounds a PUT /v1/config body — the single source is configguard (also enforced at
+	// the gateway, the real trust boundary, so a direct gRPC client cannot exceed it either).
+	maxConfigBytes = configguard.MaxConfigBytes
 )
 
 type readyCheck struct {
@@ -62,13 +63,19 @@ type readyCheck struct {
 	Detail string `json:"detail,omitempty"` // authenticated callers only
 }
 
-// readyState memoizes the last probe. Its mutex serializes probes (the single-flight): a burst of
-// /readyz requests performs ONE round of dependency I/O, and the rest read the memo.
+// readyState memoizes the last probe. The mutex is held ONLY to read/publish the memo and to claim the
+// right to probe — NEVER across the outbound I/O itself. A single in-flight probe is coordinated by
+// `inflight`+`done` (the single-flight), and `epoch` guards against a config write racing an in-flight
+// probe: a PUT bumps `epoch`, and a probe that started before the bump refuses to publish its now-stale
+// result, so `invalidateReadiness()` (called on the PUT path) can never be overwritten by an older probe.
 type readyState struct {
-	mu     sync.Mutex
-	at     time.Time
-	checks map[string]readyCheck
-	ready  bool
+	mu       sync.Mutex
+	at       time.Time
+	checks   map[string]readyCheck
+	ready    bool
+	epoch    uint64
+	inflight bool
+	done     chan struct{}
 }
 
 func (s *server) client() *http.Client {
@@ -83,35 +90,71 @@ func (s *server) client() *http.Client {
 	}
 }
 
-// readiness returns the memoized checks, refreshing them at most once per readyCacheTTL.
-// It never takes s.mu: the run map must stay serviceable while a dependency probe is in flight.
+// readiness returns the memoized checks, refreshing them at most once per readyCacheTTL. The dependency
+// I/O runs with NO lock held, so neither a concurrent /readyz poll nor a PUT /v1/config (which calls
+// invalidateReadiness) is ever blocked behind a slow-but-live probe. It also never takes s.mu, so the
+// run map stays serviceable throughout.
 func (s *server) readiness() (map[string]readyCheck, bool) {
 	s.ready.mu.Lock()
-	defer s.ready.mu.Unlock()
-	if s.ready.checks != nil && time.Since(s.ready.at) < readyCacheTTL {
-		return s.ready.checks, s.ready.ready
+	for {
+		if s.ready.checks != nil && time.Since(s.ready.at) < readyCacheTTL {
+			c, r := s.ready.checks, s.ready.ready
+			s.ready.mu.Unlock()
+			return c, r
+		}
+		if s.ready.inflight { // another goroutine is probing; wait for it, then re-check the memo
+			done := s.ready.done
+			s.ready.mu.Unlock()
+			<-done
+			s.ready.mu.Lock()
+			continue
+		}
+		break
 	}
+	// Claim the probe. epoch is snapshotted so a PUT that invalidates mid-probe is detected below.
+	s.ready.inflight = true
+	s.ready.done = make(chan struct{})
+	done := s.ready.done
+	epoch := s.ready.epoch
+	s.ready.mu.Unlock()
 
+	checks, ready := s.probeAll() // outbound I/O — NO lock held
+
+	s.ready.mu.Lock()
+	s.ready.inflight = false
+	close(done)
+	if s.ready.epoch == epoch { // no PUT raced us; publish. Otherwise drop — the next caller re-probes.
+		s.ready.checks, s.ready.ready, s.ready.at = checks, ready, time.Now()
+	}
+	s.ready.mu.Unlock()
+	return checks, ready
+}
+
+// probeAll runs the dependency probes with NO lock held (that is the whole point — see readiness). The
+// probes are sequential because the llm base_url may come from the config document the store probe reads;
+// the total time is bounded (ping + getConfig + llm, each <= readyProbeTimeout) and is absorbed by a
+// single in-flight prober while others wait on the memo, so it never blocks a caller behind the lock.
+func (s *server) probeAll() (map[string]readyCheck, bool) {
 	checks := map[string]readyCheck{}
 	var cfg map[string]any
 
-	switch {
-	case s.store == nil:
+	if s.store == nil {
 		checks["store"] = readyCheck{Status: "skipped", Detail: "CONTROL_API_STORE_ADDR unset (standalone tier)"}
 		checks["config"] = readyCheck{Status: "skipped", Detail: "standalone tier: config is a file (brain/runconfig.py)"}
-	default:
-		if err := s.store.ping(); err != nil {
-			checks["store"] = readyCheck{Status: "error", Detail: err.Error()}
-			checks["config"] = readyCheck{Status: "error", Detail: "store-gateway unreachable"}
-		} else {
-			checks["store"] = readyCheck{Status: "ok"}
-			rec, ok := s.store.getConfig(setupConfigKey)
-			if !ok {
-				checks["config"] = readyCheck{Status: "error", Detail: "no config stored; run the setup wizard"}
-			} else {
-				checks["config"] = readyCheck{Status: "ok"}
-				_ = json.Unmarshal([]byte(rec.ValueJson), &cfg) // best-effort: only used to find a base_url
-			}
+	} else if err := s.store.ping(); err != nil {
+		checks["store"] = readyCheck{Status: "error", Detail: err.Error()}
+		checks["config"] = readyCheck{Status: "error", Detail: "store-gateway unreachable"}
+	} else {
+		checks["store"] = readyCheck{Status: "ok"}
+		rec, err := s.store.getConfig(setupConfigKey, readyProbeTimeout)
+		switch {
+		case err != nil: // gateway hiccup, NOT "no config" — do not tell the operator to re-run the wizard
+			checks["config"] = readyCheck{Status: "error", Detail: "store-gateway GetConfig failed: " + err.Error()}
+		case rec == nil:
+			checks["config"] = readyCheck{Status: "error", Detail: "no config stored; run the setup wizard"}
+		default:
+			checks["config"] = readyCheck{Status: "ok"}
+			_ = json.Unmarshal([]byte(rec.ValueJson), &cfg) // best-effort: only used to find a base_url
 		}
 	}
 	checks["llm"] = s.probeLLM(s.effectiveLLMBase(cfg))
@@ -122,7 +165,6 @@ func (s *server) readiness() (map[string]readyCheck, bool) {
 			ready = false
 		}
 	}
-	s.ready.checks, s.ready.ready, s.ready.at = checks, ready, time.Now()
 	return checks, ready
 }
 
@@ -207,8 +249,12 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"error": "no store-gateway configured; this deployment keeps its config in a file (standalone tier)"})
 		return
 	}
-	rec, ok := s.store.getConfig(setupConfigKey)
-	if !ok {
+	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	if err != nil { // a gateway failure is NOT a 404 — that would hide a real config behind a false miss
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "store-gateway unreachable"})
+		return
+	}
+	if rec == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no config stored"})
 		return
 	}
@@ -257,9 +303,13 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": setupConfigKey})
 }
 
+// invalidateReadiness drops the memo AND bumps epoch, so a probe that is already in flight (started
+// before this write) will refuse to publish its now-stale result. It only ever holds s.ready.mu for
+// these two field writes — never across I/O — so the PUT that calls it is not blocked behind a probe.
 func (s *server) invalidateReadiness() {
 	s.ready.mu.Lock()
 	s.ready.checks, s.ready.at = nil, time.Time{}
+	s.ready.epoch++
 	s.ready.mu.Unlock()
 }
 
@@ -280,8 +330,12 @@ func (s *server) loadStartupConfig() {
 	if s.store == nil {
 		return
 	}
-	rec, ok := s.store.getConfig(setupConfigKey)
-	if !ok {
+	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "control-api: startup config read failed (gateway): %v\n", err)
+		return
+	}
+	if rec == nil {
 		fmt.Fprintln(os.Stderr, "control-api: no persisted config (key \"setup\"); /readyz stays 503 until the wizard saves one")
 		return
 	}

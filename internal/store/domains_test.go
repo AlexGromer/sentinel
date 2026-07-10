@@ -295,3 +295,22 @@ func TestConfigRejectsSecrets(t *testing.T) {
 		t.Fatalf("empty key must be InvalidArgument, got %v", err)
 	}
 }
+
+// The size bound is enforced at the GATEWAY, not only the HTTP layer — the gateway is the trust
+// boundary reachable by any STORE_TOKEN holder, so a direct gRPC client cannot exceed it either.
+func TestConfigGatewayRejectsOversized(t *testing.T) {
+	s := newDomServer(t)
+	ctx := context.Background()
+	pad := make([]byte, 64*1024+1024)
+	for i := range pad {
+		pad[i] = 'a'
+	}
+	doc := `{"pad":"` + string(pad) + `"}`
+	if _, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "setup", ValueJson: doc}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("oversized document at the gateway must be InvalidArgument, got %v", err)
+	}
+	lst, _ := s.ListConfig(ctx, &pb.Empty{})
+	if len(lst.Items) != 0 {
+		t.Fatalf("an oversized document must not be persisted; got %d rows", len(lst.Items))
+	}
+}

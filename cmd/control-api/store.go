@@ -335,20 +335,27 @@ func (c *storeClient) putConfig(key, valueJSON string) error {
 	return err
 }
 
-// getConfig returns (nil,false) on miss or gateway error — the caller decides whether that is a
-// not-found (HTTP 404) or a readiness failure (/readyz "config": missing).
-func (c *storeClient) getConfig(key string) (*storepb.ConfigRecord, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+// getConfig distinguishes the three outcomes the collapsed (rec,bool) form could not:
+//   - (rec, nil)  : found
+//   - (nil, nil)  : genuinely no such key (the gateway answered Found=false)
+//   - (nil, err)  : the RPC/gateway failed — NOT the same as "no config"
+//
+// Conflating the last two made GET /v1/config answer 404 "no config stored" when the gateway was merely
+// unreachable (hiding a real config) and made /readyz tell an operator to re-run the wizard on a
+// gateway-latency problem. `timeout` lets the readiness path bound this at readyProbeTimeout rather than
+// the longer storeCallTimeout.
+func (c *storeClient) getConfig(key string, timeout time.Duration) (*storepb.ConfigRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	rec, err := c.cl.GetConfig(ctx, &storepb.ConfigKey{Key: key})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store GetConfig(%s): %v\n", key, err)
-		return nil, false
+		return nil, err
 	}
 	if !rec.Found {
-		return nil, false
+		return nil, nil
 	}
-	return rec, true
+	return rec, nil
 }
 
 // ping is the cheapest round-trip that proves the gateway socket is alive and authenticating.
