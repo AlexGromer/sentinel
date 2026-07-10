@@ -71,8 +71,15 @@ if os.path.isfile(os.path.join(ROOT, "scripts/offline-verify.sh")):
 
 # --- .dockerignore hub-page fix -------------------------------------------------------------------
 if os.path.isfile(os.path.join(ROOT, ".dockerignore")):
-    check("!docs/index.html" in read(".dockerignore"),
+    _di = read(".dockerignore")
+    check("!docs/index.html" in _di,
           ".dockerignore whitelists docs/index.html (image hub landing page present)")
+    # M11.5 PR-4: pages bundled into the `webui` image fetch these at runtime; excluding them makes the
+    # setup wizard's ../backend-presets.json (and the hub's prices.json) 404 inside the image.
+    check("!docs/backend-presets.json" in _di,
+          ".dockerignore whitelists docs/backend-presets.json (webui wizard preset override)")
+    check("!docs/prices.json" in _di,
+          ".dockerignore whitelists docs/prices.json (webui hub live-pricing override)")
 
 # --- verdict --------------------------------------------------------------------------------------
 if FAILURES:

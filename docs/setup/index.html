@@ -3,270 +3,985 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentinel — setup / config generator</title>
+<title>Sentinel — setup wizard</title>
+<!--
+  Sentinel setup wizard — guided onboarding state machine (M11.5 PR-4; ADR-059/060/061).
+
+  Steps: Runtime -> Model & Auth -> Run params -> Review.
+
+  SCHEMA-DRIVEN + AIR-GAPPED (ADR-061). The form renders from GET /v1/config-schema. That endpoint is not
+  reachable on GitHub Pages or over file://, so the page ships a FALLBACK snapshot of the schema and of
+  docs/backend-presets.json and renders from it immediately. Two overrides then win, in order:
+    (1) best-effort fetch('../backend-presets.json')  — Pages / webui bundle; silently skipped on file://
+        (same idiom as docs/index.html's fetch('prices.json') over its embedded seeds)
+    (2) fetch(<control-API>/v1/config-schema) on "Проверить" — the live server always wins.
+  The snapshots are NOT allowed to drift: cmd/control-api/setup_wizard_test.go extracts the marked blocks
+  below and asserts they still match the live handler and docs/backend-presets.json.
+
+  Vanilla JS, zero dependencies, no CDN, no build step. Secrets (LLM_API_KEY, control-API bearer token)
+  are never persisted and never leave the page.
+-->
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --acc:#2563eb; --ok:#15803d; --warn:#b8860b; --br:#d4d4d8; --card:#f6f6f7; }
-  @media (prefers-color-scheme: dark){ :root{ --bg:#0d1117; --fg:#e6edf3; --mut:#9aa7b4; --acc:#5b9dff; --ok:#3fb950; --warn:#d29922; --br:#30363d; --card:#161b22; } }
-  *{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:1rem;max-width:980px;margin:0 auto}
-  h1{font-size:1.3rem;margin:.2rem 0} h2{font-size:1rem;margin:1.2rem 0 .3rem} .sub{color:var(--mut);margin:.2rem 0 1rem}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem} @media(max-width:760px){.grid{grid-template-columns:1fr}}
-  fieldset{border:1px solid var(--br);border-radius:8px;padding:.8rem;margin:0 0 1rem} legend{color:var(--mut);padding:0 .4rem;font-size:.85rem}
-  label{display:block;margin:.5rem 0 .15rem;font-size:.9rem} input,select,textarea{width:100%;padding:.4rem;border:1px solid var(--br);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
-  textarea{resize:vertical;min-height:2.4rem} .row{display:flex;align-items:center;gap:.5rem;margin-top:.5rem} .row input[type=checkbox]{width:auto}
-  .hide{display:none}
-  .out{position:relative;background:var(--card);border:1px solid var(--br);border-radius:8px;padding:.8rem;margin-bottom:1rem}
-  pre{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.45 ui-monospace,monospace}
-  .copy{position:absolute;top:.5rem;right:.5rem;font-size:.75rem;padding:.2rem .5rem;border:1px solid var(--br);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
-  .dl{position:absolute;top:.5rem;right:3.6rem;font-size:.75rem;padding:.2rem .5rem;border:1px solid var(--acc);border-radius:6px;background:var(--bg);color:var(--acc);cursor:pointer}
-  .warn{color:var(--warn)} .mut{color:var(--mut)} a{color:var(--acc)} code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
-  details{margin-top:1rem;font-size:.85rem;color:var(--mut)}
+:root{
+  --bg:#0b0b10;--bg2:#13131c;--bg3:#1b1b26;--line:#2a2a38;
+  --tx:#e8e8ee;--mut:#9aa0b0;--acc:#ff2d55;--acc2:#ff6b88;
+  --ok:#36d399;--no:#ff4d6d;--warn:#ffb000;
+  --glow:0 0 8px rgba(255,45,85,.55),0 0 2px rgba(255,45,85,.85);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);
+  font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif}
+a{color:var(--acc2);text-decoration:none}
+a:hover{text-decoration:underline}
+code,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+.wrap{max-width:900px;margin:0 auto;padding:0 16px 72px}
+
+/* language visibility — default RU; toggled by body class (same gate as docs/index.html) */
+body.lang-ru [data-lang="en"]{display:none !important}
+body.lang-en [data-lang="ru"]{display:none !important}
+
+header.top{position:sticky;top:0;z-index:20;background:rgba(11,11,16,.93);
+  border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+header.top .bar{max-width:900px;margin:0 auto;padding:10px 16px;display:flex;
+  align-items:center;justify-content:space-between;gap:1rem}
+header.top h1{font-size:1.05rem;margin:0;font-weight:800;letter-spacing:.2px}
+header.top h1 span.dot{color:var(--acc)}
+.langbtns{display:flex;gap:.3rem}
+.langbtns button{background:var(--bg3);color:var(--mut);border:1px solid var(--line);
+  border-radius:6px;padding:.25rem .6rem;cursor:pointer;font:inherit;font-size:.8rem}
+.langbtns button[aria-pressed="true"]{background:var(--acc);color:#0b0b10;border-color:var(--acc);font-weight:700}
+
+p.sub{color:var(--mut);font-size:.9rem;margin:1rem 0}
+
+/* step bar — .subtabbar/.subtab-btn/.subpanel lifted from docs/index.html (M14, ADR-055) */
+.subtabbar{display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0}
+.subtab-btn{background:var(--bg3);color:var(--mut);border:1px solid var(--line);border-radius:6px;
+  padding:.32rem .7rem;cursor:pointer;font:inherit;font-size:.82rem}
+.subtab-btn[aria-selected="true"]{background:var(--acc2);color:#0b0b10;border-color:var(--acc2);font-weight:700}
+.subpanel{display:none}
+.subpanel.on{display:block}
+
+fieldset{border:1px solid var(--line);border-radius:10px;padding:.9rem;margin:0 0 1rem;background:var(--bg2)}
+legend{color:var(--mut);padding:0 .4rem;font-size:.82rem}
+label{display:block;margin:.6rem 0 .2rem;font-size:.88rem;color:var(--tx)}
+input,select,textarea{width:100%;background:var(--bg3);border:1px solid var(--line);color:var(--tx);
+  border-radius:8px;padding:.45rem .6rem;font:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
+textarea{resize:vertical;min-height:3rem}
+.row{display:flex;align-items:center;gap:.5rem;margin-top:.6rem}
+.row input[type=checkbox]{width:auto}
+.row label{margin:0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.hide{display:none}
+.mut{color:var(--mut)} .warn{color:var(--warn)} .ok{color:var(--ok)}
+.hint{color:var(--mut);font-size:.78rem;margin-top:.2rem}
+
+/* validation */
+.err{color:var(--no);font-size:.78rem;margin-top:.2rem;min-height:0}
+input.bad,select.bad,textarea.bad{border-color:var(--no);box-shadow:0 0 6px rgba(255,77,109,.45)}
+.errbox{border:1px solid var(--no);border-radius:8px;padding:.6rem .8rem;margin:.6rem 0;
+  background:rgba(255,77,109,.08);font-size:.85rem}
+.errbox ul{margin:.3rem 0 0;padding-left:1.1rem}
+
+.navrow{display:flex;justify-content:space-between;gap:.6rem;margin-top:1rem}
+button.nav,button.act{background:var(--bg3);color:var(--tx);border:1px solid var(--line);
+  border-radius:8px;padding:.45rem 1rem;cursor:pointer;font:inherit}
+button.nav[data-primary],button.act[data-primary]{background:var(--acc);color:#0b0b10;border-color:var(--acc);font-weight:700}
+button:disabled{opacity:.45;cursor:not-allowed}
+
+.out{position:relative;background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+  padding:.8rem;margin-bottom:1rem}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.45 ui-monospace,monospace;color:var(--tx)}
+.copy,.dl{position:absolute;top:.5rem;font-size:.72rem;padding:.2rem .5rem;border-radius:6px;cursor:pointer;
+  background:var(--bg3);color:var(--tx);border:1px solid var(--line)}
+.copy{right:.5rem} .dl{right:3.9rem;border-color:var(--acc2);color:var(--acc2)}
+
+.badge{display:inline-block;font-size:.72rem;padding:.1rem .45rem;border-radius:5px;
+  border:1px solid var(--line);background:var(--bg3);color:var(--mut);margin-left:.4rem}
+.badge.live{border-color:var(--ok);color:var(--ok)}
+h2{font-size:1rem;margin:1.2rem 0 .4rem}
+details{margin-top:1.2rem;font-size:.84rem;color:var(--mut)}
+details a{color:var(--acc2)}
 </style>
 </head>
-<body>
-<h1>Sentinel — генератор конфигурации</h1>
-<p class="sub">Статический клиент (vanilla JS, без сервера и сети — работает offline / air-gapped). Собирает валидный
-<code>RunConfig YAML</code> + env-блок + команду запуска из проверенной поверхности конфигурации
-(<code>brain/runconfig.py</code> · <code>cmd/agentctl</code> · <code>brain/llm.py</code>). Модели и эндпоинты — в
-<a href="../LOCAL_MODELS.md">LOCAL_MODELS.md</a>. <strong>ADR-031 фаза-1.</strong>
-Полностью работает на GitHub Pages: сгенерируй и <strong>скачай</strong> <code>run.yaml</code>/<code>sentinel.env</code>,
-подложи в свой локальный инстанс. Локально / air-gapped (часть Docker-бандла):
-<code>docker compose --profile webui up</code> → <code>http://localhost:8088/setup/</code>.
-«Живой» режим (запуск/смена на лету через локальный control-API) — M9.3.</p>
+<body class="lang-ru">
 
-<div class="grid">
-  <fieldset><legend>Сценарий</legend>
-    <label>Режим (mode)</label>
-    <select id="mode">
-      <option value="explore">explore — авто-исследование + покрытие</option>
-      <option value="goal" selected>goal — цель словами → сценарий</option>
-      <option value="describe">describe — описание потока → сценарий</option>
-    </select>
-    <div id="goalWrap"><label>Цель (goal)</label><textarea id="goal" placeholder="залогиниться и открыть биллинг"></textarea></div>
-    <div id="descWrap" class="hide"><label>Описание потока (describe)</label><textarea id="describe" placeholder="открыть форму регистрации, заполнить email и пароль, отправить"></textarea></div>
-    <label>Target URL</label><input id="target" placeholder="https://app.example  или  file:///app/testdata/fixtures/l2.html">
-    <label>Planner</label>
-    <select id="planner"><option value="heuristic">heuristic (детерминированный, offline)</option><option value="llm">llm (Opus/локальная)</option><option value="goal">goal (grounded)</option></select>
-  </fieldset>
+<header class="top"><div class="bar">
+  <h1>Sentinel <span class="dot">·</span> <span data-lang="ru">мастер настройки</span><span data-lang="en">setup wizard</span></h1>
+  <div class="langbtns">
+    <button type="button" id="lang-ru" aria-pressed="true" onclick="setLang('ru')">RU</button>
+    <button type="button" id="lang-en" aria-pressed="false" onclick="setLang('en')">EN</button>
+  </div>
+</div></header>
 
-  <fieldset><legend>Бюджеты и охват</legend>
-    <label>coverage_target (0–1)</label><input id="coverage" type="number" value="0.85" min="0" max="1" step="0.05">
-    <label>max_steps</label><input id="maxsteps" type="number" value="40" min="1" step="1">
-    <label>plan_budget (PLAN_TOKEN_LIMIT, 0=off)</label><input id="planbud" type="number" value="50000" min="0" step="1000">
-    <label>heal_budget (HEAL_TOKEN_LIMIT, 0=off)</label><input id="healbud" type="number" value="20000" min="0" step="1000">
-    <label>total_budget (TOTAL_TOKEN_LIMIT, 0=off)</label><input id="totbud" type="number" value="0" min="0" step="1000">
-  </fieldset>
+<main class="wrap">
+
+<p class="sub">
+  <span data-lang="ru">Пошаговый мастер: собирает валидный <code>RunConfig YAML</code> + env-блок + команду запуска.
+    Форма рендерится из <code>GET /v1/config-schema</code>; без control-API используется встроенный снимок схемы
+    (работает offline / air-gapped / <code>file://</code>).</span>
+  <span data-lang="en">A stepped wizard: it assembles a valid <code>RunConfig YAML</code> + an env block + the run command.
+    The form renders from <code>GET /v1/config-schema</code>; with no control-API it falls back to an embedded schema
+    snapshot (works offline / air-gapped / <code>file://</code>).</span>
+  <span class="badge" id="srcbadge"></span>
+</p>
+
+<div class="subtabbar" role="tablist" aria-label="Setup steps">
+  <button type="button" class="subtab-btn" data-subtab="runtime" role="tab" aria-selected="true">1 · <span data-lang="ru">Рантайм</span><span data-lang="en">Runtime</span></button>
+  <button type="button" class="subtab-btn" data-subtab="model" role="tab" aria-selected="false">2 · <span data-lang="ru">Модель и доступ</span><span data-lang="en">Model &amp; Auth</span></button>
+  <button type="button" class="subtab-btn" data-subtab="params" role="tab" aria-selected="false">3 · <span data-lang="ru">Параметры прогона</span><span data-lang="en">Run params</span></button>
+  <button type="button" class="subtab-btn" data-subtab="review" role="tab" aria-selected="false">4 · <span data-lang="ru">Проверка и запуск</span><span data-lang="en">Review &amp; run</span></button>
 </div>
 
-<div class="grid">
-  <fieldset><legend>Auth (login-as-test, опц.)</legend>
-    <label>storage_state (загрузить session, путь)</label><input id="ss" placeholder="state/auth.json">
-    <label>storage_state_save (сохранить после логина)</label><input id="sss" placeholder="state/auth.json">
-    <label>login_plan (PLAN_FILE для логин-прогона)</label><input id="loginplan" placeholder="runs/login/plan.json">
-    <div class="row"><input id="pwnotrace" type="checkbox" checked><label style="margin:0">PW_NO_TRACE — отключить трейсинг (обязательно при вводе пароля; GAP-RISK-010)</label></div>
-  </fieldset>
+<div id="draftnote" class="errbox hide" style="border-color:var(--line);background:var(--bg2)">
+  <span data-lang="ru">Восстановлен сохранённый черновик (секреты не хранятся).</span>
+  <span data-lang="en">Restored a saved draft (secrets are never stored).</span>
+  <button type="button" class="act" id="draftclear" style="margin-left:.6rem;font-size:.78rem;padding:.2rem .6rem">
+    <span data-lang="ru">Сбросить</span><span data-lang="en">Reset</span>
+  </button>
+</div>
 
-  <fieldset><legend>Модель (config-only, ADR-019)</legend>
-    <label>Backend</label>
-    <select id="backend"><option value="">— по умолчанию (Anthropic, claude-*)</option><option value="anthropic">anthropic (нативно)</option><option value="openai">openai-compat (локальная / роутер / cloud)</option></select>
-    <div id="openaiWrap" class="hide">
-      <label>LLM_BASE_URL (для локальной/роутера)</label><input id="baseurl" placeholder="http://localhost:11434/v1">
+<!-- ============================ 1 · Runtime ============================ -->
+<section class="subpanel on" data-subpanel="runtime" role="tabpanel">
+  <fieldset>
+    <legend><span data-lang="ru">Где крутится модель</span><span data-lang="en">Where the model runs</span></legend>
+    <label for="preset"><span data-lang="ru">Пресет рантайма</span><span data-lang="en">Runtime preset</span></label>
+    <select id="preset" data-draft></select>
+    <div class="hint" id="presethint"></div>
+
+    <label for="backend">LLM_BACKEND</label>
+    <select id="backend" data-draft></select>
+    <div class="err" id="e-backend" aria-live="polite"></div>
+    <div class="hint">
+      <span data-lang="ru">Все локальные рантаймы и OpenAI-совместимые облака = <code>openai</code> (шов ADR-019).
+        <code>sampling</code> — модель даёт MCP-хост, мастером не выбирается.</span>
+      <span data-lang="en">Every local runtime and OpenAI-compatible cloud = <code>openai</code> (the ADR-019 seam).
+        <code>sampling</code> means the MCP host supplies the model — not selectable here.</span>
     </div>
-    <label>Модель planner</label><input id="modelp" placeholder="qwen3:14b  /  claude-opus-4-8  /  o3">
-    <label>Модель heal (опц., своя)</label><input id="modelh" placeholder="qwen2.5-vl:7b  /  claude-sonnet-4-6">
-    <div class="row"><input id="vision" type="checkbox"><label style="margin:0">LLM_VISION — vision-heal (нужна VLM)</label></div>
+
+    <div id="baseurlWrap">
+      <label for="baseurl">LLM_BASE_URL</label>
+      <input id="baseurl" data-draft placeholder="http://ollama:11434/v1">
+      <div class="err" id="e-baseurl" aria-live="polite"></div>
+      <div class="hint">
+        <span data-lang="ru">Хосты вида <code>ollama</code>/<code>litellm</code> — реальные сервисы docker-compose;
+          для остальных подставь свой хост (<code>localhost:&lt;порт&gt;</code>).</span>
+        <span data-lang="en">Hostnames like <code>ollama</code>/<code>litellm</code> are real docker-compose services;
+          for the rest substitute your own host (<code>localhost:&lt;port&gt;</code>).</span>
+      </div>
+    </div>
   </fieldset>
-</div>
+  <div class="navrow"><span></span><button type="button" class="nav" data-primary data-next="model"><span data-lang="ru">Далее →</span><span data-lang="en">Next →</span></button></div>
+</section>
 
-<h2>1) RunConfig YAML</h2>
-<div class="out"><button class="dl" data-t="yaml" data-f="run.yaml">⬇ run.yaml</button><button class="copy" data-t="yaml">copy</button><pre id="yaml"></pre></div>
+<!-- ========================= 2 · Model & Auth ========================= -->
+<section class="subpanel" data-subpanel="model" role="tabpanel">
+  <fieldset>
+    <legend><span data-lang="ru">Модель (по ролям)</span><span data-lang="en">Model (per role)</span></legend>
+    <div id="rolemodels" class="grid"></div>
+    <div class="row"><input id="vision" type="checkbox" data-draft><label for="vision">LLM_VISION —
+      <span data-lang="ru">vision-heal (нужна VLM; для openai по умолчанию выключено)</span>
+      <span data-lang="en">vision heal (needs a VLM; off by default for openai)</span></label></div>
+    <div class="row"><input id="structured" type="checkbox" data-draft><label for="structured">LLM_STRUCTURED —
+      <span data-lang="ru">строгий JSON-выход (многие локальные эндпоинты не поддерживают)</span>
+      <span data-lang="en">strict JSON output (many local endpoints reject it)</span></label></div>
+  </fieldset>
 
-<h2>2) Env-блок (модель + ключ)</h2>
-<div class="out"><button class="dl" data-t="env" data-f="sentinel.env">⬇ sentinel.env</button><button class="copy" data-t="env">copy</button><pre id="env"></pre></div>
-<p class="mut">⚠️ <span class="warn">Ключ не попадает в YAML</span> — он только в env (резолвится в pw-executor, никогда в plan/transcript/trace). Не коммить env с реальным ключом.</p>
+  <fieldset>
+    <legend><span data-lang="ru">Ключ доступа к модели</span><span data-lang="en">Model API key</span></legend>
+    <label for="apikey" id="apikeylabel">LLM_API_KEY</label>
+    <input id="apikey" type="password" autocomplete="off" placeholder="noauth">
+    <div class="err" id="e-apikey" aria-live="polite"></div>
+    <p class="hint warn">
+      <span data-lang="ru">⚠ Ключ не сохраняется (ни в черновик, ни в YAML) — он попадает только в env-блок,
+        который ты скачиваешь. Не коммить его.</span>
+      <span data-lang="en">⚠ The key is never stored (not in the draft, not in the YAML) — it only lands in the env block
+        you download. Do not commit it.</span>
+    </p>
+  </fieldset>
 
-<h2>3) Команда запуска</h2>
-<div class="out"><button class="copy" data-t="cmd">copy</button><pre id="cmd"></pre></div>
+  <fieldset>
+    <legend><span data-lang="ru">Auth приложения (login-as-test, опц.)</span><span data-lang="en">Application auth (login-as-test, optional)</span></legend>
+    <div class="grid">
+      <div>
+        <label for="ss">storage_state</label><input id="ss" data-draft placeholder="state/auth.json">
+        <label for="loginplan">login_plan (PLAN_FILE)</label><input id="loginplan" data-draft placeholder="runs/login/plan.json">
+      </div>
+      <div>
+        <label for="sss">storage_state_save</label><input id="sss" data-draft placeholder="state/auth.json">
+      </div>
+    </div>
+    <div class="row"><input id="pwnotrace" type="checkbox" checked data-draft><label for="pwnotrace">PW_NO_TRACE —
+      <span data-lang="ru">выключить трейсинг (обязательно при вводе пароля; GAP-RISK-010)</span>
+      <span data-lang="en">disable tracing (mandatory when typing a password; GAP-RISK-010)</span></label></div>
+  </fieldset>
 
-<h2>4) Живой запуск (опц. — через локальный control-API, M9.3)</h2>
-<div class="grid">
-  <div><label>control-API URL</label><input id="capi" placeholder="http://localhost:8090"></div>
-  <div><label>Bearer token (CONTROL_API_TOKEN)</label><input id="capitok" type="password" placeholder="нужен для запуска"></div>
-</div>
-<div class="row" style="margin-top:.6rem">
-  <button id="check" type="button">Проверить</button>
-  <button id="run" type="button" disabled>▶ Запустить</button>
-  <button id="rerun" type="button" disabled title="replay">🔁 Перепрогон</button>
-  <button id="baseline" type="button" disabled title="baseline update">📌 Эталон</button>
-  <span id="capistatus" class="mut"></span>
-</div>
-<div class="out" id="runout" style="display:none;margin-top:.6rem"><pre id="runlog"></pre></div>
-<p class="mut">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (исключение mixed-content);
-control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла
-(<code>docker compose --profile control-api up</code>, порт 8090) ограничения нет. Токен хранится только в этой вкладке.</p>
+  <div class="navrow">
+    <button type="button" class="nav" data-back="runtime"><span data-lang="ru">← Назад</span><span data-lang="en">← Back</span></button>
+    <button type="button" class="nav" data-primary data-next="params"><span data-lang="ru">Далее →</span><span data-lang="en">Next →</span></button>
+  </div>
+</section>
 
-<details><summary>Соответствие коду</summary>
-<p>YAML-ключи = <code>brain/runconfig.py</code> (<code>_KEY_ENV</code> + <code>_AUTH_ENV</code>); приоритет: явный флаг/env &gt; файл &gt; дефолт.
-Флаги = <code>cmd/agentctl</code> (<code>run --target/--run-config/--goal/--describe/--planner/...</code>).
-Env моделей = <code>brain/llm.py make_backend</code> (per-role <code>LLM_*[_PLANNER|_HEAL]</code>). Каталог моделей/эндпоинтов — <a href="../LOCAL_MODELS.md">LOCAL_MODELS.md §3–§4</a>.</p></details>
+<!-- ========================== 3 · Run params ========================== -->
+<section class="subpanel" data-subpanel="params" role="tabpanel">
+  <fieldset>
+    <legend><span data-lang="ru">Сценарий</span><span data-lang="en">Scenario</span></legend>
+    <label for="mode"><span data-lang="ru">Режим (mode)</span><span data-lang="en">Mode</span></label>
+    <select id="mode" data-draft></select>
+    <div class="hint">
+      <span data-lang="ru">Выбор рантайма (шаг 1) ≠ режим прогона. <code>replay</code>/<code>baseline</code> целятся в
+        прошлый прогон (кнопки на шаге 4), <code>chat</code> живёт в чат-UI.</span>
+      <span data-lang="en">The runtime choice (step 1) ≠ the run mode. <code>replay</code>/<code>baseline</code> target a
+        previous run (buttons on step 4); <code>chat</code> lives in the chat UI.</span>
+    </div>
+
+    <div id="goalWrap">
+      <label for="goal">goal</label>
+      <textarea id="goal" data-draft placeholder="залогиниться и открыть биллинг"></textarea>
+      <div class="err" id="e-goal" aria-live="polite"></div>
+    </div>
+    <div id="descWrap" class="hide">
+      <label for="describe">describe</label>
+      <textarea id="describe" data-draft placeholder="открыть форму регистрации, заполнить email и пароль, отправить"></textarea>
+      <div class="err" id="e-describe" aria-live="polite"></div>
+    </div>
+
+    <label for="target">target <span class="mut">(http:// · https:// · file://)</span></label>
+    <input id="target" data-draft placeholder="https://app.example  |  file:///app/testdata/fixtures/l2.html">
+    <div class="err" id="e-target" aria-live="polite"></div>
+
+    <label for="planner">planner</label>
+    <select id="planner" data-draft></select>
+  </fieldset>
+
+  <fieldset>
+    <legend><span data-lang="ru">Бюджеты и охват</span><span data-lang="en">Budgets &amp; coverage</span>
+      <span class="mut" style="font-size:.75rem"> — <span data-lang="ru">поля из схемы</span><span data-lang="en">fields from the schema</span></span></legend>
+    <div id="numfields" class="grid"></div>
+  </fieldset>
+
+  <div class="navrow">
+    <button type="button" class="nav" data-back="model"><span data-lang="ru">← Назад</span><span data-lang="en">← Back</span></button>
+    <button type="button" class="nav" data-primary data-next="review"><span data-lang="ru">Далее →</span><span data-lang="en">Next →</span></button>
+  </div>
+</section>
+
+<!-- ========================== 4 · Review & run ======================== -->
+<section class="subpanel" data-subpanel="review" role="tabpanel">
+  <div id="summary" aria-live="polite"></div>
+
+  <h2>1) RunConfig YAML</h2>
+  <div class="out"><button class="dl" data-t="yaml" data-f="run.yaml">⬇ run.yaml</button><button class="copy" data-t="yaml"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button><pre id="yaml"></pre></div>
+
+  <h2>2) <span data-lang="ru">Env-блок (модель + ключ)</span><span data-lang="en">Env block (model + key)</span></h2>
+  <div class="out"><button class="dl" data-t="env" data-f="sentinel.env">⬇ sentinel.env</button><button class="copy" data-t="env"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button><pre id="env"></pre></div>
+  <p class="hint warn">
+    <span data-lang="ru">⚠ Ключ живёт только в env — никогда в YAML, plan, transcript или trace.</span>
+    <span data-lang="en">⚠ The key lives in env only — never in the YAML, plan, transcript or trace.</span>
+  </p>
+
+  <h2>3) <span data-lang="ru">Команда запуска</span><span data-lang="en">Run command</span></h2>
+  <div class="out"><button class="copy" data-t="cmd"><span data-lang="ru">копировать</span><span data-lang="en">copy</span></button><pre id="cmd"></pre></div>
+
+  <h2>4) <span data-lang="ru">Живой запуск (опц. — локальный control-API)</span><span data-lang="en">Live run (optional — local control-API)</span></h2>
+  <div class="grid">
+    <div><label for="capi">control-API URL</label><input id="capi" data-draft placeholder="http://localhost:8090"></div>
+    <div><label for="capitok">Bearer token (CONTROL_API_TOKEN)</label><input id="capitok" type="password" autocomplete="off" placeholder="нужен для запуска"></div>
+  </div>
+  <div class="row" style="margin-top:.6rem;flex-wrap:wrap">
+    <button type="button" class="act" id="check"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
+    <button type="button" class="act" data-primary id="run" disabled>▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span></button>
+    <button type="button" class="act" id="rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+    <button type="button" class="act" id="baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+    <span id="capistatus" class="mut"></span>
+  </div>
+  <div class="out" id="runout" style="display:none;margin-top:.6rem"><pre id="runlog"></pre></div>
+  <p class="hint">
+    <span data-lang="ru">С GitHub Pages живой режим работает только против <code>http://localhost</code> (исключение mixed-content);
+      control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Токен хранится только в этой вкладке
+      и никогда не пишется в черновик. «Проверить» также подтягивает <em>живую</em> схему и перерисовывает форму.</span>
+    <span data-lang="en">From GitHub Pages the live mode only works against <code>http://localhost</code> (the mixed-content exemption);
+      the control-API must send CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). The token stays in this tab only and is
+      never written to the draft. "Check" also pulls the <em>live</em> schema and re-renders the form.</span>
+  </p>
+
+  <div class="navrow">
+    <button type="button" class="nav" data-back="params"><span data-lang="ru">← Назад</span><span data-lang="en">← Back</span></button>
+    <span></span>
+  </div>
+</section>
+
+<details><summary><span data-lang="ru">Соответствие коду</span><span data-lang="en">Mapping to the code</span></summary>
+<p>
+  <span data-lang="ru">YAML-ключи и <code>auth</code> = <code>brain/runconfig.py</code> (<code>_KEY_ENV</code> + <code>_AUTH_ENV</code>);
+    приоритет: явный флаг/env &gt; файл &gt; дефолт. Флаги = <code>cmd/agentctl</code>.
+    Env моделей = <code>brain/llm.py make_backend</code> (per-role <code>LLM_*[_PLANNER|_HEAL]</code>).
+    Пресеты рантаймов = <a href="../backend-presets.json">backend-presets.json</a> · каталог — <a href="../LOCAL_MODELS.md">LOCAL_MODELS.md</a>.
+    Схема формы = <code>GET /v1/config-schema</code> (ADR-060).</span>
+  <span data-lang="en">The YAML keys and <code>auth</code> come from <code>brain/runconfig.py</code> (<code>_KEY_ENV</code> + <code>_AUTH_ENV</code>);
+    precedence: explicit flag/env &gt; file &gt; default. Flags come from <code>cmd/agentctl</code>.
+    Model env comes from <code>brain/llm.py make_backend</code> (per-role <code>LLM_*[_PLANNER|_HEAL]</code>).
+    Runtime presets = <a href="../backend-presets.json">backend-presets.json</a> · catalogue — <a href="../LOCAL_MODELS.md">LOCAL_MODELS.md</a>.
+    The form schema = <code>GET /v1/config-schema</code> (ADR-060).</span>
+</p></details>
+
+</main>
 
 <script>
-const $=id=>document.getElementById(id);
-function q(s){ s=String(s); return '"'+s.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"'; }
-function sync(){
-  const mode=$("mode").value;
-  $("goalWrap").classList.toggle("hide", mode!=="goal");
-  $("descWrap").classList.toggle("hide", mode!=="describe");
-  if(mode==="goal" && !$("planner").dataset.touched) $("planner").value="goal";
-  $("openaiWrap").classList.toggle("hide", $("backend").value!=="openai");
-  render();
-}
-function render(){
-  const mode=$("mode").value, target=$("target").value.trim();
-  const lines=["# Sentinel RunConfig — generated by setup-WebUI (docs/setup). Pass via: --run-config <file>"];
-  lines.push("mode: "+mode);
-  if(mode==="goal" && $("goal").value.trim()) lines.push("goal: "+q($("goal").value.trim()));
-  if(mode==="describe" && $("describe").value.trim()) lines.push("describe: "+q($("describe").value.trim()));
-  lines.push("planner: "+$("planner").value);
-  lines.push("coverage_target: "+($("coverage").value||"0.85"));
-  lines.push("max_steps: "+($("maxsteps").value||"40"));
-  lines.push("plan_budget: "+($("planbud").value||"50000"));
-  lines.push("heal_budget: "+($("healbud").value||"20000"));
-  lines.push("total_budget: "+($("totbud").value||"0"));
-  const ss=$("ss").value.trim(), sss=$("sss").value.trim(), lp=$("loginplan").value.trim(), pnt=$("pwnotrace").checked;
-  const authSet = ss||sss||lp;
-  if(authSet || pnt){
-    lines.push("auth:");
-    if(ss)  lines.push("  storage_state: "+q(ss));
-    if(sss) lines.push("  storage_state_save: "+q(sss));
-    if(lp)  lines.push("  login_plan: "+q(lp));
-    lines.push("  pw_no_trace: "+(pnt?"true":"false"));
-  }
-  $("yaml").textContent = lines.join("\n");
+/* =====================================================================
+   Fallback snapshots (ADR-061). Rendered immediately so the page works
+   with no control-API (GitHub Pages / file:// / air-gapped bundle).
+   cmd/control-api/setup_wizard_test.go parses the marked blocks and
+   fails CI if they drift from the live handler / backend-presets.json.
+   ===================================================================== */
+/* SCHEMA-SNAPSHOT-BEGIN */
+var FALLBACK_SCHEMA = {
+  "modes": ["explore", "goal", "describe", "replay", "baseline", "chat"],
+  "planner": ["heuristic", "llm", "goal"],
+  "backends": ["anthropic", "openai", "sampling"],
+  "roles": ["planner", "heal"],
+  "fields": {
+    "target": {"type": "string", "required": true},
+    "goal": {"type": "string"},
+    "describe": {"type": "string"},
+    "conversation_id": {"type": "string"},
+    "coverage_target": {"type": "number", "default": 0.85},
+    "max_steps": {"type": "int", "default": 40},
+    "plan_budget": {"type": "int", "default": 50000},
+    "heal_budget": {"type": "int", "default": 20000},
+    "total_budget": {"type": "int", "default": 0}
+  },
+  "llm": {
+    "backend": {"env": "LLM_BACKEND", "type": "enum", "enum": ["anthropic", "openai", "sampling"], "default": "anthropic", "role_split": true},
+    "model": {"env": "LLM_MODEL", "type": "string", "role_split": true},
+    "base_url": {"env": "LLM_BASE_URL", "type": "string", "role_split": true},
+    "api_key": {"env": "LLM_API_KEY", "type": "string", "secret": true, "role_split": true},
+    "vision": {"env": "LLM_VISION", "type": "bool", "default": false, "role_split": true},
+    "structured": {"env": "LLM_STRUCTURED", "type": "bool", "default": false, "role_split": true}
+  },
+  "note": "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload"
+};
+/* SCHEMA-SNAPSHOT-END */
 
-  // env block
-  const be=$("backend").value, bu=$("baseurl").value.trim(), mp=$("modelp").value.trim(), mh=$("modelh").value.trim(), vis=$("vision").checked;
-  const env=[];
-  if(be){
-    env.push("export LLM_BACKEND="+be);
-    if(be==="openai" && bu) env.push("export LLM_BASE_URL="+bu);
-    if(mp) env.push("export LLM_MODEL_PLANNER="+mp);
-    if(mh) env.push("export LLM_MODEL_HEAL="+mh);
-    if(vis) env.push("export LLM_VISION=1");
-    if(be==="openai"){
-      env.push("export LLM_API_KEY=...        # local Ollama/vLLM: 'noauth'; cloud/router: your key — DO NOT COMMIT");
-    } else {
-      env.push("export ANTHROPIC_API_KEY=...  # required for the Anthropic backend — DO NOT COMMIT");
+/* PRESETS-SNAPSHOT-BEGIN */
+var FALLBACK_PRESETS = {
+  "anthropic": {"label": "Cloud — Anthropic", "backend": "anthropic", "base_url": null, "vision": true, "structured": true, "api_key": "anthropic_env", "default_model": {"planner": "claude-opus-4-8", "heal": "claude-sonnet-4-6"}},
+  "openai": {"label": "Cloud — OpenAI-compatible (OpenAI/DeepSeek/OpenRouter)", "backend": "openai", "base_url": null, "vision": false, "structured": false, "api_key": "real", "note": "set the provider's /v1 base_url + a real key; OpenAI itself supports vision+structured — set LLM_VISION=1/LLM_STRUCTURED=1 if your model does"},
+  "ollama": {"label": "Ollama", "backend": "openai", "base_url": "http://ollama:11434/v1", "vision": false, "structured": false, "api_key": "noauth"},
+  "vllm": {"label": "vLLM", "backend": "openai", "base_url": "http://vllm:8000/v1", "vision": false, "structured": false, "api_key": "noauth"},
+  "llamacpp": {"label": "llama.cpp / llamafile", "backend": "openai", "base_url": "http://host:8080/v1", "vision": false, "structured": false, "api_key": "noauth"},
+  "lmstudio": {"label": "LM Studio", "backend": "openai", "base_url": "http://host:1234/v1", "vision": false, "structured": false, "api_key": "noauth"},
+  "localai": {"label": "LocalAI", "backend": "openai", "base_url": "http://localai:8080/v1", "vision": false, "structured": false, "api_key": "noauth"},
+  "litellm": {"label": "LiteLLM (router)", "backend": "openai", "base_url": "http://litellm:4000/v1", "vision": false, "structured": false, "api_key": "noauth", "note": "routes many providers (ADR-045; image in deploy/litellm)"},
+  "tgi": {"label": "HuggingFace TGI", "backend": "openai", "base_url": "http://host:<PORT>/v1", "vision": false, "structured": false, "api_key": "noauth", "note": "operator sets the port (no default)"}
+};
+/* PRESETS-SNAPSHOT-END */
+
+var SCHEMA = FALLBACK_SCHEMA;
+var PRESETS = FALLBACK_PRESETS;
+var schemaSrc = 'snapshot';   /* snapshot | live */
+var presetsSrc = 'snapshot';  /* snapshot | file */
+
+var $ = function (id) { return document.getElementById(id); };
+function lang() { return document.body.classList.contains('lang-en') ? 'en' : 'ru'; }
+function tr(ru, en) { return lang() === 'en' ? en : ru; }
+
+/* ----------------------------- i18n (same driver as docs/index.html) ----------------------------- */
+function setLang(l) {
+  document.body.classList.remove('lang-ru', 'lang-en');
+  document.body.classList.add('lang-' + l);
+  document.documentElement.lang = l;
+  try { localStorage.setItem('sentinel_lang', l); } catch (e) {}
+  $('lang-ru').setAttribute('aria-pressed', l === 'ru' ? 'true' : 'false');
+  $('lang-en').setAttribute('aria-pressed', l === 'en' ? 'true' : 'false');
+  /* <option> cannot host <span data-lang> (M12), so option labels are rebuilt on every language switch */
+  refreshOptionLabels();
+  renderPresetHint();
+  setSrcBadge();
+  renderReview();
+}
+function initLang() {
+  var l = 'ru';
+  try { l = localStorage.getItem('sentinel_lang') || 'ru'; } catch (e) {}
+  setLang(l === 'en' ? 'en' : 'ru');
+}
+
+/* ----------------------------- labels for <option> ----------------------------- */
+var MODE_LABEL = {
+  explore:  { ru: 'explore — авто-исследование + покрытие', en: 'explore — autonomous crawl + coverage' },
+  goal:     { ru: 'goal — цель словами → сценарий',        en: 'goal — a goal in words → a scenario' },
+  describe: { ru: 'describe — описание потока → сценарий',  en: 'describe — a flow description → a scenario' }
+};
+var PLANNER_LABEL = {
+  heuristic: { ru: 'heuristic — детерминированный, offline', en: 'heuristic — deterministic, offline' },
+  llm:       { ru: 'llm — модель планирует',                 en: 'llm — the model plans' },
+  goal:      { ru: 'goal — grounded под цель',               en: 'goal — grounded on the goal' }
+};
+var KEYHINT = {
+  anthropic_env: { ru: 'Ключ берётся из ANTHROPIC_API_KEY.', en: 'The key comes from ANTHROPIC_API_KEY.' },
+  real:          { ru: 'Нужен настоящий ключ провайдера.',    en: 'A real provider key is required.' },
+  noauth:        { ru: 'Ключ игнорируется, но SDK требует непустую строку (noauth).', en: 'The key is ignored, but the SDK requires a non-empty string (noauth).' }
+};
+
+/* Modes the wizard can author. replay/baseline need a prior run (step-4 buttons); chat needs the chat UI.
+   Intersected with the schema, so a mode the server drops disappears from the dropdown. */
+var AUTHORING_MODES = ['explore', 'goal', 'describe'];
+/* Backends the wizard must NOT offer. `sampling` means the MCP host supplies the model: brain/llm.py
+   engages it only inside an active MCP session, so the run.yaml/env this page generates for a plain
+   `agentctl run` would silently fall back to the heuristic. Filtering it keeps the dropdown honest with
+   the hint text next to it. */
+var NON_WIZARD_BACKENDS = { sampling: 1 };
+function wizardBackends() {
+  return (SCHEMA.backends || []).filter(function (b) { return !NON_WIZARD_BACKENDS[b]; });
+}
+/* conversation_id is chat-only; target/goal/describe get dedicated widgets above the generated block. */
+var SKIP_FIELDS = { conversation_id: 1 };
+var STRUCTURAL_FIELDS = { target: 1, goal: 1, describe: 1 };
+
+function optLabel(map, key) {
+  var m = map[key];
+  return m ? m[lang()] : key;
+}
+function fillSelect(sel, values, labelMap) {
+  var prev = sel.value;
+  sel.innerHTML = '';
+  values.forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = labelMap ? optLabel(labelMap, v) : v;
+    sel.appendChild(o);
+  });
+  if (values.indexOf(prev) >= 0) sel.value = prev;
+}
+function refreshOptionLabels() {
+  fillSelect($('mode'), authoringModes(), MODE_LABEL);
+  fillSelect($('planner'), SCHEMA.planner || [], PLANNER_LABEL);
+  fillSelect($('backend'), wizardBackends(), null);
+  renderPresetSelect();
+}
+
+/* ----------------------------- schema-driven rendering ----------------------------- */
+function authoringModes() {
+  var m = SCHEMA.modes || [];
+  return AUTHORING_MODES.filter(function (x) { return m.indexOf(x) >= 0; });
+}
+function numericFields() {
+  var f = SCHEMA.fields || {};
+  return Object.keys(f).filter(function (k) {
+    return !SKIP_FIELDS[k] && !STRUCTURAL_FIELDS[k] && (f[k].type === 'int' || f[k].type === 'number');
+  });
+}
+function fieldId(k) { return 'f-' + k; }
+
+/* Numeric run-params are GENERATED from the schema: a field added server-side shows up here with no edit. */
+function renderNumFields() {
+  var host = $('numfields');
+  var keep = {};
+  numericFields().forEach(function (k) { var el = $(fieldId(k)); if (el) keep[k] = el.value; });
+  host.innerHTML = '';
+  numericFields().forEach(function (k) {
+    var d = SCHEMA.fields[k];
+    var box = document.createElement('div');
+    var lab = document.createElement('label');
+    lab.setAttribute('for', fieldId(k));
+    lab.textContent = k + (d['default'] !== undefined ? ' (' + tr('дефолт', 'default') + ' ' + d['default'] + ')' : '');
+    var inp = document.createElement('input');
+    inp.type = 'number';
+    inp.id = fieldId(k);
+    inp.setAttribute('data-draft', '');
+    if (k === 'coverage_target') { inp.min = '0'; inp.max = '1'; inp.step = '0.05'; }
+    else if (k === 'max_steps')  { inp.min = '1'; inp.step = '1'; }
+    else                          { inp.min = '0'; inp.step = '1000'; }
+    inp.value = (keep[k] !== undefined && keep[k] !== '') ? keep[k] : (d['default'] !== undefined ? String(d['default']) : '');
+    inp.addEventListener('input', onInput);
+    var err = document.createElement('div'); err.className = 'err'; err.id = 'e-' + fieldId(k); err.setAttribute('aria-live', 'polite');
+    box.appendChild(lab); box.appendChild(inp); box.appendChild(err);
+    host.appendChild(box);
+  });
+}
+
+/* Per-role model inputs are GENERATED from schema.roles + schema.llm.model.env (LLM_MODEL_<ROLE>). */
+function roleEnv(role) {
+  var base = (SCHEMA.llm && SCHEMA.llm.model && SCHEMA.llm.model.env) || 'LLM_MODEL';
+  return base + '_' + role.toUpperCase();
+}
+function roleId(role) { return 'm-' + role; }
+function renderRoleModels() {
+  var host = $('rolemodels');
+  var roles = SCHEMA.roles || ['planner', 'heal'];
+  var keep = {};
+  roles.forEach(function (r) { var el = $(roleId(r)); if (el) keep[r] = el.value; });
+  host.innerHTML = '';
+  roles.forEach(function (r) {
+    var box = document.createElement('div');
+    var lab = document.createElement('label');
+    lab.setAttribute('for', roleId(r));
+    lab.textContent = roleEnv(r);
+    var inp = document.createElement('input');
+    inp.id = roleId(r);
+    inp.setAttribute('data-draft', '');
+    inp.placeholder = r === 'planner' ? 'qwen3:14b  /  claude-opus-4-8' : 'qwen2.5-vl:7b  /  claude-sonnet-4-6';
+    if (keep[r]) inp.value = keep[r];
+    inp.addEventListener('input', onInput);
+    var err = document.createElement('div'); err.className = 'err'; err.id = 'e-' + roleId(r); err.setAttribute('aria-live', 'polite');
+    box.appendChild(lab); box.appendChild(inp); box.appendChild(err);
+    host.appendChild(box);
+  });
+}
+
+function renderPresetSelect() {
+  var sel = $('preset');
+  var prev = sel.value;
+  sel.innerHTML = '';
+  Object.keys(PRESETS).forEach(function (k) {
+    var o = document.createElement('option');
+    o.value = k; o.textContent = PRESETS[k].label || k;
+    sel.appendChild(o);
+  });
+  if (prev && PRESETS[prev]) sel.value = prev;
+}
+/* Only the bilingual KEYHINT is shown. A preset's `note` is English provenance data for the JSON/docs,
+   not UI chrome — rendering it here would code-switch the RU interface (scoped in ADR-061). */
+function renderPresetHint() {
+  var p = PRESETS[$('preset').value];
+  if (!p) { $('presethint').textContent = ''; return; }
+  var kh = KEYHINT[p.api_key];
+  $('presethint').textContent = kh ? kh[lang()] : '';
+}
+function applyPreset() {
+  var p = PRESETS[$('preset').value];
+  if (!p) return;
+  $('backend').value = p.backend;
+  $('baseurl').value = p.base_url || '';
+  $('vision').checked = !!p.vision;
+  $('structured').checked = !!p.structured;
+  /* ALWAYS rewrite the per-role models. Only the anthropic preset carries default_model, so a conditional
+     reset would leave e.g. claude-opus-4-8 sitting in LLM_MODEL_PLANNER after switching to Ollama. */
+  var dm = p.default_model || {};
+  (SCHEMA.roles || []).forEach(function (r) {
+    var el = $(roleId(r));
+    if (el) el.value = dm[r] || '';
+  });
+  sync();
+}
+
+var SRC_LABEL = {
+  snapshot: { ru: 'снимок', en: 'snapshot' },
+  live:     { ru: 'живая',  en: 'live' },
+  file:     { ru: 'файл',   en: 'file' }
+};
+function srcName(s) { var m = SRC_LABEL[s]; return m ? m[lang()] : s; }
+function setSrcBadge() {
+  var b = $('srcbadge');
+  b.textContent = tr('схема', 'schema') + ': ' + srcName(schemaSrc) + ' · ' + tr('пресеты', 'presets') + ': ' + srcName(presetsSrc);
+  b.classList.toggle('live', schemaSrc === 'live');
+}
+/* A control-API older than ADR-060 answers {modes, planner, fields, note} — no backends/roles/llm.
+   Accepting that would empty the backend select and emit `export LLM_BACKEND=` while Review still says
+   "valid". Require the whole shape; otherwise keep the snapshot and tell the user. */
+var REQUIRED_SCHEMA_KEYS = ['modes', 'planner', 'backends', 'roles', 'fields', 'llm'];
+function schemaComplete(s) {
+  if (!s || typeof s !== 'object') return false;
+  return REQUIRED_SCHEMA_KEYS.every(function (k) {
+    var v = s[k];
+    if (Array.isArray(v)) return v.length > 0;
+    return !!v && typeof v === 'object' && Object.keys(v).length > 0;
+  });
+}
+function applySchema(s, src) {
+  if (!schemaComplete(s)) return false;
+  SCHEMA = s; schemaSrc = src;
+  renderSchemaDriven();
+  setSrcBadge();
+  return true;
+}
+function renderSchemaDriven() {
+  refreshOptionLabels();
+  renderRoleModels();
+  renderNumFields();
+  sync();
+}
+
+/* ----------------------------- validation ----------------------------- */
+/* mirrors validTarget() in cmd/control-api/main.go */
+function validTarget(u) {
+  return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('file://') === 0;
+}
+function anyRoleModel() {
+  return (SCHEMA.roles || []).some(function (r) { var el = $(roleId(r)); return el && el.value.trim(); });
+}
+function num(id) { var el = $(id); return el ? parseFloat(el.value) : NaN; }
+
+/* Each entry: [inputId, message]. Empty array = the step is valid. */
+function validateStep(step) {
+  var e = [];
+  if (step === 'runtime') {
+    /* A backend must actually be selected: a partial live schema could otherwise leave the select empty. */
+    var be = $('backend').value;
+    if (!be || wizardBackends().indexOf(be) < 0) {
+      e.push(['backend', tr('выбери backend', 'select a backend')]);
     }
-  } else {
-    env.push("# default backend = Anthropic (claude-opus-4-8 planner / claude-sonnet-4-6 heal).");
-    env.push("export ANTHROPIC_API_KEY=...    # absent key -> offline heuristic / L1–L6 fallback. DO NOT COMMIT");
+    /* Step 1 owns base_url only. The "openai needs a key or a base_url" rule lives on step 2, where the key
+       field actually is — enforcing it here would dead-end the "Cloud — OpenAI-compatible" preset (base_url null). */
+    var bu = $('baseurl').value.trim();
+    if (be === 'openai' && bu && (bu.indexOf('<PORT>') >= 0 || bu.indexOf('http://host:') === 0)) {
+      e.push(['baseurl', tr('замени плейсхолдер host/<PORT> на свой адрес', 'replace the host/<PORT> placeholder with your address')]);
+    }
   }
-  $("env").textContent = env.join("\n");
-
-  // command
-  const t = target || "<TARGET_URL>";
-  const c=[];
-  c.push("# native:");
-  c.push("agentctl run --target "+q(t)+" --run-config run.yaml");
-  c.push("");
-  c.push("# docker (mount run.yaml into /config):");
-  c.push("docker compose run --rm sentinel run --target "+q(t)+" --run-config /config/run.yaml");
-  $("cmd").textContent = c.join("\n");
+  if (step === 'model') {
+    /* mirrors make_backend() in brain/llm.py: openai needs a model AND (key or base_url) */
+    if ($('backend').value === 'openai') {
+      if (!anyRoleModel()) e.push([roleId('planner'), tr('backend=openai требует модель', 'backend=openai requires a model')]);
+      if (!$('baseurl').value.trim() && !$('apikey').value.trim()) {
+        e.push(['apikey', tr('openai: нужен LLM_BASE_URL (шаг 1) или ключ', 'openai: LLM_BASE_URL (step 1) or a key is required')]);
+      }
+    }
+  }
+  if (step === 'params') {
+    var tgt = $('target').value.trim();
+    var req = !!(SCHEMA.fields && SCHEMA.fields.target && SCHEMA.fields.target.required);
+    if (!tgt && req) e.push(['target', tr('target обязателен', 'target is required')]);
+    else if (tgt && !validTarget(tgt)) e.push(['target', tr('target должен начинаться с http:// https:// или file://', 'target must start with http:// https:// or file://')]);
+    var mode = $('mode').value;
+    if (mode === 'goal' && !$('goal').value.trim()) e.push(['goal', tr('режим goal требует цель', 'goal mode requires a goal')]);
+    if (mode === 'describe' && !$('describe').value.trim()) e.push(['describe', tr('режим describe требует описание', 'describe mode requires a description')]);
+    numericFields().forEach(function (k) {
+      var v = num(fieldId(k));
+      if (isNaN(v)) { e.push([fieldId(k), tr('нужно число', 'a number is required')]); return; }
+      if (k === 'coverage_target' && (v < 0 || v > 1)) e.push([fieldId(k), tr('диапазон 0–1', 'range 0–1')]);
+      else if (k === 'max_steps' && v < 1) e.push([fieldId(k), tr('минимум 1', 'minimum 1')]);
+      else if (k !== 'coverage_target' && k !== 'max_steps' && v < 0) e.push([fieldId(k), tr('не может быть отрицательным', 'cannot be negative')]);
+    });
+  }
+  return e;
 }
-$("planner").addEventListener("input",e=>{e.target.dataset.touched="1";});
-document.querySelectorAll("input,select,textarea").forEach(e=>e.addEventListener("input",sync));
-document.querySelectorAll(".copy").forEach(b=>b.addEventListener("click",()=>{
-  const t=$(b.dataset.t).textContent; navigator.clipboard&&navigator.clipboard.writeText(t);
-  const o=b.textContent; b.textContent="copied"; setTimeout(()=>b.textContent=o,1000);
-}));
-// Download the generated artifact as a file (fully client-side — works on GitHub Pages, no server).
-document.querySelectorAll(".dl").forEach(b=>b.addEventListener("click",()=>{
-  const blob=new Blob([$(b.dataset.t).textContent],{type:"text/plain;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=b.dataset.f;
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),0);
-}));
-
-// --- M9.3 phase-2: live run via the control-API (health -> run -> poll). Pure fetch, no deps. ---
-const capiBase = () => $("capi").value.trim().replace(/\/+$/, "");
-const setCapiStatus = (t) => { $("capistatus").textContent = t; };
-const runLog = (t) => { $("runout").style.display = "block"; $("runlog").textContent = t; };
-$("check").addEventListener("click", async () => {
-  const base = capiBase();
-  if (!base) { setCapiStatus("укажите URL"); return; }
-  setCapiStatus("проверяю…");
-  try {
-    const r = await fetch(base + "/healthz");
-    if (!r.ok) { setCapiStatus("✗ HTTP " + r.status); $("run").disabled = true; return; }
-    const j = await r.json();
-    setCapiStatus("✓ ok v" + (j.version || "?") + " (runs=" + (j.runs ?? 0) + ")");
-    $("run").disabled = false;
-  } catch (e) { setCapiStatus("✗ недоступен (CORS/выключен): " + e.message); $("run").disabled = true; }
-});
-// last COMPLETED run — enables 🔁 Перепрогон (replay) / 📌 Эталон (baseline), которые целятся в него через from_run (ADR-047)
-let lastRunId = null;
-function setRunControls(disabled){
-  $("run").disabled = disabled;
-  $("rerun").disabled = disabled || !lastRunId;
-  $("baseline").disabled = disabled || !lastRunId;
+function clearErrors() {
+  document.querySelectorAll('.err').forEach(function (n) { n.textContent = ''; });
+  document.querySelectorAll('.bad').forEach(function (n) { n.classList.remove('bad'); });
 }
-// Общий драйвер: ▶ Запустить / 🔁 Перепрогон / 📌 Эталон шлют в один POST /v1/runs и опрашивают статус.
+function paintErrors(errs) {
+  errs.forEach(function (pair) {
+    var el = $(pair[0]), msg = $('e-' + pair[0]);
+    if (el) el.classList.add('bad');
+    if (msg) msg.textContent = pair[1];
+  });
+}
+function allErrors() {
+  return ['runtime', 'model', 'params'].reduce(function (acc, s) { return acc.concat(validateStep(s)); }, []);
+}
+/* first step (in order) that fails validation, or null when everything is valid */
+function firstBrokenStep() {
+  var order = ['runtime', 'model', 'params'];
+  for (var i = 0; i < order.length; i++) if (validateStep(order[i]).length) return order[i];
+  return null;
+}
+
+/* ----------------------------- steps ----------------------------- */
+var STEPS = ['runtime', 'model', 'params', 'review'];
+function showStep(name) {
+  document.querySelectorAll('.subpanel[data-subpanel]').forEach(function (p) {
+    p.classList.toggle('on', p.getAttribute('data-subpanel') === name);
+  });
+  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function (b) {
+    b.setAttribute('aria-selected', b.getAttribute('data-subtab') === name ? 'true' : 'false');
+  });
+  try { localStorage.setItem('sentinel_setup_step', name); } catch (e) {}
+  if (name === 'review') renderReview();
+}
+/* Moving FORWARD validates every earlier step and stops at the first broken one (the §7 "re-ask" loop). */
+function goStep(name) {
+  var target = STEPS.indexOf(name);
+  clearErrors();
+  for (var i = 0; i < target; i++) {
+    var errs = validateStep(STEPS[i]);
+    if (errs.length) {
+      paintErrors(errs);
+      showStep(STEPS[i]);
+      var first = $(errs[0][0]);
+      if (first && first.focus) first.focus();   /* a11y: move focus to the offending control */
+      return false;
+    }
+  }
+  showStep(name);
+  return true;
+}
+
+/* ----------------------------- draft persistence ----------------------------- */
+/* Only [data-draft] inputs are persisted. #apikey and #capitok deliberately carry no data-draft. */
+var DRAFT_KEY = 'sentinel_setup_draft';
+function saveDraft() {
+  var d = {};
+  document.querySelectorAll('[data-draft]').forEach(function (el) {
+    d[el.id] = (el.type === 'checkbox') ? el.checked : el.value;
+  });
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (e) {}
+}
+function loadDraft() {
+  var raw = null;
+  try { raw = localStorage.getItem(DRAFT_KEY); } catch (e) {}
+  if (!raw) return false;
+  var d;
+  try { d = JSON.parse(raw); } catch (e) { return false; }
+  if (!d || typeof d !== 'object') return false;
+  Object.keys(d).forEach(function (id) {
+    var el = $(id);
+    if (!el || el.hasAttribute('data-draft') === false) return;
+    if (el.type === 'checkbox') el.checked = !!d[id]; else el.value = d[id];
+  });
+  return true;
+}
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  location.reload();
+}
+
+/* ----------------------------- output rendering ----------------------------- */
+function q(s) { s = String(s); return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
+
+function buildYaml() {
+  var mode = $('mode').value;
+  var lines = ['# Sentinel RunConfig — generated by the setup wizard (docs/setup). Pass via: --run-config <file>'];
+  lines.push('mode: ' + mode);
+  if (mode === 'goal' && $('goal').value.trim()) lines.push('goal: ' + q($('goal').value.trim()));
+  if (mode === 'describe' && $('describe').value.trim()) lines.push('describe: ' + q($('describe').value.trim()));
+  lines.push('planner: ' + $('planner').value);
+  numericFields().forEach(function (k) {
+    var el = $(fieldId(k));
+    if (el && el.value !== '') lines.push(k + ': ' + el.value);
+  });
+  var ss = $('ss').value.trim(), sss = $('sss').value.trim(), lp = $('loginplan').value.trim(), pnt = $('pwnotrace').checked;
+  if (ss || sss || lp || pnt) {
+    lines.push('auth:');
+    if (ss)  lines.push('  storage_state: ' + q(ss));
+    if (sss) lines.push('  storage_state_save: ' + q(sss));
+    if (lp)  lines.push('  login_plan: ' + q(lp));
+    lines.push('  pw_no_trace: ' + (pnt ? 'true' : 'false'));
+  }
+  return lines.join('\n');
+}
+function buildEnv() {
+  var be = $('backend').value, bu = $('baseurl').value.trim(), key = $('apikey').value.trim();
+  var env = [];
+  env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.backend && SCHEMA.llm.backend.env) || 'LLM_BACKEND') + '=' + be);
+  if (be === 'openai' && bu) env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.base_url && SCHEMA.llm.base_url.env) || 'LLM_BASE_URL') + '=' + bu);
+  (SCHEMA.roles || []).forEach(function (r) {
+    var el = $(roleId(r));
+    if (el && el.value.trim()) env.push('export ' + roleEnv(r) + '=' + el.value.trim());
+  });
+  if ($('vision').checked)     env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.vision && SCHEMA.llm.vision.env) || 'LLM_VISION') + '=1');
+  if ($('structured').checked) env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.structured && SCHEMA.llm.structured.env) || 'LLM_STRUCTURED') + '=1');
+  var keyEnv = (be === 'anthropic') ? 'ANTHROPIC_API_KEY' : ((SCHEMA.llm && SCHEMA.llm.api_key && SCHEMA.llm.api_key.env) || 'LLM_API_KEY');
+  env.push('export ' + keyEnv + '=' + (key || '...') + '        # DO NOT COMMIT');
+  if (be === 'anthropic' && !key) env.push('# no key -> offline heuristic / L1–L6 fallback');
+  return env.join('\n');
+}
+function buildCmd() {
+  var t = $('target').value.trim() || '<TARGET_URL>';
+  return ['# native:',
+    'agentctl run --target ' + q(t) + ' --run-config run.yaml',
+    '',
+    '# docker (mount run.yaml into /config):',
+    'docker compose run --rm sentinel run --target ' + q(t) + ' --run-config /config/run.yaml'].join('\n');
+}
+function renderReview() {
+  if (!$('yaml')) return;
+  $('yaml').textContent = buildYaml();
+  $('env').textContent = buildEnv();
+  $('cmd').textContent = buildCmd();
+  var errs = allErrors();
+  var box = $('summary');
+  if (!errs.length) {
+    box.className = 'errbox';
+    box.style.borderColor = 'var(--ok)';
+    box.style.background = 'rgba(54,211,153,.08)';
+    box.innerHTML = '';
+    box.textContent = tr('✓ Конфигурация валидна.', '✓ The configuration is valid.');
+  } else {
+    box.className = 'errbox';
+    box.style.borderColor = '';
+    box.style.background = '';
+    var ul = '<ul>' + errs.map(function (p) { return '<li>' + p[0] + ': ' + p[1] + '</li>'; }).join('') + '</ul>';
+    box.innerHTML = '<strong>' + tr('Исправь перед запуском:', 'Fix before running:') + '</strong>' + ul;
+  }
+}
+
+/* ----------------------------- conditional visibility ----------------------------- */
+function sync() {
+  var mode = $('mode').value;
+  $('goalWrap').classList.toggle('hide', mode !== 'goal');
+  $('descWrap').classList.toggle('hide', mode !== 'describe');
+  var openai = $('backend').value === 'openai';
+  $('baseurlWrap').classList.toggle('hide', !openai);
+  $('apikeylabel').textContent = ($('backend').value === 'anthropic') ? 'ANTHROPIC_API_KEY' : 'LLM_API_KEY';
+  renderPresetHint();
+  renderReview();
+}
+function onInput() { sync(); saveDraft(); }
+
+/* ----------------------------- live control-API (M9.3 driver, preserved) ----------------------------- */
+var capiBase = function () { return $('capi').value.trim().replace(/\/+$/, ''); };
+var setCapiStatus = function (t) { $('capistatus').textContent = t; };
+var runLog = function (t) { $('runout').style.display = 'block'; $('runlog').textContent = t; };
+var lastRunId = null;
+
+function setRunControls(disabled) {
+  $('run').disabled = disabled;
+  $('rerun').disabled = disabled || !lastRunId;
+  $('baseline').disabled = disabled || !lastRunId;
+}
 async function startRun(body, label) {
-  const base = capiBase(), tok = $("capitok").value.trim();
-  runLog((label ? label + "\n" : "") + "POST /v1/runs …");
+  var base = capiBase(), tok = $('capitok').value.trim();
+  runLog((label ? label + '\n' : '') + 'POST /v1/runs …');
   setRunControls(true);
   try {
-    const r = await fetch(base + "/v1/runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(tok ? { Authorization: "Bearer " + tok } : {}) },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.status !== 202) { runLog("✗ HTTP " + r.status + ": " + (j.error || JSON.stringify(j))); setRunControls(false); return; }
-    runLog("✓ запущен run_id=" + j.run_id + "\nартефакты: " + j.artifact_dir + "\nопрашиваю статус…");
+    var hdr = { 'Content-Type': 'application/json' };
+    if (tok) hdr.Authorization = 'Bearer ' + tok;
+    var r = await fetch(base + '/v1/runs', { method: 'POST', headers: hdr, body: JSON.stringify(body) });
+    var j = await r.json().catch(function () { return {}; });
+    if (r.status !== 202) { runLog('✗ HTTP ' + r.status + ': ' + (j.error || JSON.stringify(j))); setRunControls(false); return; }
+    runLog('✓ run_id=' + j.run_id + '\n' + tr('артефакты', 'artifacts') + ': ' + j.artifact_dir + '\n' + tr('опрашиваю статус…', 'polling status…'));
     pollRun(base, j.run_id, tok);
-  } catch (e) { runLog("✗ " + e.message); setRunControls(false); }
+  } catch (e) { runLog('✗ ' + e.message); setRunControls(false); }
 }
-$("run").addEventListener("click", () => {
-  const target = $("target").value.trim(), mode = $("mode").value;
-  if (!target) { runLog("укажите target URL в секции «Сценарий»"); return; }
-  startRun({
-    target, mode, planner: $("planner").value,
-    goal: mode === "goal" ? $("goal").value.trim() : "",
-    describe: mode === "describe" ? $("describe").value.trim() : "",
-    coverage_target: $("coverage").value, max_steps: $("maxsteps").value,
-  });
-});
-$("rerun").addEventListener("click", () => { if (lastRunId) startRun({ mode: "replay", from_run: lastRunId }, "🔁 Перепрогон from_run=" + lastRunId); });
-$("baseline").addEventListener("click", () => { if (lastRunId) startRun({ mode: "baseline", from_run: lastRunId }, "📌 Эталон from_run=" + lastRunId); });
-
-// exit-код → человекочитаемый вердикт (RU-only — страница монолингвальна)
 function setupVerdict(j) {
-  if (j.state === "failed") return "✖ прогон не запущен" + (j.error ? " — " + j.error : "");
+  if (j.state === 'failed') return tr('✖ прогон не запущен', '✖ the run did not start') + (j.error ? ' — ' + j.error : '');
   switch (j.exit_code) {
-    case 0: return "✓ пройдено (exit 0)";
-    case 1: return "⚠ тест нашёл проблему (exit 1)";
-    case 2: return "⚠ визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌";
-    case 3: return "✖ целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)";
-    default: return "exit " + j.exit_code;
+    case 0: return tr('✓ пройдено (exit 0)', '✓ passed (exit 0)');
+    case 1: return tr('⚠ тест нашёл проблему (exit 1)', '⚠ the test found a problem (exit 1)');
+    case 2: return tr('⚠ визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌', '⚠ visual/golden regression (exit 2) — you can pin a baseline 📌');
+    case 3: return tr('✖ целостность/конфигурация (exit 3) — нужен человек', '✖ integrity/configuration (exit 3) — a human is needed');
+    default: return 'exit ' + j.exit_code;
   }
 }
 function pollRun(base, id, tok) {
-  let n = 0;
-  const timer = setInterval(async () => {
-    if (++n > 150) { clearInterval(timer); runLog($("runlog").textContent + "\n(опрос остановлен — таймаут)"); setRunControls(false); return; }
+  var n = 0;
+  var timer = setInterval(async function () {
+    if (++n > 150) { clearInterval(timer); runLog($('runlog').textContent + '\n' + tr('(опрос остановлен — таймаут)', '(polling stopped — timeout)')); setRunControls(false); return; }
     try {
-      const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id), { headers: tok ? { Authorization: "Bearer " + tok } : {} });
-      const j = await r.json();
-      if (j.state && j.state !== "running") {
+      var r = await fetch(base + '/v1/runs/' + encodeURIComponent(id), { headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
+      var j = await r.json();
+      if (j.state && j.state !== 'running') {
         clearInterval(timer);
-        lastRunId = id; // remember for re-run / baseline
-        runLog("● " + j.state + " · exit_code=" + j.exit_code + (j.error ? (" · err=" + j.error) : "") + "\nартефакты: " + j.artifact_dir + "\n" + setupVerdict(j));
+        lastRunId = id;
+        runLog('● ' + j.state + ' · exit_code=' + j.exit_code + (j.error ? (' · err=' + j.error) : '') +
+               '\n' + tr('артефакты', 'artifacts') + ': ' + j.artifact_dir + '\n' + setupVerdict(j));
         setRunControls(false);
-      } else { runLog("… running (" + n + ")  run_id=" + id); }
+      } else { runLog('… running (' + n + ')  run_id=' + id); }
     } catch (e) { /* transient — keep polling */ }
   }, 2000);
 }
-sync();
+
+/* "Проверить" = liveness + pull the LIVE schema (unauthenticated GET) and re-render the form. */
+async function checkCapi() {
+  var base = capiBase();
+  if (!base) { setCapiStatus(tr('укажите URL', 'enter a URL')); return; }
+  setCapiStatus(tr('проверяю…', 'checking…'));
+  try {
+    var r = await fetch(base + '/healthz');
+    if (!r.ok) { setCapiStatus('✗ HTTP ' + r.status); $('run').disabled = true; return; }
+    var j = await r.json();
+    setCapiStatus('✓ ok v' + (j.version || '?') + ' (runs=' + (j.runs == null ? 0 : j.runs) + ')');
+    $('run').disabled = false;
+  } catch (e) {
+    setCapiStatus(tr('✗ недоступен (CORS/выключен): ', '✗ unreachable (CORS/down): ') + e.message);
+    $('run').disabled = true;
+    return;
+  }
+  try {  /* live schema wins over the snapshot (ADR-061) — but only if the server serves the whole shape */
+    var rs = await fetch(base + '/v1/config-schema');
+    if (rs.ok) {
+      var js = await rs.json();
+      setCapiStatus($('capistatus').textContent + ' · ' + (applySchema(js, 'live')
+        ? tr('схема обновлена', 'schema refreshed')
+        : tr('схема сервера неполная — использую снимок', 'server schema incomplete — using the snapshot')));
+    }
+  } catch (e) { /* keep the snapshot */ }
+}
+
+/* ----------------------------- wiring ----------------------------- */
+document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function (b) {
+  b.addEventListener('click', function () { goStep(b.getAttribute('data-subtab')); });
+});
+document.querySelectorAll('[data-next]').forEach(function (b) {
+  b.addEventListener('click', function () { goStep(b.getAttribute('data-next')); });
+});
+document.querySelectorAll('[data-back]').forEach(function (b) {
+  b.addEventListener('click', function () { clearErrors(); showStep(b.getAttribute('data-back')); });
+});
+$('preset').addEventListener('change', function () { applyPreset(); saveDraft(); });
+$('backend').addEventListener('change', onInput);
+['mode', 'planner', 'goal', 'describe', 'target', 'baseurl', 'ss', 'sss', 'loginplan', 'pwnotrace', 'vision', 'structured', 'capi'].forEach(function (id) {
+  $(id).addEventListener('input', onInput);
+  $(id).addEventListener('change', onInput);
+});
+$('apikey').addEventListener('input', function () { sync(); });   /* secret: rendered, never saved */
+$('draftclear').addEventListener('click', clearDraft);
+$('check').addEventListener('click', checkCapi);
+$('run').addEventListener('click', function () {
+  var target = $('target').value.trim(), mode = $('mode').value;
+  var broken = firstBrokenStep();
+  if (broken) { clearErrors(); paintErrors(allErrors()); showStep(broken); return; }
+  startRun({
+    target: target, mode: mode, planner: $('planner').value,
+    goal: mode === 'goal' ? $('goal').value.trim() : '',
+    describe: mode === 'describe' ? $('describe').value.trim() : '',
+    coverage_target: ($(fieldId('coverage_target')) || {}).value || '',
+    max_steps: ($(fieldId('max_steps')) || {}).value || ''
+  });
+});
+$('rerun').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'replay', from_run: lastRunId }, '🔁 replay from_run=' + lastRunId); });
+$('baseline').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'baseline', from_run: lastRunId }, '📌 baseline from_run=' + lastRunId); });
+
+document.querySelectorAll('.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var t = $(b.dataset.t).textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t);
+    var html = b.innerHTML;                       /* keep the bilingual <span> pair to restore */
+    b.textContent = tr('скопировано', 'copied');
+    setTimeout(function () { b.innerHTML = html; }, 1000);
+  });
+});
+document.querySelectorAll('.dl').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var blob = new Blob([$(b.dataset.t).textContent], { type: 'text/plain;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = b.dataset.f;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 0);
+  });
+});
+
+/* ----------------------------- boot ----------------------------- */
+(function boot() {
+  renderSchemaDriven();                 /* build selects + generated fields from the snapshot */
+  renderPresetSelect();
+  var restored = loadDraft();           /* restore AFTER the generated inputs exist */
+  if (restored) $('draftnote').classList.remove('hide');
+  /* With no draft, the form must agree with the preset it displays (vision/structured/base_url/models). */
+  else applyPreset();
+  initLang();
+  sync();
+  setSrcBadge();
+
+  /* re-run state machine (ADR-059): a restored draft is re-validated and lands on the first broken step */
+  var step = 'runtime';
+  try { step = localStorage.getItem('sentinel_setup_step') || 'runtime'; } catch (e) {}
+  if (STEPS.indexOf(step) < 0) step = 'runtime';
+  var broken = restored ? firstBrokenStep() : null;
+  if (broken) { paintErrors(allErrors()); showStep(broken); } else { showStep(step); }
+
+  /* presets override: works on Pages and in the webui bundle; silently skipped on file:// */
+  fetch('../backend-presets.json')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (j && j.presets && Object.keys(j.presets).length) {
+        PRESETS = j.presets; presetsSrc = 'file';
+        renderPresetSelect(); renderPresetHint(); setSrcBadge();
+      }
+    })
+    .catch(function () { /* file:// or offline — the snapshot stays */ });
+})();
 </script>
 </body>
 </html>
