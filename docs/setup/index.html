@@ -295,8 +295,18 @@ details a{color:var(--acc2)}
     <button type="button" class="act" data-primary id="run" disabled>▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span></button>
     <button type="button" class="act" id="rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
     <button type="button" class="act" id="baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+    <button type="button" class="act" id="savecfg" title="PUT /v1/config">💾 <span data-lang="ru">Сохранить на сервер</span><span data-lang="en">Save to server</span></button>
     <span id="capistatus" class="mut"></span>
   </div>
+  <p class="hint">
+    <span data-lang="ru">«Сохранить на сервер» пишет конфиг в <code>config</code>-домен store-gateway (<code>PUT /v1/config</code>,
+      нужен токен) — его читает control-API на старте, и по нему <code>/readyz</code> становится <code>200</code>.
+      Ключи не отправляются: сервер отвергает документ с секретным полем (ADR-062).</span>
+    <span data-lang="en">"Save to server" writes the config into the store-gateway's <code>config</code> domain
+      (<code>PUT /v1/config</code>, token required) — the control-API reads it at start, and it is what turns
+      <code>/readyz</code> into a <code>200</code>. Keys are never sent: the server refuses a document carrying a
+      secret-shaped field (ADR-062).</span>
+  </p>
   <div class="out" id="runout" style="display:none;margin-top:.6rem"><pre id="runlog"></pre></div>
   <p class="hint">
     <span data-lang="ru">С GitHub Pages живой режим работает только против <code>http://localhost</code> (исключение mixed-content);
@@ -877,6 +887,61 @@ function pollRun(base, id, tok) {
   }, 2000);
 }
 
+/* ----------------------------- save the config to the server (M11.5 PR-5, ADR-062) -----------------------------
+   The document is BUILT from the non-secret controls only — #apikey and #capitok are not read here, so a key
+   cannot leak into it by accident. The gateway independently refuses any secret-shaped member name, so this is
+   a convenience, not the boundary. */
+function buildConfigDoc() {
+  var be = $('backend').value, mode = $('mode').value;
+  var models = {};
+  (SCHEMA.roles || []).forEach(function (r) {
+    var el = $(roleId(r));
+    if (el && el.value.trim()) models[r] = el.value.trim();
+  });
+  var run = { mode: mode, planner: $('planner').value };
+  if ($('target').value.trim()) run.target = $('target').value.trim();
+  if (mode === 'goal' && $('goal').value.trim()) run.goal = $('goal').value.trim();
+  if (mode === 'describe' && $('describe').value.trim()) run.describe = $('describe').value.trim();
+  numericFields().forEach(function (k) {
+    var el = $(fieldId(k));
+    if (el && el.value !== '') run[k] = Number(el.value);
+  });
+  var llm = { backend: be, vision: $('vision').checked, structured: $('structured').checked, model: models };
+  if (be === 'openai' && $('baseurl').value.trim()) llm.base_url = $('baseurl').value.trim();
+  return {
+    llm: llm,
+    run: run,
+    auth: {
+      storage_state: $('ss').value.trim(),
+      storage_state_save: $('sss').value.trim(),
+      login_plan: $('loginplan').value.trim(),
+      pw_no_trace: $('pwnotrace').checked
+    }
+  };
+}
+async function saveConfig() {
+  var base = capiBase(), tok = $('capitok').value.trim();
+  if (!base) { setCapiStatus(tr('укажите URL control-API', 'enter the control-API URL')); return; }
+  if (!tok) { setCapiStatus(tr('для сохранения нужен токен', 'a token is required to save')); return; }
+  var broken = firstBrokenStep();
+  if (broken) { clearErrors(); paintErrors(allErrors()); showStep(broken); return; }
+  setCapiStatus(tr('сохраняю…', 'saving…'));
+  try {
+    var r = await fetch(base + '/v1/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
+      body: JSON.stringify(buildConfigDoc())
+    });
+    var j = await r.json().catch(function () { return {}; });
+    if (r.ok) { setCapiStatus(tr('✓ конфиг сохранён на сервере', '✓ config saved on the server')); return; }
+    if (r.status === 501) {
+      setCapiStatus(tr('сервер без store-gateway — конфиг остаётся файлом', 'no store-gateway — the config stays a file'));
+      return;
+    }
+    setCapiStatus('✗ HTTP ' + r.status + (j.error ? ': ' + j.error : ''));
+  } catch (e) { setCapiStatus('✗ ' + e.message); }
+}
+
 /* "Проверить" = liveness + pull the LIVE schema (unauthenticated GET) and re-render the form. */
 async function checkCapi() {
   var base = capiBase();
@@ -923,6 +988,7 @@ $('backend').addEventListener('change', onInput);
 $('apikey').addEventListener('input', function () { sync(); });   /* secret: rendered, never saved */
 $('draftclear').addEventListener('click', clearDraft);
 $('check').addEventListener('click', checkCapi);
+$('savecfg').addEventListener('click', saveConfig);
 $('run').addEventListener('click', function () {
   var target = $('target').value.trim(), mode = $('mode').value;
   var broken = firstBrokenStep();

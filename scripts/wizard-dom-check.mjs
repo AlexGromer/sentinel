@@ -22,7 +22,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -77,12 +78,30 @@ function startStatic() {
   return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve({ srv, port: srv.address().port })));
 }
 
-async function startControlAPI(port, corsOrigin) {
+// A real store-gateway on a unix socket, so PUT /v1/config exercises the config domain end to end
+// (and /readyz has a store dependency to probe) rather than short-circuiting to 501.
+async function startStoreGateway(dir) {
+  const sock = path.join(dir, 'store.sock');
+  const proc = spawn(path.join(REPO, 'bin', 'store-gateway'),
+    ['--addr', sock, '--db', path.join(dir, 'store.db'), '--no-auth'],
+    { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] });
+  proc.stderr.on('data', (b) => { if (process.env.DOM_GATE_VERBOSE) process.stderr.write(`[store] ${b}`); });
+  const { access } = await import('node:fs/promises');
+  for (let i = 0; i < 100; i++) {                       // wait for the socket to appear
+    try { await access(sock); return { proc, addr: `unix:${sock}` }; } catch { /* not yet */ }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  proc.kill('SIGKILL');
+  throw new Error('store-gateway did not create its socket within 5s');
+}
+
+async function startControlAPI(port, corsOrigin, storeAddr) {
   const bin = path.join(REPO, 'bin', 'control-api');
   const proc = spawn(bin, [], {
     cwd: REPO,
     env: { ...process.env, CONTROL_API_ADDR: `127.0.0.1:${port}`, CONTROL_API_TOKEN: TOKEN,
-           CONTROL_API_CORS_ORIGINS: corsOrigin, CONTROL_API_STORE_ADDR: '' },
+           CONTROL_API_CORS_ORIGINS: corsOrigin, CONTROL_API_STORE_ADDR: storeAddr || '',
+           LLM_BASE_URL: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   proc.stderr.on('data', (b) => { if (process.env.DOM_GATE_VERBOSE) process.stderr.write(`[capi] ${b}`); });
@@ -158,16 +177,18 @@ async function launchBrowser() {
 /* ------------------------------------------------------------------ main */
 // Every resource is acquired INSIDE the try. Acquiring bin/control-api before it meant a failing
 // chromium.launch() skipped the only capi.kill() in the script, orphaning a live process on a live port.
-let staticSrv = null, capi = null, browser = null, base = '', capiURL = '';
+let staticSrv = null, capi = null, store = null, browser = null, tmp = null, base = '', capiURL = '';
 try {
   staticSrv = await startStatic();
   base = `http://127.0.0.1:${staticSrv.port}`;
+  tmp = await mkdtemp(path.join(tmpdir(), 'sentinel-domgate-'));
+  store = await startStoreGateway(tmp);
   const capiPort = await freePort();
-  capi = await startControlAPI(capiPort, base);
+  capi = await startControlAPI(capiPort, base, store.addr);
   capiURL = `http://127.0.0.1:${capiPort}`;
   browser = await launchBrowser();
 
-  console.log(`setup wizard DOM gate — docs at ${base}, control-api at ${capiURL}\n`);
+  console.log(`setup wizard DOM gate — docs at ${base}, control-api at ${capiURL}, store at ${store.addr}\n`);
 
   /* 1 — four steps, forward navigation validates every earlier step (ADR-059 "re-ask" loop) */
   await check('steps: 4 panels, Next/Back gating, forward nav stops at the first broken step', async () => {
@@ -415,10 +436,74 @@ try {
     eq(await step(page), 'review', 'valid budgets pass');
     await ctx.close();
   });
+
+  /* 11 — M11.5 PR-5: "Save to server" writes the config domain and flips /readyz 503 -> 200 */
+  await check('config: "Save to server" persists a secret-free document and readiness flips 503 -> 200', async () => {
+    const readyz = async (tok) => {
+      const r = await fetch(`${capiURL}/readyz`, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
+      return { code: r.status, body: await r.json() };
+    };
+
+    // store is wired but nothing is stored yet -> not ready, and an anonymous caller learns no topology
+    const before = await readyz(null);
+    eq(before.code, 503, '/readyz before any config');
+    eq(before.body.status, 'not_ready', 'overall status');
+    eq(before.body.checks.store.status, 'ok', 'store check');
+    eq(before.body.checks.config.status, 'error', 'config check');
+    ok(before.body.checks.store.detail === undefined, 'anonymous caller must not receive detail strings');
+    const beforeAuthed = await readyz(TOKEN);
+    ok(typeof beforeAuthed.body.checks.config.detail === 'string', 'an authenticated caller receives detail');
+
+    const { ctx, page } = await freshPage(browser, base);
+    await page.selectOption('#preset', 'anthropic');     // no base_url -> the llm probe stays `skipped`
+    await page.click('button[data-next="model"]');
+    await page.fill('#apikey', 'SEKRIT-NEVER-SENT');     // typed, and must never reach the server
+    await page.click('button[data-next="params"]');
+    await page.fill('#target', 'https://app.example');
+    await page.click('button[data-next="review"]');
+    await page.fill('#capi', capiURL);
+    await page.fill('#capitok', TOKEN);
+    await page.click('#savecfg');
+    await page.waitForFunction(() => /сохранён|saved on the server/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
+
+    const after = await readyz(null);
+    eq(after.code, 200, '/readyz after saving the config');
+    eq(after.body.status, 'ready', 'overall status');
+    eq(after.body.checks.config.status, 'ok', 'config check');
+    eq(after.body.checks.llm.status, 'skipped', 'anthropic has no base_url -> llm probe skipped');
+
+    const stored = await (await fetch(`${capiURL}/v1/config`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+    const blob = JSON.stringify(stored);
+    ok(!blob.includes('SEKRIT'), `the API key reached the server: ${blob}`);
+    ok(!/api_key|apikey/i.test(blob), `a secret-shaped field reached the server: ${blob}`);
+    eq(stored.config.llm.backend, 'anthropic', 'stored backend');
+    eq(stored.config.llm.model.planner, 'claude-opus-4-8', 'stored planner model');
+    eq(stored.config.run.target, 'https://app.example', 'stored target');
+    ok(typeof stored.updated_at === 'string' && stored.updated_at.length > 0, 'updated_at reported');
+
+    // a configured but unreachable LLM endpoint must FAIL readiness (port 1 = instant refusal)
+    await page.click('.subtab-btn[data-subtab="runtime"]');   // #preset lives on step 1
+    await page.selectOption('#preset', 'ollama');
+    await page.fill('#baseurl', 'http://127.0.0.1:1/v1');
+    await page.click('button[data-next="model"]');
+    await page.fill('#m-planner', 'qwen3:14b');
+    await page.click('button[data-next="params"]');
+    await page.click('button[data-next="review"]');
+    await page.click('#savecfg');
+    await page.waitForFunction(() => /сохранён|saved on the server/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
+
+    const dead = await readyz(TOKEN);
+    eq(dead.code, 503, '/readyz with an unreachable llm base_url');
+    eq(dead.body.checks.llm.status, 'error', 'llm check');
+    eq(dead.body.checks.config.status, 'ok', 'config is still stored');
+    await ctx.close();
+  });
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (capi) capi.kill('SIGTERM');
+  if (store) store.proc.kill('SIGTERM');
   if (staticSrv) staticSrv.srv.close();
+  if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {});
 }
 
 const failed = results.filter((r) => !r.ok);

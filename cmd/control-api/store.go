@@ -322,3 +322,40 @@ func (c *storeClient) trends(metric string, window int64) (*storepb.TrendReply, 
 	}
 	return tr, true
 }
+
+// --- config (M11.5 PR-5, ADR-062: the service tier of the tiered config) ------------------------
+// Unlike every helper above, putConfig does NOT swallow its error: a configuration write that
+// silently vanished would leave the operator believing the wizard had saved. The HTTP layer maps the
+// gRPC code (InvalidArgument -> 400, anything else -> 502).
+
+func (c *storeClient) putConfig(key, valueJSON string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	_, err := c.cl.PutConfig(ctx, &storepb.ConfigRecord{Key: key, ValueJson: valueJSON})
+	return err
+}
+
+// getConfig returns (nil,false) on miss or gateway error — the caller decides whether that is a
+// not-found (HTTP 404) or a readiness failure (/readyz "config": missing).
+func (c *storeClient) getConfig(key string) (*storepb.ConfigRecord, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	rec, err := c.cl.GetConfig(ctx, &storepb.ConfigKey{Key: key})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetConfig(%s): %v\n", key, err)
+		return nil, false
+	}
+	if !rec.Found {
+		return nil, false
+	}
+	return rec, true
+}
+
+// ping is the cheapest round-trip that proves the gateway socket is alive and authenticating.
+// Used by /readyz; it must NOT be called while holding s.mu.
+func (c *storeClient) ping() error {
+	ctx, cancel := context.WithTimeout(context.Background(), readyProbeTimeout)
+	defer cancel()
+	_, err := c.cl.ListConfig(ctx, &storepb.Empty{})
+	return err
+}

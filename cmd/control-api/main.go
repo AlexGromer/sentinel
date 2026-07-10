@@ -178,6 +178,13 @@ type server struct {
 	publicBind bool         // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
 	mu         sync.RWMutex
 	runs       map[string]*run
+
+	// M11.5 PR-5 (ADR-062): /readyz. llmBaseURL is the env-configured LLM endpoint ("" = not configured);
+	// probes fall back to the persisted config's llm.base_url. ready guards its own state, NOT s.mu —
+	// a readiness probe does network I/O and must never block /v1/runs.
+	llmBaseURL string
+	httpClient *http.Client
+	ready      readyState
 }
 
 func newRunID() string {
@@ -217,7 +224,7 @@ func (s *server) cors(h http.Handler) http.Handler {
 		if origin != "" && s.corsAllow[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		}
 		if r.Method == http.MethodOptions {
@@ -1331,7 +1338,11 @@ func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
 func (s *server) mux() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", s.handleHealthz)
+	m.HandleFunc("GET /readyz", s.handleReadyz) // M11.5 PR-5 (ADR-062): unauth like /healthz, but probes real deps
 	m.HandleFunc("GET /v1/config-schema", s.handleConfigSchema)
+	// M11.5 PR-5: the service tier of the tiered config (ADR-049). Token-gated both ways.
+	m.HandleFunc("GET /v1/config", s.handleGetConfig)
+	m.HandleFunc("PUT /v1/config", s.handlePutConfig)
 	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	m.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
@@ -1379,6 +1390,7 @@ func main() {
 		orchAddr:   os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
 		publicBind: !isLocalBind(addr),
 		runs:       map[string]*run{},
+		llmBaseURL: os.Getenv("LLM_BASE_URL"), // M11.5 PR-5: the /readyz llm probe target (env wins over the stored config)
 	}
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {
 		if o = strings.TrimSpace(o); o != "" {
@@ -1394,6 +1406,7 @@ func main() {
 			s.store = sc
 			defer sc.close()
 			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
+			s.loadStartupConfig() // M11.5 PR-5 (ADR-062): read the service-tier config once, before serving
 		}
 	}
 	if s.token == "" {

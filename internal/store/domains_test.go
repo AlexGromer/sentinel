@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
@@ -191,5 +194,104 @@ func TestStoreDSNScaffoldRefuses(t *testing.T) {
 	t.Setenv("STORE_DSN", "postgres://user@host/db")
 	if _, err := New(filepath.Join(t.TempDir(), "s.db")); err == nil {
 		t.Fatal("STORE_DSN set must refuse to start (Postgres deferred to M13-service)")
+	}
+}
+
+// --- config domain (M11.5 PR-5, ADR-062) ------------------------------------
+
+func TestConfigRoundTripAndUpsert(t *testing.T) {
+	s := newDomServer(t)
+	ctx := context.Background()
+	doc := `{"llm":{"backend":"openai","base_url":"http://ollama:11434/v1"},"run":{"max_steps":40}}`
+	if _, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "setup", ValueJson: doc}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	got, err := s.GetConfig(ctx, &pb.ConfigKey{Key: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Found || got.ValueJson != doc {
+		t.Fatalf("round-trip mismatch: found=%v value=%q", got.Found, got.ValueJson)
+	}
+	if got.UpdatedAt == "" {
+		t.Fatal("updated_at must be defaulted on write")
+	}
+
+	// upsert: same key, new document -> one row, new value
+	doc2 := `{"llm":{"backend":"anthropic"}}`
+	if _, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "setup", ValueJson: doc2}); err != nil {
+		t.Fatalf("PutConfig upsert: %v", err)
+	}
+	got, _ = s.GetConfig(ctx, &pb.ConfigKey{Key: "setup"})
+	if got.ValueJson != doc2 {
+		t.Fatalf("upsert did not replace: %q", got.ValueJson)
+	}
+	lst, err := s.ListConfig(ctx, &pb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lst.Items) != 1 {
+		t.Fatalf("upsert must not insert a second row; got %d", len(lst.Items))
+	}
+
+	// missing key -> Found=false, not an error
+	miss, err := s.GetConfig(ctx, &pb.ConfigKey{Key: "nope"})
+	if err != nil || miss.Found {
+		t.Fatalf("missing key: err=%v found=%v", err, miss.Found)
+	}
+	// delete is idempotent
+	if _, err := s.DeleteConfig(ctx, &pb.ConfigKey{Key: "setup"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteConfig(ctx, &pb.ConfigKey{Key: "setup"}); err != nil {
+		t.Fatalf("delete must be idempotent: %v", err)
+	}
+}
+
+// The guard is the whole point of the domain: a wizard must never be able to park a credential here.
+func TestConfigRejectsSecrets(t *testing.T) {
+	s := newDomServer(t)
+	ctx := context.Background()
+	bad := []struct{ name, doc string }{
+		{"top-level api_key", `{"api_key":"sk-live-1"}`},
+		{"nested api_key", `{"llm":{"backend":"openai","api_key":"sk-live-2"}}`},
+		{"uppercase env name", `{"LLM_API_KEY":"sk-live-3"}`},
+		{"anthropic env name", `{"ANTHROPIC_API_KEY":"sk-ant-1"}`},
+		{"bare key", `{"key":"sk-live-4"}`},
+		{"bearer token", `{"control":{"bearer_token":"t"}}`},
+		{"exact token", `{"token":"t"}`},
+		{"password", `{"auth":{"password":"hunter2"}}`},
+		{"secret", `{"client_secret":"s"}`},
+		{"inside an array", `{"backends":[{"name":"a"},{"apikey":"sk-live-5"}]}`},
+		{"deeply nested", `{"a":{"b":{"c":{"private_key":"pk"}}}}`},
+		// a bare JSON string has no member names — it must not slip past a name-based guard
+		{"bare JSON string", `"sk-live-6"`},
+		{"JSON array document", `["sk-live-7"]`},
+		{"not JSON at all", `sk-live-8`},
+	}
+	for _, tc := range bad {
+		_, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "setup", ValueJson: tc.doc})
+		if err == nil {
+			t.Errorf("%s: PutConfig must refuse %q", tc.name, tc.doc)
+			continue
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s: want InvalidArgument, got %v (%v)", tc.name, status.Code(err), err)
+		}
+	}
+	// nothing was written by any rejected call
+	lst, _ := s.ListConfig(ctx, &pb.Empty{})
+	if len(lst.Items) != 0 {
+		t.Fatalf("rejected documents must not be persisted; got %d rows", len(lst.Items))
+	}
+
+	// counters that merely CONTAIN "token" are legitimate and must pass
+	good := `{"llm":{"max_tokens":4096,"total_tokens":0},"run":{"plan_budget":50000}}`
+	if _, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "setup", ValueJson: good}); err != nil {
+		t.Fatalf("max_tokens/total_tokens must not be treated as secrets: %v", err)
+	}
+	// an empty key is a client bug, not a silent no-op
+	if _, err := s.PutConfig(ctx, &pb.ConfigRecord{Key: "", ValueJson: `{}`}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty key must be InvalidArgument, got %v", err)
 	}
 }

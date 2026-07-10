@@ -69,10 +69,12 @@ jobs:
       - name: Build agentctl (Go)
         run: go build -o bin/agentctl ./cmd/agentctl
 
-      # The wizard DOM gate below drives a REAL control-api, so CI must build it (it previously
-      # only ever existed inside the Docker image).
-      - name: Build control-api (Go)
-        run: go build -o bin/control-api ./cmd/control-api
+      # The wizard DOM gate below drives a REAL control-api backed by a REAL store-gateway, so CI must
+      # build both (control-api previously only ever existed inside the Docker image).
+      - name: Build control-api + store-gateway (Go)
+        run: |
+          go build -o bin/control-api ./cmd/control-api
+          go build -o bin/store-gateway ./cmd/store-gateway
 
       - name: Vet + unit test (Go)
         run: |
