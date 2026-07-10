@@ -497,7 +497,7 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 - [ ] **PR-1 (этот freeze):** ADR-059 + переписанный §7 + bilingual-parity. *(docs, проверяемо сейчас)*
 - [x] **PR-2 (этот PR):** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере (fake-release + tamper-negative). *(полный E2E = maintainer `v*`-tag, как M11.1)*
 - [x] **PR-3 (этот PR):** `/v1/config-schema` покрывает LLM-backend-поверхность (`backends`/`roles`/`llm`-дескрипторы из `brain/llm.py`; `api_key`=secret-без-значения); `backend-presets.json` (9 пресетов) парсится и каждый `backend` ⊆ enum схемы (гейт `TestBackendPresetsParseAndMatchSchema`). *(env-истина — `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig-ядро, LLM_* там нет)*
-- [ ] **PR-4:** wizard пошаговый, schema-driven, валидирует ввод, персистит черновик, двуязычный, air-gapped (`node --check`, `file://`).
+- [x] **PR-4 (этот PR):** wizard пошаговый (Runtime→Model&Auth→Run-params→Review), schema-driven (рендер из `/v1/config-schema` + встроенный снимок для offline и live-override, ADR-061), валидирует ввод (target/бюджеты/openai-правила `make_backend`), персистит черновик (секреты — никогда), двуязычный (`data-lang`), air-gapped (`node --check` в CI теперь на всех `docs/*.html`; `file://` — снимок вместо `fetch`). *(интерактивный browser-прогон — ручной; CI держит синтаксис + 2 anti-drift-гейта)*
 - [ ] **PR-5:** `config`-домен в store-gateway; `/readyz` → `503` до готовности зависимостей, `200` когда готов.
 - [ ] Новый пользователь с Docker завершает первый explore за ≤ 10 минут по `docs/QUICKSTART.md`.
 

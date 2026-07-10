@@ -74,16 +74,19 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: SPA syntax check (docs/index.html inline JS — node --check floor gate, M15)
+      - name: SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)
         run: |
           python3 - <<'PY'
-          import re
-          html = open('docs/index.html').read()
-          blocks = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S)
-          open('/tmp/spa_check.js', 'w').write('\n;\n'.join(blocks))
-          print('inline <script> blocks:', len(blocks))
+          import re, pathlib
+          pages = ['docs/index.html', 'docs/setup/index.html', 'docs/chat/index.html']
+          for p in pages:
+              html = pathlib.Path(p).read_text()
+              blocks = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S)
+              out = '/tmp/spa_check__' + p.replace('/', '_') + '.js'
+              pathlib.Path(out).write_text('\n;\n'.join(blocks))
+              print(p, '-> inline <script> blocks:', len(blocks))
           PY
-          node --check /tmp/spa_check.js
+          for f in /tmp/spa_check__*.js; do echo "node --check $f"; node --check "$f"; done
 
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
