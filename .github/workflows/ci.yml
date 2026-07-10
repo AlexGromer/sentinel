@@ -69,16 +69,25 @@ jobs:
       - name: Build agentctl (Go)
         run: go build -o bin/agentctl ./cmd/agentctl
 
+      # The wizard DOM gate below drives a REAL control-api, so CI must build it (it previously
+      # only ever existed inside the Docker image).
+      - name: Build control-api (Go)
+        run: go build -o bin/control-api ./cmd/control-api
+
       - name: Vet + unit test (Go)
         run: |
           go vet ./...
           go test ./...
 
+      # Walks docs/ instead of an enumerated page list: the list had drifted to 3 of the 6 pages,
+      # leaving docs/calculators/*.html (inline JS) ungated while the docs claimed full coverage.
       - name: SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)
         run: |
           python3 - <<'PY'
           import re, pathlib
-          pages = ['docs/index.html', 'docs/setup/index.html', 'docs/chat/index.html']
+          pages = sorted(str(p) for p in pathlib.Path('docs').rglob('*.html'))
+          assert pages, 'no docs/**/*.html found — the gate would pass vacuously'
+          print('pages under the gate:', len(pages))
           for p in pages:
               html = pathlib.Path(p).read_text()
               blocks = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S)
@@ -87,6 +96,12 @@ jobs:
               print(p, '-> inline <script> blocks:', len(blocks))
           PY
           for f in /tmp/spa_check__*.js; do echo "node --check $f"; node --check "$f"; done
+
+      # Real headless-Chromium run of docs/setup/index.html against a real control-api. Closes the
+      # "an interactive browser run is manual" boundary ADR-061 shipped with. Playwright + the browser
+      # are already present from the pw-executor steps above; no new dependency.
+      - name: Setup-wizard DOM gate (headless Chromium; M11.5)
+        run: node scripts/wizard-dom-check.mjs
 
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
