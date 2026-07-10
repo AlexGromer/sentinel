@@ -12,6 +12,10 @@
 //
 //   node scripts/wizard-dom-check.mjs [--headed]
 //
+// --headed needs the FULL chromium build. CI (and the default headless path) only need
+// chromium-headless-shell, so --headed fails on a CI-provisioned checkout until you run:
+//   (cd pw-executor && npx playwright install chromium)
+//
 // Exit 0 = every check passed. Exit 1 = at least one failed (each failure is printed with its reason).
 
 import { createRequire } from 'node:module';
@@ -136,17 +140,35 @@ async function freshPage(browser, base) {
 // weaker signal would race every preset assertion against that fetch.
 const settled = (page) => page.waitForFunction(() => window.presetsSrc === 'file', null, { timeout: 15000 });
 
+// --headed resolves a different browser build than the headless shell CI installs. Fail with the cure,
+// not with Playwright's raw "Executable doesn't exist at .../chromium-1228/..." path dump.
+async function launchBrowser() {
+  const headed = process.argv.includes('--headed');
+  try {
+    return await chromium.launch({ headless: !headed });
+  } catch (e) {
+    if (headed) {
+      throw new Error(`--headed needs the full chromium build, which CI does not install.\n` +
+        `  fix: (cd pw-executor && npx playwright install chromium)\n  original: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
 /* ------------------------------------------------------------------ main */
-const staticSrv = await startStatic();
-const base = `http://127.0.0.1:${staticSrv.port}`;
-const capiPort = await freePort();
-const capi = await startControlAPI(capiPort, base);
-const capiURL = `http://127.0.0.1:${capiPort}`;
-const browser = await chromium.launch({ headless: !process.argv.includes('--headed') });
-
-console.log(`setup wizard DOM gate — docs at ${base}, control-api at ${capiURL}\n`);
-
+// Every resource is acquired INSIDE the try. Acquiring bin/control-api before it meant a failing
+// chromium.launch() skipped the only capi.kill() in the script, orphaning a live process on a live port.
+let staticSrv = null, capi = null, browser = null, base = '', capiURL = '';
 try {
+  staticSrv = await startStatic();
+  base = `http://127.0.0.1:${staticSrv.port}`;
+  const capiPort = await freePort();
+  capi = await startControlAPI(capiPort, base);
+  capiURL = `http://127.0.0.1:${capiPort}`;
+  browser = await launchBrowser();
+
+  console.log(`setup wizard DOM gate — docs at ${base}, control-api at ${capiURL}\n`);
+
   /* 1 — four steps, forward navigation validates every earlier step (ADR-059 "re-ask" loop) */
   await check('steps: 4 panels, Next/Back gating, forward nav stops at the first broken step', async () => {
     const { ctx, page } = await freshPage(browser, base);
@@ -394,9 +416,9 @@ try {
     await ctx.close();
   });
 } finally {
-  await browser.close();
-  capi.kill('SIGTERM');
-  staticSrv.srv.close();
+  if (browser) await browser.close().catch(() => {});
+  if (capi) capi.kill('SIGTERM');
+  if (staticSrv) staticSrv.srv.close();
 }
 
 const failed = results.filter((r) => !r.ok);
