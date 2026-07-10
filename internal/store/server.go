@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS results (
 CREATE TABLE IF NOT EXISTS metrics (
   run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT
 );
+CREATE TABLE IF NOT EXISTS config (
+  key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
 CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);

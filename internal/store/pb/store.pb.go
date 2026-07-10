@@ -1796,6 +1796,167 @@ func (x *TrendReply) GetPoints() []*TrendPoint {
 	return nil
 }
 
+// --- config (M11.5 PR-5, ADR-062: the SERVICE tier of the tiered config, ADR-049) -------------
+// A key -> JSON document store. The standalone tier keeps using a file (brain/runconfig.py); this
+// domain is what a service deployment reads at start and the setup wizard writes.
+// SECRETS ARE REJECTED, not stripped: PutConfig fails with InvalidArgument when value_json carries a
+// secret-shaped key anywhere in the document. Keys live in the process env, never in the store.
+type ConfigRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	ValueJson     string                 `protobuf:"bytes,2,opt,name=value_json,json=valueJson,proto3" json:"value_json,omitempty"` // a JSON object; secret-shaped member names are refused
+	UpdatedAt     string                 `protobuf:"bytes,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // RFC3339 (defaulted on write)
+	Found         bool                   `protobuf:"varint,4,opt,name=found,proto3" json:"found,omitempty"`                         // false => no such key (GetConfig)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigRecord) Reset() {
+	*x = ConfigRecord{}
+	mi := &file_store_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigRecord) ProtoMessage() {}
+
+func (x *ConfigRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigRecord.ProtoReflect.Descriptor instead.
+func (*ConfigRecord) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ConfigRecord) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ConfigRecord) GetValueJson() string {
+	if x != nil {
+		return x.ValueJson
+	}
+	return ""
+}
+
+func (x *ConfigRecord) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+func (x *ConfigRecord) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+type ConfigKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigKey) Reset() {
+	*x = ConfigKey{}
+	mi := &file_store_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigKey) ProtoMessage() {}
+
+func (x *ConfigKey) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigKey.ProtoReflect.Descriptor instead.
+func (*ConfigKey) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ConfigKey) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type ConfigList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Items         []*ConfigRecord        `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigList) Reset() {
+	*x = ConfigList{}
+	mi := &file_store_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigList) ProtoMessage() {}
+
+func (x *ConfigList) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigList.ProtoReflect.Descriptor instead.
+func (*ConfigList) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ConfigList) GetItems() []*ConfigRecord {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 var File_store_proto protoreflect.FileDescriptor
 
 const file_store_proto_rawDesc = "" +
@@ -1953,7 +2114,19 @@ const file_store_proto_rawDesc = "" +
 	"\x05value\x18\x03 \x01(\x01R\x05value\"I\n" +
 	"\n" +
 	"TrendReply\x12;\n" +
-	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points2\xa6\x0e\n" +
+	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points\"t\n" +
+	"\fConfigRecord\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1d\n" +
+	"\n" +
+	"value_json\x18\x02 \x01(\tR\tvalueJson\x12\x1d\n" +
+	"\n" +
+	"updated_at\x18\x03 \x01(\tR\tupdatedAt\x12\x14\n" +
+	"\x05found\x18\x04 \x01(\bR\x05found\"\x1d\n" +
+	"\tConfigKey\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\"I\n" +
+	"\n" +
+	"ConfigList\x12;\n" +
+	"\x05items\x18\x01 \x03(\v2%.sentinel.persistence.v1.ConfigRecordR\x05items2\xf9\x10\n" +
 	"\fStoreService\x12O\n" +
 	"\tUpsertRun\x12\".sentinel.persistence.v1.RunRecord\x1a\x1e.sentinel.persistence.v1.Empty\x12L\n" +
 	"\x06GetRun\x12\x1e.sentinel.persistence.v1.RunId\x1a\".sentinel.persistence.v1.RunRecord\x12R\n" +
@@ -1979,7 +2152,12 @@ const file_store_proto_rawDesc = "" +
 	"\vListResults\x12'.sentinel.persistence.v1.ListResultsReq\x1a#.sentinel.persistence.v1.ResultList\x12V\n" +
 	"\rIngestMetrics\x12%.sentinel.persistence.v1.MetricsBatch\x1a\x1e.sentinel.persistence.v1.Empty\x12]\n" +
 	"\fQueryMetrics\x12%.sentinel.persistence.v1.MetricsQuery\x1a&.sentinel.persistence.v1.MetricsSeries\x12P\n" +
-	"\x06Trends\x12!.sentinel.persistence.v1.TrendReq\x1a#.sentinel.persistence.v1.TrendReplyB5Z3github.com/AlexGromer/sentinel/internal/store/pb;pbb\x06proto3"
+	"\x06Trends\x12!.sentinel.persistence.v1.TrendReq\x1a#.sentinel.persistence.v1.TrendReply\x12R\n" +
+	"\tPutConfig\x12%.sentinel.persistence.v1.ConfigRecord\x1a\x1e.sentinel.persistence.v1.Empty\x12V\n" +
+	"\tGetConfig\x12\".sentinel.persistence.v1.ConfigKey\x1a%.sentinel.persistence.v1.ConfigRecord\x12Q\n" +
+	"\n" +
+	"ListConfig\x12\x1e.sentinel.persistence.v1.Empty\x1a#.sentinel.persistence.v1.ConfigList\x12R\n" +
+	"\fDeleteConfig\x12\".sentinel.persistence.v1.ConfigKey\x1a\x1e.sentinel.persistence.v1.EmptyB5Z3github.com/AlexGromer/sentinel/internal/store/pb;pbb\x06proto3"
 
 var (
 	file_store_proto_rawDescOnce sync.Once
@@ -1993,7 +2171,7 @@ func file_store_proto_rawDescGZIP() []byte {
 	return file_store_proto_rawDescData
 }
 
-var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_store_proto_goTypes = []any{
 	(*RunRecord)(nil),        // 0: sentinel.persistence.v1.RunRecord
 	(*RunId)(nil),            // 1: sentinel.persistence.v1.RunId
@@ -2022,7 +2200,10 @@ var file_store_proto_goTypes = []any{
 	(*TrendReq)(nil),         // 24: sentinel.persistence.v1.TrendReq
 	(*TrendPoint)(nil),       // 25: sentinel.persistence.v1.TrendPoint
 	(*TrendReply)(nil),       // 26: sentinel.persistence.v1.TrendReply
-	(*Empty)(nil),            // 27: sentinel.persistence.v1.Empty
+	(*ConfigRecord)(nil),     // 27: sentinel.persistence.v1.ConfigRecord
+	(*ConfigKey)(nil),        // 28: sentinel.persistence.v1.ConfigKey
+	(*ConfigList)(nil),       // 29: sentinel.persistence.v1.ConfigList
+	(*Empty)(nil),            // 30: sentinel.persistence.v1.Empty
 }
 var file_store_proto_depIdxs = []int32{
 	0,  // 0: sentinel.persistence.v1.RunList.runs:type_name -> sentinel.persistence.v1.RunRecord
@@ -2033,53 +2214,62 @@ var file_store_proto_depIdxs = []int32{
 	20, // 5: sentinel.persistence.v1.MetricsBatch.points:type_name -> sentinel.persistence.v1.MetricPoint
 	20, // 6: sentinel.persistence.v1.MetricsSeries.points:type_name -> sentinel.persistence.v1.MetricPoint
 	25, // 7: sentinel.persistence.v1.TrendReply.points:type_name -> sentinel.persistence.v1.TrendPoint
-	0,  // 8: sentinel.persistence.v1.StoreService.UpsertRun:input_type -> sentinel.persistence.v1.RunRecord
-	1,  // 9: sentinel.persistence.v1.StoreService.GetRun:input_type -> sentinel.persistence.v1.RunId
-	2,  // 10: sentinel.persistence.v1.StoreService.ListRuns:input_type -> sentinel.persistence.v1.ListRunsReq
-	4,  // 11: sentinel.persistence.v1.StoreService.SaveScenario:input_type -> sentinel.persistence.v1.Scenario
-	5,  // 12: sentinel.persistence.v1.StoreService.GetScenario:input_type -> sentinel.persistence.v1.ScenarioId
-	6,  // 13: sentinel.persistence.v1.StoreService.ListScenarios:input_type -> sentinel.persistence.v1.ListScenariosReq
-	5,  // 14: sentinel.persistence.v1.StoreService.DeleteScenario:input_type -> sentinel.persistence.v1.ScenarioId
-	8,  // 15: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
-	10, // 16: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
-	11, // 17: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
-	10, // 18: sentinel.persistence.v1.StoreService.DeleteTest:input_type -> sentinel.persistence.v1.TestId
-	13, // 19: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
-	14, // 20: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
-	15, // 21: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
-	14, // 22: sentinel.persistence.v1.StoreService.DeleteChat:input_type -> sentinel.persistence.v1.ConversationId
-	17, // 23: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
-	1,  // 24: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
-	18, // 25: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
-	21, // 26: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
-	22, // 27: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
-	24, // 28: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
-	27, // 29: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
-	0,  // 30: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
-	3,  // 31: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
-	27, // 32: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
-	4,  // 33: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
-	7,  // 34: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
-	27, // 35: sentinel.persistence.v1.StoreService.DeleteScenario:output_type -> sentinel.persistence.v1.Empty
-	9,  // 36: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
-	9,  // 37: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
-	12, // 38: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
-	27, // 39: sentinel.persistence.v1.StoreService.DeleteTest:output_type -> sentinel.persistence.v1.Empty
-	27, // 40: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
-	13, // 41: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
-	16, // 42: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
-	27, // 43: sentinel.persistence.v1.StoreService.DeleteChat:output_type -> sentinel.persistence.v1.Empty
-	27, // 44: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
-	17, // 45: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
-	19, // 46: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
-	27, // 47: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
-	23, // 48: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
-	26, // 49: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
-	29, // [29:50] is the sub-list for method output_type
-	8,  // [8:29] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	27, // 8: sentinel.persistence.v1.ConfigList.items:type_name -> sentinel.persistence.v1.ConfigRecord
+	0,  // 9: sentinel.persistence.v1.StoreService.UpsertRun:input_type -> sentinel.persistence.v1.RunRecord
+	1,  // 10: sentinel.persistence.v1.StoreService.GetRun:input_type -> sentinel.persistence.v1.RunId
+	2,  // 11: sentinel.persistence.v1.StoreService.ListRuns:input_type -> sentinel.persistence.v1.ListRunsReq
+	4,  // 12: sentinel.persistence.v1.StoreService.SaveScenario:input_type -> sentinel.persistence.v1.Scenario
+	5,  // 13: sentinel.persistence.v1.StoreService.GetScenario:input_type -> sentinel.persistence.v1.ScenarioId
+	6,  // 14: sentinel.persistence.v1.StoreService.ListScenarios:input_type -> sentinel.persistence.v1.ListScenariosReq
+	5,  // 15: sentinel.persistence.v1.StoreService.DeleteScenario:input_type -> sentinel.persistence.v1.ScenarioId
+	8,  // 16: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
+	10, // 17: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
+	11, // 18: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
+	10, // 19: sentinel.persistence.v1.StoreService.DeleteTest:input_type -> sentinel.persistence.v1.TestId
+	13, // 20: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
+	14, // 21: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
+	15, // 22: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
+	14, // 23: sentinel.persistence.v1.StoreService.DeleteChat:input_type -> sentinel.persistence.v1.ConversationId
+	17, // 24: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
+	1,  // 25: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
+	18, // 26: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
+	21, // 27: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
+	22, // 28: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
+	24, // 29: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
+	27, // 30: sentinel.persistence.v1.StoreService.PutConfig:input_type -> sentinel.persistence.v1.ConfigRecord
+	28, // 31: sentinel.persistence.v1.StoreService.GetConfig:input_type -> sentinel.persistence.v1.ConfigKey
+	30, // 32: sentinel.persistence.v1.StoreService.ListConfig:input_type -> sentinel.persistence.v1.Empty
+	28, // 33: sentinel.persistence.v1.StoreService.DeleteConfig:input_type -> sentinel.persistence.v1.ConfigKey
+	30, // 34: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
+	0,  // 35: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
+	3,  // 36: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
+	30, // 37: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
+	4,  // 38: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
+	7,  // 39: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
+	30, // 40: sentinel.persistence.v1.StoreService.DeleteScenario:output_type -> sentinel.persistence.v1.Empty
+	9,  // 41: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
+	9,  // 42: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
+	12, // 43: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
+	30, // 44: sentinel.persistence.v1.StoreService.DeleteTest:output_type -> sentinel.persistence.v1.Empty
+	30, // 45: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
+	13, // 46: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
+	16, // 47: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
+	30, // 48: sentinel.persistence.v1.StoreService.DeleteChat:output_type -> sentinel.persistence.v1.Empty
+	30, // 49: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
+	17, // 50: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
+	19, // 51: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
+	30, // 52: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
+	23, // 53: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
+	26, // 54: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
+	30, // 55: sentinel.persistence.v1.StoreService.PutConfig:output_type -> sentinel.persistence.v1.Empty
+	27, // 56: sentinel.persistence.v1.StoreService.GetConfig:output_type -> sentinel.persistence.v1.ConfigRecord
+	29, // 57: sentinel.persistence.v1.StoreService.ListConfig:output_type -> sentinel.persistence.v1.ConfigList
+	30, // 58: sentinel.persistence.v1.StoreService.DeleteConfig:output_type -> sentinel.persistence.v1.Empty
+	34, // [34:59] is the sub-list for method output_type
+	9,  // [9:34] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_store_proto_init() }
@@ -2094,7 +2284,7 @@ func file_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_proto_rawDesc), len(file_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   27,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

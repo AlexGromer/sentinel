@@ -1,5 +1,6 @@
 // M13 (ADR-049/050): the StoreService — 5 persistence domains (runs, scenarios/tests, chats
 // projection, results, metrics) on the SAME single-writer SQLite DB as the legacy PersistenceService.
+// M11.5 PR-5 (ADR-062) adds a 6th: config — the SERVICE tier of the tiered config (ADR-049).
 // All writes take s.mu (ADR-007); reads don't. Upserts use portable `INSERT ... ON CONFLICT DO UPDATE`
 // (no SQLite-only INSERT OR REPLACE) so the Postgres backend (M13-service, M11/ADR-053) reuses this SQL.
 package store
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/AlexGromer/sentinel/internal/configguard"
 	pb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
@@ -458,4 +463,70 @@ func (s *Server) Trends(_ context.Context, r *pb.TrendReq) (*pb.TrendReply, erro
 		pts[i], pts[j] = pts[j], pts[i]
 	}
 	return &pb.TrendReply{Points: pts}, nil
+}
+
+// --- config (M11.5 PR-5, ADR-062: the service tier of the tiered config) -----
+//
+// A key -> JSON-document store. The standalone tier keeps its file loader (brain/runconfig.py,
+// unchanged); this domain is what a SERVICE deployment reads at start and the setup wizard writes.
+//
+// The secret guard is enforced HERE, not only in the control-API, because this socket is reachable by
+// any same-UID process holding STORE_TOKEN — an HTTP-only check would be a suggestion, not a boundary.
+// The rule itself lives in internal/configguard so both enforcement points share one definition.
+
+// PutConfig upserts a config document, REFUSING (InvalidArgument) rather than silently stripping a
+// document that is not a JSON object or that carries a secret-shaped member name at any depth.
+func (s *Server) PutConfig(_ context.Context, r *pb.ConfigRecord) (*pb.Empty, error) {
+	if r.Key == "" {
+		return nil, status.Error(codes.InvalidArgument, "config: key is required")
+	}
+	if err := configguard.Validate(r.ValueJson); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO config(key,value_json,updated_at) VALUES(?,?,?)
+		 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+		r.Key, r.ValueJson, nowRFC3339(r.UpdatedAt))
+	return &pb.Empty{}, err
+}
+
+func (s *Server) GetConfig(_ context.Context, k *pb.ConfigKey) (*pb.ConfigRecord, error) {
+	r := &pb.ConfigRecord{Key: k.Key}
+	err := s.db.QueryRow(`SELECT value_json,updated_at FROM config WHERE key=?`, k.Key).
+		Scan(&r.ValueJson, &r.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return &pb.ConfigRecord{Found: false}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.Found = true
+	return r, nil
+}
+
+func (s *Server) ListConfig(_ context.Context, _ *pb.Empty) (*pb.ConfigList, error) {
+	rows, err := s.db.Query(`SELECT key,value_json,updated_at FROM config ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := &pb.ConfigList{}
+	for rows.Next() {
+		r := &pb.ConfigRecord{Found: true}
+		if err := rows.Scan(&r.Key, &r.ValueJson, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out.Items = append(out.Items, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteConfig is idempotent — deleting a missing key is success, like DeleteScenario/DeleteTest/DeleteChat.
+func (s *Server) DeleteConfig(_ context.Context, k *pb.ConfigKey) (*pb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM config WHERE key=?`, k.Key)
+	return &pb.Empty{}, err
 }

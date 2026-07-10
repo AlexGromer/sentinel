@@ -140,6 +140,26 @@ class StoreServiceStub:
                 request_serializer=store__pb2.TrendReq.SerializeToString,
                 response_deserializer=store__pb2.TrendReply.FromString,
                 _registered_method=True)
+        self.PutConfig = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/PutConfig',
+                request_serializer=store__pb2.ConfigRecord.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
+                _registered_method=True)
+        self.GetConfig = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/GetConfig',
+                request_serializer=store__pb2.ConfigKey.SerializeToString,
+                response_deserializer=store__pb2.ConfigRecord.FromString,
+                _registered_method=True)
+        self.ListConfig = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/ListConfig',
+                request_serializer=persistence__pb2.Empty.SerializeToString,
+                response_deserializer=store__pb2.ConfigList.FromString,
+                _registered_method=True)
+        self.DeleteConfig = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/DeleteConfig',
+                request_serializer=store__pb2.ConfigKey.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
+                _registered_method=True)
 
 
 class StoreServiceServicer:
@@ -279,6 +299,33 @@ class StoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PutConfig(self, request, context):
+        """config (M11.5 PR-5)
+        InvalidArgument when value_json carries a secret
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetConfig(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListConfig(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteConfig(self, request, context):
+        """idempotent, like DeleteScenario/DeleteTest/DeleteChat
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_StoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -386,6 +433,26 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     servicer.Trends,
                     request_deserializer=store__pb2.TrendReq.FromString,
                     response_serializer=store__pb2.TrendReply.SerializeToString,
+            ),
+            'PutConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.PutConfig,
+                    request_deserializer=store__pb2.ConfigRecord.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
+            ),
+            'GetConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetConfig,
+                    request_deserializer=store__pb2.ConfigKey.FromString,
+                    response_serializer=store__pb2.ConfigRecord.SerializeToString,
+            ),
+            'ListConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListConfig,
+                    request_deserializer=persistence__pb2.Empty.FromString,
+                    response_serializer=store__pb2.ConfigList.SerializeToString,
+            ),
+            'DeleteConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteConfig,
+                    request_deserializer=store__pb2.ConfigKey.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -955,6 +1022,114 @@ class StoreService:
             '/sentinel.persistence.v1.StoreService/Trends',
             store__pb2.TrendReq.SerializeToString,
             store__pb2.TrendReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PutConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/PutConfig',
+            store__pb2.ConfigRecord.SerializeToString,
+            persistence__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/GetConfig',
+            store__pb2.ConfigKey.SerializeToString,
+            store__pb2.ConfigRecord.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/ListConfig',
+            persistence__pb2.Empty.SerializeToString,
+            store__pb2.ConfigList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/DeleteConfig',
+            store__pb2.ConfigKey.SerializeToString,
+            persistence__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,
