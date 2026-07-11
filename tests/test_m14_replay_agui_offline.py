@@ -176,19 +176,26 @@ def test_threshold_zero_emits_no_hitl():
 
 
 def test_healed_step_resets_the_streak():
-    # miss, miss, then a HEAL SUCCESS must reset consecutive_heal_failures below threshold=3 so no signal
+    # LOAD-BEARING (the reset must matter): miss, miss, SUCCESS, miss, miss at threshold 3.
+    #   working reset -> streak peaks at 2 (1,2,reset 0,1,2)          -> NO hitl_needed
+    #   broken/no-op reset -> streak accumulates to 4 (1,2,3,4)       -> hitl_needed WOULD fire
+    # So asserting "no hitl_needed" only passes because the reset works.
     os.environ["SENTINEL_AUTO_HITL_THRESHOLD"] = "3"
     try:
-        # plan: nav, 2 gone-clicks (miss), 1 healable click (HealEx heals via testid)
-        steps = _miss_plan(2)["steps"]
-        steps.append({"step_id": 99, "action_type": "click", "semantic_id": "sidH", "intent": "click",
-                      "locator": {"role": "button", "name": "Old"},
-                      "alternatives": [{"strategy": "testid", "locator": {"testid": "cta"}, "prior": 0.95}]})
+        healable = {"action_type": "click", "semantic_id": "sidH", "intent": "click",
+                    "locator": {"role": "button", "name": "Old"},
+                    "alternatives": [{"strategy": "testid", "locator": {"testid": "cta"}, "prior": 0.95}]}
+        gone = lambda i: {"action_type": "click", "semantic_id": f"g{i}", "intent": "click",
+                          "locator": {"role": "button", "name": f"Gone{i}"}, "alternatives": []}
+        steps = [{"step_id": 1, "action_type": "navigate", "semantic_id": "nav1", "intent": "nav",
+                  "target": "file:///s/index.html", "locator": None, "alternatives": None},
+                 gone(0), gone(1), {**healable, "step_id": 4}, gone(2), gone(3)]
+        for i, s in enumerate(steps):
+            s.setdefault("step_id", i + 1)
         plan = {"plan_id": "pmix", "target_url": "file:///s/index.html",
                 "plan_hash": canonical_plan_hash(steps), "steps": steps}
 
-        # a FakeEx: everything misses EXCEPT the testid alternative (so step 99 heals, the rest miss)
-        class MixEx(MissEx):
+        class MixEx(MissEx):  # everything misses EXCEPT the testid alternative (so the healable step passes)
             def call(self, m, **p):
                 if m == "browser.probe" and p["locator"].get("testid") == "cta":
                     return {"count": 1}
@@ -197,8 +204,32 @@ def test_healed_step_resets_the_streak():
         report, ev = _run(MixEx(), plan)
     finally:
         del os.environ["SENTINEL_AUTO_HITL_THRESHOLD"]
-    # 2 consecutive misses < threshold 3, then a success resets -> never reaches 3 -> no signal
     assert not any(e["type"] == "hitl_needed" for e in ev), _types(ev)
+    # sanity: the healable step really did heal (so the reset had something to reset)
+    assert report["healed"] == 1, report
+
+
+def test_non_heal_failure_also_counts_toward_the_streak():
+    # A navigate that THROWS is a real failure but not a heal miss. It must still extend the streak —
+    # graph-mode counts every failure, and a run stuck on navigation should summon a human too.
+    class NavFailEx(MissEx):
+        def call(self, m, **p):
+            if m == "browser.navigate":
+                raise RuntimeError("network down")
+            return super().call(m, **p)
+
+    steps = [{"step_id": i + 1, "action_type": "navigate", "semantic_id": f"n{i}", "intent": "nav",
+              "target": "file:///s/p.html", "locator": None, "alternatives": None} for i in range(2)]
+    plan = {"plan_id": "pnav", "target_url": "file:///s/p.html",
+            "plan_hash": canonical_plan_hash(steps), "steps": steps}
+    os.environ["SENTINEL_AUTO_HITL_THRESHOLD"] = "2"
+    try:
+        report, ev = _run(NavFailEx(), plan)
+    finally:
+        del os.environ["SENTINEL_AUTO_HITL_THRESHOLD"]
+    hitls = [e for e in ev if e["type"] == "hitl_needed"]
+    assert hitls, f"navigate failures must count toward the auto-HITL streak, got {_types(ev)}"
+    assert hitls[0]["data"]["count"] >= 2, hitls
 
 
 def test_malformed_threshold_does_not_crash():

@@ -13,8 +13,10 @@ NOTE: `Context`/`FastMCP` are imported at module level (no `from __future__ impo
 FastMCP's `get_type_hints` can resolve the `Context` param and inject it / exclude it from the schema.
 """
 import asyncio
+import contextlib
 import json
 import os
+import sys
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -27,10 +29,19 @@ def build_app(out, run_id: str) -> FastMCP:
     app = FastMCP("sentinel-brain")
 
     async def _drive(ctx, use_sampling: bool, work) -> str:
-        """Bind the host sampling session (if needed) and run the sync `work` off the event loop."""
+        """Bind the host sampling session (if needed) and run the sync `work` off the event loop.
+
+        stdout is the MCP JSON-RPC channel here (module docstring), but the brain's run code prints to
+        stdout: `@@AGUI` AG-UI events (graph.py/replay.py, M14) and the replay tail summary
+        (__main__.py). Left alone, those non-protocol lines interleave with the framed JSON-RPC the host
+        is reading and can desync it. Redirect stdout→stderr for the duration of `work`: the MCP SDK's
+        writer holds the ORIGINAL stdout buffer (captured when the stdio transport was set up), so framed
+        responses still reach the host, while the brain's diagnostics land on stderr (harmless — no
+        control-API line-reader consumes @@AGUI in mcp-server mode; the host drives via JSON-RPC)."""
         token = set_sampling_session(asyncio.get_running_loop(), ctx.session) if use_sampling else None
         try:
-            rc = await asyncio.to_thread(work)
+            with contextlib.redirect_stdout(sys.stderr):
+                rc = await asyncio.to_thread(work)
         finally:
             if token is not None:
                 reset_sampling_session(token)

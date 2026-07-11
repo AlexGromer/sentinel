@@ -140,8 +140,9 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     checked = set()
     failures = 0
     regressions = 0
-    # M14 tail 2: auto-HITL signal. `consecutive_heal_failures` counts heal MISSES in a row (reset on any
-    # passed step) — the same quantity graph-mode tracks. threshold=0 (default) disables the emit.
+    # M14 tail 2: auto-HITL signal. `consecutive_heal_failures` counts CONSECUTIVE real (non-quarantined)
+    # failures — the same quantity graph-mode tracks (it increments on every failure via heal-routing).
+    # threshold=0 (default) disables the emit. See the per-step update after the quarantine block.
     consecutive_heal_failures = 0
     try:
         hitl_threshold = int(os.environ.get("SENTINEL_AUTO_HITL_THRESHOLD", "0"))
@@ -157,7 +158,6 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         step_key = s.get("semantic_id") or str(s.get("step_id"))
         rec = {"step_id": s.get("step_id"), "type": kind, "intent": s.get("intent")}
         passed = True
-        healed_this_step = False  # a heal was attempted this step and did NOT succeed
         _emit("step.progress", run_id, n=idx + 1, total=total, desc=f"{kind}: {s.get('intent') or step_key}")
 
         if kind == "navigate":
@@ -219,27 +219,14 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                               confidence=h.get("confidence"), ok=True)
                     except Exception as e:
                         rec["outcome"], rec["error"], rec["heal"], passed = "failed", str(e), h, False
-                        healed_this_step = True
                         _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
                               confidence=h.get("confidence"), ok=False)
                 else:
                     rec["outcome"], rec["heal"], passed = "failed", h, False
-                    healed_this_step = True
                     _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
                           confidence=h.get("confidence"), ok=False)
         else:
             rec["outcome"], rec["error"], passed = "failed", f"unknown action_type: {kind}", False
-
-        # --- auto-HITL signal (M14 tail 2) -------------------------------------
-        # A passed step breaks the streak; a heal MISS extends it. On threshold, emit hitl_needed —
-        # the co-pilot shows the "take control" banner. Actually pausing replay for a human is M9-LIVE.
-        if passed:
-            consecutive_heal_failures = 0
-        elif healed_this_step:
-            consecutive_heal_failures += 1
-            if hitl_threshold > 0 and consecutive_heal_failures >= hitl_threshold:
-                _emit("hitl_needed", run_id, reason="consecutive_heal_failures",
-                      count=consecutive_heal_failures)
 
         # --- flake quarantine accounting (suppresses exit-1 contribution) ------
         quarantined = store.record_step(plan_id, step_key, passed, aut_version)
@@ -248,6 +235,20 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["quarantined"] = True
             else:
                 failures += 1
+
+        # --- auto-HITL signal (M14 tail 2) -------------------------------------
+        # Tracks CONSECUTIVE real failures (any kind — a broken navigate/assert is the agent stuck just
+        # like a heal miss), matching graph-mode's `consecutive_heal_failures` (which increments on every
+        # failure via heal-routing, resets on a pass). A passed step OR a quarantined flake resets it (a
+        # known-flaky step is not "stuck"); a real, non-quarantined failure extends it. On threshold, emit
+        # hitl_needed — the co-pilot shows the "take control" banner. Actually pausing replay is M9-LIVE.
+        if passed or quarantined:
+            consecutive_heal_failures = 0
+        else:
+            consecutive_heal_failures += 1
+            if hitl_threshold > 0 and consecutive_heal_failures >= hitl_threshold:
+                _emit("hitl_needed", run_id, reason="consecutive_heal_failures",
+                      count=consecutive_heal_failures)
 
         # --- golden capture / diff: once per page, at FIRST landing -------------
         # Symmetry: baseline AND replay both snapshot a page on first arrival, so the compared
@@ -271,8 +272,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                     # plan_hash mismatch (exit 3), never silently trust the forged baseline.
                     report["exit_code"] = 3
                     report["reason"] = str(e)
+                    # This early return bypasses the normal `report["failed"] = failures` at the tail, so
+                    # set it HERE too — otherwise the persisted heal-report.json says failed=0 while the
+                    # AG-UI verdict (below) says failed=N for the same aborted run (they must agree).
+                    report["failed"] = failures
                     _emit("verdict", run_id, verdict="integrity", exit_code=3,
-                          healed=report["healed"], failed=failures)
+                          healed=report["healed"], failed=report["failed"])
                     _write(report, run_dir)
                     return report
                 if g:
