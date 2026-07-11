@@ -410,7 +410,7 @@ jobs:
         with:
           go-version: '1.26'
       - name: shellcheck all shell scripts
-        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh
+        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh scripts/collect-live-run.sh
       - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
         run: |
           set -euo pipefail
@@ -434,6 +434,65 @@ jobs:
           fi
           kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
           echo "install-smoke: OK (positive install + tampered-checksum rejection)"
+
+  # ---------------------------------------------------------------------------
+  # collect-live-run-smoke: M9-LIVE prep — proves scripts/collect-live-run.sh redacts BY DEFAULT.
+  # A synthetic run dir is planted with one canary per redaction mechanism (structural fill/type
+  # blanking · keyword k=v prose · Authorization header · credential shape · cookie) plus two that
+  # can only be handled by EXCLUSION (storage_state.json, trace.zip). Every canary is distinct, so a
+  # broken mechanism leaves ITS canary behind instead of hiding behind a sibling rule (mutation-tested
+  # locally: neutering any one mechanism makes its canary survive).
+  # THE acceptance criterion is the final assertion: no canary survives in the DECOMPRESSED bundle.
+  # Grepping the .tar.gz blob would pass vacuously — gzip hides the plaintext, which is also exactly
+  # why gitleaks is NOT a safety net for this script.
+  # ---------------------------------------------------------------------------
+  collect-live-run-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: collect-live-run.sh — default redaction + exclusions + --with-trace opt-in
+        run: |
+          set -euo pipefail
+          id=citestcanary
+          mkdir -p "runs/$id"
+          # structural: a typed value with no keyword and no credential shape — ONLY the fill/type
+          # blanking can remove it (LLM authoring cannot emit secretRef, so this is the real leak path)
+          printf '{"plan_hash":"deadbeefPLANHASH","steps":[{"step_id":1,"action_type":"fill","value":"CANARY-STRUCT-fill-0123456789"}]}\n' > "runs/$id/plan.json"
+          printf '{"steps":[{"action_type":"type","text":"CANARY-STRUCT-type-0123456789"}]}\n' > "runs/$id/scenario.json"
+          # keyword-adjacent prose + auth headers (Basic is caught ONLY by the header rule; Bearer is
+          # deliberately double-covered by the header rule and the bearer rule)
+          printf '{"step":1,"decision":"fill password CANARY-KV-0123456789","reason":"Authorization: Bearer CANARY-HDR-0123456789","note":"Authorization: Basic CANARY-BASIC-0123456789","prompt_tokens":11}\n' > "runs/$id/llm-transcript.jsonl"
+          # credential shape + cookie, in the HTML report (html.escape()d, but the secret survives escaping)
+          printf '<html><body><p>sk-CANARY-ENTROPY-0123456789</p><p>Cookie: sid=CANARY-COOKIE-0123456789</p></body></html>\n' > "runs/$id/report.html"
+          printf 'sentinel_steps_total 2\n' > "runs/$id/metrics.prom"
+          # these two can never be redacted — only excluded
+          printf '{"cookies":[{"name":"sid","value":"CANARY-EXCLUDED-state-0123456789"}]}\n' > "runs/$id/storage_state.json"
+          printf 'PK-fake-zip CANARY-EXCLUDED-trace-0123456789\n' > "runs/$id/trace.zip"
+          printf 'msgpack-blob CANARY-EXCLUDED-ckpt-0123456789\n' > "runs/$id/checkpoint.db"
+
+          scripts/collect-live-run.sh "$id"                                   # (a) exits 0
+          bundle="live-results/live-$id.tar.gz"
+          test -f "$bundle"                                                   # (b) bundle written
+          # (c-e) the three files that must never ship by default
+          for forbidden in 'trace\.zip' 'storage_state' 'checkpoint'; do
+            if tar tzf "$bundle" | grep -q "$forbidden"; then
+              echo "::error::$forbidden is in the default bundle"; exit 1
+            fi
+          done
+          # (f) ACCEPTANCE CRITERION — grep the DECOMPRESSED stream: no canary of any mechanism survives
+          if tar xzOf "$bundle" | grep -o 'CANARY-[A-Z]*' | sort -u | grep .; then
+            echo "::error::the canaries listed above survived redaction"; exit 1
+          fi
+          # (g) analysis-critical fields are NOT collateral damage
+          tar xzOf "$bundle" | grep -q 'deadbeefPLANHASH' || { echo "::error::plan_hash was scrubbed"; exit 1; }
+          tar xzOf "$bundle" | grep -q '"prompt_tokens": 11' || { echo "::error::token counters were mangled"; exit 1; }
+          # (h) the opt-in path still works (and ships the trace unredacted, by design)
+          scripts/collect-live-run.sh "$id" --with-trace
+          tar tzf "$bundle" | grep -q 'trace\.zip' || { echo "::error::--with-trace did not include trace.zip"; exit 1; }
+          # (i) guards: traversal-shaped id and an unknown run must both be refused
+          if scripts/collect-live-run.sh '../etc' >/dev/null 2>&1; then echo "::error::traversal id accepted"; exit 1; fi
+          if scripts/collect-live-run.sh 'nosuchrun' >/dev/null 2>&1; then echo "::error::missing run accepted"; exit 1; fi
+          echo "collect-live-run-smoke: OK (no canary survived; trace/storage_state/checkpoint excluded; opt-in honoured)"
 
   # ---------------------------------------------------------------------------
   # install-ps1-smoke: M11-DIST — the Windows peer of install-smoke. Cross-builds agentctl.exe,
