@@ -99,7 +99,7 @@ CopilotKit (npm/React + Node runtime) can only ever be a **dev convenience**: it
 ## 7. Deferred
 - **M15**: wiring the `results`/`metrics` domains + native charts into the Tests panels (stubs today).
 - **M9-LIVE**: live e2e AG-UI (a real browser) · full `run_id`↔session ownership authorization · a live check of auto-HITL.
-- **replay/baseline AG-UI + auto-HITL**: today AG-UI emission + auto-HITL are wired only for the **graph modes** (explore/goal/describe/chat via `build_graph`); the `run_replay` path (where real L1-L6 healing with a confidence gate happens) → **follow-up** (validated live in M9-LIVE). The Live timeline degrades to a `log` view for a replay/baseline run (not rich chips).
+- **replay/baseline AG-UI + auto-HITL — ✅ emission+signal (M14 tail 2):** `run_replay` now emits `run.started`/`step.progress`/`heal`(real L1-L6 strategy/confidence)/`verdict`(real exit 0/1/2/3) — a rich timeline instead of a `log` view; a consecutive-heal-failure counter + `hitl_needed` at `SENTINEL_AUTO_HITL_THRESHOLD` (0=off). **The live auto-PAUSE (a human taking over mid-replay) = M9-LIVE** — replay has no interrupt/resume machinery, and co-pilot takeover-in-replay is deferred there too (as is graph-mode's live-pause validation). `tests/test_m14_replay_agui_offline.py`.
 - **M-STRUCTURED-OUT** (right after M14): strict `tool_use`/`json_schema` instead of `find('{')` parsing.
 - **M-INSTALL / M-AUTOPILOT-LOCAL** (after the epic): self-installer · hw-probe→sizing→ollama-deploy + UI model management.
 - **M13-service** (M11): Postgres/migrations/TCP.
