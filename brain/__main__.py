@@ -348,7 +348,7 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         f"aut={aut_version or '-'} ci={ci}")
     try:
         report = run_replay(ex, store, heal, plan, target, str(out),
-                            baseline=baseline, aut_version=aut_version, ci=ci, force=force)
+                            baseline=baseline, aut_version=aut_version, ci=ci, force=force, run_id=run_id)
         # M9.1 (ADR-026): persist auth after a successful login-as-test run (before traceStop/shutdown).
         save_state = os.environ.get("STORAGE_STATE_SAVE")
         if save_state and report.get("exit_code") == 0:

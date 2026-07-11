@@ -19,8 +19,28 @@ import hashlib
 import json
 import os
 
+from . import agui
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
+
+
+def _log(*a):
+    # local logger stand-in (replay.py has no `log` import; emission failures are non-fatal anyway)
+    import sys
+    print("[replay]", *a, file=sys.stderr, flush=True)
+
+
+def _emit(event_type: str, run_id: str, **data) -> None:
+    """Best-effort AG-UI emission for the replay path (M14 tail 2; docs/M14_CONTRACT.md §2/§7).
+
+    The graph modes emit via graph.py's `_agui`; replay cannot import that (graph.py imports FROM
+    replay — a cycle), so this is the replay-local twin: additive stdout only, UNCONDITIONAL, and
+    swallowed on failure so it can never break a replay. A run_id of "" (no wiring / older caller)
+    is still emitted — the control-API keys by run_id but an empty one is harmless observability."""
+    try:
+        agui.emit(event_type, run_id, **data)
+    except Exception as e:
+        _log("agui emit failed:", e)
 
 
 def _a11y_hash(aria: str) -> str:
@@ -80,19 +100,29 @@ def _expect_params(s: dict) -> dict:
 
 def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                baseline: bool = False, aut_version: str = "", ci: bool = False,
-               force: bool = False) -> dict:
-    """Replay `plan` against `new_target`. Returns the report incl. `exit_code`."""
+               force: bool = False, run_id: str = "") -> dict:
+    """Replay `plan` against `new_target`. Returns the report incl. `exit_code`.
+
+    M14 tail 2 (docs/M14_CONTRACT.md §7): this path now emits AG-UI events (run.started · step.progress ·
+    heal · verdict) so a replay/baseline run drives the co-pilot's rich timeline instead of a raw log view,
+    and counts consecutive heal failures to emit the auto-HITL `hitl_needed` signal at
+    SENTINEL_AUTO_HITL_THRESHOLD — mirroring the graph-mode checkpoint node. The *signal* is wired here;
+    the live auto-PAUSE (a human takeover mid-replay) rides on the co-pilot takeover machinery, which is
+    M9-LIVE — replay has no interrupt/resume today, and graph-mode defers its live auto-pause to M9-LIVE too."""
     steps = plan.get("steps", [])
     plan_id = plan.get("plan_id") or "plan"
     stored = plan.get("plan_hash", "")
     computed = canonical_plan_hash(steps)
-    report = {"plan_id": plan_id, "mode": "baseline" if baseline else "replay",
+    mode = "baseline" if baseline else "replay"
+    report = {"plan_id": plan_id, "mode": mode,
               "steps": [], "regressions": [], "healed": 0, "failed": 0}
+    _emit("run.started", run_id, mode=mode, target=new_target, planner="replay")
 
     # --- plan integrity hard-abort (ADR-006) -----------------------------------
     if stored and computed != stored and not force:
         report["exit_code"] = 3
         report["reason"] = f"plan_hash mismatch stored={stored[:12]} computed={computed[:12]}"
+        _emit("verdict", run_id, verdict="integrity", exit_code=3, healed=0, failed=0)
         _write(report, run_dir)
         return report
 
@@ -110,12 +140,25 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     checked = set()
     failures = 0
     regressions = 0
+    # M14 tail 2: auto-HITL signal. `consecutive_heal_failures` counts CONSECUTIVE real (non-quarantined)
+    # failures — the same quantity graph-mode tracks (it increments on every failure via heal-routing).
+    # threshold=0 (default) disables the emit. See the per-step update after the quarantine block.
+    consecutive_heal_failures = 0
+    try:
+        hitl_threshold = int(os.environ.get("SENTINEL_AUTO_HITL_THRESHOLD", "0"))
+    except ValueError:
+        # A malformed operator env must not crash the whole replay before a single step runs (this parse
+        # sits at the top of the function, unlike graph-mode's mid-run checkpoint) — treat garbage as off.
+        _log("bad SENTINEL_AUTO_HITL_THRESHOLD; treating as 0 (auto-HITL off)")
+        hitl_threshold = 0
+    total = len(steps)
 
-    for s in steps:
+    for idx, s in enumerate(steps):
         kind = s.get("action_type")
         step_key = s.get("semantic_id") or str(s.get("step_id"))
         rec = {"step_id": s.get("step_id"), "type": kind, "intent": s.get("intent")}
         passed = True
+        _emit("step.progress", run_id, n=idx + 1, total=total, desc=f"{kind}: {s.get('intent') or step_key}")
 
         if kind == "navigate":
             tgt = (s.get("target") or "").replace(old_base, new_base)
@@ -172,10 +215,16 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                         rec["outcome"], rec["locator"] = "healed", h["locator"]
                         rec["heal"] = {k: h.get(k) for k in ("strategy", "confidence", "outcome")}
                         report["healed"] += 1
+                        _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
+                              confidence=h.get("confidence"), ok=True)
                     except Exception as e:
                         rec["outcome"], rec["error"], rec["heal"], passed = "failed", str(e), h, False
+                        _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
+                              confidence=h.get("confidence"), ok=False)
                 else:
                     rec["outcome"], rec["heal"], passed = "failed", h, False
+                    _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
+                          confidence=h.get("confidence"), ok=False)
         else:
             rec["outcome"], rec["error"], passed = "failed", f"unknown action_type: {kind}", False
 
@@ -186,6 +235,20 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["quarantined"] = True
             else:
                 failures += 1
+
+        # --- auto-HITL signal (M14 tail 2) -------------------------------------
+        # Tracks CONSECUTIVE real failures (any kind — a broken navigate/assert is the agent stuck just
+        # like a heal miss), matching graph-mode's `consecutive_heal_failures` (which increments on every
+        # failure via heal-routing, resets on a pass). A passed step OR a quarantined flake resets it (a
+        # known-flaky step is not "stuck"); a real, non-quarantined failure extends it. On threshold, emit
+        # hitl_needed — the co-pilot shows the "take control" banner. Actually pausing replay is M9-LIVE.
+        if passed or quarantined:
+            consecutive_heal_failures = 0
+        else:
+            consecutive_heal_failures += 1
+            if hitl_threshold > 0 and consecutive_heal_failures >= hitl_threshold:
+                _emit("hitl_needed", run_id, reason="consecutive_heal_failures",
+                      count=consecutive_heal_failures)
 
         # --- golden capture / diff: once per page, at FIRST landing -------------
         # Symmetry: baseline AND replay both snapshot a page on first arrival, so the compared
@@ -209,6 +272,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                     # plan_hash mismatch (exit 3), never silently trust the forged baseline.
                     report["exit_code"] = 3
                     report["reason"] = str(e)
+                    # This early return bypasses the normal `report["failed"] = failures` at the tail, so
+                    # set it HERE too — otherwise the persisted heal-report.json says failed=0 while the
+                    # AG-UI verdict (below) says failed=N for the same aborted run (they must agree).
+                    report["failed"] = failures
+                    _emit("verdict", run_id, verdict="integrity", exit_code=3,
+                          healed=report["healed"], failed=report["failed"])
                     _write(report, run_dir)
                     return report
                 if g:
@@ -233,5 +302,9 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     from . import budget  # M15.1: per-run token totals (heal LLM) -> persistResult ingests tokens_* + cost_usd
     report["tokens"] = budget.tracker().summary()
     report["models"] = {"heal": getattr(getattr(heal, "_backend", None), "model", None)}
+    # M14 tail 2: the REAL structured exit code (0/1/2/3), unlike graph-mode's best-effort verdict.
+    _verdict = {0: "pass", 1: "problem", 2: "regression", 3: "integrity"}.get(report["exit_code"], "problem")
+    _emit("verdict", run_id, verdict=_verdict, exit_code=report["exit_code"],
+          healed=report["healed"], failed=failures)
     _write(report, run_dir)
     return report
