@@ -32,7 +32,7 @@ M14 закрывает это: HTTP-поверхность доменов, жи�
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
 | `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
-| `run.finished` | `{exit_code}` | control-API — **UI-ветка готова, эмиссия отложена (follow-up)** |
+| `run.finished` | `{exit_code,state}` | control-API — **эмитится** (finish-горутина инжектит `@@AGUI`-строку после stdout brain, до `finish()`; `seq` опущен — отдельное un-ordered-пространство; failed-spawn → `exit_code:-1` (различается по `state`: signal-kill=`done`, spawn-fail=`failed`); typed для WS, сырая строка в `log` для SSE) |
 | `log` | `{line}` | passthrough сырого stdout |
 
 **Транспорт (надстройка R3, НЕ one-shot-шим ADR-041)**: поверх существующего WS `GET /v1/stream`. Клиент коннектится с `?run_id=<id>` (charset `validRunID` — тот же charset-guard, что у `?session=`; `run_id` используется как ключ `s.runs`-map/JSON, в путь НЕ идёт, потому `filepath.Base` не нужен) → сервер **подписывает** сокет на `runStream` этого run → пушит конверты как `wsOpText`-фреймы. Client→server takeover/return без изменений — **дуплекс на одном сокете**.

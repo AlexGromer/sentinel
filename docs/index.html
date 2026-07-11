@@ -2067,7 +2067,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       agHitlBanner(true, p.data && p.data.reason, p.data && p.data.count);
       return;
     }
-    if (p.type==='run.finished'){ agAddEvent('verdict', '⏹ run.finished exit_code='+esc(p.data && p.data.exit_code)); return; }
+    if (p.type==='run.finished'){ var fd=p.data||{}; agAddEvent('verdict', '⏹ run.finished exit_code='+esc(fd.exit_code)+(fd.state?' ('+esc(fd.state)+')':'')); return; }
     // run.started / state.transition / step.progress / tool.call / heal / verdict — generic timeline chip
     agAddEvent(agClassFor(p.type), '<b>'+esc(p.type)+'</b> #'+esc(p.seq!=null?p.seq:'?')+' '+esc(JSON.stringify(p.data||{})));
   }

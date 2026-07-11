@@ -210,6 +210,26 @@ func isLocalBind(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// aguiLine builds a runStream line carrying a control-API-injected AG-UI event (M14 tail): the
+// wsAGUIPrefix marker + a compact JSON envelope. It is the Go counterpart to brain/agui.py's emit — the
+// control-API injects the one event only it can know (run.finished, from the process exit), while every
+// other AG-UI event still comes from the brain's @@AGUI stdout lines.
+//
+// The envelope deliberately omits `seq`: the control-API does not share the brain's per-process seq space
+// (RunState has no agui_seq; ws.go never parses @@AGUI beyond the prefix), and the UI's run.finished
+// branch reads only data.exit_code (its generic branch tolerates a missing seq). `ts` is the RFC3339
+// timestamp the caller already computed (rec.FinishedAt). The value shape is fixed, so json.Marshal
+// cannot fail — mirrors wsAGUIFrame's own `_, _ = json.Marshal(...)` reasoning.
+func aguiLine(eventType, runID, ts string, data map[string]any) string {
+	b, _ := json.Marshal(map[string]any{
+		"type":   eventType,
+		"run_id": runID,
+		"ts":     ts,
+		"data":   data,
+	})
+	return wsAGUIPrefix + string(b)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -423,14 +443,30 @@ func (s *server) spawnRun(req runRequest) *run {
 		} else {
 			rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
 		}
+		// Snapshot the terminal state for the AG-UI event under the lock; append outside it (below).
+		// A "failed" run never set ExitCode (zero value 0), which would read as a clean exit — emit -1
+		// so the UI's run.finished branch does not mistake a spawn failure for success. `state` is carried
+		// alongside so exit_code:-1 is unambiguous: a signal-killed run is state=done/exit_code=-1
+		// (os.ProcessState.ExitCode() returns -1 for a signalled process), a failed-spawn is
+		// state=failed/exit_code=-1 — same as /v1/runs pairs state with exit_code.
+		exitForEvent := rec.ExitCode
+		if rec.State == "failed" {
+			exitForEvent = -1
+		}
+		stateForEvent := rec.State
+		finishedAt := rec.FinishedAt
 		s.mu.Unlock()
 		if s.store != nil { // M13: persist the terminal state (done/failed + exit_code + finished_at)
 			s.store.upsertRun(rec)
 		}
 		s.persistScenario(rec) // M14 wave W3: wire the scenarios domain to a real caller (no-op if no scenario.json)
 		s.persistResult(rec)   // M15 (ADR-051): wire the results + metrics domains (no-op if no store/artifacts)
-		lw.flush()             // emit any trailing partial line
-		rec.stream.finish()    // release SSE subscribers
+		lw.flush()             // emit any trailing partial line (all brain output precedes run.finished)
+		// M14 tail 1: the control-API injects run.finished — the one AG-UI event only it can know (the
+		// process exit). Must precede finish(): append() no-ops once the stream is done. WS subscribers
+		// get a typed run.finished frame (wsAGUIFrame); SSE gets the raw line inside a log event.
+		rec.stream.append(aguiLine("run.finished", rec.ID, finishedAt, map[string]any{"exit_code": exitForEvent, "state": stateForEvent}))
+		rec.stream.finish() // release SSE subscribers
 	}()
 	return rec
 }
