@@ -146,7 +146,9 @@ func TestRunEventsStream(t *testing.T) {
 		t.Fatalf("events content-type: %q want text/event-stream", ct)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"event: state", "event: log", "planning step 1", "walking page", `"exit_code":1`, "event: done"} {
+	// M14 tail 1: the injected run.finished reaches SSE as a RAW @@AGUI line inside a log event (SSE is
+	// never AG-UI-typed — that is WS-only; here we just confirm the terminal line is present).
+	for _, want := range []string{"event: state", "event: log", "planning step 1", "walking page", `"exit_code":1`, "run.finished", "event: done"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("events body missing %q:\n%s", want, body)
 		}

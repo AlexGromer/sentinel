@@ -32,7 +32,7 @@ M14 closes this: an HTTP surface for the domains, a live AG-UI timeline on top o
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
 | `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
-| `run.finished` | `{exit_code}` | control-API — **UI branch ready, emission deferred (follow-up)** |
+| `run.finished` | `{exit_code,state}` | control-API — **emitted** (the finish goroutine injects an `@@AGUI` line after the brain's stdout, before `finish()`; `seq` omitted — a separate un-ordered space; failed-spawn → `exit_code:-1` (disambiguated by `state`: signal-kill=`done`, spawn-fail=`failed`); typed for WS, a raw line inside a `log` event for SSE) |
 | `log` | `{line}` | passthrough of raw stdout |
 
 **Transport (an R3 add-on, NOT the one-shot ADR-041 shim)**: on top of the existing WS `GET /v1/stream`. The client connects with `?run_id=<id>` (charset `validRunID` — the same charset guard as `?session=`; `run_id` is used as an `s.runs` map key / JSON field and never flows into a path, so no `filepath.Base` is needed) → the server **subscribes** the socket to that run's `runStream` → pushes envelopes as `wsOpText` frames. Client→server takeover/return unchanged — **duplex on one socket**.

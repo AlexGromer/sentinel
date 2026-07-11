@@ -754,3 +754,119 @@ func TestStreamRunEventsWriteMutexRace(t *testing.T) {
 		t.Fatal("received no frames from concurrent pong/pusher writers (race test exercised nothing)")
 	}
 }
+
+// readUntilType reads server frames until it finds an AG-UI envelope with the given type, or fails.
+// The subscribed-snapshot replays every buffered runStream line as a frame, so run.finished arrives
+// after the run's stdout log frames.
+func readUntilType(t *testing.T, br *bufio.Reader, want string) map[string]any {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		op, payload, err := readServerFrame(br)
+		if err != nil {
+			t.Fatalf("reading frames for %q: %v", want, err)
+		}
+		if op != wsOpText {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal(payload, &ev) == nil && ev["type"] == want {
+			return ev
+		}
+	}
+	t.Fatalf("did not see a %q frame within 50 frames", want)
+	return nil
+}
+
+// M14 tail 1: a WS subscriber must receive a TYPED run.finished event carrying the real exit_code,
+// injected by the control-API's finish goroutine (the one AG-UI event the brain cannot emit). Driven
+// end-to-end through spawnRun's real finish path (fake agentctl exits 1).
+func TestRunFinishedEmittedOverWS(t *testing.T) {
+	s, _ := newRunServer(t) // fake agentctl: echoes two lines, exit 1
+	id := createRunAndWait(t, s)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, payload, err := readServerFrame(br); err != nil || op != wsOpText || !strings.Contains(string(payload), `"subscribed"`) {
+		t.Fatalf("subscribed ack op=%d err=%v payload=%s", op, err, payload)
+	}
+
+	ev := readUntilType(t, br, "run.finished")
+	if ev["run_id"] != id {
+		t.Errorf("run.finished run_id = %v, want %s", ev["run_id"], id)
+	}
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(1) {
+		t.Fatalf("run.finished data = %v, want exit_code 1", ev["data"])
+	}
+	if data["state"] != "done" { // state disambiguates exit_code:-1 (signal-kill vs failed-spawn)
+		t.Errorf("run.finished state = %v, want done", data["state"])
+	}
+	if ev["ts"] == nil || ev["ts"] == "" {
+		t.Errorf("run.finished must carry a ts, got %v", ev["ts"])
+	}
+	if _, hasSeq := ev["seq"]; hasSeq {
+		t.Errorf("control-API-injected run.finished must omit seq (separate un-ordered space), got %v", ev["seq"])
+	}
+}
+
+// A run that FAILS TO SPAWN (agentctl missing) never sets an exit code; run.finished must carry the
+// sentinel -1 so the UI does not read the zero value as a clean exit 0.
+func TestRunFinishedFailedSpawnSentinel(t *testing.T) {
+	s := &server{
+		repo:      t.TempDir(),
+		agentctl:  "/nonexistent/agentctl-does-not-exist",
+		token:     "secret-tok",
+		corsAllow: map[string]bool{},
+		runs:      map[string]*run{},
+	}
+	id := createRunAndWait(t, s)
+	s.mu.RLock()
+	st := s.runs[id].State
+	s.mu.RUnlock()
+	if st != "failed" {
+		t.Fatalf("run state = %q, want failed (spawn should fail)", st)
+	}
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, _, err := readServerFrame(br); err != nil || op != wsOpText {
+		t.Fatalf("subscribed ack op=%d err=%v", op, err)
+	}
+	ev := readUntilType(t, br, "run.finished")
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(-1) {
+		t.Fatalf("failed-spawn run.finished data = %v, want exit_code -1", ev["data"])
+	}
+	if data["state"] != "failed" { // the disambiguator: exit_code -1 + state failed = spawn error
+		t.Errorf("failed-spawn run.finished state = %v, want failed", data["state"])
+	}
+}
+
+// A run whose process is KILLED BY A SIGNAL yields ExitError.ExitCode()==-1 with State=="done" — the
+// same exit_code as a failed spawn. The `state` field disambiguates them (a signal-kill is state=done).
+func TestRunFinishedSignalKillCarriesDoneState(t *testing.T) {
+	s, _ := newRunServerWithScript(t, "#!/bin/sh\necho 'starting'\nkill -9 $$\n")
+	id := createRunAndWait(t, s)
+	s.mu.RLock()
+	st, code := s.runs[id].State, s.runs[id].ExitCode
+	s.mu.RUnlock()
+	if st != "done" || code != -1 {
+		t.Fatalf("signal-killed run: state=%q exit=%d, want done/-1", st, code)
+	}
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, _, err := readServerFrame(br); err != nil || op != wsOpText {
+		t.Fatalf("subscribed ack op=%d err=%v", op, err)
+	}
+	ev := readUntilType(t, br, "run.finished")
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(-1) || data["state"] != "done" {
+		t.Fatalf("signal-kill run.finished data = %v, want exit_code -1 + state done (distinct from failed-spawn)", ev["data"])
+	}
+}
