@@ -37,9 +37,13 @@
 | **M9.8-R3 — Co-pilot takeover (brain-side)** | ✅ готово — takeover/return поверх RunControl gRPC (`interrupt()`/`Command(resume)`, abort>takeover), ADR-054; MV3-расширение → @0xCoDSnet |
 | **M9.9 — Replay-in-UI (R1)** | ✅ готово — ▶/🔁/📌 run/replay/baseline + вердикт в vanilla-консолях (`mode=replay\|baseline`, `from_run`), ADR-047 |
 | **M9.10 — Multi-turn authoring (R2)** | ✅ готово — многотёрновый диалог (`conversation_id` → checkpointer-resume, `messages`-канал), ADR-048 |
-| **M11.x — Дистрибуция/Pages** | ✅ частично — docker-compose · Helm/Flux + Secret-плумбинг (M11.3) · GitHub Pages-хаб + калькуляторы (M11.6/b). Подробно — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M11.x — Дистрибуция/установка** | ✅ готово — release-pipeline + Cosign-keyless + syft SBOM (M11.1, ADR-030) · Helm/Flux + Secret-плумбинг (M11.3, ADR-035) · air-gapped bundle + offline-verifier (M11.4) · installer (`install.sh`/`install.ps1`/Homebrew) + schema-driven визард + config-домен + `/readyz` (M11.5, ADR-059..062) · Pages-хаб + калькуляторы (M11.6/b). Хвост: подписанный релиз/bundle на первом `v*`-теге. Подробно — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
 | **M12 — OpenAI-compat shim + единая консоль** | ✅ готово — `POST /v1/chat/completions` (1 тёрн→1 прогон) + единая `docs/index.html` (#connect/#build/#chat), ADR-041 |
-| **M13 — Persistence / 5-домен store-gateway** | ✅ готово — store-gateway на 5 доменов (SQLite-first), `runs`+`chats` персистятся; `scenarios`/`tests`/`results`/`metrics` = схема+RPC (wiring → M14/M15), ADR-049/050 |
+| **M13 — Persistence / 6-домен store-gateway** | ✅ готово — store-gateway на 6 доменов (`runs`·`scenarios`/`tests`·`chats`·`results`·`metrics` + `config`), SQLite-first, ADR-049/050/062 |
+| **M14 — Rich AG-UI co-pilot (in-house vanilla)** | ✅ готово — server→client AG-UI поверх WS `/v1/stream`; split Settings\|Tests + live-timeline + auto-HITL; CopilotKit убран, `frontend/` заморожен (ADR-052/055). Хвосты: терминальный `run.finished` (#86) + AG-UI/auto-HITL-сигнал в replay (#87) |
+| **M-STRUCTURED-OUT — Strict structured output** | ✅ готово — строгий `tool_use`/`json_schema` + `extract_json` для authoring/heal (ADR-057) |
+| **M15 — Metrics-in-UI + token-cost** | ✅ готово — нативные SVG-панели результатов/метрик; **M15.1** — 8-я метрика token-cost (`tokens`-блок → `cost_usd`), ADR-051 |
+| **M9-LIVE-prep — Подготовка к живому прогону** | ✅ готово — исполнимый `docs/M9_LIVE_PLAN.md` (8 факт-ошибок) + `scripts/collect-live-run.sh` (редактирующий коллектор артефактов), #88 |
 
 Подробности по вехам: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 

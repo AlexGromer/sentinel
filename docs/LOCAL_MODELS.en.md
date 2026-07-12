@@ -31,8 +31,8 @@ code and without a new "profile" knob** (ADR-029): provider profiles are *docume
 | Property | Value (verified against code) | Source |
 |---|---|---|
 | Output type | structured JSON (index-pick / scenario), **not** long-form generation | `brain/planner.py` |
-| Output size | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:87,146,187,231` · `healing.py:122,168` |
-| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:183` · `healing.py:118` |
+| Output size | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:116,177,228,282` · `healing.py:131,176` |
+| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:222` · `healing.py:126` |
 | Vision input | one PNG (≈1280×720) + tiny marks menu | `healing.py:168` |
 | Temperature | **0** (deterministic selection) | `planner.py` / `healing.py` |
 | Replay (hot path) | **LLM-free**, 0 tokens | `brain/replay.py` |
@@ -42,7 +42,7 @@ of a broken locator, VISION needs a **VLM that can read numbered marks** on a sc
 achievable by models from 3–4B and above — see §3 and the VRAM calculator (§5).
 
 > **In-code defaults remain `claude-*`** (`_DEFAULT_MODEL = {"planner": "claude-opus-4-8",
-> "heal": "claude-sonnet-4-6"}`, `llm.py:179`). Offline runs use `FakeBackend` (determinism/CI);
+> "heal": "claude-sonnet-4-6"}`, `llm.py:233`). Offline runs use `FakeBackend` (determinism/CI);
 > a real local model is **opt-in** via the env profile below. RTX 2060 12 GB is **one example**
 > among the 8/12/16/24 GB tiers, not the basis of the methodology.
 
@@ -50,9 +50,9 @@ achievable by models from 3–4B and above — see §3 and the VRAM calculator (
 
 ## 2. Env profile
 
-All variables are read by `make_backend` (`llm.py:182–223`). **Priority: role-specific
+All variables are read by `make_backend` (`llm.py:241–279`). **Priority: role-specific
 `LLM_<KEY>_<ROLE>` > global `LLM_<KEY>`.** Roles: `PLANNER`, `HEAL`. Keys: `BACKEND`, `MODEL`,
-`BASE_URL`, `API_KEY`, `VISION`.
+`BASE_URL`, `API_KEY`, `VISION`, `STRUCTURED`.
 
 | Env | Purpose | Note |
 |---|---|---|
@@ -61,6 +61,7 @@ All variables are read by `make_backend` (`llm.py:182–223`). **Priority: role-
 | `LLM_BASE_URL` | URL of OpenAI-compat endpoint (`…/v1`) | local: Ollama/vLLM/llama.cpp |
 | `LLM_API_KEY` | key; for local — any non-empty string (`noauth`) | fallback to `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` |
 | `LLM_VISION` | `1` → enable vision on OpenAI-compat HEAL backend | text-only model skips vision |
+| `LLM_STRUCTURED` | `1` → strict structured-output (Anthropic tool_use / OpenAI json_schema, ADR-057) on the OpenAI-compat backend | default OFF; otherwise falls back to `complete`+`extract_json` |
 | suffix `_PLANNER` / `_HEAL` | overrides the global key for that role | e.g. `LLM_MODEL_PLANNER` |
 
 **Degradation is safe:** when a key/SDK is absent `make_backend` → `None` ⇒ PLAN falls back to

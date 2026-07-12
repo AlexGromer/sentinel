@@ -2,7 +2,7 @@
 
 > 🌐 **Русский** (основная версия) · [English](THREAT_MODEL.en.md)
 
-> **Версия**: 1.1 | **Дата**: 2026-07-04 | **Авторы**: appsec-engineer (auto), @AlexGromer
+> **Версия**: 1.2 | **Дата**: 2026-07-12 | **Авторы**: appsec-engineer (auto), @AlexGromer
 > **Методология**: STRIDE-lite | **Scope**: whitebox, static analysis по исходному коду
 
 ---
@@ -93,11 +93,11 @@
 
 Граничные точки ❶–❼ соответствуют строкам таблицы ниже.
 
-> **Новые поверхности (M9.6/M9.8), не показанные на диаграмме выше (опциональны/будущее):** ❽ **CDP-attach** к браузеру пользователя (M9.6, opt-in `PW_CDP_ENDPOINT`) и ❾ **браузерное расширение** (M9.8, планируется) — см. §4.8 / §4.9.
+> **Новые поверхности (M9.6/M9.8/M9-LIVE-prep), не показанные на диаграмме выше (опциональны/будущее):** ❽ **CDP-attach** к браузеру пользователя (M9.6, opt-in `PW_CDP_ENDPOINT`), ❾ **браузерное расширение** (M9.8, планируется) и ❿ **экспорт live-run артефактов** (`scripts/collect-live-run.sh`, M9-LIVE-prep) — см. §4.8 / §4.9 / §4.10.
 >
 > **Планируемые in-tool-поверхности (ADR-046):** (a) **replay/baseline control-API-endpoint** (M9.9/R1) — re-открывает spawn-поверхность ❶-класса → мера: только `from_run:<run_id>` + artifact-whitelist+traversal-guard (не произвольный путь). **[R1a ✅ реализовано в `cmd/control-api`: `resolveFromRun` (guard `/`,`\`,`..` + `{plan.json\|scenario.json}`-whitelist) + httptest на traversal/missing-plan.]** (b) **multi-turn conversation-state** (M9.10/R2) — новый ассет: конфиденциальность накопленного AUT-контекста + DoS unbounded-state → мера: per-session cap + 0700-изоляция. (c) **AG-UI npm-фронт** (`frontend/`, ADR-044) — npm supply-chain (усиливает GAP-SEC-002) + browser-токен → мера: dev-only/не-air-gapped, токен server-side в Runtime.
 >
-> **Поверхности эпика Rich-UI/Persistence/Metrics (M13-15, ADR-049..053):** (d) **persistence-БД с user-content** (scenarios/chats/results — накопленный AUT-контекст/возможный PII) → конфиденциальность + at-rest + access-control: reuse `0700`/per-run-token/SO_PEERCRED (SQLite, standalone), Postgres → стандартный authn + секрет через `secretKeyRef` (ADR-035); DoS unbounded-state → **cap+summary реализованы (M13 w5, GAP-M9-20 ✅: `_capped_history`/`_rolling_summary`)**; retention → M13-service. (e) **always-on control-plane bind** (service-профиль) → reuse ADR-032 (localhost-default + bearer + CORS-allowlist); публичный bind = opt-in+warn; service-режим добавляет рассмотрение authN/RBAC на CRUD-эндпоинты. (f) **self-contained metrics** (ADR-051) — метрики в нашей БД + native-рендер ⇒ **снижает** поверхность vs Grafana-embed (нет внешнего рендера/iframe-доверия). (g) **rich AG-UI поверх WS** (M14) → reuse ADR-043 WS-token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, не-air-gapped dev-сборка). (h) **recorder session-resume `/v1/stream?session=`** (M13 R3-hardening, ✅ реализовано) — user-input в конструкцию пути записи → митигировано `filepath.Base`+charset `validRunID` (2 CodeQL `go/path-injection` разобраны как false-positive, sanitizer оставлен defense-in-depth); Origin fail-closed на публичном bind.
+> **Поверхности эпика Rich-UI/Persistence/Metrics (M13-15, ADR-049..053):** (d) **persistence-БД с user-content** (scenarios/chats/results — накопленный AUT-контекст/возможный PII) → конфиденциальность + at-rest + access-control: reuse `0700`/per-run-token/SO_PEERCRED (SQLite, standalone), Postgres → стандартный authn + секрет через `secretKeyRef` (ADR-035); DoS unbounded-state → **cap+summary реализованы (M13 w5, GAP-M9-20 ✅: `_capped_history`/`_rolling_summary`)**; retention → M13-service. (e) **always-on control-plane bind** (service-профиль) → reuse ADR-032 (localhost-default + bearer + CORS-allowlist); публичный bind = opt-in+warn; service-режим добавляет рассмотрение authN/RBAC на CRUD-эндпоинты. (f) **self-contained metrics** (ADR-051) — метрики в нашей БД + native-рендер ⇒ **снижает** поверхность vs Grafana-embed (нет внешнего рендера/iframe-доверия). (g) **rich AG-UI поверх WS** (M14) → reuse ADR-043 WS-token (`Sec-WebSocket-Protocol`) + npm supply-chain (GAP-SEC-002, не-air-gapped dev-сборка). (h) **recorder session-resume `/v1/stream?session=`** (M13 R3-hardening, ✅ реализовано) — user-input в конструкцию пути записи → митигировано `filepath.Base`+charset `validRunID` (2 CodeQL `go/path-injection` разобраны как false-positive, sanitizer оставлен defense-in-depth); Origin fail-closed на публичном bind. (i) **экспорт live-run артефактов** (`scripts/collect-live-run.sh`, M9-LIVE-prep, `docs/M9_LIVE_PLAN.md` §C) — новая egress-граница; редакция staging-копии по умолчанию + безусловное исключение `checkpoint.db`/`storage_state*.json`; `trace.zip` — opt-in и неотредактирован → см. §4.10 (GAP-SEC-003/GAP-SEC-004/GAP-OPS-006).
 
 ---
 
@@ -110,7 +110,7 @@
 
 | Угроза | Граница | STRIDE | Вер / Влияние | Существующая мера | Остаточный риск | Owner / Milestone |
 |---|---|---|---|---|---|---|
-| **Утечка всех host secrets в дочерние процессы.** `agentctl::spawnBrain` вызывает `cmd.Env = append(os.Environ(), …)` без allowlist (`main.go:68`). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; остаток — динамические Vault/CSI | M11.3 ✅ |
+| **Утечка всех host secrets в дочерние процессы.** До M11.3 `agentctl::spawnBrain` вызывал `cmd.Env = append(os.Environ(), …)` без allowlist (историческая цитата; теперь на этом месте `filteredEnv()`, cmd/agentctl/main.go:172–219). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; остаток — динамические Vault/CSI | M11.3 ✅ |
 | **Plaintext secrets в Helm values → Kubernetes.** `cronjob.yaml:39–46` использует `value: {{ .Values.checkpointDsn }}` и `{{range .Values.extraEnv}} value: {{ $v }}` без `secretKeyRef`. CHECKPOINT_DSN и extraEnv хранятся как строки в `values-prod.yaml`, попадают в etcd в открытом виде и видны через `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 CLOSED (Helm-half)** | M11.3 ✅ |
 
 ### 4.2 Граница ❷ — agentctl → store-gateway (Unix gRPC socket)
@@ -177,6 +177,16 @@
 | **Транспорт extension↔brain.** Стриминговый канал — точка инъекции/перехвата. **Реализован (M9.8-prep, ADR-043):** hand-rolled WS `GET /v1/stream` (client→server recorder ingest). | extension → control-API | **S/T** | Вер: M / Влияние: M | Reuse ADR-032: localhost-bind + bearer + **Origin-allowlist (CSWSH-защита)**. Токен в `Sec-WebSocket-Protocol` (`bearer.<token>`, constant-time) — браузерный WS не шлёт `Authorization`; сервер эхает **только** не-секретный сабпротокол `sentinel.recorder.v1` (токен не светится в ответе). native-messaging — stdio-альтернатива (без порта, не реализована). | Токен в браузере; WS-порт на localhost. | **M9.8-prep / GAP-M9-14 DONE** |
 | **Takeover/return — мутация чужого прогона.** **Реализован (R3, ADR-054):** аутентифицированный `/v1/stream`-клиент шлёт `{"type":"control","action":"takeover\|return","run_id":X}` → control-API форвардит в orchestrator `Takeover`/`Return` для ЛЮБОГО `run_id`; привязки `run_id`↔WS-сессия/`s.runs` НЕТ. | extension → control-API → orchestrator → brain | **S/E** | Вер: M / Влияние: M | Тот же гейт, что транспорт (localhost-bind + bearer + Origin-allowlist); `run_id` — format-guard (`validRunID`: charset + ≤64) против инъекции ключа-мапы; `abort > takeover` (hard-stop приоритетнее паузы); control-фреймы имеют собственный per-session cap. | **Cross-run authorization gap:** держатель токена (напр. скомпрометированное расширение / вредоносная вкладка) может паузить/резюмить чужой прогон. Ownership-binding (`run_id`↔сессия) откладывается до per-run сокет-discovery на **M9-LIVE**. | **R3 (ADR-054) DONE; ownership → M9-LIVE** |
 
+### 4.10 Граница ❿ — экспорт live-run артефактов (`scripts/collect-live-run.sh`, M9-LIVE-prep)
+
+> Новая egress-граница (M9-LIVE-prep, `docs/M9_LIVE_PLAN.md` §C): `scripts/collect-live-run.sh` пакует `runs/<id>/` в `live-<id>.tar.gz` для переноса на машину анализа (USB/scp, не git). Редакция включена по умолчанию и применяется к staging-копии — `runs/` не модифицируется.
+
+| Угроза | Граница | STRIDE | Вер / Влияние | Существующая мера | Остаточный риск | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **LLM-authoring не умеет `secretRef` → плейнтекст-креды в plan.json/scenario.json.** Authoring-схемы (`brain/planner.py` `_SCHEMA_STEPS`/`_SCHEMA_DRAFT`) содержат только `value`, без `secretRef` — цель вида «залогинься под user/password» материализуется литеральным паролем в артефактах (и в `trace.zip`, если он включён). | brain authoring → runs/<id>/{plan,scenario}.json → export | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED на границе экспорта:** `collect-live-run.sh` обнуляет `value`/`text` у `fill\|type\|select\|press`-шагов без `secretRef` (структурный слой, staging-копия) + текстовый sweep auth-заголовков/token-шейпов (Bearer, sk-/ghp_/AKIA/JWT); CI-канарейка `collect-live-run-smoke` проверяет это. | Первопричина не устранена: сам `runs/<id>/plan.json` на диске остаётся плейнтекстом — митигация только на границе экспорта, не на authoring-время. Известный потолок: shapeless keyword-less секрет в свободнотекстовом non-secret-поле (напр. `reason`) переживает текстовый sweep. | **GAP-SEC-003** — M9-LIVE / M10 |
+| **`STORAGE_STATE_SAVE` не защищён от записи внутрь `runs/<id>`.** Путь приходит от вызывающего (`brain/runconfig.py` → `pw-executor/src/server.ts`), код-барьера «не в артефакт-каталог» нет. Playwright storage-state = auth cookies + localStorage (session-hijack материал). | brain/runconfig.py → pw-executor write path → export | **I** (Information Disclosure) | Вер: L / Влияние: H | **MITIGATED на границе экспорта:** коллектор безусловно исключает `*state*.json` (даже с `--with-trace`) и громко предупреждает о находке. | На уровне записи барьера всё ещё нет — наивный `tar runs/<id>` в обход коллектора всё равно унёс бы файл. | **GAP-SEC-004** — M10 |
+| **Нет on-disk маркера «ран завершён».** Ни `agentctl`, ни brain не пишут признак завершения (`report.json`/`report.html`/`metrics.prom` создаёт отдельный subcommand `report`) → «ран, упавший на 3-м шаге» и «ран в полёте» неотличимы на диске. | agentctl/brain → runs/<id>/ → collector / M15-дашборд | **D** (диагностическая неоднозначность) | Вер: M / Влияние: L | Осознанное решение: коллектор warn'ит об отсутствующих артефактах, но не fail'ит (fail был бы ложноположительным на mid-flight-ране). | Оператор/дашборд не может отличить crash от in-flight без ручной проверки. | **GAP-OPS-006** — post-M9-LIVE |
+
 ---
 
 ## 5. Сводная таблица GAP-трекинга
@@ -184,12 +194,15 @@
 | GAP ID | Статус | STRIDE | Severity | Краткое описание | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Утечка-в-трейс: трейсинг отключён (`PW_NO_TRACE`) на auth-прогонах; секреты по env-var NAME через secretRef; brain redacts logs; fail-closed при активном трейсинге; prod использует storageState. | — |
-| **GAP-SEC-001** | **CLOSED — Helm-половина (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **Остаток:** `NODE_`/`GIT_` префиксы → `NODE_AUTH_TOKEN`/`GIT_ASKPASS` (issue #25). | done; #25 → 0xCoDSnet |
+| **GAP-SEC-001** | **CLOSED — Helm-половина + #25 (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **#25 CLOSED:** `NODE_`/`GIT_` больше не префиксы — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` exact-allowlisted (`TestFilteredEnvPrefixNarrowing`). **Остаток:** только динамические секреты Vault/CSI-driver. | done |
 | **#23 store-gateway authN** | **MITIGATED** | E | MEDIUM | per-run token authN в gRPC-metadata (`TokenAuthInterceptor`) + SO_PEERCRED + сокет 0600; unit-тест `TestTokenAuthInterceptor`. | done; #23 → 0xCoDSnet |
 | **#24 golden integrity** | **MITIGATED** | T | MEDIUM | HMAC `golden_snapshots` (ключ `state/golden.key`, вне БД); tamper → exit 3; тесты `TestGoldenIntegrityTamper` + `test_golden_mac_tamper_detected_exit3`. | done; #24 → 0xCoDSnet |
 | **#26 trace.zip PII** | **MITIGATED** | I | MEDIUM | `runs/` + `runs/<id>/` → `0700` (owner-only); retention `trace.zip` (`SENTINEL_TRACE_KEEP`=10 / `SENTINEL_TRACE_TTL_HOURS`); тесты `TestMkArtifactDirPerms`/`TestSweepTraces*`. Encryption/redaction — опц., не реализовано. | done; #26 → 0xCoDSnet |
 | **GAP-SEC-002** | **PARTIALLY OPEN** | T, E | HIGH | Python no lockfile, no SBOM, no image signing. | M11.1 |
 | **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert-классификация (`ERR_CERT*`) в `browser.navigate` (этот цикл); строго по умолчанию. Расширенный diagnostic в heal-report — M9.4. | M9.4 |
+| **GAP-SEC-003** | **MITIGATED (граница экспорта)** | I | MEDIUM | `scripts/collect-live-run.sh` обнуляет `value`/`text` у `fill\|type\|select\|press`-шагов без `secretRef` (структурная блокировка + текстовый sweep на staging-копии); CI-канарейка `collect-live-run-smoke`. Первопричина (authoring-схема без `secretRef`) остаётся открытой. | M9-LIVE / M10 |
+| **GAP-SEC-004** | **MITIGATED (граница экспорта)** | I | MEDIUM | Коллектор безусловно исключает `*state*.json` (даже с `--with-trace`) + громкий warn. Код-уровневого барьера на запись `STORAGE_STATE_SAVE` внутрь `runs/<id>` пока нет. | M10 |
+| **GAP-OPS-006** | **OPEN** | D | LOW | Нет on-disk маркера завершения рана; коллектор/будущий M15-дашборд не отличают crash от in-flight рана (коллектор осознанно warn'ит, а не fail'ит на отсутствующих артефактах). | post-M9-LIVE |
 
 ---
 
@@ -197,7 +210,7 @@
 
 Следующие меры **не реализованы** в текущей кодовой базе. Указаны как planned/milestone.
 
-1. ~~**GAP-SEC-001 — env allowlist**~~ — **DONE (M11.3 / ADR-035):** `filteredEnv()` переведён в default-on (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + curated-список. **Остаток:** префиксы `NODE_`/`GIT_` пропускают `NODE_AUTH_TOKEN`/`GIT_ASKPASS` → issue **#25**.
+1. ~~**GAP-SEC-001 — env allowlist**~~ — **DONE (M11.3 / ADR-035):** `filteredEnv()` переведён в default-on (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + curated-список. **#25 CLOSED:** `NODE_`/`GIT_` убраны как префиксы — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` exact-allowlisted (`TestFilteredEnvPrefixNarrowing`, cmd/agentctl/main.go:190–191). **Остаток:** только динамические секреты Vault/CSI-driver — открыто.
 2. ~~**GAP-SEC-001 — Helm secretKeyRef**~~ — **DONE (M11.3):** `secrets.*` → `valueFrom.secretKeyRef` при `secrets.enabled` (plaintext-fallback в dev); helper `sentinel.envAllow`; `deploy/flux/`.
 3. **GAP-SEC-002 — Python lockfile**: добавить `uv lock` в CI, зафиксировать `uv.lock` в repo, в Dockerfile использовать `uv sync --frozen` или pip с `--require-hashes`.
 4. **GAP-SEC-002 — SCA + SBOM + image signing**: добавить Trivy/Grype SCA scan в CI pipeline; `syft` для генерации SBOM; `cosign` для подписи образа.
@@ -206,6 +219,9 @@
 7. ~~**`runs/` access control**~~ — **DONE (#26):** `runs/` и `runs/<id>/` → `0700` (agentctl + brain); retention `trace.zip` в `agentctl` (`SENTINEL_TRACE_KEEP` / `SENTINEL_TRACE_TTL_HOURS`), задокументирована в `docs/OUTPUTS.md`. Опц. (не реализовано): encryption-at-rest / PII-redaction. Актуально и для CDP-режима ❽.
 8. ~~**store-gateway integrity** (граница ❷)~~ — **DONE (#23/#24):** per-run token authN в gRPC-metadata (`TokenAuthInterceptor`) + SO_PEERCRED + сокет `0600`; HMAC-целостность `golden_snapshots` (ключ `state/golden.key` вне БД) с верификацией при replay (tamper → exit 3).
 9. **расширение (M9.8, ❾):** при реализации — минимальные `host_permissions`, debugger-attach только по takeover-сигналу, локальный транспорт (control-API token / native-messaging) — см. `M9.8_CONTRACT` + ADR-038/039.
+10. **GAP-SEC-003 — `secretRef` в authoring-схеме**: добавить `secretRef` в `brain/planner.py` `_SCHEMA_STEPS`/`_SCHEMA_DRAFT` + промпт-правило против инлайна credentials, чтобы LLM-авторинг логина перестал материализовывать пароль литералом в `plan.json`/`scenario.json`.
+11. **GAP-SEC-004 — код-барьер на `STORAGE_STATE_SAVE`**: отклонять путь сохранения внутри артефакт-каталога на уровне кода (по образцу `isUnder`-гарда в `cmd/agentctl`), не полагаясь только на исключение в коллекторе.
+12. **GAP-OPS-006 — маркер завершения рана**: `agentctl` пишет `status.json` (exit-код) на выходе, чтобы отличить упавший ран от in-flight.
 
 ---
 
@@ -217,3 +233,4 @@
 - ADR-015 (store-gateway, single SQLite writer): [`docs/M2b_CONTRACT.md`](M2b_CONTRACT.md)
 - ADR-026 / GAP-RISK-010 (storageState, PW_NO_TRACE): [`docs/M9.1_CONTRACT.md`](M9.1_CONTRACT.md)
 - ADR-021 (token budgets): [`docs/M8_CONTRACT.md`](M8_CONTRACT.md)
+- M9-LIVE-prep (экспорт live-run артефактов, редакция, GAP-SEC-003/004, GAP-OPS-006): [`docs/M9_LIVE_PLAN.md`](M9_LIVE_PLAN.md) §C · `scripts/collect-live-run.sh`

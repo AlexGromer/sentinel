@@ -83,7 +83,7 @@ npx @modelcontextprotocol/inspector \
 - Вызвать `replay` (детерминированный, **без LLM**) на готовом `plan.json` — не требует sampling.
 - Вызвать `explore`/`heal` — они запрашивают модель у хоста через `sampling/createMessage`; **в UI-режиме
   Inspector предложит ответить на sampling-запрос** (вы выступаете моделью) → так проверяется
-  `SamplingBackend` (`brain/llm.py:150-175`). Нет sampling → backend недоступен → fallback на эвристику/L1–L6.
+  `SamplingBackend` (`brain/llm.py:203-229`). Нет sampling → backend недоступен → fallback на эвристику/L1–L6.
 
 CLI-режим (`--cli`) удобен для скриптовой проверки tools/resources/prompts; **поддержку sampling сверяйте с
 версией Inspector** (sampling — интерактивный, обычно через UI). Offline-аналог этих проверок без живого

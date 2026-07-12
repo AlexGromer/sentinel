@@ -115,7 +115,7 @@ Fixtures directory: `testdata/fixtures/l1..l5.html` — see `testdata/fixtures/R
 
 ### What is delivered
 
-Four Go binaries (`agentctl`, `store-gateway`, `orchestrator`, `report-service`) for five platforms:
+Five Go binaries (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `report-service`) for six platforms:
 
 | Platform | GOOS | GOARCH |
 |---|---|---|
@@ -124,8 +124,9 @@ Four Go binaries (`agentctl`, `store-gateway`, `orchestrator`, `report-service`)
 | macOS Apple Silicon | darwin | arm64 |
 | macOS Intel | darwin | amd64 |
 | Windows x86-64 | windows | amd64 |
+| Windows ARM64 | windows | arm64 |
 
-Total: 20 binaries + Docker image (multi-arch: linux/amd64 + linux/arm64).
+Total: 30 binaries (6 platforms × 5 binaries) + Docker image (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 
@@ -150,7 +151,7 @@ Steps:
 
 ### Acceptance criteria M11.1
 
-- [ ] GitHub Release contains 20 binaries (5 platforms × 4 binaries) in `.tar.gz`
+- [ ] GitHub Release contains 30 binaries (6 platforms × 5 binaries) in `.tar.gz`
 - [ ] `checksums.sha256` is present and passes `sha256sum -c checksums.sha256`
 - [ ] Cosign bundle verifies: `cosign verify-blob --bundle=sentinel.bundle sentinel.tar.gz`
 - [ ] Docker image is available at `ghcr.io/alexgromer/sentinel:<tag>` for linux/amd64 + linux/arm64
@@ -257,7 +258,7 @@ Additionally: `agentctl` passes `cmd.Env = append(os.Environ(), ...)` without an
 
 **1. env-allowlist in agentctl — now default-on** (`cmd/agentctl/main.go`, `filteredEnv()`)
 
-`filteredEnv()` keeps an **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3 additions** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY) **+ a prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`/`NODE_`/`GIT_`) **+** names from `SENTINEL_ENV_ALLOW` (comma-sep — for secretKeyRef vars like `AUT_PASSWORD`).
+`filteredEnv()` keeps an **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3 additions** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY/`NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH`) **+ a prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`) — `NODE_`/`GIT_` are deliberately NOT in the prefix-list (the broad family used to leak `NODE_AUTH_TOKEN`/`GIT_ASKPASS`; the specific legitimate names are exact-allowed above) **+** names from `SENTINEL_ENV_ALLOW` (comma-sep — for secretKeyRef vars like `AUT_PASSWORD`).
 
 M11.3 flips the flag to **default-on**: the filter is always active unless explicitly opted out via `SENTINEL_ENV_ALLOWLIST=0` (an escape hatch for debugging / unusual local setups). Functional run vars (RUN_ID/TARGET_URL/RUN_MODE/PLANNER/…) are **untouched** by the filter — they are appended after `filteredEnv()` in `spawnBrain`, never inherited from the host. Unit test: `cmd/agentctl/main_test.go` (default-on drops `AWS_SECRET_ACCESS_KEY`, passes curated + `SENTINEL_ENV_ALLOW` extras; `=0` → full passthrough).
 
@@ -442,16 +443,30 @@ successful explore run in ≤ 10 minutes, **with no manual YAML editing** and no
 Not a flat form plus "drop in a YAML file by hand", but a stepped wizard that understands the runtime modes,
 assembles a correct configuration itself, persists it, and reuses it on the next launch.
 
-**1. `install.sh` — single-command installer** (POSIX `sh`)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a native PowerShell peer for Windows, no Docker/WSL needed)
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
-- `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}` (Windows goes through Docker/WSL, not through this installer);
+```powershell
+# Windows (native, no admin)
+iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
+```
+- `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: native Windows,
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), no Docker/WSL required;
 - resolves the latest GitHub Release, downloads `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (non-zero exit on mismatch) → **`cosign verify-blob`** with a **pinned identity** (the same
   regex/issuer as `scripts/offline-verify.sh`; if `cosign` is missing — a loud warning, not a hard failure);
-- installs `agentctl` into `~/.local/bin` (default, **no root**) or `/usr/local/bin` (opt-in); checks `$PATH`;
+- `install.sh` installs `agentctl` into `~/.local/bin` (default, **no root**) or `/usr/local/bin` (opt-in);
+  `install.ps1` installs into `%LOCALAPPDATA%\Programs\sentinel` (**no admin**); both check `$PATH`;
 - post-install `agentctl --version` (sanity check) + a pointer to setup-WebUI and `docs/QUICKSTART.md`; optionally downloads `docker-compose.yml`.
+
+**Homebrew (macOS/Linux):** the repository is its own tap; `Formula/sentinel.rb` is generated on every `v*`
+tag (`scripts/gen-brew-formula.sh` in `release.yml`):
+```bash
+brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel
+brew install sentinel
+```
 
 **2. setup-WebUI → a stepped wizard** (rewrites `docs/setup/index.html`, ADR-031→ADR-059)
 - Steps: **Runtime → Model&Auth → Run params → Review** (reuses the `.tabbar`/`.subtabbar` pattern from `docs/index.html`).
@@ -497,7 +512,7 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 - [x] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
 - [x] **PR-2 (this PR):** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container (fake release + tamper negative). *(full E2E = maintainer `v*` tag, as with M11.1)*
 - [x] **PR-3 (this PR):** `/v1/config-schema` covers the LLM-backend surface (`backends`/`roles`/`llm` descriptors from `brain/llm.py`; `api_key`=secret-with-no-value); `backend-presets.json` (9 presets) parses and every `backend` ⊆ the schema enum (gate `TestBackendPresetsParseAndMatchSchema`). *(env source of truth = `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig core, no LLM_* there)*
-- [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(the DOM run is automated — `scripts/wizard-dom-check.mjs`, 11 checks in headless Chromium in CI; the syntax gate covers all 6 `docs/` pages; + 2 anti-drift gates)*
+- [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(the DOM run is automated — `scripts/wizard-dom-check.mjs`, 12 checks in headless Chromium in CI; the syntax gate covers all 6 `docs/` pages; + 2 anti-drift gates)*
 - [x] **PR-5 (this PR):** the `config` domain lands in the store-gateway (a 6th `StoreService` domain, ADR-062); secrets are **refused** (`internal/configguard`, one rule shared by the gateway and the control-API — 14 bypass attempts in tests); the control-API reads the config at start and the wizard writes it (`PUT /v1/config`, token-gated); `/readyz` → `503` until dependencies are ready, `200` once ready (an unconfigured dependency is `skipped`, so standalone stays ready). *(end-to-end DOM gate: browser → control-API → gRPC → SQLite → `/readyz`)*
 - [x] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`. **Measured (2026-07-11):** `docker compose build` **208 s** + `docker compose run … --target https://example.com --planner heuristic` **21 s** = **~3 min 49 s** end-to-end, exit 0, `plan.json`+`trace.zip` produced. *(Caveat: the `playwright` base image was cached; a fully cold pull adds ~2.44 GB of download → ~7 min on a ~100 Mbps link — still under budget, but network-dependent.)*
 

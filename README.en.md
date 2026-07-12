@@ -37,9 +37,13 @@ Russian is the primary, authoritative documentation; English copies live in `*.e
 | **M9.8-R3 — Co-pilot takeover (brain-side)** | ✅ done — takeover/return over RunControl gRPC (`interrupt()`/`Command(resume)`, abort>takeover), ADR-054; MV3 extension → @0xCoDSnet |
 | **M9.9 — Replay-in-UI (R1)** | ✅ done — ▶/🔁/📌 run/replay/baseline + verdict across the vanilla consoles (`mode=replay\|baseline`, `from_run`), ADR-047 |
 | **M9.10 — Multi-turn authoring (R2)** | ✅ done — multi-turn dialogue (`conversation_id` → checkpointer resume, `messages` channel), ADR-048 |
-| **M11.x — Distribution/Pages** | ✅ partial — docker-compose · Helm/Flux + Secret plumbing (M11.3) · GitHub Pages hub + calculators (M11.6/b). Details — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M11.x — Distribution/install** | ✅ done — release pipeline + Cosign-keyless + syft SBOM (M11.1, ADR-030) · Helm/Flux + Secret plumbing (M11.3, ADR-035) · air-gapped bundle + offline verifier (M11.4) · installer (`install.sh`/`install.ps1`/Homebrew) + schema-driven wizard + config domain + `/readyz` (M11.5, ADR-059..062) · Pages hub + calculators (M11.6/b). Tail: a signed release/bundle on the first `v*` tag. Details — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
 | **M12 — OpenAI-compat shim + unified console** | ✅ done — `POST /v1/chat/completions` (1 turn→1 run) + unified `docs/index.html` (#connect/#build/#chat), ADR-041 |
-| **M13 — Persistence / 5-domain store-gateway** | ✅ done — store-gateway across 5 domains (SQLite-first), `runs`+`chats` persisted; `scenarios`/`tests`/`results`/`metrics` = schema+RPC (wiring → M14/M15), ADR-049/050 |
+| **M13 — Persistence / 6-domain store-gateway** | ✅ done — store-gateway across 6 domains (`runs`·`scenarios`/`tests`·`chats`·`results`·`metrics` + `config`), SQLite-first, ADR-049/050/062 |
+| **M14 — Rich AG-UI co-pilot (in-house vanilla)** | ✅ done — server→client AG-UI over WS `/v1/stream`; split Settings\|Tests + live timeline + auto-HITL; CopilotKit dropped, `frontend/` frozen (ADR-052/055). Tails: the terminal `run.finished` (#86) + AG-UI/auto-HITL signal in replay (#87) |
+| **M-STRUCTURED-OUT — Strict structured output** | ✅ done — strict `tool_use`/`json_schema` + `extract_json` for authoring/heal (ADR-057) |
+| **M15 — Metrics-in-UI + token-cost** | ✅ done — native SVG results/metrics panels; **M15.1** — the 8th token-cost metric (`tokens` block → `cost_usd`), ADR-051 |
+| **M9-LIVE-prep — Live-run preparation** | ✅ done — an executable `docs/M9_LIVE_PLAN.md` (8 factual errors) + `scripts/collect-live-run.sh` (a redacting artifact collector), #88 |
 
 Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
