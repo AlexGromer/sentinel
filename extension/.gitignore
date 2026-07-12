@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# The repo-root .gitignore excludes any `public/` (a Next.js/Jekyll convention) — but this extension's
+# static HTML lives in public/. Re-include it here.
+!public/
+!public/**

@@ -1,0 +1,23 @@
+{
+  "name": "sentinel-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sentinel MV3 browser extension — live action recorder + co-pilot takeover (M9.8).",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node --import tsx --test \"src/**/*.test.ts\"",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "jsdom": "^25.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -50,11 +50,11 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | **Multi-turn чат / контекст / коррекция по ходу** | «brain-extension» → **R2/M9.10** | ✅ DONE — R2a backend + R2b UI (ADR-048, offline; GAP-M9-17 closed) |
 | Headed / видимый браузер (F2) | M9.6/ADR-037 | ✅ DONE offline (live pending) |
 | CDP-attach к Chrome пользователя (F3) | M9.6/ADR-036/037 | ✅ DONE offline (live pending) |
-| **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ❌ design-only (extension+brain) |
+| **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ⚙️ extension-side ✅ (`extension/`, #47: `chrome.debugger` attach/return, баннер); brain interrupt/resume = R3 |
 | WS-транспорт client→server (`/v1/stream`) | M9.8-prep/ADR-043 | ✅ DONE |
 | SSE server→client + artifact-fetch | M9.3-tail/ADR-040 | ✅ DONE |
 | Rich AG-UI co-pilot (vanilla) | **M14/ADR-055** | ✅ in-house в `docs/index.html` (Settings\|Tests · library/promote · live AG-UI-timeline · auto-HITL-баннер); CopilotKit `frontend/` заморожен (reference) |
-| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ❌ not-built → @0xCoDSnet (#42-47) |
+| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ✅ DONE (`extension/`, #42-47: рекордер+redaction, SW-WS, DevTools-панель, record→scenario, takeover/return CDP; dev-only, не в CI). Live record→replay = M9-LIVE |
 | LiteLLM opt-router · MCP-Inspector | ADR-045 | ✅ DONE (config/docs) |
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** частично ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy-адаптер not-built** |

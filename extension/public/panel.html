@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sentinel</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 13px/1.5 system-ui, sans-serif;
+        margin: 0;
+        padding: 12px;
+      }
+      h1 { font-size: 14px; margin: 0 0 10px; }
+      fieldset { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; margin: 0 0 12px; padding: 10px; }
+      legend { font-weight: 600; padding: 0 4px; }
+      label { display: block; margin: 6px 0 2px; font-weight: 500; }
+      input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 4px 6px; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+      button { padding: 5px 12px; border-radius: 5px; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #888; }
+      .dot.connected { background: #2ea043; }
+      .dot.connecting { background: #d29922; }
+      .dot.error { background: #cf222e; }
+      .muted { opacity: 0.7; }
+      code { font-family: ui-monospace, monospace; }
+      #error { color: #cf222e; min-height: 1.2em; }
+      .badge { padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <h1>Sentinel — recorder &amp; co-pilot</h1>
+
+    <fieldset>
+      <legend>Connection</legend>
+      <div class="row">
+        <span id="conn-dot" class="dot"></span>
+        <span id="conn-text">disconnected</span>
+        <span class="muted">· session <code id="session">—</code></span>
+      </div>
+      <div class="row">drive: <span id="drive" class="badge">idle</span></div>
+      <div id="error"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Record</legend>
+      <div class="row">
+        <button id="start" type="button">● Start recording</button>
+        <button id="stop" type="button" disabled>■ Stop</button>
+        <span class="muted">events: <span id="events">0</span></span>
+      </div>
+      <p class="muted">Captures clicks &amp; inputs on this tab. Password / secret fields are never recorded.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Co-pilot</legend>
+      <div class="row">
+        <button id="takeover" type="button">Take over</button>
+        <button id="return" type="button" disabled>Return to agent</button>
+      </div>
+      <p class="muted">Attaches the debugger (Chrome shows a banner) and pauses the agent. Returning detaches and resumes.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Config</legend>
+      <label for="url">Control-API URL</label>
+      <input id="url" type="text" placeholder="http://127.0.0.1:8090" autocomplete="off" />
+      <label for="token">Bearer token</label>
+      <input id="token" type="password" placeholder="(kept in extension storage, never committed)" autocomplete="off" />
+      <div class="row"><button id="save" type="button">Save</button> <span id="saved" class="muted"></span></div>
+    </fieldset>
+
+    <script src="panel.js"></script>
+  </body>
+</html>

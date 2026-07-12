@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Sentinel Recorder",
+  "version": "0.1.0",
+  "description": "Record live browser actions into a Sentinel scenario, and hand control between agent and human (co-pilot). M9.8.",
+  "minimum_chrome_version": "120",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "devtools_page": "devtools.html",
+  "action": {
+    "default_title": "Sentinel Recorder"
+  },
+  "permissions": ["activeTab", "storage", "scripting"],
+  "optional_permissions": ["debugger"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}
