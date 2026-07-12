@@ -35,8 +35,8 @@ jobs:
           - { goos: windows, goarch: amd64 }
           - { goos: windows, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
       - name: Build + package binaries
@@ -55,7 +55,7 @@ jobs:
           done
           cp LICENSE README.md "dist/${out}/" 2>/dev/null || true
           tar -C dist -czf "dist/${out}.tar.gz" "${out}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.tar.gz
@@ -69,7 +69,7 @@ jobs:
       packages: write   # GHCR push (tag only)
       id-token: write   # cosign keyless
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Resolve tag / push mode / image tags
         id: meta
         run: |
@@ -91,18 +91,18 @@ jobs:
             case "${TAG}" in *-*) : ;; *) echo "${IMAGE}:latest" ;; esac
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         if: steps.meta.outputs.push == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build (+ push on tag) multi-arch image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           # dry-run builds a single arch (fast Dockerfile smoke); a tag builds + pushes both.
@@ -125,7 +125,7 @@ jobs:
           else
             syft scan dir:. -o cyclonedx-json=sbom.cdx.json
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom.cdx.json
@@ -140,7 +140,7 @@ jobs:
       contents: write   # create the Release
       id-token: write   # cosign keyless sign-blob
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: art
           merge-multiple: true
@@ -178,10 +178,10 @@ jobs:
     permissions:
       contents: write   # commit the bumped formula back to the default branch
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: art
           merge-multiple: true

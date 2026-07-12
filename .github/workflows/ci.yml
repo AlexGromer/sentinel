@@ -53,7 +53,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (Python env/dep manager for the brain)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Build pw-executor (TypeScript -> dist/server.js)
         run: |
@@ -150,7 +150,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (brain runtime deps)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       # Restores bin/agentctl and pw-executor/dist/ at the repo root.
       - name: Download build artifact
@@ -245,7 +245,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (brain runtime deps)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Download build artifact
         uses: actions/download-artifact@v8
@@ -299,7 +299,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: pip-audit (Python deps — advisory; audits the committed lock)
         continue-on-error: true   # advisory: a newly published CVE against the pinned lock must not redden an unrelated PR (#8)
@@ -358,11 +358,11 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx (GHA layer cache for the multi-stage build)
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # build-push-action wires the GHA cache token; load:true puts amd64 sentinel:local in the daemon.
       - name: Build sentinel:local (cached, amd64, loaded — not pushed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -579,11 +579,11 @@ jobs:
       # ships a go1.26 build; step-level continue-on-error keeps the job GREEN and lets ruff still run.
       - name: golangci-lint (advisory)
         continue-on-error: true
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           args: --issues-exit-code=0
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
       - name: ruff (advisory — brain + tests)
         run: uvx ruff check brain/ tests/ || true
