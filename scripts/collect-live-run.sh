@@ -16,7 +16,12 @@
 #   2. textual sweep over every collected file: Authorization/Bearer/Cookie headers, secret-ish
 #      key=value pairs, and common credential shapes (sk-…, gh?_…, AKIA…, JWT, xox?-…).
 # Hashes, ids and counters (plan_hash, golden sha256, step_id, token counts) are deliberately NOT
-# touched — they carry no secrets and the analysis depends on them.
+# touched — they carry no secrets and the analysis depends on them. The shape rules fire even on values
+# stored under those analysis-field names, so a token misfiled under `model`/`hash`/`outcome` is still
+# caught. KNOWN CEILING: a SHAPELESS, keyword-less secret sitting in a non-secret-named, non-typing
+# field (e.g. a bare password in a free-text `reason`) has nothing to match on and will survive the
+# textual fallback — chasing it needs entropy heuristics with unacceptable false-positive cost. Eyeball
+# a real-app bundle before it leaves, and prefer trace-free fixture runs where nothing needs redacting.
 #
 # NEVER collected, at any flag: checkpoint.db (opaque msgpack of the full RunState — raw goal/messages/
 # site_map, not structurally redactable) and storage_state*.json (Playwright auth cookies + localStorage
@@ -163,53 +168,68 @@ import sys
 
 bundle, MASK = sys.argv[1], sys.argv[2]
 
-TYPING = {"fill", "type", "select", "select_option", "press"}
 SECRET_KEY = re.compile(
     r"^(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|"
     r"auth|authorization|cookie|session|session[_-]?id|credential|credentials)$", re.I)
 
-SWEEPS = [
+# SHAPE_SWEEPS: distinctive credential/header patterns. Applied to EVERY string leaf, including values
+# under SAFE_KEY-named keys — a sha256/plan_hash/enum/int matches none of these prefixes, so analysis
+# fields stay intact while an sk-/ghp_/AKIA/JWT/xox token stored under a key named `model`/`outcome`/
+# `hash` no longer walks out unmasked (adversarial-verify A1: SAFE_KEY used to route these around the sweep).
+SHAPE_SWEEPS = [
     # auth headers (value → mask, header name kept so the shape stays readable). The value is consumed
-    # to end-of-line, NOT \S+: `Authorization: Bearer <tok>` would otherwise mask only "Bearer" and
-    # leave the token behind (caught by the CANARY-HDR canary).
+    # to end-of-line, NOT \S+: `Authorization: Bearer <tok>` would otherwise mask only "Bearer".
     (re.compile(r"(?i)\b((?:proxy-)?authorization)\s*:\s*[^\r\n\"]+"), r"\1: " + MASK),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{4,}"), "Bearer " + MASK),
     (re.compile(r"(?i)\b(set-cookie|cookie)\s*:\s*[^\r\n\"]+"), r"\1: " + MASK),
-    # secret-ish key/value: `password: x`, `token=x`, and the keyword-adjacent prose an LLM writes
-    # ("fill password hunter2"). \b keeps prompt_tokens / completion_tokens (word chars incl. '_') safe.
-    (re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|"
-                r"credential|session[_-]?id)\b(\"?\s*[:=]\s*\"?|\s+)([^\s\"',;}&]{3,})"),
-     lambda m: m.group(1) + m.group(2) + MASK),
-    # credential shapes that stand alone with no keyword next to them
     (re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}"), MASK),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}"), MASK),
     (re.compile(r"\bAKIA[0-9A-Z]{8,}\b"), MASK),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{8,}"), MASK),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}"), MASK),  # JWT
 ]
+# PROSE_SWEEPS: the keyword-adjacent value ("fill password hunter2", "token=x"). This one CAN mangle
+# legit free-text, so it is skipped for SAFE_KEY analysis fields (a machine enum/hash never carries a
+# credential keyword next to a value). \b keeps prompt_tokens / completion_tokens safe.
+PROSE_SWEEPS = [
+    (re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|"
+                r"credential|session[_-]?id)\b(\"?\s*[:=]\s*\"?|\s+)([^\s\"',;}&]{3,})"),
+     lambda m: m.group(1) + m.group(2) + MASK),
+]
 
 SAFE_KEY = re.compile(r"^(plan_hash|plan_id|step_id|id|sha256|golden.*|hash|.*_tokens|"
                       r"prompt_hash|model|planner|strategy|outcome|exit_code)$", re.I)
 
 
-def sweep(s: str) -> str:
-    for pat, rep in SWEEPS:
+def _apply(rules, s):
+    for pat, rep in rules:
         s = pat.sub(rep, s)
     return s
 
 
+def sweep(s: str) -> str:            # full sweep (shape + prose) — used for un-keyed text and fallbacks
+    return _apply(PROSE_SWEEPS, _apply(SHAPE_SWEEPS, s))
+
+
+def sweep_shapes(s: str) -> str:     # shape-only — for SAFE_KEY analysis fields (A1)
+    return _apply(SHAPE_SWEEPS, s)
+
+
 def walk(node):
     if isinstance(node, dict):
-        action = str(node.get("action_type") or node.get("action") or "").lower()
-        typing_step = action in TYPING and not (node.get("secretRef") or node.get("secret_ref"))
+        # A step-shaped node is anything carrying an action/verb or a selector — NOT a closed verb
+        # allowlist, so an aliased action ("setValue") cannot smuggle its value past the blanking
+        # (adversarial-verify A3). The secretRef opt-out is still honoured.
+        is_step = bool(node.get("action_type") or node.get("action") or node.get("selector"))
+        blank_typed = is_step and not (node.get("secretRef") or node.get("secret_ref"))
         out = {}
         for k, v in node.items():
-            if typing_step and k in ("value", "text") and isinstance(v, str) and v:
+            if blank_typed and k in ("value", "text", "secret") and isinstance(v, str) and v:
                 out[k] = MASK
-            elif isinstance(v, str) and SECRET_KEY.match(k) :
+            elif isinstance(v, str) and SECRET_KEY.match(k):
                 out[k] = MASK
-            elif isinstance(v, str) and not SAFE_KEY.match(k):
-                out[k] = sweep(v)
+            elif isinstance(v, str):
+                out[k] = sweep_shapes(v) if SAFE_KEY.match(k) else sweep(v)
             else:
                 out[k] = walk(v)
         return out
@@ -238,15 +258,23 @@ for root, _dirs, files in os.walk(bundle):
 
         if name.endswith(".jsonl"):
             lines = []
-            for line in original.splitlines():
+            # split ONLY on the record delimiter. str.splitlines() also breaks on U+2028/U+2029, which
+            # are legal *inside* a JSON string — a record torn there fails json.loads on both halves and
+            # skips the structural blanking, leaking a bare `value` (adversarial-verify A2). The file is
+            # opened newline="" so "\n" is the raw delimiter.
+            for line in original.split("\n"):
                 if not line.strip():
                     lines.append(line)
                     continue
                 try:
                     lines.append(json.dumps(walk(json.loads(line)), ensure_ascii=False))
                 except (ValueError, RecursionError):
+                    print("WARN  a %s record is not valid JSON — text-swept, not structurally redacted"
+                          % name, file=sys.stderr)
                     lines.append(sweep(line))       # partial/corrupt line: still swept, never passed raw
-            redacted = "\n".join(lines) + "\n"
+            redacted = "\n".join(lines)
+            if original.endswith("\n") and not redacted.endswith("\n"):
+                redacted += "\n"
         elif name.endswith(".json"):
             redacted = redact_json_text(original)
             if redacted is None:                    # truncated JSON from a crashed run
