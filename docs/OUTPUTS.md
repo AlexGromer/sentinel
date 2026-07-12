@@ -8,10 +8,14 @@
 
 ## Обзор
 
-Каждый запуск Sentinel производит детерминированный набор артефактов. Девять создаются
-при каждом полном запуске; один является опциональным и требует явного флага CLI. Все артефакты
-помещаются в `ARTIFACT_DIR/runs/{run_id}/`, если не указано иное. JSON-артефакты машиночитаемы
-для CI-инструментов; HTML- и TypeScript-артефакты предназначены для людей.
+Каждый запуск Sentinel производит детерминированный набор артефактов; конкретный набор зависит
+от режима запуска (explore vs. replay/baseline) — см. пометки «As-built» у каждого пункта ниже.
+Все артефакты помещаются в `ARTIFACT_DIR/runs/{run_id}/`, если не указано иное. JSON-артефакты
+машиночитаемы для CI-инструментов; HTML-артефакты — для людей.
+
+> Два пункта каталога (карта покрытия `sitemap.json` и опциональный SARIF-экспорт) помечены ниже
+> как **as-built: не реализовано** — оставлены в каталоге как известные gaps, а не удалены, чтобы
+> не терять историю запроса.
 
 ---
 
@@ -22,9 +26,17 @@
 Основной вывод запуска `--explore` и основной вход для всех последующих запусков
 `--replay` или `--ci`.
 
-Схема: `{plan_id (UUID), plan_hash (SHA-256 канонического JSON с сортированными ключами; числа
-сериализуются как есть, без округления, ни одно поле не исключается), target_url, aut_version (git SHA),
-exploration_seed, coverage_achieved, steps[], golden_snapshots{step_id: {a11y_hash, screenshot_hash}}}`.
+Схема (реальные top-level ключи, `brain/graph.py:401-416`): `{plan_id (UUID), plan_hash (SHA-256
+канонического JSON над steps[] с сортированными ключами; числа сериализуются как есть, без
+округления, ни одно поле не исключается), target_url, run_mode, coverage_target,
+coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[], tokens (из
+`budget.tracker().summary()`), models ({"plan": <имя модели планировщика>})}`. Каждый объект
+`steps[]` — ровно 8 ключей: `step_id`, `intent`, `semantic_id`, `action_type`, `target`, `locator`,
+`alternatives` (плоский список `{strategy, locator, prior}`, не карта `L1..L6`), `is_milestone`.
+
+**As-built:** `aut_version` и `exploration_seed` в `plan.json` **не входят** — таких полей в коде
+нет. `golden_snapshots` тоже не embedded в `plan.json` — эталоны живут отдельно, в SQL-таблице
+`golden_snapshots` (см. §5), и пишутся только явной командой `agentctl baseline update`.
 
 `plan.json` коммитится в репозиторий приложения и управляет всеми запусками replay. Он является
 машиночитаемым эквивалентом написанного вручную скрипта исследовательского тестирования, но
@@ -33,21 +45,27 @@ exploration_seed, coverage_achieved, steps[], golden_snapshots{step_id: {a11y_ha
 
 ---
 
-### 2. Отчёт о запуске (`run_report.json` + `run_report.html`)
+### 2. Отчёт о запуске (`report.json` + `report.html` + `metrics.prom`)
 
 Основной артефакт для CI-потребления, испускаемый в конце каждого запуска.
 
-**JSON** машиночитаем: управляет кодом выхода процесса, заполняет интеграции комментариев
-Slack/PR и разбирается любой CI-системой без специальных инструментов.
+**As-built:** имён `run_report.json`/`run_report.html` в коде нет. Реально `brain/report.py::generate()`
+(`brain/report.py:88-97`) читает `heal-report.json` (артефакт **replay**-запуска; baseline-прогон пишет `baseline-report.json`) и пишет три
+файла: `report.json`, `report.html` и `metrics.prom` (Prometheus textfile-формат,
+node_exporter textfile-collector).
 
-**HTML** воспроизводит структуру Playwright HTML reporter, чтобы существующий CI-инструментарий
-(GitHub Actions summary, Allure и т.д.) мог разобрать его без изменения конфигурации.
+**JSON** машиночитаем: управляет кодом выхода процесса и разбирается любой CI-системой без
+специальных инструментов.
 
-Оба формата включают: статус каждого шага (PASS / FAIL / SKIP / HEALED / QUARANTINED);
-раздел аудита исцеления с diff оригинального и исцелённого локатора, уверенностью и
-обоснованием; предупреждения о расхождении golden-diff и хеша скриншота; карту покрытия
-(проверенные против обнаруженных интерактивных элементов); разбивку затрат по узлам LangGraph;
-список ожидающих решений human-gate; и статус целостности плана.
+**HTML** — самодостаточная страница с CSS inline (`brain/report.py::_html()`), не копирует формат
+стороннего Playwright HTML reporter.
+
+Реально присутствуют в `report.json`/`report.html` (по полям `heal-report.json`, см.
+`brain/replay.py`): статус каждого шага (`ok` / `healed` / `failed`) с флагом `quarantined`;
+запись heal-аудита на шаге (`heal: {strategy, confidence, outcome}`); список `regressions`
+(golden-diff по a11y/скриншоту); итоговые `healed`/`failed`/`exit_code`; и блоки `tokens`/`models`
+(см. §8). Разбивки затрат по узлам LangGraph, отдельной карты покрытия и списка ожидающих
+human-gate решений в этой схеме нет.
 
 ---
 
@@ -100,95 +118,112 @@ playwright show-trace trace.zip
 
 ### 5. Регрессионные golden-базовые линии
 
-Хеш доступности по вехе-шагу (`a11y_hash`) и хеш скриншота (`screenshot_hash`),
-а также содержимое снимков.
+Хеш доступности (`a11y_hash`) и хеш скриншота (`screenshot_hash`) по каждой странице, при
+первом заходе на неё.
 
-Хранятся в таблице `golden_snapshots` (Go store-gateway, SQLite WAL) и встроены в
-`plan.json`. Они **неизменны после explore-запуска**: никакой CI-replay или автоматическое
-исцеление не могут их обновить. Единственный путь мутации — явная команда оператора:
+**As-built:** хранятся только в SQL-таблице `golden_snapshots` (`brain/store.py:68-70`,
+локальный SQLite) — **не** встроены в `plan.json` (в реальной схеме `plan.json` такого ключа
+нет, см. §1). Записываются они **только** в baseline-запуске (`agentctl baseline update`,
+`RUN_MODE=baseline` → `brain/replay.py:253-266`, `save_golden()` вызывается только
+`if baseline:`) — обычный explore-запуск их не пишет. Они неизменны между baseline-запусками:
+никакой CI-replay или автоматическое исцеление не может их обновить. Единственный путь мутации —
+явная команда оператора:
 
 ```bash
-agentctl baseline update --plan-id <id> --aut-version <sha>
+agentctl baseline update --plan <plan.json> [--target <URL>]
 ```
 
-Эта команда выполняет replay, принимает текущие снимки как новую golden-версию, записывает
-новый `plan_hash` и архивирует предыдущую запись. Такая структура делает архитектурно
-невозможным сценарий «CI переписал свою собственную базовую линию».
+Эта команда выполняет replay и на первом заходе на каждую страницу перезаписывает её строку в
+`golden_snapshots` (`INSERT OR REPLACE`) текущими хешами. **As-built:** `plan_hash` при этом не
+пересчитывается, `plan.json` не изменяется, и версионирования/архивирования предыдущей записи
+(`superseded_by`) в коде нет — «новая» golden-версия просто заменяет старую строку в SQL. Такая
+структура всё равно делает архитектурно невозможным сценарий «CI переписал свою собственную
+базовую линию»: запись в `golden_snapshots` доступна только через этот отдельный, явно
+вызываемый оператором путь.
 
 Двойная хеш-конструкция (a11y + screenshot) обнаруживает регрессии только визуального
 характера (изменения CSS / разметки), которые a11y-слепое сравнение не может обнаружить,
-выводя их как события `VISUAL_WARN`. Базовые линии экспортируемы как tarball для
-контроля версий рядом с `plan.json`.
+выводя их как события `VISUAL_WARN` (гейтит `exit 2` только при `SENTINEL_VISUAL_AUTHORITATIVE=1`,
+см. `DETERMINISM.md`). Отдельного механизма экспорта базовых линий как tarball в коде не найдено.
 
 ---
 
-### 6. Аудит исцеления (`healing-audit.jsonl`)
+### 6. Аудит исцеления (таблица `healing_audit`, SQLite)
 
-Append-only JSONL-файл (никогда никаких операций UPDATE или DELETE) с записью каждой попытки
-исцеления во время запуска.
+**As-built:** отдельного файла `healing-audit.jsonl` в коде нет, и команды
+`agentctl healing report` не существует (грепом по `brain/` и `cmd/` — ноль совпадений). Каждая
+попытка исцеления во время запуска добавляется (только `INSERT`, без `UPDATE`/`DELETE`) в
+SQL-таблицу `healing_audit` (`brain/store.py:64`, метод `LocalStore.audit()`,
+`brain/store.py:145-152`).
 
-**Схема записи:** `{run_id, step, semantic_id, original_selector, strategy_used
-(L1..L6 | llm_a11y | llm_visual | cache), healed_selector, confidence, outcome,
-llm_tokens, duration_ms, dom_hash_before, dom_hash_after, timestamp}`.
+**Реальная схема строки** (`brain/store.py:58-67`): `{run_id, step, semantic_id, page_path,
+strategy, original, healed, confidence, outcome, dom_hash, ts}`.
 
-Те же записи сохраняются в таблице `healing_audit` в БД store-gateway.
-JSONL-файл испускается как артефакт CI-сборки.
-
-Сценарии использования: запросы через `agentctl healing report`; подача в `agentctl calibrate`
-для вычисления точности/полноты прошлых автоисцелений относительно результатов `human_verified`;
-криминалистический след для понимания истории дрейфа локаторов.
+Накопленную историю можно запросить через `agentctl calibrate` (`brain/store.py:154-155`,
+`LocalStore.audit_rows()` читает `strategy, outcome, confidence` из `healing_audit`) — она
+вычисляет точность/полноту прошлых автоисцелений; криминалистический след для понимания
+истории дрейфа локаторов остаётся в той же таблице (SQL, не отдельный JSONL-артефакт).
 
 ---
 
 ### 7. Транскрипт LLM (`llm-transcript.jsonl`)
 
-Неизменяемый JSONL-файл для каждого запуска с записью каждого вызова LLM во время запуска.
+JSONL-файл для каждого explore-запуска с записью каждого решения планировщика
+(`brain/__main__.py:113-115`, `tx_write()`; заполняется из `brain/graph.py:225-245,390-392`).
 
-Поля записи: `ts`, `run_id`, `step_id`, `node`, `model`, `prompt_tokens`,
-`completion_tokens`, `latency_ms`, `cost_usd`, `decision_summary`, `temperature`.
+**As-built — реальная схема записи:** ровно `{step, planner, model, decision, reason,
+prompt_tokens, completion_tokens}`. Полей `ts`, `run_id`, `node`, `latency_ms`, `cost_usd`,
+`temperature` в записи нет.
 
-Выполняет `fsync` в конце запуска и не изменяется после этого момента. Содержимое промпта
-**не** хранится — только `decision_summary` (структурированный итог) и `prompt_HASH` в
-OTel-спанах. Это предотвращает появление секретов, встроенных в состояние страницы,
-в хранимых артефактах.
+Пишется построчно (`tx.write(...)`, `tx.flush()`) по мере вызовов планировщика; `decision` —
+либо `"done"` (когда explore завершается), либо текст `intent` выбранного действия. Содержимое
+промпта в файле не хранится; хэш промпта (`prompt_HASH`, `brain/otel.py`) попадает только в
+атрибуты OTel-спанов, не в этот JSONL — так секреты, встроенные в состояние страницы, не
+попадают в хранимые артефакты.
 
-Обеспечивает отладку решений в offline-режиме, итерацию промптов без повторного обращения
-к API, атрибуцию затрат по узлам и аудит соответствия решений агента.
-
----
-
-### 8. Отчёт о затратах (`cost_report.json` + stdout)
-
-Структурированный итог затрат, испускаемый в конце каждого запуска.
-
-Схема: `{run_id, total_cost_usd, tokens_by_model, cost_by_node, runs_this_week_cost}`.
-
-Выводится в stdout при завершении запуска (таблица, читаемая человеком) и записывается как JSON
-для программного потребления в автоматизации комментариев к PR и дашбордах трендов Grafana.
-Стоимость вычисляется из конфигурируемой таблицы цен (никогда не жёстко запрограммированной)
-с использованием опубликованных цен за токены поставщика LLM.
+Обеспечивает отладку решений планировщика в offline-режиме и построчную сверку с `plan.json`.
 
 ---
 
-### 9. Карта покрытия (`sitemap.json`)
+### 8. Итог по токенам (поле `tokens` — не отдельный файл)
 
-Граф обнаруженных страниц, инкрементально обновляемый в explore-запусках.
+**As-built:** отдельного `cost_report.json` в коде нет (грепом по `brain/` — ноль совпадений).
+Итог по токенам за запуск — это поле `tokens` внутри уже существующих артефактов: `plan.json`
+(`brain/graph.py:412-413`, `plan_obj["tokens"] = budget.tracker().summary()`, для explore) и
+`heal-report.json`/`report.json` (`brain/replay.py:302-303`, тот же
+`budget.tracker().summary()`, для replay/baseline).
 
-Содержимое: каждый URL, обнаруженный во время исследования, с количеством интерактивных
-элементов на странице, `a11y_completeness_ratio` для этой страницы и статусом
-исследовано/не исследовано.
+**Схема `tokens`** (`brain/budget.py:52-58`): `{prompt, completion, total,
+plan: {prompt, completion}, heal: {prompt, completion}}`. Рядом пишется `models`
+(`{"plan": <модель планировщика>}` в `plan.json`, `{"heal": <модель heal-бэкенда>}` в
+`report.json`).
 
-Позволяет инженеру с первого взгляда видеть всю исследованную поверхность AUT. Страницы с
-хронически низким `completeness_ratio` (canvas-тяжёлые / shadow DOM) помечаются как
-кандидаты для инструментирования `data-testid` / ARIA командой AUT.
+Ценообразование (`cost_usd`) в этих артефактах не считается — по комментарию в
+`brain/budget.py`, эти счётчики токенов предназначены для последующего прайсинга на стороне
+Go control-API, а не в самом брейне. Отдельного `stdout`-вывода таблицы затрат,
+`cost_by_node` или `runs_this_week_cost` в коде не найдено.
 
 ---
 
-### 10. Отчёт SARIF (опционально — `--sarif`)
+### 9. Карта покрытия — as-built: не пишется как файл
 
-SARIF (Static Analysis Results Interchange Format) файл, отображающий реальные тестовые
-сбои на схему SARIF для интеграции с GitHub Code Scanning.
+**As-built:** `sitemap.json` в коде не создаётся (грепом по `brain/` — ноль совпадений). Explore
+действительно строит карту сайта в памяти (`site_map` в `RunState`, накапливается в узле
+`ground()` в `brain/graph.py`, используется сценарным узлом `scenario_head`, ADR-028) —
+но на диск как отдельный `sitemap.json` она не сериализуется. `plan.json` хранит только
+целочисленные счётчики `interactive_seen` и `interactive_exercised` (см. §1), не per-page граф.
 
-**Только по запросу.** Передайте `--sarif` в `agentctl run` для испускания этого артефакта.
-При наличии файл загружается в endpoint сканирования кода GitHub для отображения сбоев Sentinel
-как находок безопасности/качества в diff-представлении pull request.
+Сегодня единственный источник для восстановления обнаруженной поверхности AUT — сам `plan.json`
+(`steps[]`, из которого можно восстановить маршрут навигации) или `trace.zip`; отдельного
+артефакта карты покрытия нет.
+
+---
+
+### 10. Отчёт SARIF — as-built: флага `--sarif` в коде нет
+
+**As-built:** в `cmd/agentctl/main.go` нет флага `--sarif` ни у одной подкоманды. Полный список
+подкоманд `agentctl`: `run`, `baseline`, `locators`, `export-spec`, `report`, `calibrate`,
+`version`; полный список флагов `run` не включает `--sarif` (грепом по `cmd/agentctl/main.go` —
+ноль совпадений). SARIF-экспорт для GitHub Code Scanning — предложенная, но не реализованная
+возможность; при необходимости источником для внешней конвертации в SARIF сегодня может служить
+`report.json` (§2).

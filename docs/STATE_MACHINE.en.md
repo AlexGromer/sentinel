@@ -19,280 +19,350 @@ This separation is what makes the "single-writer" guarantee over the main DB act
 |---|---|
 | Framework | LangGraph `StateGraph` (Python, `langgraph` package) |
 | Checkpoint store | `langgraph.checkpoint.sqlite.SqliteSaver` |
-| Checkpoint DB path (CI) | `/tmp/agent-{run_id}-ckpt.db` — one file per job, no contention |
-| Checkpoint DB path (service) | Distinct file or `AsyncPostgresSaver` schema, never the store-gateway file |
+| Checkpoint DB path | `<artifact_dir>/checkpoint.db` — one SQLite file per run (`brain/__main__.py:135`), never the store-gateway file |
 | Thread identity key | `thread_id = run_id` |
-| Production swap (K3s, M5) | `AsyncPostgresSaver` replaces `SqliteSaver` — one constructor change, schema unchanged |
+| Production DB (`CHECKPOINT_DSN`) | Synchronous `PostgresSaver` (package `langgraph.checkpoint.postgres`) replaces `SqliteSaver` when `CHECKPOINT_DSN` is set — same interface, schema unchanged (`_checkpointer`, `brain/__main__.py:26-38`) |
 | Browser execution layer | **`pw-executor`** — our own TypeScript server implementing MCP/JSON-RPC 2.0 over stdio (built, not bought; replaces any off-the-shelf browser MCP server) |
+
+> **Two independent execution paths.** This `StateGraph` drives `explore` and `chat` mode
+> (including `goal`/`describe` via the `scenario` node, ADR-028/ADR-048) — there is NO branching
+> on `run_mode` inside the graph (`graph.py:463-475`: edges are either unconditional or routed by
+> 4 router functions, none of which reads `run_mode`). `replay` and `baseline` mode never go
+> through this graph at all — they run a separate loop, `run_replay()` (`brain/replay.py`),
+> dispatched from `_run_replay()` (`brain/__main__.py:514`). The real locator-healing engine
+> (`HealingEngine.heal`, cache + strategies + LLM + visual mode) runs **only** in that loop —
+> see §3.11.
 
 ---
 
 ## 2. Shared State Object — `RunState` (TypedDict)
 
-`RunState` is the single shared object threaded through every node.
-All fields are checkpointed at each `checkpoint` node invocation.
+`RunState` is the single shared object threaded through every node (`brain/state.py:10-63`,
+`TypedDict total=False`, 33 fields). All fields, except the internal `_`-channels, are checkpointed
+at each `checkpoint` node invocation.
 
-### 2.1 Identity and Mode
+> The table below lists ONLY the fields actually declared in `RunState`. An earlier version of this
+> document described fields from an unbuilt design (`session_id`, `aut_version`, a detailed
+> `PageModel` with `a11y_tree`/`landmarks`/`forms`/`completeness_ratio`/hashes, `episodic_buffer`,
+> `healing_context`/`heal_attempts`, `token_usage`/`token_budget`/`budget_warning_emitted`,
+> `human_gate_*`, `run_dir`/`artifacts`/`step_failures`) — none of these exist in `brain/state.py`
+> or anywhere else in the tree (verified by `grep`); they have been removed from the table below.
 
-| Field | Type | Description |
-|---|---|---|
-| `session_id` | `str` | Unique session identifier |
-| `run_id` | `str` | Unique run identifier; doubles as LangGraph `thread_id` |
-| `run_mode` | `Literal["explore", "replay", "ci"]` | Controls which nodes are active and which are skipped |
-| `target_url` | `str` | Root URL of the application under test |
-| `aut_version` | `str` | Git SHA of the application under test, recorded at run start |
-| `current_url` | `str` | URL currently loaded in the browser |
+### 2.1 Identity and Configuration
 
-### 2.2 Perception
+| Field | Description |
+|---|---|
+| `run_id` | Run identifier; doubles as the LangGraph checkpointer's `thread_id` |
+| `run_mode` | `str`; observed values are `"explore"` (`_run_explore`) and `"chat"` (`_run_chat`) — both run through the SAME graph. No router function in the graph reads `run_mode` |
+| `target_url` | Root URL of the application under test |
+| `base_origin` | Target origin — filters `nav_frontier` to same-origin |
+| `coverage_target` | Fraction of discovered buttons that must be clicked before convergence. Default `0.85` |
+| `max_steps` | Hard cap on exploration steps |
+| `artifact_dir` | Per-run artifact directory (`plan.json`, `checkpoint.db`, LLM transcript) |
+| `goal` | NL goal for `GoalPlanner` (goal mode); `""` in pure explore |
+| `describe` | NL flow description for `DescribePlanner` (describe mode); `""` otherwise |
 
-| Field | Type | Description |
-|---|---|---|
-| `page_model` | `PageModel` | Parsed page representation: `{url, title, a11y_tree: dict, landmarks, forms, interactive_elements, completeness_ratio, a11y_hash, screenshot_hash, dom_subtree_hash}` |
+### 2.2 Conversation and Site Map (ADR-028 / ADR-048)
 
-### 2.3 Plan
+| Field | Description |
+|---|---|
+| `messages` | Conversation accumulator (`Annotated[list, add_messages]`) — LangGraph's reducer appends turns across calls. Empty for one-shot explore/goal/describe runs |
+| `site_map` | Site-wide element map `page_path -> [element]`, accumulated by `ground` over the whole explore walk |
+| `phase` | `"explore"` \| `"scenario"` |
+| `scenario_steps` | Grounded steps appended by the `scenario` node into `exploration_plan` |
+| `scenario_unmatched` | Draft steps/refs that could not be grounded to a real element |
 
-| Field | Type | Description |
-|---|---|---|
-| `exploration_plan` | `list[PlannedAction]` | Ordered sequence of planned steps. Each `PlannedAction`: `{step_id, intent, semantic_id, action_type, locator, locator_alternatives[L1..L6], value?, expected_outcome, assertion, is_critical, is_milestone, healed: bool}` |
-| `plan_hash` | `str` | SHA-256 of canonical JSON of all steps (sorted keys; numbers serialised as-is, no rounding). Hard-abort on mismatch in replay/ci mode |
-| `current_step` | `int` | Index into `exploration_plan` |
+### 2.3 Perception
 
-### 2.4 Coverage / Convergence
+| Field | Description |
+|---|---|
+| `current_url` | URL currently loaded in the browser |
+| `page_model` | Dict assembled by `perceive`/`ground`: `{url, title, aria, nodeCount}` plus `buttons` (added by `ground`). **Does not** contain `a11y_tree`/`landmarks`/`forms`/`completeness_ratio` or any hashes — the code never computes those subfields (`graph.py:156-202`) |
 
-> These fields replace the LLM-only `exploration_complete` flag from earlier proposals.
-> The LLM may *propose* done but cannot force it; the metric decides.
+### 2.4 Exploration Accounting / Convergence
 
-| Field | Type | Description |
-|---|---|---|
-| `coverage_target` | `float` | Fraction of discovered interactive elements that must be exercised before exploration ends. Default: `0.85` |
-| `interactive_seen` | `set[str]` | Semantic IDs of all interactive elements discovered |
-| `interactive_exercised` | `set[str]` | Semantic IDs of interactive elements acted upon |
-| `nav_frontier` | `deque[str]` | Unexplored URLs and links remaining |
-| `coverage_achieved` | `float` | Computed as `len(exercised) / max(1, len(seen))` |
-| `exploration_complete` | `bool` | `True` only when `coverage_achieved >= coverage_target` AND `nav_frontier` is empty |
+| Field | Description |
+|---|---|
+| `exploration_plan` | Ordered list of planned/executed steps |
+| `plan_hash` | SHA-256 of canonical JSON of the steps — computed in the `report` node, **not** in `plan` |
+| `current_step` | Number of the last executed step |
+| `interactive_seen` | `semantic_id`s of all discovered buttons |
+| `interactive_exercised` | `semantic_id`s of buttons that have been clicked |
+| `visited_paths` | Page paths visited |
+| `nav_frontier` | Unvisited same-origin links |
+| `coverage_achieved` | `len(exercised) / max(1, len(seen))` |
+| `exploration_complete` | Set by the `plan` node when `current_step >= max_steps`, or no candidates remain, or (`coverage_achieved >= coverage_target` AND `nav_frontier` is empty) — or the planner itself proposed `done` |
+| `executed_actions` | Flat log of executed actions `{step_id, type, ok}` |
+| `errors` | List of `act` error strings |
 
-### 2.5 Episodic Memory
+### 2.5 Operator Takeover (ADR-054)
 
-| Field | Type | Description |
-|---|---|---|
-| `episodic_buffer` | `deque[EpisodicEvent]` | Bounded circular buffer, max 50 entries. When full, oldest events are LLM-summarised (Sonnet by default) into ~200-token episode summaries to bound context growth |
-| `executed_actions` | `list[ExecutedAction]` | Full action history: `{step, action_type, locator, outcome, duration_ms, pre_hash, post_hash, healing_flagged}` |
+| Field | Description |
+|---|---|
+| `takeover_returns` | Operator return payloads — one entry per takeover→return cycle. Observability only: not part of `plan.json`/`scenario.json`, does not affect `plan_hash` |
 
-### 2.6 Healing
+### 2.6 Auto-HITL (ADR-055)
 
-| Field | Type | Description |
-|---|---|---|
-| `healing_context` | `Optional[HealingContext]` | Active heal context: `{semantic_id, failure_type, attempted_locator, element_description}`. `None` when no heal is in progress |
-| `heal_attempts` | `int` | Per-step heal counter. Reset at each `checkpoint`. Hard cap: 3 in explore mode, 2 in replay hot path |
-| `pending_human_review` | `list[HealCandidate]` | Heal candidates awaiting human gate decision |
-| `healed_locators` | `list[HealedLocator]` | Healed locators pending flush to `store-gateway` at next `checkpoint` |
+| Field | Description |
+|---|---|
+| `consecutive_heal_failures` | Counts consecutive misses of the `heal` node (in the explore graph `heal` is a stub, see §3.6, so EVERY entry is a miss); reset to 0 on a successful `verify`. Reaching `SENTINEL_AUTO_HITL_THRESHOLD` auto-arms `_takeover_armed` in the `checkpoint` node |
+| `failed_steps` | Running total of `verify` failures (observability / M15-metrics substrate) |
 
-### 2.7 Token Budget
+### 2.7 Internal Channels
 
-| Field | Type | Description |
-|---|---|---|
-| `token_usage` | `dict[str, TokenCount]` | Per-model-id usage: `model_id → {prompt, completion, cost_usd}`. In-process counter; Go orchestrator independently enforces a hard ceiling |
-| `token_budget` | `dict[str, int]` | Per-model-id budget limits (from config). Defaults: 50k tokens/run for Opus 4.8 (plan, default), 20k tokens/run for Sonnet 4.6 (heal, default) |
-| `budget_warning_emitted` | `bool` | Set when 80% of any budget is consumed; prevents duplicate `BUDGET_WARNING` events |
+| Field | Description |
+|---|---|
+| `_pending` | The action planned but not yet executed (bridge from `plan` to `act`) |
+| `_last_ok` | Result of the last `act` (bool) |
+| `_verify_ok` | Result of `verify` — see §3.5 |
+| `_takeover_armed` | Armed by `checkpoint` when an operator takeover was requested or the auto-HITL threshold fired; routes to the `takeover` node |
 
-### 2.8 Human Gate / Control
+### 2.8 Token Budget — NOT a `RunState` field
 
-| Field | Type | Description |
-|---|---|---|
-| `human_gate_pending` | `bool` | `True` when the run is paused at a `checkpoint` awaiting operator decision |
-| `human_gate_reason` | `Optional[str]` | Human-readable explanation of why the gate was raised |
-| `human_gate_decision` | `Optional[Literal["approve", "skip", "abort"]]` | Resolution set by `agentctl gate approve|skip|abort` |
-| `human_gate_resolved_locator` | `Optional[str]` | Operator-supplied locator when decision is `"approve"` |
-| `stop_signal` | `bool` | Externally injected stop flag (e.g., CI timeout or operator `agentctl run --stop`) |
-
-### 2.9 Artifacts
-
-| Field | Type | Description |
-|---|---|---|
-| `run_dir` | `str` | Filesystem path to the per-run artifact directory |
-| `artifacts` | `RunArtifacts` | `{trace_path, screenshot_paths, spec_path, report_path}` — paths to emitted files |
-| `step_failures` | `dict[str, int]` | `step_key → consecutive_failure_count`. Input to AUT-SHA-gated flake quarantine logic |
+Token accounting is a **process-global** `BudgetTracker` (`brain/budget.py`), not a `RunState`
+field: the planner and `HealingEngine` read `budget.tracker()` directly. Limits come from env:
+`PLAN_TOKEN_LIMIT` (default 50000), `HEAL_TOKEN_LIMIT` (default 20000), `TOTAL_TOKEN_LIMIT`
+(default 0 = off). On reaching a limit, `exceeded(role)` simply returns `True` — the caller (the
+planner / `HealingEngine._llm_reground`) degrades silently, with no dedicated AG-UI or "warning"
+log event. No `BUDGET_WARNING` event exists in the code (`grep` across the tree — 0 matches).
 
 ---
 
 ## 3. Nodes
 
-There are **9 named nodes** (8 core + `takeover`, M9.8-R3/ADR-054) plus the two implicit LangGraph built-in nodes (`START`, `END`).
-The `checkpoint` node, when `_takeover_armed` is set, routes to the dedicated `takeover` node (unconditional `interrupt()` → pause, operator takes over → `Command(resume)`; precedence **abort > takeover**).
-The framework wires `START` → first node and `END` as the graph terminal automatically.
+The graph has **10 named nodes** (`brain/graph.py:454-459`: `perceive`, `ground`, `plan`, `act`,
+`verify`, `heal`, `checkpoint`, `takeover`, `scenario`, `report`) plus the two implicit LangGraph
+built-in nodes (`START`, `END`). There is NO branching on `run_mode` inside the graph — every edge
+is either unconditional or resolved by one of 4 router functions (`route_entry`, `route_plan`,
+`route_verify`, `route_checkpoint`), none of which reads `run_mode`. The same graph serves explore,
+`chat` (multi-turn, ADR-048), and goal/describe (when a `scenario_head` is wired, ADR-028).
+The `checkpoint` node, when `_takeover_armed` is set, routes to the dedicated `takeover` node
+(unconditional `interrupt()` → pause, operator takes over → `Command(resume)`; precedence
+**abort > takeover**). The framework wires `START` → first node (via `route_entry`) and `END` as
+the graph terminal automatically.
+
+`replay`/`baseline` mode does not use this graph at all — it runs as a separate loop, see §3.11.
 
 ### Node summary
 
-| # | Node | LLM | Model | Notes |
-|---|---|---|---|---|
-| 1 | `perceive` | No | — | Entry of every cycle; calls `pw-executor` for a11y snapshot |
-| 2 | `ground` | No | — | Parses `PageModel`; validates against golden baselines in replay |
-| 3 | `plan` | Yes | Opus 4.8 (default) | **Explore mode only** — skipped entirely in replay/ci |
-| 4 | `act` | No | — | Executes the current step via `pw-executor` |
-| 5 | `verify` | Conditional | Sonnet 4.6 (default) | Sonnet only for explore-mode soft assertion; deterministic in replay |
-| 6 | `heal` | Conditional | Sonnet 4.6 (default) | Sonnet for a11y re-grounding (L5+); gated visual also Sonnet |
-| 7 | `checkpoint` | No | — | Flushes LangGraph checkpoint + `store-gateway` writes; handles human gate pause |
-| 8 | `report` | No | — | Terminal node; assembles and emits `RunResult` |
+| # | Node | LLM | Notes |
+|---|---|---|---|
+| 1 | `perceive` | No | Snapshots the page (`browser.currentUrl` + `browser.snapshot`) |
+| 2 | `ground` | No | Catalogues interactive elements, grows `nav_frontier`/`site_map`, computes coverage |
+| 3 | `plan` | Conditional | Depends on `planner`: `HeuristicPlanner` is deterministic; an LLM planner — yes |
+| 4 | `act` | No | Executes `_pending` via `pw-executor` |
+| 5 | `verify` | No | One-line pass-through `ok = bool(_last_ok)` — NOT a classifier |
+| 6 | `heal` | No | **Stub** in the explore graph — log + counter; real heal only in `run_replay()` (§3.11) |
+| 7 | `checkpoint` | No | Polls the orchestrator (abort/takeover) + checks the auto-HITL threshold |
+| 8 | `takeover` | No | `interrupt()` — pause for an operator takeover |
+| 9 | `scenario` | Conditional | Only if a `scenario_head` is wired (goal/describe); also the warm-chat resume entry point |
+| 10 | `report` | No | Terminal node; freezes `plan.json` + `plan_hash` |
 
 ### 3.1 `perceive`
 
 **LLM: None.**
 
-Entry point of every agent cycle.
-
-- Calls `pw-executor` (via MCP/JSON-RPC 2.0 over stdio) for `accessibility_snapshot()`.
-- Computes `completeness_ratio` (named interactive elements / total interactive elements).
-- If `completeness_ratio < 0.30` (canvas, shadow DOM, custom elements, cross-origin iframes),
-  also calls `screenshot()` on `pw-executor` to produce a set-of-marks context for the visual
-  healing fallback — this expenditure is gated and does not occur on every cycle.
-- Computes `a11y_hash`, `screenshot_hash`, and `dom_subtree_hash` (subtree-scoped, not
-  whole-page, to prevent unrelated ad/banner changes from invalidating all cached locators).
-- Starts or resumes the `pw-executor` Playwright trace at run start.
+- Calls `pw-executor`: `browser.currentUrl` + `browser.snapshot`, assembles
+  `page_model = {url, title, aria, nodeCount}`.
+- On the very first pass (`page_model` still empty) emits AG-UI `run.started`; always emits
+  `state.transition(to="perceive")`.
+- **Does not compute** `completeness_ratio`, `a11y_hash`, `screenshot_hash`, `dom_subtree_hash`,
+  and does not decide whether to call `screenshot()` — none of those mechanisms exist in the code
+  (`grep completeness_ratio` finds only design-document mentions, no implementation).
+- **Does not manage** starting/stopping the Playwright trace — the trace is stopped exactly once,
+  after the graph finishes, in `brain/__main__.py` (`browser.traceStop`), not per `perceive` call.
 
 ### 3.2 `ground`
 
 **LLM: None.**
 
-- Parses the raw a11y tree into the typed `PageModel`.
-- Updates `interactive_seen` and `nav_frontier` from newly discovered elements and links.
-- Computes `coverage_achieved = len(interactive_exercised) / max(1, len(interactive_seen))`.
-- Sets `exploration_complete = True` only when `coverage_achieved >= coverage_target`
-  AND `nav_frontier` is empty.
-- **In replay/ci mode:** validates `a11y_hash` and `screenshot_hash` against the immutable
-  golden baseline for each milestone step. Emits `STRUCTURAL_CHANGE` on a11y drift or
-  `VISUAL_WARN` on screenshot-hash divergence without failing the step outright.
+- Catalogues interactive elements (`_elements_from_interactives`, `graph.py:54-102`): role, name,
+  `testid`, a primary locator plus an ordered `alternatives` list (`testid`/`role_name`/`label`/
+  `text_role`, priors 0.95/0.90/0.88/0.80).
+- Coverage is computed over buttons only (`role == "button"`); links feed `nav_frontier`.
+- Grows `site_map[path]` with the FULL element set (buttons + links + form fields) — the map the
+  `scenario` node consumes (ADR-028).
+- Recomputes `interactive_seen`, `nav_frontier` (same-origin only, not yet visited),
+  `visited_paths`, `coverage_achieved = exercised / max(1, seen)`.
+- **Does not validate** against a golden baseline (`a11y_hash`/`screenshot_hash`) — that check does
+  not exist in the explore graph; golden-diff is implemented only in `run_replay()` (§3.11).
+- Unconditional edge `ground → plan` (`graph.py:464`) — no branching on `run_mode`.
 
 ### 3.3 `plan`
 
-**LLM: Opus 4.8 (default), temperature = 0. Explore mode only.**
+**LLM: conditional** — depends on the `planner` that was wired in (`HeuristicPlanner` is
+deterministic; an LLM-backed planner, or `GoalPlanner`/`DescribePlanner` for phase 1, are selected
+in `_run_explore`, `brain/__main__.py:102-108`).
 
-- Skipped entirely in `replay` and `ci` modes — `ground` routes straight to `act`.
-- Input context: `page_model`, episodic tail from `episodic_buffer`, `nav_frontier`,
-  remaining token budget, and `coverage_achieved`.
-- Output: one or more `PlannedAction` entries to append to `exploration_plan`, or a
-  *proposed* `exploration_complete = True`.
-- The LLM may propose done but the flag is only set if the coverage metric independently
-  confirms it (`ground` owns the authoritative check).
-- Applies an in-process budget pre-check before the LLM call; degrades gracefully (partial
-  plan freeze) rather than aborting.
-- On completion of exploration: freezes `plan.json` and computes `plan_hash`.
+- Assembles candidates: unexercised buttons (`click`) plus the whole `nav_frontier` (`navigate`).
+- Concludes exploration (`exploration_complete=True`) when `current_step >= max_steps`, or no
+  candidates remain, or (`coverage_achieved >= coverage_target` AND `nav_frontier` is empty) — or
+  when the planner itself returned `decision.get("done")`.
+- Otherwise asks `planner.propose(...)` for the next action, appends it to `exploration_plan`, and
+  places it in `_pending` (bridge to `act`).
+- Calls `rc.report(...)` (RunControl); if the orchestrator returned `ABORT`, converges immediately
+  (`exploration_complete=True`) without waiting for `checkpoint`.
+- **Does NOT freeze** `plan.json` and **does NOT compute** `plan_hash` — that is the `report`
+  node's job (§3.10), not `plan`'s.
+- Writes an LLM-transcript record (`tx_write`) on every step, regardless of outcome.
 
 ### 3.4 `act`
 
 **LLM: None.**
 
-- Pops `exploration_plan[current_step]`.
-- **Explore mode:** executes the action via `pw-executor` using the `locator_hint` from
-  the plan.
-- **Replay/ci mode:** executes the *frozen* locator from the committed `plan.json`.
-  No LLM invoked; zero token cost on the happy path.
-- Appends a skeleton `ExecutedAction` record to `executed_actions`.
-- On any `pw-executor` error (selector not found, element not interactable, etc.): routes
-  to `verify`, which classifies the failure before escalating to `heal`.
+- Executes `_pending` via `pw-executor` (`navigate`/`click`/`fill`/`type`/`select`/`press`/
+  `assert`); for `fill`/`type`/`select`/`assert` it reuses the `replay.py:_act`/`_expect_params`
+  dispatcher — a single source of truth shared between explore and replay.
+- On success: marks the button `exercised` (only for `click`), appends to `executed_actions`,
+  sets `_last_ok=True`.
+- On an exception: appends a string to `errors`, sets `_last_ok=False`.
+- Emits AG-UI `tool.call` and `step.progress`. Unconditional edge `act → verify`.
 
 ### 3.5 `verify`
 
-**LLM: Conditional — Sonnet 4.6 (default) only for explore-mode soft assertion.**
+**LLM: None.**
 
-- Re-snapshots the page inline (calls `pw-executor accessibility_snapshot()` after the action).
-- Classifies the outcome into one of:
-  - `PASS`
-  - `LOCATOR_STALE` — element present in the a11y tree but selector no longer resolves
-  - `ELEMENT_GONE` — element absent from the tree (removed, conditional, or A/B variant)
-  - `TIMING` — element present but not yet interactable; retry `act` once with a short wait
-    *before* escalating to `heal`
-  - `UNEXPECTED_ERROR` — navigation/network/JS error; not healed, routed directly to `report`
-- **In replay mode:** performs a structural a11y diff against the golden baseline
-  (`diff_ratio` check) and a screenshot-hash comparison for milestone steps.
-- **In explore mode:** uses Sonnet for soft assertion evaluation when the step has a
-  non-trivial `expected_outcome`/`assertion`.
-- A genuine assertion mismatch (element found, observed value wrong) is a real `FAIL`
-  and is NOT healed — it routes to `report`.
+- A one-line pass-through: `ok = bool(state.get("_last_ok", True))`.
+- **Does NOT classify** the outcome into `PASS`/`LOCATOR_STALE`/`ELEMENT_GONE`/`TIMING`/
+  `UNEXPECTED_ERROR` — those categories do not exist in the code (`grep` across the tree — 0
+  matches); there is no re-snapshot of the page and no LLM call for soft assertions.
+- On `ok=True`: resets `consecutive_heal_failures=0` — the ONLY reset point for the auto-HITL
+  counter (ADR-055).
+- On `ok=False`: increments `failed_steps`.
+- Route (`route_verify`, `graph.py:428-429`): `"checkpoint" if ok else "heal"` — exactly 2 outcomes.
 
 ### 3.6 `heal`
 
-**LLM: Conditional — Sonnet 4.6 (default) (a11y re-grounding, visual set-of-marks).**
+**LLM: None — STUB in the explore graph.**
 
-Delegates all healing logic to the `healing-engine` module.
-Operates on `HealingContext {semantic_id, failure_type, attempted_locator, element_description}`.
+> Node docstring in the code: *"STUB in the explore graph (explore discovers, it does not heal).
+> See brain/replay.py."*
 
-Healing proceeds in bounded, ordered steps:
-
-1. **Cache lookup** (zero LLM): query `store-gateway` for a `healed_locator` matching
-   `(page_url, semantic_id)` with a still-valid `dom_subtree_hash`. On hit: reuse immediately.
-   On miss: evict (mark `deprecated`) and proceed.
-2. **Strategy rotation L1–L6** (zero LLM): probe candidates in order via `pw-executor`;
-   take the first resolving to exactly one element.
-
-   | Level | Strategy | Prior |
-   |---|---|---|
-   | L1 | `data-testid` / `data-cy` / `data-pw` | 0.95 |
-   | L2 | ARIA role + accessible name | 0.90 |
-   | L3 | `aria-label` exact match | 0.88 |
-   | L4 | Visible text + role | 0.80 |
-   | L5 | Scoped CSS (semantic container + element type) | 0.65 |
-   | L6 | XPath positional | 0.45 |
-
-   A match at L5/L6 emits a `strategy_degradation` metric (DOM instability signal).
-
-3. **LLM a11y re-grounding** (Sonnet 4.6 by default, structured output): only if cache + L1–L6 all fail.
-   Applies LLM-overconfidence discount `× 0.90`.
-4. **Visual set-of-marks** (Sonnet 4.6 vision by default): only if `completeness_ratio < 0.30`
-   AND step 3 failed AND the M5 PoC validated `> 70%` accuracy on 20 real broken-selector
-   scenarios. Returns a `mark_number` mapped to a real semantic locator, not a coordinate click.
-   Applies visual discount `× 0.85`.
-5. **Verify-before-accept**: every LLM/visual candidate is re-probed against the live DOM
-   via `pw-executor`. If it does not resolve to exactly one element, confidence is zeroed.
-6. **Confidence gate**:
-   - `≥ 0.85` → auto-heal: run the action once with the healed locator; on success persist
-     `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`.
-   - `0.60–0.84` → flagged: apply optimistically, set `healing_flagged = True`, persist with
-     `review_required = True`; surfaces in the run report.
-   - `< 0.60` → human gate: do not persist; emit `NEEDS_HUMAN_REVIEW`; in CI auto-skip
-     the step; in interactive mode pause at `checkpoint` until `agentctl gate` resolves it.
-7. **Audit** (append-only): every attempt writes a `healing_audit` row — no `UPDATE`/`DELETE`
-   ever. Written as `healing-audit.jsonl` CI artifact and as OTel span attributes
-   (selector + confidence only; never prompt content).
-8. **Bounded retry + quarantine**: `heal_attempts` hard-capped at 3 (explore) / 2 (replay).
-   On cap: AUT-SHA-gated flake quarantine — a step is quarantined only when it fails in
-   N-of-5 recent runs *without* an AUT git-SHA change.
-
-> **Cold-start note:** the auto-accept threshold defaults to **0.90** (not 0.85) until
-> enough human-verified outcomes accumulate for `agentctl calibrate` to compute
-> precision/recall and lower it safely.
+- Logs and increments `consecutive_heal_failures` — the node physically cannot repair a locator:
+  there is no cache, no strategy rotation, no LLM re-grounding, no visual mode here.
+- Every entry into this node is a miss by definition; used as the auto-HITL signal (§2.6).
+- The real healing engine (`HealingEngine.heal`: cache + strategies + LLM + visual set-of-marks)
+  runs **only** in the separate `run_replay()` loop — see §3.11.
+- Unconditional edge `heal → checkpoint`.
 
 ### 3.7 `checkpoint`
 
 **LLM: None.**
 
-- Flushes the LangGraph checkpoint to the separate checkpoint DB
-  (`SqliteSaver` / `AsyncPostgresSaver`).
-- Flushes `pending healed_locators` and the updated `page_model` to `store-gateway`
-  via `PersistenceService` gRPC.
-- Records a `checkpoint_id` event with the Go `orchestrator`.
-- Resets `heal_attempts` and clears `healing_context`.
-- **If `human_gate_pending = True`:** calls `RunControl.Checkpoint` / `Pause` on the
-  orchestrator and suspends the LangGraph thread until `agentctl gate approve|skip|abort`
-  delivers a resolution via gRPC. In CI mode the gate auto-skips after the configured
-  timeout (default 30 min).
+- `rc.poll(run_id, "checkpoint")` — polls the Go orchestrator (RunControl gRPC, ADR-054):
+  - `ABORT` → `exploration_complete=True`, clears `_takeover_armed` (converges immediately;
+    **abort takes precedence over takeover**).
+  - `TAKEOVER` → arms `_takeover_armed=True` (the actual pause happens in the next node,
+    `takeover`, not here — the decision is latched into state so `interrupt()` replays
+    deterministically on resume).
+  - otherwise: if `consecutive_heal_failures >= SENTINEL_AUTO_HITL_THRESHOLD` (env, default `0` =
+    off) — also arms `_takeover_armed=True` and emits AG-UI `hitl_needed`.
+- There is **no** `store-gateway` write here, **no** `PersistenceService` call, **no** reset of
+  `heal_attempts`/`healing_context` (neither field exists) — the actual LangGraph checkpoint is
+  flushed by the framework itself (the compiled graph with `checkpointer=saver`), not by this
+  node's code.
+- Route (`route_checkpoint`, `graph.py:431-438`) — exactly 3 targets: `exploration_complete →
+  scenario`; else `_takeover_armed → takeover`; else `current_step >= max_steps → scenario`,
+  else `→ perceive`.
 
-### 3.8 `report`
+### 3.8 `takeover`
+
+**LLM: None.**
+
+- The only node calling `interrupt({"reason": "operator_takeover", "run_id": ...})` —
+  unconditionally (the decision was already latched into `_takeover_armed` by `checkpoint`, so a
+  repeat entry on resume is safe and idempotent).
+- `app.invoke()` returns control with `__interrupt__`; the live browser is handed to the operator
+  (CDP, M9-LIVE). The orchestrator sends `Command(resume=...)` on Return — the run continues from
+  the same point (`_resume_through_takeovers`, `brain/__main__.py:61-85`).
+- On resume: clears `_takeover_armed`, appends the return payload to `takeover_returns`.
+- Unconditional edge `takeover → checkpoint` (re-polls before continuing, in case the Return has
+  not yet propagated to the orchestrator).
+
+### 3.9 `scenario`
+
+**LLM: conditional** — only if a `scenario_head` was wired into the graph (`GoalPlanner` for goal
+mode, `DescribePlanner` for describe mode); a no-op (`{}`) in pure explore.
+
+- Phase 2 (ADR-028): authors a grounded scenario over the **complete** `site_map`, not just the
+  buttons explicitly clicked — `goal` mode builds `refs` and calls `ground_scenario`; `describe`
+  mode produces an LLM draft and deterministically reconciles it (`reconcile`) against the real map.
+- **M9.10 (ADR-048): also the RESUME entry point for a warm multi-turn conversation.**
+  `route_entry` (`graph.py:440-445`) routes `START` straight here, bypassing `perceive`, when the
+  state already carries both `site_map` and `messages` (a warm thread) — it re-authors over the
+  persisted map using prior turns as refine context (`_capped_history`, capped by
+  `SENTINEL_REFINE_HISTORY_KEEP`, default 6 turns).
+- Appends grounded steps to `exploration_plan`, records `scenario_unmatched`, appends an assistant
+  summary turn to `messages` for the next turn.
+- Unconditional edge `scenario → report`.
+
+### 3.10 `report`
 
 **LLM: None. Terminal node.**
 
-- Stops the `pw-executor` Playwright trace; relays `trace_path` to the orchestrator via gRPC.
-- Serialises `plan.json` (with `plan_hash` + dual golden baselines) if not yet frozen.
-- Builds the `RunResult`:
-  - Per-step outcomes: `PASS` / `FAIL` / `SKIP` / `HEALED` / `QUARANTINED`
-  - Healing-audit section (original vs healed locator, confidence, reasoning,
-    flagged-for-review list)
-  - Golden-diff and screenshot-hash drift warnings
-  - Coverage map (exercised vs discovered elements)
-  - Cost breakdown by node and model
-  - Human-gate pending list
-  - Plan integrity status
-- Calls `WriteRunResult` on `store-gateway`.
-- Emits `DONE` event to the orchestrator (exit code propagated to `agentctl`).
+- Computes `plan_hash` (canonical SHA-256 over `exploration_plan`) and writes `plan.json` to
+  `artifact_dir` — this is the **only** place the plan is actually frozen.
+- Adds `tokens` (a `budget.tracker().summary()` snapshot, §2.8) and `models` to `plan.json`.
+- Emits AG-UI `verdict` — a best-effort verdict from this node's OWN view of the run (whether
+  `errors` is non-empty), **not** the true process exit code: the real exit code is computed in
+  `brain/__main__.py` after `app.invoke()` returns, outside the graph.
+- **Does not call** `WriteRunResult`, does not assemble a unified `RunResult` (healing audit,
+  golden-diff warnings, coverage map, cost breakdown, human-gate list), and does not emit a `DONE`
+  event — none of those constructs exist in the graph's code.
+- Unconditional edge `report → END`.
+
+### 3.11 `run_replay()` — the standalone replay/baseline loop (bypasses the graph)
+
+`run_mode in {"replay", "baseline"}` does NOT go through the `StateGraph` at all: `_run_replay()`
+(`brain/__main__.py:514`) calls `run_replay()` (`brain/replay.py:101`) directly — a plain Python
+loop over the frozen steps in `plan.json`, with no LangGraph, no checkpointer, and no
+`perceive`/`ground`/`plan` nodes.
+
+- **Integrity check (ADR-006):** recomputes `plan_hash` over the steps; on mismatch (and without
+  `FORCE_REPLAY=1`) — a hard abort, `exit_code=3`, nothing executes.
+- **Per step:** `navigate`/`assert`/`press` execute directly; for `click`/`fill`/`type`/`select`,
+  a `browser.probe` on the primary locator runs first — at `count==1` the action executes right
+  away, otherwise the **real** `HealingEngine.heal(ctx)` is called (`brain/healing.py:56-112`):
+  1. Cache lookup (`store.lookup`) on `(page_path, semantic_id, dom_hash)`; a miss triggers
+     `store.evict_stale`.
+  2. Strategy rotation over the recorded `alternatives`: the first locator that resolves to
+     exactly one element (`brain/healing.py:26-27`, `PRIORS`):
+
+     | Strategy | Source | Prior |
+     |---|---|---|
+     | `testid` | generated by `ground()` from `data-testid`/`data-cy`/`data-pw` | 0.95 |
+     | `role_name` | generated by `ground()` — ARIA role + accessible name | 0.90 |
+     | `label` | generated by `ground()` from `aria-label` (not for buttons) | 0.88 |
+     | `text_role` | generated by `ground()` from visible text | 0.80 |
+     | `css` | ONLY from LLM re-grounding (step 3 below) | 0.65, then ×0.90 overconfidence discount |
+     | `xpath` | declared in `PRIORS`; generated by `record_bridge.py` (recorded extension scenarios), not `ground()` | 0.45 |
+     | `visual` | ONLY from visual set-of-marks (step 4) | 0.80 (in the FLAGGED band by design) |
+
+  3. If rotation found nothing — LLM re-grounding (`_llm_reground`, a structured JSON reply with a
+     CSS selector), only if an LLM backend is wired (`use_llm=True`, typically `HEAL_LLM=1`) and
+     the `heal` budget is not exhausted (`budget.tracker().exceeded("heal")`).
+  4. If that found nothing either — visual set-of-marks (`_visual_reground`), only if
+     `use_visual=True` **and** the backend supports vision. There is no `completeness_ratio` gate
+     — that field does not exist anywhere in the code.
+  5. The candidate is re-probed against the live DOM; if it does not resolve to exactly one
+     element, confidence is zeroed.
+  6. Gate: `confidence >= 0.85` → `auto_healed` (locator persisted as `active`); `0.60–0.84` →
+     `flagged` (applied optimistically, persisted with a review flag); `< 0.60` → `needs_review`,
+     the locator is NOT persisted, the step fails.
+  7. Every attempt writes a row to the `healing_audit` SQLite table (append-only,
+     `brain/store.py:145-152`) — no `UPDATE`/`DELETE` ever.
+- **Flake quarantine:** `store.record_step(plan_id, step_key, passed, aut_version)` keeps a
+  sliding window of the last 5 outcomes PER AUT SHA (reset on a SHA change); ≥3 failures out of 5
+  triggers quarantine (`quarantined=True`, excluded from `exit 1`); 3 consecutive passes clear the
+  quarantine (`brain/store.py:179-196`). Golden-diff regressions (`exit 2`) are NOT suppressed by
+  quarantine.
+- **No retry loop with an attempt cap** for a single step (no `heal_attempts` field at all) — each
+  step gets exactly one `heal.heal(ctx)` call.
+- **AG-UI + auto-HITL (M14 tail 2, ADR-055):** emits `run.started`/`step.progress`/`heal`/
+  `verdict`; counts `consecutive_heal_failures` (same semantics and `SENTINEL_AUTO_HITL_THRESHOLD`
+  threshold as the graph, `brain/replay.py:143-153`) and emits `hitl_needed` at the threshold — but
+  there is no real pause (interrupt/resume) in the replay loop: a live auto-takeover mid-replay is
+  M9-LIVE work.
 
 ---
 
@@ -300,67 +370,49 @@ Healing proceeds in bounded, ordered steps:
 
 ### 4.1 Edge Table
 
+Source of truth: `brain/graph.py:454-475` (`b.add_edge`/`b.add_conditional_edges`). Every edge
+below is valid for the ONE graph used by explore/chat/goal/describe — there is no `run_mode`
+branching.
+
 | From | To | Condition / Trigger |
 |---|---|---|
-| `START` | `perceive` | Always (graph entry) |
+| `START` | `perceive` | `route_entry`: cold start — `site_map` and/or `messages` empty |
+| `START` | `scenario` | `route_entry`: warm resume — both `site_map` and `messages` populated (ADR-048) |
 | `perceive` | `ground` | Always |
-| `ground` | `plan` | `run_mode == "explore"` AND `not exploration_complete` |
-| `ground` | `act` | `run_mode in {"replay", "ci"}` OR (`explore` AND plan exists AND `current_step > 0`) |
-| `ground` | `report` | `run_mode == "explore"` AND `exploration_complete` |
-| `plan` | `checkpoint` | Plan just frozen (exploration complete at planning layer) |
-| `plan` | `act` | Next action queued; exploration continuing |
-| `plan` | `report` | `exploration_complete` confirmed OR budget exhausted |
+| `ground` | `plan` | Always |
+| `plan` | `act` | `route_plan`: `not exploration_complete` — next action queued in `_pending` |
+| `plan` | `scenario` | `route_plan`: `exploration_complete` |
 | `act` | `verify` | Always |
-| `verify` | `heal` | Outcome is `LOCATOR_STALE` OR `ELEMENT_GONE` OR `TIMING` |
-| `verify` | `checkpoint` | Outcome is `PASS` AND `step.is_milestone == True` |
-| `verify` | `act` | Outcome is `PASS` AND `not is_milestone` AND steps remain |
-| `verify` | `report` | All steps done OR outcome is `UNEXPECTED_ERROR` OR genuine `FAIL` on a critical step |
-| `heal` | `act` | `confidence >= 0.60` AND `heal_attempts < cap` — retry with healed locator |
-| `heal` | `checkpoint` | `confidence < 0.60` — human gate raised |
-| `heal` | `checkpoint` | `heal_attempts >= cap` — quarantine and flush |
-| `heal` | `act` *(next step)* | Heal failed AND `step.is_critical == False` — skip step, continue |
-| `checkpoint` | `heal` | Human gate resolved with `decision == "approve"` and a locator |
-| `checkpoint` | `act` | Human gate resolved with `decision == "skip"` — resume at next step |
-| `checkpoint` | `END` | Human gate resolved with `decision == "abort"` |
-| `checkpoint` | `perceive` | Normal cycle continuation (no gate, no terminal condition) |
-| `checkpoint` | `report` | Terminal condition met: coverage achieved OR budget exhausted OR `stop_signal` |
+| `verify` | `checkpoint` | `route_verify`: `_verify_ok == True` |
+| `verify` | `heal` | `route_verify`: `_verify_ok == False` |
+| `heal` | `checkpoint` | Always (stub node in the explore graph, §3.6) |
+| `checkpoint` | `scenario` | `route_checkpoint`: `exploration_complete` OR `current_step >= max_steps` |
+| `checkpoint` | `takeover` | `route_checkpoint`: `_takeover_armed` (and NOT `exploration_complete`) |
+| `checkpoint` | `perceive` | `route_checkpoint`: otherwise — normal cycle continuation |
+| `takeover` | `checkpoint` | Always (re-polls the orchestrator before continuing) |
+| `scenario` | `report` | Always |
 | `report` | `END` | Always (terminal) |
 
-### 4.2 Conditional Edge Logic — Summary
+### 4.2 Router Functions — Verbatim
 
-Three nodes emit conditional edges driven by `RunState` fields:
+Exactly 4 functions emit conditional edges; none reads `run_mode` (`graph.py:425-445`):
 
-**`ground`** (mode router):
-```
-if run_mode == "explore" and exploration_complete  →  report
-if run_mode == "explore" and not exploration_complete  →  plan
-if run_mode in {"replay", "ci"}  →  act
-if run_mode == "explore" and plan_exists and current_step > 0  →  act
-```
+```python
+def route_plan(state):
+    return "scenario" if state.get("exploration_complete") else "act"
 
-**`verify`** (outcome classifier):
-```
-if outcome in {LOCATOR_STALE, ELEMENT_GONE, TIMING}  →  heal
-if outcome == PASS and is_milestone  →  checkpoint
-if outcome == PASS and not is_milestone and steps_remain  →  act
-else (done | error | critical fail)  →  report
-```
+def route_verify(state):
+    return "checkpoint" if state.get("_verify_ok", True) else "heal"
 
-**`heal`** (confidence gate + attempt cap):
-```
-if confidence >= 0.60 and heal_attempts < cap  →  act          # retry
-if confidence < 0.60  →  checkpoint                            # human gate
-if heal_attempts >= cap  →  checkpoint                         # quarantine
-if heal_failed and not is_critical  →  act (next step)         # skip
-```
+def route_checkpoint(state):
+    if state.get("exploration_complete"):
+        return "scenario"
+    if state.get("_takeover_armed"):
+        return "takeover"
+    return "scenario" if state.get("current_step", 0) >= state.get("max_steps", 40) else "perceive"
 
-**`checkpoint`** (gate resolver + cycle controller):
-```
-if human_gate_pending and decision == "approve"  →  heal
-if human_gate_pending and decision == "skip"  →  act
-if human_gate_pending and decision == "abort"  →  END
-if terminal (coverage | budget | stop_signal)  →  report
-else  →  perceive
+def route_entry(state):
+    return "scenario" if (state.get("site_map") and state.get("messages")) else "perceive"
 ```
 
 ---
@@ -368,112 +420,94 @@ else  →  perceive
 ## 5. ASCII Flow Diagram
 
 ```
-                        ┌─────────┐
-                        │  START  │
-                        └────┬────┘
-                             │
-                             ▼
-                        ┌─────────┐
-              ┌──────── │ perceive│ ◄──────────────────────────────┐
-              │         └────┬────┘                                │
-              │              │ always                              │
-              │              ▼                                     │
-              │         ┌─────────┐                               │
-              │         │  ground │                               │
-              │         └────┬────┘                               │
-              │              │                                     │
-              │    ┌─────────┼──────────────┐                     │
-              │    │         │              │                     │
-              │ (explore     │           (explore                 │
-              │ +complete)   │(replay/ci  +plan+                  │
-              │    │         │ OR explore  step>0)                │
-              │    │         │ +!complete) │                      │
-              │    ▼         ▼             │                      │
-              │ ┌────────┐ ┌──────┐       │                      │
-              │ │ report │ │ plan │       │                      │
-              │ └───┬────┘ └──┬───┘       │                      │
-              │     │        │\           │                      │
-              │     │   frozen │\next     │                      │
-              │     │    plan  │ action   │                      │
-              │     │        ▼  \         │                      │
-              │     │  ┌──────────┐       │                      │
-              │     │  │checkpoint│◄──────┘◄──────────┐          │
-              │     │  └─────┬────┘                   │          │
-              │     │        │ normal cycle            │          │
-              │     │        └────────────────────────►┘          │
-              │     │                                             │
-              │     │       ┌──────────────────────────────────── ┤
-              │     │       │                                     │
-              │     │       ▼                                     │
-              │     │    ┌─────┐                                  │
-              │     │    │ act │                                  │
-              │     │    └──┬──┘                                  │
-              │     │       │ always                              │
-              │     │       ▼                                     │
-              │     │    ┌────────┐                               │
-              │     │    │ verify │                               │
-              │     │    └───┬────┘                               │
-              │     │        │                                     │
-              │     │  ┌─────┼──────────────────┐                │
-              │     │  │     │                  │                │
-              │     │(stale/ │(PASS+         (PASS+             │
-              │     │ gone/  │ milestone)    !milestone          │
-              │     │ timing)│               +steps)            │
-              │     │  │     ▼               │                   │
-              │     │  │  ┌──────────┐       └──► act ──────────►┘
-              │     │  │  │checkpoint│◄───────────────┐
-              │     │  │  └─────┬────┘                │
-              │     │  │        │                      │
-              │     │  │  (human gate decision)        │
-              │     │  │    approve │  skip  │  abort  │
-              │     │  │           │        │    │     │
-              │     │  │           ▼        ▼    ▼     │
-              │     │  │        ┌──────┐   act  END    │
-              │     │  │        │ heal │               │
-              │     │  ▼        └──┬───┘               │
-              │     │ ┌──────┐     │                   │
-              │     │ │ heal │     │ confidence≥0.60   │
-              │     │ └──┬───┘     │ AND attempts<cap  │
-              │     │    │         └──────────────────►┘(act retry)
-              │     │    │
-              │     │    ├── confidence<0.60 ──────────► checkpoint (human gate)
-              │     │    ├── attempts>=cap  ──────────► checkpoint (quarantine)
-              │     │    └── failed+!critical ─────────► act (next step)
-              │     │
-              │     └──────────────────────────────────► END
-              │                                          ▲
-              └──────────────────────────────────────────┘
-                  (explore+complete OR budget OR stop)
+                                  ┌─────────┐
+                          ┌────── │  START  │ ──────┐
+                          │       └─────────┘       │
+                (site_map+messages: warm resume)  (else: cold start)
+                          │                          │
+                          ▼                          ▼
+                    ┌───────────┐              ┌───────────┐
+        ┌─────────► │  scenario │ ◄──────┐     │  perceive │◄────────────┐
+        │           └─────┬─────┘        │     └─────┬─────┘             │
+        │                 │ always       │           │ always            │
+        │                 ▼              │           ▼                   │
+        │           ┌───────────┐        │     ┌───────────┐             │
+        │           │  report   │        │     │   ground  │             │
+        │           └─────┬─────┘        │     └─────┬─────┘             │
+        │                 │ always       │           │ always            │
+        │                 ▼              │           ▼                   │
+        │              ┌─────┐           │     ┌───────────┐             │
+        │              │ END │           │     │   plan    │             │
+        │              └─────┘           │     └─────┬─────┘             │
+        │                                │           │                   │
+        │                    exploration_complete   not exploration_complete
+        │                                │           │                   │
+        └────────────────────────────────┘           ▼                   │
+        ▲                                       ┌───────────┐            │
+        │                                       │    act    │            │
+        │                                       └─────┬─────┘            │
+        │                                             │ always           │
+        │                                             ▼                  │
+        │                                       ┌───────────┐            │
+        │                                       │  verify   │            │
+        │                                       └─────┬─────┘            │
+        │                                _verify_ok │  │ NOT _verify_ok  │
+        │                                    ┌───────┘  └───────┐        │
+        │                                    ▼                  ▼        │
+        │                              ┌───────────┐      ┌───────────┐  │
+        │                    ┌────────►│ checkpoint│      │   heal    │  │
+        │                    │         └─────┬─────┘      │ (STUB)    │  │
+        │                    │               │            └─────┬─────┘  │
+        │            exploration_complete OR │ always (heal→checkpoint)  │
+        │            current_step>=max_steps │◄───────────────────┘      │
+        │                    │               │                           │
+        │                    │      _takeover_armed                      │
+        │                    │               │                           │
+        │                    ▼               ▼                           │
+        └────────────(scenario, above)  ┌───────────┐                    │
+                                         │ takeover  │                    │
+                                         │(interrupt)│                    │
+                                         └─────┬─────┘                    │
+                                               │ always                   │
+                                               └──────────► checkpoint    │
+                                        (else, from checkpoint) ──────────┘
+                                            perceive (normal cycle)
 ```
 
-> Simplified for readability — see Section 4 for the precise conditional rules.
-> `checkpoint → perceive` (normal cycle) is the primary back-edge driving the loop.
+> Simplified rendering of the real edges in `graph.py:454-475` (see the precise table in §4.1).
+> There are no `LOCATOR_STALE`/`ELEMENT_GONE`/`TIMING`/`human gate` branches — none of those exist
+> in the code.
+> `checkpoint → perceive` is the primary back-edge driving the explore loop.
 
 ---
 
 ## 6. LLM Usage Per Node — Quick Reference
 
-| Node | LLM Called | Model | When |
-|---|---|---|---|
-| `perceive` | No | — | — |
-| `ground` | No | — | — |
-| `plan` | Yes | Opus 4.8 (default, temperature 0) | Explore mode only; skipped in replay/ci |
-| `act` | No | — | — |
-| `verify` | Conditional | Sonnet 4.6 (default) | Explore mode only, for soft assertion evaluation |
-| `heal` | Conditional | Sonnet 4.6 (default) | Only after cache + L1–L6 rotation fail; vision also Sonnet |
-| `checkpoint` | No | — | — |
-| `report` | No | — | — |
-
-**Budget defaults** (configurable; enforced in-process with Go-side hard ceiling):
-
-| Budget key | Model | Default |
+| Node | LLM Called | When |
 |---|---|---|
-| `plan_token_limit` | Opus 4.8 (default) | 50,000 tokens / run |
-| `heal_token_limit` | Sonnet 4.6 (default) | 20,000 tokens / run |
+| `perceive` | No | — |
+| `ground` | No | — |
+| `plan` | Conditional | Depends on `planner`: `HeuristicPlanner` is deterministic; an LLM planner/`GoalPlanner`/`DescribePlanner` — yes |
+| `act` | No | — |
+| `verify` | No | One-line pass-through, no LLM call (§3.5) |
+| `heal` | No | Stub in the explore graph (§3.6); real LLM heal only in `run_replay()` (§3.11) |
+| `checkpoint` | No | — |
+| `takeover` | No | — |
+| `scenario` | Conditional | Only if a `scenario_head` is wired (goal/describe) |
+| `report` | No | — |
 
-Exceeding 80% of any budget emits `BUDGET_WARNING`; exhaustion degrades gracefully
-(plan node stops issuing new exploration steps; heal node falls back to L1–L6 rotation only)
-rather than aborting the run.
+**Token budget** (§2.8) — the process-global `brain/budget.py:BudgetTracker`, NOT a `RunState` field:
+
+| Env variable | Default |
+|---|---|
+| `PLAN_TOKEN_LIMIT` | 50,000 tokens / run |
+| `HEAL_TOKEN_LIMIT` | 20,000 tokens / run |
+| `TOTAL_TOKEN_LIMIT` | `0` (off) |
+
+On reaching a limit, `exceeded(role)` returns `True`, and the caller (the planner /
+`HealingEngine._llm_reground`) degrades silently (the planner falls back to the heuristic; heal
+falls back to deterministic strategy rotation only), with no dedicated event —
+**`BUDGET_WARNING` does not exist in the code** (`grep` across the tree — 0 matches).
 
 ---
 
