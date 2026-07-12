@@ -2,7 +2,7 @@
 
 > 🌐 [Русский](COPILOT.md) (authoritative) · **English**
 
-> **ADR-046** · **Date**: 2026-06-29 · **Status**: vision + roadmap (single source of truth)
+> **ADR-046** · **Date**: 2026-07-12 · **Status**: vision + roadmap (M13–M15 delivered; authoritative status — `../ARCHITECTURE.md` §6 + `../BACKLOG.md`)
 
 This document reconciles Sentinel's **full co-pilot vision** with the **actual state** and the **wave plan**
 (mine + contributor @0xCoDSnet). It resolves the accumulated "expectation ↔ reality" desync (multi-turn chat,
@@ -59,7 +59,7 @@ context + correction). **Status: multi-turn ✅ DONE** (M9.10, ADR-048) — **R2
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** partial ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy adapter not-built** |
 | Security module (XSS/CSRF/IDOR…, authz-gated) | M10/GAP-M9-11 | ❌ design-only |
-| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 🚧 **M13 in progress** (persistence, SQLite-first, waves 1-6 on branch; Postgres/service → M13-service); M14/M15 📋 planned |
+| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | ✅ **all delivered**: M13 5-domain store-gateway SQLite-first (#64, Postgres/service → M13-service); M14 rich AG-UI + Settings\|Tests (#66) + tails `run.finished` (#86) and replay-AG-UI/auto-HITL signal (#87); M15 metrics-in-UI (#70) + M15.1 token-cost (#72) |
 | Accuracy (Langfuse/DSPy) | roadmap | ❌ not-built (after user tests) |
 
 ## 4. Agreements (principles)
