@@ -461,7 +461,7 @@ iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1
   `install.ps1` — в `%LOCALAPPDATA%\Programs\sentinel` (**без admin**); оба проверяют `$PATH`;
 - post-install `agentctl --version` (sanity) + указатель на setup-WebUI и `docs/QUICKSTART.md`; опц. качает `docker-compose.yml`.
 
-**Homebrew (macOS/Linux):** репозиторий — собственный tap; `Formula/sentinel.rb` генерируется на каждый `v*`-тег
+**Homebrew (macOS):** репозиторий — собственный tap; `Formula/sentinel.rb` генерируется на каждый `v*`-тег
 (`scripts/gen-brew-formula.sh` в `release.yml`):
 ```bash
 brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel

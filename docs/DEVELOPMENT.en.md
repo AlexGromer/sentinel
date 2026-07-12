@@ -38,7 +38,7 @@ go build -o bin/orchestrator ./cmd/orchestrator       # M8: gRPC RunControl supe
 go build -o bin/report-service ./cmd/report-service   # M8: HTTP report/metrics server (long-lived mode)
 
 # Python — brain (LangGraph)
-cd brain && uv sync --frozen && cd ..      # reproducible install from brain/uv.lock (13 locked deps; matches the Dockerfile)
+cd brain && UV_PROJECT_ENVIRONMENT=../.venv uv sync --frozen && cd ..   # 13 locked deps from brain/uv.lock; UV_PROJECT_ENVIRONMENT puts the venv at repo-root ./.venv (where agentctl looks), like the Dockerfile's UV_PROJECT_ENVIRONMENT=/app/.venv
 ```
 `agentctl` auto-uses `./.venv/bin/python` to run the brain (override with `BRAIN_PYTHON`).
 
