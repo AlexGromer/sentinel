@@ -4,12 +4,16 @@
 
 Производный документ синтеза дизайна от 2026-06-23; канонический итог в ../ARCHITECTURE.md.
 
-> **Статус доставки (на 2026-07-04):** M0–M8 (+ M2b/M4b) — ✅ доставлено; **M9** — дизайн заморожен
+> **Статус доставки (на 2026-07-12):** M0–M8 (+ M2b/M4b) — ✅ доставлено; **M9** — дизайн заморожен
 > (Proposed, ADR-022..025); **M9.1–M9.6** ✅ offline (ADR-026/027/028/032/036/037); **M9.9=R1** replay-in-UI
-> (ADR-047), **M9.10=R2** multi-turn (ADR-048), **M9.8-R3** co-pilot takeover (ADR-054) — ✅; **M11.3/11.6/6b**
-> dist+Pages+калькуляторы · **M12** OpenAI-shim+единая консоль (ADR-041) · **M13** 5-domain store-gateway
-> SQLite-first (ADR-049/050) — ✅. **Далее:** M14 (rich AG-UI + Settings|Tests) → M15 (metrics). Детальные
-> секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
+> (ADR-047), **M9.10=R2** multi-turn (ADR-048), **M9.8-R3** co-pilot takeover (ADR-054) — ✅; **M12** OpenAI-shim+единая
+> консоль (ADR-041) · **M13** 5-domain store-gateway SQLite-first (ADR-049/050) · **M14** rich AG-UI + Settings|Tests
+> (ADR-052/055) + хвосты `run.finished` (#86) и replay-AG-UI/auto-HITL-сигнал (#87) · **M15** metrics-in-UI (ADR-051) +
+> **M15.1** token-cost · **M-STRUCTURED-OUT** strict json_schema (ADR-057) · **M11.1/11.3/11.4/11.5/11.6/6b/M11-DIST**
+> release-pipeline+air-gap+installer+wizard+config-домен (ADR-030/035/059..062) · **M9-LIVE-prep** (исполнимый live-план +
+> редактирующий коллектор) — всё ✅. **Далее:** M9-LIVE [локальная LLM] → M9.7 (auth/deploy-адаптеры) → M10 (security) →
+> Langfuse/DSPy + Pages-final. Хвосты M11.1/11.4 (реальный подписанный релиз/bundle) — maintainer-gated на первом `v*`-теге.
+> Детальные секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
 > `../BACKLOG.md`.
 
 ---

@@ -30,7 +30,7 @@
 | **M9.1 — Form/Login/Validation primitives** | ✅ готово (offline) — pw-executor `fill`/`type`/`press`/`select` + storageState-auth (login-as-test) + assert/негативный слой, ADR-026 |
 | **M9.2a — GoalPlanner (NL→plan)** | ✅ готово (offline) — goal-directed планировщик с `grounding` (выбор только из реальных элементов карты — не галлюцинирует селекторы) + `--goal` авто-режим + минимальный RunConfig YAML, ADR-027 |
 | **M9.2b — Two-phase + describe-first** | ✅ готово (offline) — полный explore→карта сайта→one-shot сценарий по цели/описанию (кросс-страничный, привязан к реальным элементам); `--describe` + богатый RunConfig (auth/scenarios), ADR-028 |
-| **M9.3 — Control-API (non-MCP)** | ✅ готово (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); чат-фронт + CI-шаблоны — остаток (GAP-M9-03), ADR-023/032 |
+| **M9.3 — Control-API (non-MCP)** | ✅ готово (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); чат-фронт (`docs/chat/`) + CI-шаблоны (`docs/ci-templates/`) — ✅ (M9.3-tail, GAP-M9-03 закрыт), ADR-023/032/040 |
 | **M9.4 + M9.5 — Tabs + backend correlation** | ✅ готово (offline, Wave A) — in-app вкладки (`[role=tab]`) + браузерные вкладки (multi-page) + `traceparent`-инъекция в запросы, ADR-022/024 |
 | **M9.6 — Browser modes** | ✅ готово (offline, Wave D) — headed + CDP-attach (env-тумблер `PW_HEADLESS=0` / `PW_CDP_ENDPOINT`); **Chromium-only by design**, ADR-036/037 |
 | **M9.7 — Pluggable adapters** | 🔶 частично — model/backend через LiteLLM-роутер (ADR-045); остаток — auth/deploy-адаптеры (GAP-M9-08) |
@@ -52,7 +52,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — мозг: state machine на LangGraph + логика планирования и healing.
 - **TypeScript** — `pw-executor`: наш собственный Playwright-сервер (мы **строим** его сами, а не берём готовый продукт — см. ADR-001).
 
-Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (54 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Полный дизайн: [`ARCHITECTURE.md`](ARCHITECTURE.md) (62 ADR) · детальные разборы в [`docs/`](docs/) · история проектных решений в [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Режимы браузера (M9.6):** по умолчанию own-headless; `PW_HEADLESS=0` — headed (видимый), `PW_CDP_ENDPOINT` — CDP-attach к существующему Chrome пользователя. Движок — **только Chromium by design** (ADR-036); детерминированный голден-replay — только в headless (см. [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 

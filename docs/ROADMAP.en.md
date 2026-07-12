@@ -4,12 +4,16 @@
 
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
 
-> **Delivery status (as of 2026-07-04):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
+> **Delivery status (as of 2026-07-12):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
 > (Proposed, ADR-022..025); **M9.1–M9.6** ✅ offline (ADR-026/027/028/032/036/037); **M9.9=R1** replay-in-UI
-> (ADR-047), **M9.10=R2** multi-turn (ADR-048), **M9.8-R3** co-pilot takeover (ADR-054) — ✅; **M11.3/11.6/6b**
-> dist+Pages+calculators · **M12** OpenAI-shim+unified console (ADR-041) · **M13** 5-domain store-gateway
-> SQLite-first (ADR-049/050) — ✅. **Next:** M14 (rich AG-UI + Settings|Tests) → M15 (metrics). The
-> detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
+> (ADR-047), **M9.10=R2** multi-turn (ADR-048), **M9.8-R3** co-pilot takeover (ADR-054) — ✅; **M12** OpenAI-shim+unified
+> console (ADR-041) · **M13** 5-domain store-gateway SQLite-first (ADR-049/050) · **M14** rich AG-UI + Settings|Tests
+> (ADR-052/055) + tails `run.finished` (#86) and replay-AG-UI/auto-HITL signal (#87) · **M15** metrics-in-UI (ADR-051) +
+> **M15.1** token-cost · **M-STRUCTURED-OUT** strict json_schema (ADR-057) · **M11.1/11.3/11.4/11.5/11.6/6b/M11-DIST**
+> release-pipeline+air-gap+installer+wizard+config-domain (ADR-030/035/059..062) · **M9-LIVE-prep** (executable live plan +
+> redacting collector) — all ✅. **Next:** M9-LIVE [local LLM] → M9.7 (auth/deploy adapters) → M10 (security) →
+> Langfuse/DSPy + Pages-final. M11.1/11.4 tails (a real signed release/bundle) are maintainer-gated on the first `v*` tag.
+> The detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
 > `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 
 ---

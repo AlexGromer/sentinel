@@ -30,7 +30,7 @@ Russian is the primary, authoritative documentation; English copies live in `*.e
 | **M9.1 — Form/Login/Validation primitives** | ✅ done (offline) — pw-executor `fill`/`type`/`press`/`select` + storageState auth (login-as-test) + assert/negative layer, ADR-026 |
 | **M9.2a — GoalPlanner (NL→plan)** | ✅ done (offline) — a goal-directed grounded planner (explore-first, never hallucinates selectors) + `--goal` auto-mode + a minimal RunConfig YAML, ADR-027 |
 | **M9.2b — Two-phase + describe-first** | ✅ done (offline) — full explore→site map→one-shot scenario from a goal/description (cross-page, grounded in real elements); `--describe` + a rich RunConfig (auth/scenarios), ADR-028 |
-| **M9.3 — Control-API (non-MCP)** | ✅ done (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); chat front + CI templates remain (GAP-M9-03), ADR-023/032 |
+| **M9.3 — Control-API (non-MCP)** | ✅ done (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); chat front (`docs/chat/`) + CI templates (`docs/ci-templates/`) — ✅ (M9.3-tail, GAP-M9-03 closed), ADR-023/032/040 |
 | **M9.4 + M9.5 — Tabs + backend correlation** | ✅ done (offline, Wave A) — in-app tabs (`[role=tab]`) + browser tabs (multi-page) + `traceparent` injection into requests, ADR-022/024 |
 | **M9.6 — Browser modes** | ✅ done (offline, Wave D) — headed + CDP-attach (env toggle `PW_HEADLESS=0` / `PW_CDP_ENDPOINT`); **Chromium-only by design**, ADR-036/037 |
 | **M9.7 — Pluggable adapters** | 🔶 partial — model/backend via the LiteLLM router (ADR-045); auth/deploy adapters remain (GAP-M9-08) |
@@ -52,7 +52,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (54 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (62 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Browser modes (M9.6):** own-headless by default; `PW_HEADLESS=0` — headed (visible), `PW_CDP_ENDPOINT` — CDP-attach to the user's existing Chrome. The engine is **Chromium-only by design** (ADR-036); deterministic golden replay is headless-only (see [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 
