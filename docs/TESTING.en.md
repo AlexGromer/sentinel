@@ -20,7 +20,8 @@ go vet ./...
 go test ./...
 ```
 
-`go test ./...` — unit tests for the control plane (agentctl, store-gateway). Expected result:
+`go test ./...` — unit tests for ALL Go components (agentctl, control-api, orchestrator,
+report-service, store-gateway, internal/*). Expected result:
 every package prints `ok` or `--- PASS`; a non-zero exit code is a blocker.
 
 ### 1.2 Python: offline suite (full regression M3–M9)
@@ -28,7 +29,7 @@ every package prints `ok` or `--- PASS`; a non-zero exit code is a blocker.
 Run all offline tests with a single command:
 
 ```bash
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do
     .venv/bin/python tests/test_${t}_offline.py
 done
 ```
@@ -47,6 +48,11 @@ Or individually — for fast isolation:
 .venv/bin/python tests/test_m9_2_offline.py # GoalPlanner grounding, OOB→done, RunConfig precedence
 .venv/bin/python tests/test_m9_2b_offline.py # two-phase goal/describe, reconcile, rich RunConfig
 ```
+
+The list above is a representative sample (one example per M-stage); the remaining modules
+in the loop (`r2_multiturn`, `r3_takeover`, `determinism`, `record_bridge`, `sanitize`, `m13_chats`,
+`m14_agui`, `m14_replay_agui`, `m_structured_out`, `m11_4`) run with the same pattern
+(`.venv/bin/python tests/test_<module>_offline.py`) — see the full list in the `for` loop above.
 
 Each file prints `PASS <test_name>` for every test and `ALL PASS (N)` at the end.
 A non-zero exit code or the string `FAIL` in stdout is a blocker.
@@ -91,11 +97,15 @@ npm audit
 cd ..
 ```
 
-`govulncheck` is installed once: `go install golang.org/x/vuln/cmd/govulncheck@latest`.
+`govulncheck` is installed once: `go install golang.org/x/vuln/cmd/govulncheck@latest` (locally;
+in CI the version is pinned — `@v1.1.4` — for scanner reproducibility).
 `pip-audit` is installed in the venv: `uv pip install pip-audit` or `pip install pip-audit`.
 
-In CI: a non-zero exit code from any of the three scanners requires review (CRITICAL/HIGH — blocker;
-MODERATE/LOW — context-dependent decision).
+In CI (#8): only **deterministic** gates run on push/PR — `gitleaks` (job `security`,
+HARD) + `pip-audit` (advisory). Scanners against **live advisory DBs** (`govulncheck` + `npm audit`)
+are moved to a separate scheduled workflow `.github/workflows/security-nightly.yml` (daily +
+`workflow_dispatch`): a red nightly run can reflect a fresh upstream CVE rather than a PR regression.
+A non-zero exit code from any scanner requires review (CRITICAL/HIGH — blocker; MODERATE/LOW — context-dependent).
 
 ---
 
@@ -113,6 +123,7 @@ The model is selected **exclusively via env** — no code changes needed.
 | `LLM_BASE_URL` | yes | `LLM_BASE_URL_PLANNER` / `LLM_BASE_URL_HEAL` | — (Anthropic SDK default) |
 | `LLM_API_KEY` | yes | `LLM_API_KEY_PLANNER` / `LLM_API_KEY_HEAL` | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 | `LLM_VISION` | yes | `LLM_VISION_HEAL` | provider-default (Anthropic = enabled) |
+| `LLM_STRUCTURED` | yes | `LLM_STRUCTURED_PLANNER` / `LLM_STRUCTURED_HEAL` | provider-default (Anthropic = enabled; OpenAI-compat = disabled, opt-in, ADR-057) |
 
 **Precedence:** `LLM_<KEY>_<ROLE>` > `LLM_<KEY>` > built-in default.
 Roles: `PLANNER` (explore/scenario phase), `HEAL` (heal + vision Tier-7).
@@ -166,7 +177,7 @@ The heal role in this case remains on Anthropic (`ANTHROPIC_API_KEY`) or falls b
 if no key is set.
 
 > Catalog of tested models by role (context, throughput, vision compatibility):
-> `docs/LOCAL_MODELS.md` — file will be added in the documentation cycle after M9.
+> [`docs/LOCAL_MODELS.md`](LOCAL_MODELS.en.md).
 
 ---
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -365,6 +366,91 @@ func TestStreamTakeoverReturnForwardsToOrchestrator(t *testing.T) {
 	}
 }
 
+// --- R3-hardening (M13): Origin fail-closed on a public bind + recorder session-resume ---
+
+func TestStreamPublicBindRejectsOriginWithoutAllowlist(t *testing.T) {
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: true, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public bind + no allowlist + Origin: got %d want 403 (fail-closed)", rec.Code)
+	}
+}
+
+func TestStreamLocalBindPermitsOriginWithoutAllowlist(t *testing.T) {
+	// Local bind (publicBind=false) + empty allowlist: the Origin passes the CSWSH gate, so the request
+	// reaches the hijack — which a ResponseRecorder can't satisfy → 500 streaming-unsupported. A non-403
+	// proves the Origin was NOT rejected (dev-permissive, still bearer-gated).
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: false, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code == http.StatusForbidden {
+		t.Fatal("local bind must not reject an Origin without an allowlist")
+	}
+}
+
+func TestStreamBadSessionRejected(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.URL.RawQuery = "session=../../etc/passwd"
+	newTestServer().mux().ServeHTTP(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("path-traversal session id: got %d want 400", rec.Code)
+	}
+}
+
+func TestStreamSessionResumeAppendsToSameDir(t *testing.T) {
+	s, repo := newRunServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+	host := strings.TrimPrefix(ts.URL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	const sess = "resume-abc123"
+	req := "GET /v1/stream?session=" + sess + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\n" +
+		"Connection: Upgrade\r\nSec-WebSocket-Key: " + rfcSampleKey + "\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: sentinel.recorder.v1, bearer.secret-tok\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	for { // drain handshake headers
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			break
+		}
+	}
+	_, payload, err := readServerFrame(br) // greeting must carry the RESUMED session id
+	if err != nil {
+		t.Fatal(err)
+	}
+	var greet map[string]string
+	if err := json.Unmarshal(payload, &greet); err != nil || greet["session"] != sess {
+		t.Fatalf("greeting session = %v want %q", greet, sess)
+	}
+	event := `{"type":"click","selector":"#x"}`
+	_, _ = conn.Write(wsClientFrame(wsOpText, []byte(event)))
+	_, _, _ = readServerFrame(br) // ack
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+
+	data, err := os.ReadFile(filepath.Join(repo, "runs", "record-"+sess, "events.ndjson"))
+	if err != nil || !strings.Contains(string(data), event) {
+		t.Fatalf("event not appended to the resumed session dir record-%s: %v", sess, err)
+	}
+}
+
 func TestStreamTakeoverMissingRunID(t *testing.T) {
 	s, _ := newRunServer(t)
 	fake, target := startFakeOrch(t)
@@ -429,5 +515,358 @@ func TestStreamRecorderEventTypedReturnPersists(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("recorder event typed %q was swallowed, not persisted to events.ndjson", event)
+	}
+}
+
+// --- M14 W2: ?run_id= server→client AG-UI event subscription ---------------------------------------
+
+// wsDialRunID opens a /v1/stream?run_id=<id> socket and completes the handshake, leaving the reader
+// positioned right after the HTTP headers — the caller reads the first frame (subscribed or error).
+func wsDialRunID(t *testing.T, ts *httptest.Server, runID string) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	host := strings.TrimPrefix(ts.URL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := "GET /v1/stream?run_id=" + runID + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\n" +
+		"Connection: Upgrade\r\nSec-WebSocket-Key: " + rfcSampleKey + "\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Protocol: sentinel.recorder.v1, bearer.secret-tok\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	for { // drain status line + handshake headers
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			break
+		}
+	}
+	return conn, br
+}
+
+func TestStreamRunEventsPushesAGUIVerbatim(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := &run{ID: "runX", State: "running", stream: newRunStream()}
+	s.mu.Lock()
+	s.runs["runX"] = rec
+	s.mu.Unlock()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, "runX")
+	defer conn.Close()
+
+	op, payload, err := readServerFrame(br) // subscribed ack
+	if err != nil || op != wsOpText {
+		t.Fatalf("subscribed ack op=%d err=%v", op, err)
+	}
+	var ack map[string]string
+	if err := json.Unmarshal(payload, &ack); err != nil || ack["type"] != "subscribed" || ack["run_id"] != "runX" {
+		t.Fatalf("subscribed ack = %v (err=%v)", ack, err)
+	}
+
+	// M9.8 F4 hitl_needed passthrough: brain (M14 W4) emits a pre-formed AG-UI JSON envelope; it must
+	// reach the subscriber byte-for-byte, not re-wrapped as a log line.
+	agui := `{"type":"hitl_needed","run_id":"runX","data":{"reason":"captcha"}}`
+	rec.stream.append(wsAGUIPrefix + agui)
+
+	op, payload, err = readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("agui event op=%d err=%v", op, err)
+	}
+	if string(payload) != agui {
+		t.Fatalf("agui event forwarded = %q, want verbatim %q", payload, agui)
+	}
+
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+}
+
+func TestStreamRunEventsWrapsPlainLineAsLog(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := &run{ID: "runX", State: "running", stream: newRunStream()}
+	s.mu.Lock()
+	s.runs["runX"] = rec
+	s.mu.Unlock()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, "runX")
+	defer conn.Close()
+
+	if _, _, err := readServerFrame(br); err != nil { // subscribed ack
+		t.Fatalf("subscribed ack: %v", err)
+	}
+
+	rec.stream.append("plain stdout line")
+
+	op, payload, err := readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("log event op=%d err=%v", op, err)
+	}
+	var logEvt map[string]any
+	if err := json.Unmarshal(payload, &logEvt); err != nil || logEvt["type"] != "log" || logEvt["run_id"] != "runX" {
+		t.Fatalf("log event = %v (err=%v)", logEvt, err)
+	}
+	data, _ := logEvt["data"].(map[string]any)
+	if data["line"] != "plain stdout line" {
+		t.Fatalf("log event data.line = %v, want %q", data, "plain stdout line")
+	}
+
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+}
+
+// Regression: a recorder-style line that merely STARTS WITH the "@@AGUI " marker but isn't well-formed
+// JSON (a spoofed prefix) must fall back to a log envelope carrying the ORIGINAL line, not be dropped
+// or forwarded as a bogus verbatim frame.
+func TestStreamRunEventsMalformedAGUIFallsBackToLog(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := &run{ID: "runZ", State: "running", stream: newRunStream()}
+	s.mu.Lock()
+	s.runs["runZ"] = rec
+	s.mu.Unlock()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, "runZ")
+	defer conn.Close()
+
+	if _, _, err := readServerFrame(br); err != nil { // subscribed ack
+		t.Fatalf("subscribed ack: %v", err)
+	}
+
+	spoofed := wsAGUIPrefix + "not-actually-json (a recorder line that happens to start with the marker)"
+	rec.stream.append(spoofed)
+
+	op, payload, err := readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("fallback log op=%d err=%v", op, err)
+	}
+	var logEvt map[string]any
+	if err := json.Unmarshal(payload, &logEvt); err != nil || logEvt["type"] != "log" {
+		t.Fatalf("malformed @@AGUI must fall back to a log event, got %v (err=%v)", logEvt, err)
+	}
+	data, _ := logEvt["data"].(map[string]any)
+	if data["line"] != spoofed {
+		t.Fatalf("log fallback must carry the ORIGINAL line, got %v want %q", data, spoofed)
+	}
+
+	_, _ = conn.Write(wsClientFrame(wsOpClose, nil))
+	_, _, _ = readServerFrame(br)
+}
+
+func TestStreamRunEventsUnknownRunIDClosesGracefully(t *testing.T) {
+	s := newTestServer() // runs map is empty — "no-such-run" can't exist
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, "no-such-run")
+	defer conn.Close()
+
+	op, payload, err := readServerFrame(br)
+	if err != nil || op != wsOpText {
+		t.Fatalf("error frame op=%d err=%v", op, err)
+	}
+	var errFrame map[string]string
+	if err := json.Unmarshal(payload, &errFrame); err != nil || errFrame["type"] != "error" || errFrame["run_id"] != "no-such-run" {
+		t.Fatalf("error frame = %v (err=%v)", errFrame, err)
+	}
+	op, _, err = readServerFrame(br)
+	if err != nil || op != wsOpClose {
+		t.Fatalf("close frame op=%d err=%v", op, err)
+	}
+}
+
+// TestStreamRunEventsWriteMutexRace exercises the two goroutines that write to the SAME socket
+// concurrently — the read loop (replying pong to client pings) and the event pusher (forwarding
+// appended runStream lines) — under `go test -race`. Without wc's write mutex this corrupts the
+// frame stream (interleaved header/payload bytes); with it, every frame the reader parses is well-formed.
+func TestStreamRunEventsWriteMutexRace(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := &run{ID: "runY", State: "running", stream: newRunStream()}
+	s.mu.Lock()
+	s.runs["runY"] = rec
+	s.mu.Unlock()
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, "runY")
+	defer conn.Close()
+
+	if _, _, err := readServerFrame(br); err != nil { // subscribed ack
+		t.Fatalf("subscribed ack: %v", err)
+	}
+
+	var mu sync.Mutex
+	received := 0
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			if _, _, err := readServerFrame(br); err != nil {
+				return
+			}
+			mu.Lock()
+			received++
+			mu.Unlock()
+		}
+	}()
+
+	const n = 150
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // read-loop goroutine writes: a pong per client ping
+		defer wg.Done()
+		for i := 0; i < n; i++ {
+			if _, err := conn.Write(wsClientFrame(wsOpPing, nil)); err != nil {
+				return
+			}
+		}
+	}()
+	go func() { // pusher goroutine writes: an event per appended line
+		defer wg.Done()
+		for i := 0; i < n; i++ {
+			rec.stream.append("line")
+		}
+	}()
+	wg.Wait()
+
+	for i := 0; i < 200; i++ { // poll briefly for both write paths to drain, rather than a fixed sleep
+		mu.Lock()
+		got := received
+		mu.Unlock()
+		if got >= n {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = conn.Close()
+	<-readerDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	if received == 0 {
+		t.Fatal("received no frames from concurrent pong/pusher writers (race test exercised nothing)")
+	}
+}
+
+// readUntilType reads server frames until it finds an AG-UI envelope with the given type, or fails.
+// The subscribed-snapshot replays every buffered runStream line as a frame, so run.finished arrives
+// after the run's stdout log frames.
+func readUntilType(t *testing.T, br *bufio.Reader, want string) map[string]any {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		op, payload, err := readServerFrame(br)
+		if err != nil {
+			t.Fatalf("reading frames for %q: %v", want, err)
+		}
+		if op != wsOpText {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal(payload, &ev) == nil && ev["type"] == want {
+			return ev
+		}
+	}
+	t.Fatalf("did not see a %q frame within 50 frames", want)
+	return nil
+}
+
+// M14 tail 1: a WS subscriber must receive a TYPED run.finished event carrying the real exit_code,
+// injected by the control-API's finish goroutine (the one AG-UI event the brain cannot emit). Driven
+// end-to-end through spawnRun's real finish path (fake agentctl exits 1).
+func TestRunFinishedEmittedOverWS(t *testing.T) {
+	s, _ := newRunServer(t) // fake agentctl: echoes two lines, exit 1
+	id := createRunAndWait(t, s)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, payload, err := readServerFrame(br); err != nil || op != wsOpText || !strings.Contains(string(payload), `"subscribed"`) {
+		t.Fatalf("subscribed ack op=%d err=%v payload=%s", op, err, payload)
+	}
+
+	ev := readUntilType(t, br, "run.finished")
+	if ev["run_id"] != id {
+		t.Errorf("run.finished run_id = %v, want %s", ev["run_id"], id)
+	}
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(1) {
+		t.Fatalf("run.finished data = %v, want exit_code 1", ev["data"])
+	}
+	if data["state"] != "done" { // state disambiguates exit_code:-1 (signal-kill vs failed-spawn)
+		t.Errorf("run.finished state = %v, want done", data["state"])
+	}
+	if ev["ts"] == nil || ev["ts"] == "" {
+		t.Errorf("run.finished must carry a ts, got %v", ev["ts"])
+	}
+	if _, hasSeq := ev["seq"]; hasSeq {
+		t.Errorf("control-API-injected run.finished must omit seq (separate un-ordered space), got %v", ev["seq"])
+	}
+}
+
+// A run that FAILS TO SPAWN (agentctl missing) never sets an exit code; run.finished must carry the
+// sentinel -1 so the UI does not read the zero value as a clean exit 0.
+func TestRunFinishedFailedSpawnSentinel(t *testing.T) {
+	s := &server{
+		repo:      t.TempDir(),
+		agentctl:  "/nonexistent/agentctl-does-not-exist",
+		token:     "secret-tok",
+		corsAllow: map[string]bool{},
+		runs:      map[string]*run{},
+	}
+	id := createRunAndWait(t, s)
+	s.mu.RLock()
+	st := s.runs[id].State
+	s.mu.RUnlock()
+	if st != "failed" {
+		t.Fatalf("run state = %q, want failed (spawn should fail)", st)
+	}
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, _, err := readServerFrame(br); err != nil || op != wsOpText {
+		t.Fatalf("subscribed ack op=%d err=%v", op, err)
+	}
+	ev := readUntilType(t, br, "run.finished")
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(-1) {
+		t.Fatalf("failed-spawn run.finished data = %v, want exit_code -1", ev["data"])
+	}
+	if data["state"] != "failed" { // the disambiguator: exit_code -1 + state failed = spawn error
+		t.Errorf("failed-spawn run.finished state = %v, want failed", data["state"])
+	}
+}
+
+// A run whose process is KILLED BY A SIGNAL yields ExitError.ExitCode()==-1 with State=="done" — the
+// same exit_code as a failed spawn. The `state` field disambiguates them (a signal-kill is state=done).
+func TestRunFinishedSignalKillCarriesDoneState(t *testing.T) {
+	s, _ := newRunServerWithScript(t, "#!/bin/sh\necho 'starting'\nkill -9 $$\n")
+	id := createRunAndWait(t, s)
+	s.mu.RLock()
+	st, code := s.runs[id].State, s.runs[id].ExitCode
+	s.mu.RUnlock()
+	if st != "done" || code != -1 {
+		t.Fatalf("signal-killed run: state=%q exit=%d, want done/-1", st, code)
+	}
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+	conn, br := wsDialRunID(t, ts, id)
+	defer conn.Close()
+	if op, _, err := readServerFrame(br); err != nil || op != wsOpText {
+		t.Fatalf("subscribed ack op=%d err=%v", op, err)
+	}
+	ev := readUntilType(t, br, "run.finished")
+	data, _ := ev["data"].(map[string]any)
+	if data == nil || data["exit_code"] != float64(-1) || data["state"] != "done" {
+		t.Fatalf("signal-kill run.finished data = %v, want exit_code -1 + state done (distinct from failed-spawn)", ev["data"])
 	}
 }

@@ -2,7 +2,7 @@
 
 > 🌐 **Русский** (основная версия) · [English](COPILOT.en.md)
 
-> **ADR-046** · **Дата**: 2026-06-29 · **Статус**: видение + roadmap (единый источник правды)
+> **ADR-046** · **Дата**: 2026-07-12 · **Статус**: видение + roadmap (M13–M15 доставлены; авторитетный статус — `../ARCHITECTURE.md` §6 + `../BACKLOG.md`)
 
 Этот документ сводит **полное co-pilot-видение** Sentinel с **фактическим состоянием** и **планом по волнам**
 (мои + контрибьютора @0xCoDSnet). Он разрешает накопившийся рассинхрон «ожидание ↔ реализация»
@@ -23,7 +23,7 @@
 | **Multi-turn диалог + коррекция** | контекст между сообщениями, правка по ходу | **✅ DONE** — R2a backend (checkpointer-resume) + R2b UI (vanilla, ADR-048); live=M9-LIVE |
 | **Co-pilot takeover/return (F4)** | агент ↔ человек на одной живой сессии | MV3-расширение + `chrome.debugger` (0xCoDSnet) + brain interrupt/resume (R3) |
 | **MV3-рекордер** | запись действий человека → сценарий | MV3 content-script → `/v1/stream` → `reconcile` (0xCoDSnet) |
-| **Rich-фронт (опц.)** | стриминг/HITL/generative-UI | AG-UI/CopilotKit `frontend/` (dev) — **vanilla `docs/*` остаётся первичным, air-gapped** |
+| **Rich AG-UI co-pilot** | стриминг/HITL/generative-UI/timeline | **in-house vanilla** в `docs/*` (M14, ADR-055) — суверенный единый UI, air-gapped; CopilotKit `frontend/` заморожен (deprecated) |
 
 ## 2. Две оси эволюции
 
@@ -53,19 +53,19 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ⚙️ extension-side ✅ (`extension/`, #47: `chrome.debugger` attach/return, баннер); brain interrupt/resume = R3 |
 | WS-транспорт client→server (`/v1/stream`) | M9.8-prep/ADR-043 | ✅ DONE |
 | SSE server→client + artifact-fetch | M9.3-tail/ADR-040 | ✅ DONE |
-| AG-UI/CopilotKit rich-фронт | M9.8-prep/ADR-044 | 🧪 scaffold (`frontend/`, dev-only, не air-gapped, не в CI) |
-| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ✅ DONE (`extension/`, #42-46: рекордер+redaction, SW-WS, панель, record→scenario; dev-only). Live-replay = M9-LIVE |
+| Rich AG-UI co-pilot (vanilla) | **M14/ADR-055** | ✅ in-house в `docs/index.html` (Settings\|Tests · library/promote · live AG-UI-timeline · auto-HITL-баннер); CopilotKit `frontend/` заморожен (reference) |
+| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ✅ DONE (`extension/`, #42-47: рекордер+redaction, SW-WS, DevTools-панель, record→scenario, takeover/return CDP; dev-only, не в CI). Live record→replay = M9-LIVE |
 | LiteLLM opt-router · MCP-Inspector | ADR-045 | ✅ DONE (config/docs) |
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** частично ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy-адаптер not-built** |
 | Security-модуль (XSS/CSRF/IDOR…, authz-gated) | M10/GAP-M9-11 | ❌ design-only |
-| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | 📋 planned (docs-frozen; после R3) |
+| **Rich-UI + persistence + metrics-in-UI** (two-tier service) | M13-15 / ADR-049..053 | ✅ **все доставлены**: M13 5-domain store-gateway SQLite-first (#64, Postgres/service→M13-service); M14 rich AG-UI + Settings\|Tests (#66) + хвосты `run.finished` (#86) и replay-AG-UI/auto-HITL-сигнал (#87); M15 metrics-in-UI (#70) + M15.1 token-cost (#72) |
 | Точность (Langfuse/DSPy) | roadmap | ❌ not-built (после user-тестов) |
 
 ## 4. Договорённости (принципы)
 
 1. **In-tool-first.** Запуск/перепрогон/baseline **внутри инструмента** — первичны. CI-экспорт (Jenkins/GitLab — `docs/ci-templates/`, уже есть) — вторичен/бонус.
-2. **Vanilla `docs/*` = первичный UI** (air-gapped, zero-build, `file://`-safe). **AG-UI `frontend/` = dev rich-front** (не air-gapped, не в CI) — параллельная опция, не замена. **Эволюция (эпик M13-15, ADR-049..053):** профили = топология-не-фичи (оба full + air-gapped); AG-UI → **полноценный rich-фронт** (M14) поверх R3-WS в ОБОИХ профилях; vanilla `docs/*` = air-gapped-вариант того же набора; метрики **self-contained** (ADR-051).
+2. **Vanilla `docs/*` = ЕДИНСТВЕННЫЙ суверенный UI** (air-gapped, zero-build, `file://`-safe). **CopilotKit `frontend/` — deprecated (ADR-055), заморожен как reference** (npm/build/Node = не air-gapped → не путь поставки; убирает GAP-SEC-002). **Эволюция (эпик M13-15, ADR-049..053; уточнено ADR-055):** rich AG-UI co-pilot пишем САМИ на vanilla поверх R3-WS (`@@AGUI`-события, M14) — не через kit; профили = топология-не-фичи; метрики **self-contained** (ADR-051, M15).
 3. **Open WebUI = совместимый клиент** OpenAI-compat-шима (опц., сам поднимаешь), **НЕ co-pilot**. Перехват/co-pilot даёт **расширение (`chrome.debugger`) + brain**, не чат-UI.
 4. **Multi-turn — ✅ DONE** (M9.10, ADR-048): R2a backend (checkpointer-resume) + R2b UI (vanilla); offline-verified, live=M9-LIVE.
 5. **F4 — совместная веха:** расширение/CDP/panel — @0xCoDSnet (#47); brain interrupt/resume + WS-сигналы — мои (R3).

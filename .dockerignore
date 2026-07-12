@@ -12,8 +12,13 @@ deploy
 docs/**
 !docs/setup/**
 !docs/calculators/**
+!docs/index.html
 !docs/index.md
 !docs/_config.yml
 !docs/LOCAL_MODELS.md
+# data files the bundled pages fetch at runtime: the setup wizard's runtime presets (M11.5 PR-4) and the
+# hub's live-pricing seeds. Without these the `webui` profile serves pages whose fetch() 404s.
+!docs/backend-presets.json
+!docs/prices.json
 memory
 **/__pycache__

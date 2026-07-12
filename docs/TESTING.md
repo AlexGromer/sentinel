@@ -1,6 +1,6 @@
 # Sentinel — Руководство по тестированию
 
-> 🌐 **Русский** (основная версия) · English — _будет добавлен_ (перевод — следующий цикл)
+> 🌐 **Русский** (основная версия) · [English](TESTING.en.md)
 
 Handoff-grade гайд: любой разработчик должен дойти от чистого клона до зелёного CI без
 устных объяснений. Читайте вместе с [`DEVELOPMENT.md`](DEVELOPMENT.md) (сборка компонентов,
@@ -20,7 +20,8 @@ go vet ./...
 go test ./...
 ```
 
-`go test ./...` — unit-тесты control-plane (agentctl, store-gateway). Ожидаемый результат:
+`go test ./...` — unit-тесты ВСЕХ Go-компонентов (agentctl, control-api, orchestrator,
+report-service, store-gateway, internal/*). Ожидаемый результат:
 все пакеты выводят `ok` или `--- PASS`; ненулевой exit code = блокер.
 
 ### 1.2 Python: offline-сьют (весь регресс M3–M9)
@@ -28,7 +29,7 @@ go test ./...
 Запустите все offline-тесты одной командой:
 
 ```bash
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b; do
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do
     .venv/bin/python tests/test_${t}_offline.py
 done
 ```
@@ -47,6 +48,11 @@ done
 .venv/bin/python tests/test_m9_2_offline.py # GoalPlanner grounding, OOB→done, RunConfig precedence
 .venv/bin/python tests/test_m9_2b_offline.py # двухфазный goal/describe, reconcile, богатый RunConfig
 ```
+
+Список выше — представительная выборка (`§1.1`-й пример на каждый M-этап); остальные модули
+цикла (`r2_multiturn`, `r3_takeover`, `determinism`, `record_bridge`, `sanitize`, `m13_chats`,
+`m14_agui`, `m14_replay_agui`, `m_structured_out`, `m11_4`) запускаются тем же паттерном
+(`.venv/bin/python tests/test_<module>_offline.py`) — см. полный список в цикле `for` выше.
 
 Каждый файл выводит `PASS <test_name>` на каждый тест и `ALL PASS (N)` в конце.
 Ненулевой exit code или строка `FAIL` в stdout = блокер.
@@ -117,6 +123,7 @@ Sentinel поддерживает **любой OpenAI-совместимый end
 | `LLM_BASE_URL` | да | `LLM_BASE_URL_PLANNER` / `LLM_BASE_URL_HEAL` | — (Anthropic SDK default) |
 | `LLM_API_KEY` | да | `LLM_API_KEY_PLANNER` / `LLM_API_KEY_HEAL` | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 | `LLM_VISION` | да | `LLM_VISION_HEAL` | provider-default (Anthropic = включён) |
+| `LLM_STRUCTURED` | да | `LLM_STRUCTURED_PLANNER` / `LLM_STRUCTURED_HEAL` | provider-default (Anthropic = включён; OpenAI-compat = выключен, opt-in, ADR-057) |
 
 **Precedence:** `LLM_<KEY>_<ROLE>` > `LLM_<KEY>` > встроенный дефолт.
 Роли: `PLANNER` (фаза explore/scenario), `HEAL` (heal + vision Tier-7).
@@ -170,7 +177,7 @@ Heal-роль при этом остаётся на Anthropic (`ANTHROPIC_API_KE
 если ключ не задан.
 
 > Каталог протестированных моделей по ролям (контекст, throughput, vision-совместимость):
-> `docs/LOCAL_MODELS.md` — файл будет добавлен в рамках цикла документации после M9.
+> [`docs/LOCAL_MODELS.md`](LOCAL_MODELS.md).
 
 ---
 

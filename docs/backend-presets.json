@@ -1,0 +1,83 @@
+{
+  "_asof": "2026-07-06",
+  "_source": "docs/DISTRIBUTION.md §7 preset table + docs/LOCAL_MODELS.md §4; env surface = brain/llm.py make_backend (M11.5 PR-3, ADR-060)",
+  "_note": "All presets except 'anthropic' use LLM_BACKEND=openai (OpenAI-compatible seam, ADR-019). base_url values mirror the DISTRIBUTION §7 table: only 'ollama' and 'litellm' are services this repo's docker-compose actually defines — for 'vllm'/'localai' add a same-named compose service or point base_url at your host (e.g. http://localhost:8000/v1); 'llamacpp'/'lmstudio'/'tgi' use a generic host:<port> placeholder you must replace (TGI has no default port). api_key: 'anthropic_env'=ANTHROPIC_API_KEY; 'real'=provider key; 'noauth'=ignored but the OpenAI SDK requires a non-empty string. vision/structured default OFF for every openai-compatible backend (opt-in in brain/llm.py via LLM_VISION=1/LLM_STRUCTURED=1; many endpoints incl. text-only DeepSeek and most local runtimes don't support them) and ON only for native anthropic. The 'sampling' backend (schema enum) is MCP host-supplied (mcp-server mode), not a wizard preset.",
+  "presets": {
+    "anthropic": {
+      "label": "Cloud — Anthropic",
+      "backend": "anthropic",
+      "base_url": null,
+      "vision": true,
+      "structured": true,
+      "api_key": "anthropic_env",
+      "default_model": { "planner": "claude-opus-4-8", "heal": "claude-sonnet-4-6" }
+    },
+    "openai": {
+      "label": "Cloud — OpenAI-compatible (OpenAI/DeepSeek/OpenRouter)",
+      "backend": "openai",
+      "base_url": null,
+      "vision": false,
+      "structured": false,
+      "api_key": "real",
+      "note": "set the provider's /v1 base_url + a real key; OpenAI itself supports vision+structured — set LLM_VISION=1/LLM_STRUCTURED=1 if your model does"
+    },
+    "ollama": {
+      "label": "Ollama",
+      "backend": "openai",
+      "base_url": "http://ollama:11434/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth"
+    },
+    "vllm": {
+      "label": "vLLM",
+      "backend": "openai",
+      "base_url": "http://vllm:8000/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth"
+    },
+    "llamacpp": {
+      "label": "llama.cpp / llamafile",
+      "backend": "openai",
+      "base_url": "http://host:8080/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth"
+    },
+    "lmstudio": {
+      "label": "LM Studio",
+      "backend": "openai",
+      "base_url": "http://host:1234/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth"
+    },
+    "localai": {
+      "label": "LocalAI",
+      "backend": "openai",
+      "base_url": "http://localai:8080/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth"
+    },
+    "litellm": {
+      "label": "LiteLLM (router)",
+      "backend": "openai",
+      "base_url": "http://litellm:4000/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth",
+      "note": "routes many providers (ADR-045; image in deploy/litellm)"
+    },
+    "tgi": {
+      "label": "HuggingFace TGI",
+      "backend": "openai",
+      "base_url": "http://host:<PORT>/v1",
+      "vision": false,
+      "structured": false,
+      "api_key": "noauth",
+      "note": "operator sets the port (no default)"
+    }
+  }
+}

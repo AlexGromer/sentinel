@@ -4,11 +4,16 @@
 
 Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
 
-> **Delivery status (as of 2026-06-26):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
-> (Proposed, ADR-022..025); **M9.1** (forms/login/validation, ADR-026) — ✅ delivered offline; **M9.2a**
-> (GoalPlanner NL→plan, ADR-027) + **M9.2b** (two-phase + describe-first + rich RunConfig, ADR-028) —
-> ✅ delivered offline. The
-> detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
+> **Delivery status (as of 2026-07-12):** M0–M8 (+ M2b/M4b) — ✅ delivered; **M9** — design frozen
+> (Proposed, ADR-022..025); **M9.1–M9.6** ✅ offline (ADR-026/027/028/032/036/037); **M9.9=R1** replay-in-UI
+> (ADR-047), **M9.10=R2** multi-turn (ADR-048), **M9.8-R3** co-pilot takeover (ADR-054) — ✅; **M12** OpenAI-shim+unified
+> console (ADR-041) · **M13** 5-domain store-gateway SQLite-first (ADR-049/050) · **M14** rich AG-UI + Settings|Tests
+> (ADR-052/055) + tails `run.finished` (#86) and replay-AG-UI/auto-HITL signal (#87) · **M15** metrics-in-UI (ADR-051) +
+> **M15.1** token-cost · **M-STRUCTURED-OUT** strict json_schema (ADR-057) · **M11.1/11.3/11.4/11.5/11.6/6b/M11-DIST**
+> release-pipeline+air-gap+installer+wizard+config-domain (ADR-030/035/059..062) · **M9-LIVE-prep** (executable live plan +
+> redacting collector) — all ✅. **Next:** M9-LIVE [local LLM] → M9.7 (auth/deploy adapters) → M10 (security) →
+> Langfuse/DSPy + Pages-final. M11.1/11.4 tails (a real signed release/bundle) are maintainer-gated on the first `v*` tag.
+> The detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
 > `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 
 ---
@@ -374,4 +379,4 @@ RunConfig: declarative `auth:`→`STORAGE_STATE*` + named `scenarios:` + `--scen
 describe-unmatched→1, `GOAL`⊕`DESCRIBE`→3. Offline-verified (`test_m9_2b` 20 + the m3..m9_2b regression 95 +
 `go build`/`vet` + `tsc` + gitleaks); a 5-dimension adversarial review (grounding held, determinism clean).
 The live goal/describe run is on "go".
-**Current co-pilot roadmap (single source): [`COPILOT.md`](COPILOT.md)** — layers · §F evolution · feature inventory · waves [me]/[0xCoDSnet]. In brief (as of 2026-06-29): M9.3/M9.4/M9.5/M9.6 ✅ · M12 ✅ · adopt LiteLLM+MCP-Inspector (ADR-045) ✅ → **R1 M9.9 Replay-in-UI → R2 M9.10 Multi-turn → R3 M9.8-F4-brain** [me]; MV3 #42-47 + security #36/37/38 [@0xCoDSnet]; then the **M13-15 epic** (persistence · rich AG-UI · metrics-in-UI; two-tier service, ADR-049..053) · M9.7-rem · M10 · M11.x · M9-LIVE · Langfuse/DSPy. Authoritative: `../ARCHITECTURE.md §6` + `../BACKLOG.md`.
+**Current co-pilot roadmap (single source): [`COPILOT.md`](COPILOT.md)** — layers · §F evolution · feature inventory · waves [me]/[0xCoDSnet]. In brief (as of 2026-07-04): M9.3–M9.6 ✅ · M12 ✅ · adopt LiteLLM+MCP-Inspector (ADR-045) ✅ · **R1 M9.9 Replay-in-UI ✅ · R2 M9.10 Multi-turn ✅ · R3 M9.8-F4-brain ✅** [me] · **M13 persistence ✅**; MV3 #42-47 + security #36/37/38 [@0xCoDSnet]; **epic next: M14 rich AG-UI → M15 metrics-in-UI** (two-tier service, ADR-049..053) · M9.7-rem · M10 · M11.x · M9-LIVE · Langfuse/DSPy. Authoritative: `../ARCHITECTURE.md §6` + `../BACKLOG.md`.

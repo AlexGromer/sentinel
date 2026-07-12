@@ -76,7 +76,7 @@ ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 # Local model (activate by uncommenting):
 # LLM_BACKEND: openai
 # LLM_BASE_URL: http://ollama:11434/v1
-# LLM_MODEL: qwen2.5:7b           # from the docs/LOCAL_MODELS.md §5c catalog
+# LLM_MODEL: qwen2.5:7b           # from the docs/LOCAL_MODELS.md §3 catalog
 # LLM_API_KEY: noauth             # Ollama ignores the key; SDK requires a non-empty value
 # LLM_VISION: 0                   # 1 only for a vision-capable heal model
 ```
@@ -111,11 +111,11 @@ Fixtures directory: `testdata/fixtures/l1..l5.html` — see `testdata/fixtures/R
 
 ## §3 M11.1 — GitHub Releases: multi-OS/arch binaries + Docker + signatures
 
-**Status:** not started. Prerequisites: Foundation CI gates (DONE).
+**Status:** implemented — `.github/workflows/release.yml` landed (M11.1); the E2E signed release (publish/sign) happens on the first maintainer `v*` tag, `workflow_dispatch` is a build/SBOM dry-run. Prerequisites: Foundation CI gates (DONE).
 
 ### What is delivered
 
-Four Go binaries (`agentctl`, `store-gateway`, `orchestrator`, `report-service`) for five platforms:
+Five Go binaries (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `report-service`) for six platforms:
 
 | Platform | GOOS | GOARCH |
 |---|---|---|
@@ -124,8 +124,9 @@ Four Go binaries (`agentctl`, `store-gateway`, `orchestrator`, `report-service`)
 | macOS Apple Silicon | darwin | arm64 |
 | macOS Intel | darwin | amd64 |
 | Windows x86-64 | windows | amd64 |
+| Windows ARM64 | windows | arm64 |
 
-Total: 20 binaries + Docker image (multi-arch: linux/amd64 + linux/arm64).
+Total: 30 binaries (6 platforms × 5 binaries) + Docker image (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 
@@ -150,7 +151,7 @@ Steps:
 
 ### Acceptance criteria M11.1
 
-- [ ] GitHub Release contains 20 binaries (5 platforms × 4 binaries) in `.tar.gz`
+- [ ] GitHub Release contains 30 binaries (6 platforms × 5 binaries) in `.tar.gz`
 - [ ] `checksums.sha256` is present and passes `sha256sum -c checksums.sha256`
 - [ ] Cosign bundle verifies: `cosign verify-blob --bundle=sentinel.bundle sentinel.tar.gz`
 - [ ] Docker image is available at `ghcr.io/alexgromer/sentinel:<tag>` for linux/amd64 + linux/arm64
@@ -257,7 +258,7 @@ Additionally: `agentctl` passes `cmd.Env = append(os.Environ(), ...)` without an
 
 **1. env-allowlist in agentctl — now default-on** (`cmd/agentctl/main.go`, `filteredEnv()`)
 
-`filteredEnv()` keeps an **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3 additions** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY) **+ a prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`/`NODE_`/`GIT_`) **+** names from `SENTINEL_ENV_ALLOW` (comma-sep — for secretKeyRef vars like `AUT_PASSWORD`).
+`filteredEnv()` keeps an **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3 additions** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY/`NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH`) **+ a prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`) — `NODE_`/`GIT_` are deliberately NOT in the prefix-list (the broad family used to leak `NODE_AUTH_TOKEN`/`GIT_ASKPASS`; the specific legitimate names are exact-allowed above) **+** names from `SENTINEL_ENV_ALLOW` (comma-sep — for secretKeyRef vars like `AUT_PASSWORD`).
 
 M11.3 flips the flag to **default-on**: the filter is always active unless explicitly opted out via `SENTINEL_ENV_ALLOWLIST=0` (an escape hatch for debugging / unusual local setups). Functional run vars (RUN_ID/TARGET_URL/RUN_MODE/PLANNER/…) are **untouched** by the filter — they are appended after `filteredEnv()` in `spawnBrain`, never inherited from the host. Unit test: `cmd/agentctl/main_test.go` (default-on drops `AWS_SECRET_ACCESS_KEY`, passes curated + `SENTINEL_ENV_ALLOW` extras; `=0` → full passthrough).
 
@@ -352,7 +353,7 @@ ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, exists from M5) — comme
 
 ## §6 M11.4 — Air-gapped bundle
 
-**Status:** not started. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
+**Status:** implemented — offline compose + verify/bundle scripts + CI `airgap` job (the core is verified on every push/PR). The full bundle E2E (real GHCR image + model + signatures) is assembled by the maintainer on the first `v*` tag, same as M11.1. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
 
 ### Goal
 
@@ -367,12 +368,21 @@ A complete package for installing Sentinel in a network without internet access:
 |---|---|---|
 | Docker image | OCI tar (`docker save`) | `ghcr.io/alexgromer/sentinel:<tag>` (linux/amd64 + linux/arm64) |
 | `agentctl` (native) | `.tar.gz` from M11.1 Release | GitHub Release |
-| Ollama + selected model | Ollama `ollama pull --model-dir` export | configurable from LOCAL_MODELS §5c catalog |
+| Ollama + selected model | pull on a connected machine → tar the `OLLAMA_MODELS` volume (or `ollama create` from a GGUF+Modelfile) | configurable from the LOCAL_MODELS §3 catalog |
 | Python wheels | pre-installed in image (uv.lock) | no PyPI at runtime |
 | pw-executor dist | included in image (dist/ at build) | no npm registry at runtime |
 | `docker-compose.offline.yml` | separate file | repository |
 | Documentation (GitHub Pages) | static HTML from docs/ | HTML copy (offline bundle) |
 | Checksums + Cosign bundle | `.sha256` + `cosign.bundle` | M11.1 |
+
+### What was implemented (M11.4)
+
+- `docker-compose.offline.yml` — `internal: true` network (zero egress), `pull_policy: never`, an offline anchor with no `build:`, `demo`=`network_mode: none`, an `ollama-models` volume with a pinned `name:`; the `ollama` profile (docs are browsed via a separate `http.server` container — an internal network can't publish ports).
+- `scripts/offline-verify.sh` — a single verifier: `--local` (build→save/load→`--network none` demo+docs+negative-DNS — the CI gate) and `--bundle <dir>` (checksums + `cosign verify-blob --bundle` offline + stack up + `/v1/models`).
+- `scripts/build-airgap-bundle.sh` — maintainer assembler (run on a connected machine): `gh release download`, **verify the GHCR image before `docker save`**, export the ollama model, self-signed `MANIFEST.sha256`.
+- CI `airgap` job + `tests/test_m11_4_offline.py`; fixed `.dockerignore` (`!docs/index.html`).
+
+**Important:** "zero external calls" refers to bundle CONSUMPTION. Building the bundle (`build-airgap-bundle.sh`) runs on a connected machine and pulls images/model/release — that's expected, same as the CI/release pipeline itself not being air-gapped. `docker save`/`load` does NOT carry the image's cosign signature, so the image is verified on the connected machine BEFORE saving, and bundle integrity rests on the cosign-signed `MANIFEST.sha256`.
 
 ### `docker-compose.offline.yml`
 
@@ -406,64 +416,105 @@ docker compose -f docker-compose.offline.yml --profile demo up
 
 ### Acceptance criteria M11.4
 
-- [ ] `docker compose -f docker-compose.offline.yml up` makes no external DNS requests (verified via tcpdump or network namespace isolation)
-- [ ] `demo` profile completes explore successfully offline (heuristic planner, LLM-free)
-- [ ] Ollama endpoint `http://ollama:11434/v1` responds to `/v1/models` without internet connectivity
-- [ ] All checksums verify offline (`sha256sum -c`)
-- [ ] Cosign bundle verifies without contacting Rekor (offline bundle mode)
-- [ ] Documentation (GitHub Pages static copy) is accessible without network
+| # | Criterion | Status |
+|---|---|---|
+| 2 | demo completes explore offline (heuristic, LLM-free) | ✅ **verified in CI** (`airgap` job) |
+| 6 | static docs copy is available offline | ✅ **verified in CI** (after the `.dockerignore` fix) |
+| 1 | `compose up` with no external DNS | ◐ **mechanism** — `internal:true` + a negative-DNS probe for sentinel/demo; the full stack — at the tag |
+| 5 | cosign bundle verifies without Rekor | ◐ **mechanism** — a live self-signed `--bundle` round-trip in CI; the real release identity — at the tag |
+| 3 | Ollama `/v1/models` responds offline | ☐ **open** — at the tag (requires a real model bundle) |
+| 4 | checksums verify offline (`sha256sum -c`) | ☐ **open** — the logic self-tests; real checksums — at the tag |
 
 ---
 
 ## §7 M11.5 — Zero-level onboarding
 
-**Status:** not started. Depends on: M11.1 + M11.2 + M11.4.
+**Status:** docs-first freeze (ADR-059). Expanded beyond the original thin spec into **guided onboarding** — a
+guided state machine. Delivered across 5 sequential PRs: docs (this freeze) → installer → config-schema+presets
+→ wizard → config-domain+`/readyz`. Depends on: M11.1 (release assets) + M11.2 (setup-WebUI) + M11.4 (the offline path).
 
 ### Target user
 
-A QA or DevOps engineer who has Docker but no Go/Python/Node build toolchain. Goal: from zero to a first successful explore run in ≤ 10 minutes.
+A QA or DevOps engineer who has Docker but no Go/Python/Node build toolchain. Goal: from zero to a first
+successful explore run in ≤ 10 minutes, **with no manual YAML editing** and no need to read the full documentation.
 
-### Components
+### Vision: onboarding as a guided state machine (ADR-059)
 
-**1. `install.sh` — single-command installer**
+Not a flat form plus "drop in a YAML file by hand", but a stepped wizard that understands the runtime modes,
+assembles a correct configuration itself, persists it, and reuses it on the next launch.
 
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a native PowerShell peer for Windows, no Docker/WSL needed)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexgromer/sentinel/main/install.sh | sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
+```
+```powershell
+# Windows (native, no admin)
+iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
+```
+- `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: native Windows,
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), no Docker/WSL required;
+- resolves the latest GitHub Release, downloads `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
+- **`sha256sum -c`** (non-zero exit on mismatch) → **`cosign verify-blob`** with a **pinned identity** (the same
+  regex/issuer as `scripts/offline-verify.sh`; if `cosign` is missing — a loud warning, not a hard failure);
+- `install.sh` installs `agentctl` into `~/.local/bin` (default, **no root**) or `/usr/local/bin` (opt-in);
+  `install.ps1` installs into `%LOCALAPPDATA%\Programs\sentinel` (**no admin**); both check `$PATH`;
+- post-install `agentctl --version` (sanity check) + a pointer to setup-WebUI and `docs/QUICKSTART.md`; optionally downloads `docker-compose.yml`.
+
+**Homebrew (macOS):** the repository is its own tap; `Formula/sentinel.rb` is generated on every `v*`
+tag (`scripts/gen-brew-formula.sh` in `release.yml`):
+```bash
+brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel
+brew install sentinel
 ```
 
-What it does:
-- detects platform (uname -m / os)
-- downloads the appropriate `agentctl` binary from the latest GitHub Release
-- verifies checksum (`sha256sum -c`)
-- verifies Cosign signature (if cosign is installed; warns if not)
-- places the binary in `~/.local/bin/agentctl` or `/usr/local/bin/agentctl`
-- optionally downloads `docker-compose.yml` to the current directory
+**2. setup-WebUI → a stepped wizard** (rewrites `docs/setup/index.html`, ADR-031→ADR-059)
+- Steps: **Runtime → Model&Auth → Run params → Review** (reuses the `.tabbar`/`.subtabbar` pattern from `docs/index.html`).
+- **A runtime dropdown of presets** (see the table below) → conditional per-backend fields (base_url/model/api_key). NB: the runtime choice ≠ the RunConfig `mode` (explore/goal/describe), which lives in the Run-params step.
+- **Schema-driven**: the form renders from `GET /v1/config-schema` (extended with LLM-backend fields) — the single
+  source of truth: `brain/runconfig.py` for RunConfig fields, `brain/llm.py` `make_backend` for the LLM-backend fields (ADR-060), with no hardcoded drift.
+- **Validation**: required fields (target), budget ranges, error highlighting, re-ask on a problem.
+- **Draft persistence**: a configuration draft + the control-API URL in `localStorage` (the token is NEVER stored); on
+  relaunch — prefill and re-validation (the re-run state machine). Bilingual (`data-lang`), air-gapped (no CDN).
 
-**2. `docs/QUICKSTART.md` — step-by-step guide**
+**3. Runtime presets (open-core, the config-only seam of ADR-019).** All of them are `LLM_BACKEND=openai` + a different
+`LLM_BASE_URL`/`LLM_MODEL` (machine-readable → `docs/backend-presets.json`; source of truth — `docs/LOCAL_MODELS.md`):
 
-Structure (target length: ≤ 2 pages):
-1. Prerequisites (Docker ≥ 24)
-2. Installation (`curl | sh`)
-3. Configuration generation (link to setup-WebUI M11.2)
-4. First run: `docker compose run --rm sentinel run --target <URL>`
-5. Interpreting results: `runs/<id>/plan.json` + exit codes
-6. Next step: `docs/TESTING.md` for the full guide
+| Preset | `LLM_BACKEND` | `LLM_BASE_URL` (default) | Note |
+|---|---|---|---|
+| Cloud — Anthropic | `anthropic` | — (native) | `ANTHROPIC_API_KEY` |
+| Cloud — OpenAI-compatible (OpenAI/DeepSeek/OpenRouter) | `openai` | the provider's `/v1` | a real API key |
+| Ollama | `openai` | `http://ollama:11434/v1` | the key is ignored, the SDK requires a non-empty value (`noauth`) |
+| vLLM | `openai` | `http://vllm:8000/v1` | GPU/throughput |
+| llama.cpp / llamafile | `openai` | `http://host:8080/v1` | edge/minimal dependencies |
+| LM Studio | `openai` | `http://host:1234/v1` | dev workstation |
+| LocalAI | `openai` | `http://localai:8080/v1` | multi-backend |
+| LiteLLM (router) | `openai` | `http://litellm:4000/v1` | multi-provider router (ADR-045; image in `deploy/litellm`) |
+| HuggingFace TGI | `openai` | `http://host:<PORT>/v1` | the operator sets the port (no default) |
 
-**3. Integration with setup-WebUI (M11.2)**
+**4. Tiered config persistence** (profile = topology, ADR-049):
+- **standalone**: the config is a file (RunConfig YAML / `.env`), read back idempotently (`brain/runconfig.py` — already in place, unchanged);
+- **service**: a new `config` domain in the store-gateway (following the ADR-050 pattern) — control-API reads the config at startup / writes it from the wizard.
 
-QUICKSTART links to setup-WebUI for generating RunConfig YAML without manual editing.
+**5. `/readyz`** (on top of the existing `/healthz` liveness probe): checks real dependencies — the store-gateway
+socket reachable · the LLM endpoint (`/v1/models`) · a config present → `503` while not ready, `200` once ready (k8s-shaped).
 
-**4. Offline path (M11.4)**
+**6. `docs/QUICKSTART.md`** (≤ 2 pages): prerequisites (Docker ≥ 24) → install (`curl|sh`) → configuration (setup-WebUI) →
+the first run → interpreting `runs/<id>/plan.json` + exit codes → the offline path (M11.4) → the full guide, `docs/TESTING.md`.
 
-QUICKSTART includes an "Installation without internet access" section: download bundle, `docker load`, `docker compose -f docker-compose.offline.yml`.
+### Open-core / enterprise boundary (ADR-056)
 
-### Acceptance criteria M11.5
+The wizard + **all** runtime presets + file/DB config + health probes = **open-core** (open-core must be useful,
+not crippleware). Enterprise = managed/EMS provisioning · license issuing · multi-tenancy · SSO/RBAC/Vault · advanced BI.
 
-- [ ] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`
-- [ ] `install.sh` verifies the checksum before installation; exits with a non-zero code on mismatch
-- [ ] All QUICKSTART.md steps are reproducible in a clean Docker environment (verified in GitHub Actions)
-- [ ] Offline path is documented and verified (depends on M11.4)
-- [ ] `install.sh` does not require root when installing to `~/.local/bin`
+### Acceptance criteria M11.5 (honest, per PR)
+
+- [x] **PR-1 (this freeze):** ADR-059 + the rewritten §7 + bilingual parity. *(docs, verifiable now)*
+- [x] **PR-2 (this PR):** `install.sh` verifies checksum+cosign (non-zero exit on mismatch), installs without root into `~/.local/bin`, `agentctl --version` prints the version; CI install-smoke in a clean container (fake release + tamper negative). *(full E2E = maintainer `v*` tag, as with M11.1)*
+- [x] **PR-3 (this PR):** `/v1/config-schema` covers the LLM-backend surface (`backends`/`roles`/`llm` descriptors from `brain/llm.py`; `api_key`=secret-with-no-value); `backend-presets.json` (9 presets) parses and every `backend` ⊆ the schema enum (gate `TestBackendPresetsParseAndMatchSchema`). *(env source of truth = `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig core, no LLM_* there)*
+- [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(the DOM run is automated — `scripts/wizard-dom-check.mjs`, 12 checks in headless Chromium in CI; the syntax gate covers all 6 `docs/` pages; + 2 anti-drift gates)*
+- [x] **PR-5 (this PR):** the `config` domain lands in the store-gateway (a 6th `StoreService` domain, ADR-062); secrets are **refused** (`internal/configguard`, one rule shared by the gateway and the control-API — 14 bypass attempts in tests); the control-API reads the config at start and the wizard writes it (`PUT /v1/config`, token-gated); `/readyz` → `503` until dependencies are ready, `200` once ready (an unconfigured dependency is `skipped`, so standalone stays ready). *(end-to-end DOM gate: browser → control-API → gRPC → SQLite → `/readyz`)*
+- [x] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`. **Measured (2026-07-11):** `docker compose build` **208 s** + `docker compose run … --target https://example.com --planner heuristic` **21 s** = **~3 min 49 s** end-to-end, exit 0, `plan.json`+`trace.zip` produced. *(Caveat: the `playwright` base image was cached; a fully cold pull adds ~2.44 GB of download → ~7 min on a ~100 Mbps link — still under budget, but network-dependent.)*
 
 ---
 

@@ -48,6 +48,14 @@ class RunState(TypedDict, total=False):
     # resumes from an interrupt() (one entry per takeover→return cycle). Observability only — not in
     # plan.json/scenario.json, so plan_hash is unaffected.
     takeover_returns: list
+    # M14 (ADR-055): auto-HITL counters (docs/M14_CONTRACT.md §4). consecutive_heal_failures counts
+    # heal-node misses in a row (the explore graph's heal node is a stub — see graph.py — so every
+    # entry is a miss); reset to 0 on any successful verify. Drives the checkpoint node's auto-arm of
+    # _takeover_armed past SENTINEL_AUTO_HITL_THRESHOLD. failed_steps is a running total of verify
+    # failures (observability + M15-metrics substrate). Both default absent -> 0 (state.get(..., 0)),
+    # so existing runs/tests with no M14 wiring are unaffected.
+    consecutive_heal_failures: int
+    failed_steps: int
     # transient channels (must be declared so LangGraph keeps them across nodes)
     _pending: dict
     _last_ok: bool

@@ -30,6 +30,23 @@ class FakeBackend:
         raise NotImplementedError
 
 
+def test_budget_prompt_completion_split():
+    # M15.1: summary() keeps prompt vs completion distinct per role (cost prices in != out). Pins the
+    # split DIRECTION — asserting only spent==prompt+completion would pass even if the two were swapped.
+    budget.reset()
+    budget.tracker().add("plan", LLMResult("", 100, 30))   # prompt=100, completion=30
+    budget.tracker().add("heal", LLMResult("", 40, 12))    # prompt=40, completion=12
+    s = budget.tracker().summary()
+    assert s["prompt"] == 140 and s["completion"] == 42 and s["total"] == 182, s
+    assert s["plan"] == {"prompt": 100, "completion": 30}, s
+    assert s["heal"] == {"prompt": 40, "completion": 12}, s
+    assert budget.tracker().spent["plan"] == 130 and budget.tracker().spent["heal"] == 52, s
+    budget.tracker().reset()   # M15.1 per-run isolation: instance reset zeroes all three, keeps limits
+    z = budget.tracker().summary()
+    assert z["prompt"] == 0 and z["completion"] == 0 and z["total"] == 0, z
+    budget.reset()
+
+
 def test_tracker_accumulates_and_flips_per_role():
     t = BudgetTracker(plan_limit=250, heal_limit=100, total_limit=0)
     assert not t.exceeded("plan")

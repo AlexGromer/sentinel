@@ -53,7 +53,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (Python env/dep manager for the brain)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Build pw-executor (TypeScript -> dist/server.js)
         run: |
@@ -69,20 +69,51 @@ jobs:
       - name: Build agentctl (Go)
         run: go build -o bin/agentctl ./cmd/agentctl
 
+      # The wizard DOM gate below drives a REAL control-api backed by a REAL store-gateway, so CI must
+      # build both (control-api previously only ever existed inside the Docker image).
+      - name: Build control-api + store-gateway (Go)
+        run: |
+          go build -o bin/control-api ./cmd/control-api
+          go build -o bin/store-gateway ./cmd/store-gateway
+
       - name: Vet + unit test (Go)
         run: |
           go vet ./...
           go test ./...
 
+      # Walks docs/ instead of an enumerated page list: the list had drifted to 3 of the 6 pages,
+      # leaving docs/calculators/*.html (inline JS) ungated while the docs claimed full coverage.
+      - name: SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)
+        run: |
+          python3 - <<'PY'
+          import re, pathlib
+          pages = sorted(str(p) for p in pathlib.Path('docs').rglob('*.html'))
+          assert pages, 'no docs/**/*.html found — the gate would pass vacuously'
+          print('pages under the gate:', len(pages))
+          for p in pages:
+              html = pathlib.Path(p).read_text()
+              blocks = re.findall(r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', html, re.S)
+              out = '/tmp/spa_check__' + p.replace('/', '_') + '.js'
+              pathlib.Path(out).write_text('\n;\n'.join(blocks))
+              print(p, '-> inline <script> blocks:', len(blocks))
+          PY
+          for f in /tmp/spa_check__*.js; do echo "node --check $f"; node --check "$f"; done
+
+      # Real headless-Chromium run of docs/setup/index.html against a real control-api. Closes the
+      # "an interactive browser run is manual" boundary ADR-061 shipped with. Playwright + the browser
+      # are already present from the pw-executor steps above; no new dependency.
+      - name: Setup-wizard DOM gate (headless Chromium; M11.5)
+        run: node scripts/wizard-dom-check.mjs
+
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
-      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize — FakeBackend/FakeExecutor, no network)
+      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize + m13_chats + m14_agui + m14_replay_agui + m_structured_out + m11_4 — FakeBackend/FakeExecutor, no network)
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -e
-          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize; do
+          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do
             echo "== test_${t}_offline =="
             .venv/bin/python tests/test_${t}_offline.py
           done
@@ -122,7 +153,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (brain runtime deps)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       # Restores bin/agentctl and pw-executor/dist/ at the repo root.
       - name: Download build artifact
@@ -217,7 +248,7 @@ jobs:
           node-version: '24'
 
       - name: Install uv (brain runtime deps)
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Download build artifact
         uses: actions/download-artifact@v8
@@ -271,7 +302,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: pip-audit (Python deps — advisory; audits the committed lock)
         continue-on-error: true   # advisory: a newly published CVE against the pinned lock must not redden an unrelated PR (#8)
@@ -312,3 +343,250 @@ jobs:
 
       - name: Check bilingual docs parity
         run: python3 scripts/check_bilingual.py
+
+  # ---------------------------------------------------------------------------
+  # airgap: M11.4 — the FIRST job to exercise the Dockerfile in CI. Builds sentinel:local, round-trips
+  # it through `docker save`/`docker load`, and proves the RUNTIME makes zero external calls via
+  # scripts/offline-verify.sh --local (agentctl under --network none, the LLM-free demo explores, the
+  # bundled docs are present, and a DNS lookup from the isolated container FAILS). Runs the byte-identical
+  # verifier a maintainer runs. amd64/native only — arm64 + the full model bundle stay release-time
+  # (release.yml precedent). No needs: (the multi-stage Dockerfile self-compiles from source).
+  # ---------------------------------------------------------------------------
+  airgap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # cosign keyless self-test (same-repo only; see the guarded step below)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx (GHA layer cache for the multi-stage build)
+        uses: docker/setup-buildx-action@v4
+
+      # build-push-action wires the GHA cache token; load:true puts amd64 sentinel:local in the daemon.
+      - name: Build sentinel:local (cached, amd64, loaded — not pushed)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: sentinel:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Offline runtime verification (save/load -> --network none, no external calls)
+        env:
+          AIRGAP_SKIP_BUILD: "1"   # reuse the image built above instead of rebuilding
+        run: scripts/offline-verify.sh --local
+
+      # Cosign verify-blob MECHANISM self-test (M11.4 criterion 5, "mechanism verified"): sign a
+      # throwaway blob keyless with THIS run's OIDC identity, then verify it OFFLINE via --bundle (no
+      # Rekor call). Exercises the exact verify flag shape used against real release bundles — it would
+      # have caught the cosign `--offline`-flag removal. The SIGN half needs network (Sigstore); this
+      # tests the verify mechanism, not the air-gapped runtime. Skipped on FORK PRs (no id-token there).
+      - name: Install cosign (mechanism self-test)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: sigstore/cosign-installer@v4.1.2   # v3 CANNOT install cosign v3.x (installs a stale v2.x) — v4 required
+      - name: Cosign sign + OFFLINE verify-blob round-trip
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euo pipefail
+          echo "m11.4 airgap self-test ${GITHUB_SHA}" > /tmp/probe.txt
+          cosign sign-blob --yes --bundle /tmp/probe.cosign.bundle /tmp/probe.txt
+          cosign verify-blob /tmp/probe.txt --bundle /tmp/probe.cosign.bundle \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/ci.yml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+  # ---------------------------------------------------------------------------
+  # install-smoke: M11.5 — exercises install.sh end-to-end against a LOCALLY-built fake release
+  # (build agentctl -> package tar + checksums -> serve over http -> run install.sh -> assert the
+  # binary + --version; then a tampered checksum must fail non-zero). No real Release needed — the
+  # real signed-release install E2E is maintainer-gated on the first v* tag (like M11.1). cosign is
+  # not installed here, so install.sh takes its documented warn-and-continue path (cosign verify is
+  # tag-time). No needs: (independent of the build artifact).
+  # ---------------------------------------------------------------------------
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26 (build the fake-release agentctl)
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: shellcheck all shell scripts
+        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh scripts/collect-live-run.sh
+      - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"; tag=v0.0.0-citest; out="sentinel-$tag-linux-amd64"
+          mkdir -p "$stage/$tag/$out"
+          go build -ldflags "-X main.version=$tag" -o "$stage/$tag/$out/agentctl" ./cmd/agentctl
+          cp LICENSE "$stage/$tag/$out/" 2>/dev/null || true
+          tar -C "$stage/$tag" -czf "$stage/$tag/$out.tar.gz" "$out"
+          ( cd "$stage/$tag" && rm -rf "$out" && sha256sum "$out.tar.gz" > checksums.sha256 )
+          ( cd "$stage" && python3 -m http.server 8099 >/dev/null 2>&1 & echo $! > "$stage/srv.pid" )
+          sleep 1
+          # positive: download -> checksum -> install -> --version
+          SENTINEL_VERSION="$tag" SENTINEL_BASE_URL="http://localhost:8099" SENTINEL_BIN_DIR="$stage/bin" sh install.sh
+          test -x "$stage/bin/agentctl"
+          [ "$("$stage/bin/agentctl" --version)" = "$tag" ] || { echo "::error::agentctl --version mismatch"; exit 1; }
+          # negative: a tampered checksum MUST make install.sh exit non-zero (acceptance criterion)
+          printf '%064d  %s\n' 0 "$out.tar.gz" > "$stage/$tag/checksums.sha256"
+          if SENTINEL_VERSION="$tag" SENTINEL_BASE_URL="http://localhost:8099" SENTINEL_BIN_DIR="$stage/bin2" sh install.sh >/dev/null 2>&1; then
+            kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
+            echo "::error::install.sh accepted a tampered checksum"; exit 1
+          fi
+          kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
+          echo "install-smoke: OK (positive install + tampered-checksum rejection)"
+
+  # ---------------------------------------------------------------------------
+  # collect-live-run-smoke: M9-LIVE prep — proves scripts/collect-live-run.sh redacts BY DEFAULT.
+  # A synthetic run dir is planted with ONE DISTINCT canary per redaction mechanism: structural
+  # value/text blanking (fill · type · aliased verb setValue) · keyword k=v prose · Authorization
+  # header (Bearer + Basic) · cookie header · each credential SHAPE the script advertises (sk- · ghp_ ·
+  # AKIA · xox · JWT) · and — critically — shaped secrets stored UNDER a SAFE_KEY-named field, which an
+  # earlier version routed around the sweep. Three canaries can only be handled by EXCLUSION
+  # (storage_state.json, trace.zip, checkpoint.db). Because every canary is distinct, breaking any one
+  # mechanism leaves ITS canary behind rather than hiding behind a sibling rule (mutation-tested).
+  # THE acceptance criterion decompresses the bundle to disk (so a corrupt archive is a HARD error, not
+  # a silently-passing empty grep) and asserts NO canary of any mechanism survives. Grepping the .tar.gz
+  # blob would pass vacuously — gzip hides the plaintext, which is also why gitleaks is not a safety net.
+  # ---------------------------------------------------------------------------
+  collect-live-run-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: collect-live-run.sh — default redaction + exclusions + --with-trace opt-in
+        run: |
+          set -euo pipefail
+          id=citestcanary
+          mkdir -p "runs/$id"
+          # structural value/text blanking — no keyword, no shape, so ONLY the typing-step blank removes
+          # these. `setValue` is an ALIAS verb: it must still be blanked (not a closed verb allowlist).
+          printf '{"plan_hash":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef","model":"claude-opus-4-8","steps":[{"step_id":1,"action_type":"fill","value":"CANARY-STRUCTFILL-01234567"},{"step_id":2,"action_type":"setValue","selector":"#pass","value":"CANARY-ALIAS-01234567"}]}\n' > "runs/$id/plan.json"
+          printf '{"steps":[{"action_type":"type","text":"CANARY-STRUCTTYPE-01234567"}]}\n' > "runs/$id/scenario.json"
+          # A1: shaped secrets stored UNDER SAFE_KEY-named fields (hash, outcome) — the shape sweep must
+          # still fire on analysis-field values, or these route straight out unmasked.
+          printf '{"hash":"ghp_CANARYSAFEKEY0123456789","outcome":"sk-CANARY-SAFEKEY-0123456789"}\n' > "runs/$id/reconcile-report.json"  # gitleaks:allow (fake shaped canaries)
+          # keyword prose + auth headers (Basic is caught ONLY by the header rule) + A2: a U+2028 (raw
+          # bytes E2 80 A8) INSIDE a JSON string — valid JSON, but str.splitlines() would tear the record
+          # and skip the structural blank of `value`, leaking CANARY-U2028.
+          printf '{"step":1,"action_type":"fill","note":"page\xe2\x80\xa8break","value":"CANARY-U2028-01234567","decision":"fill password CANARY-KV-0123456789","reason":"Authorization: Bearer CANARY-HDR-0123456789","note2":"Authorization: Basic CANARY-BASIC-0123456789","prompt_tokens":11}\n' > "runs/$id/llm-transcript.jsonl"
+          # every advertised credential SHAPE + cookie, swept as plain text in the HTML report
+          printf '<html><body><p>sk-CANARY-SK-0123456789</p><p>ghp_CANARYGHP0123456789</p><p>AKIACANARY0123456789</p><p>xoxb-CANARY-0123456789</p><p>eyJCANARYAAAAAA.eyJCANARYBBBBBB.CANARYCCCC</p><p>Cookie: sid=CANARY-COOKIE-0123456789</p></body></html>\n' > "runs/$id/report.html"  # gitleaks:allow (fake shaped canaries)
+          printf 'sentinel_run_steps 2\n' > "runs/$id/metrics.prom"
+          # these three can never be redacted — only excluded
+          printf '{"cookies":[{"name":"sid","value":"CANARY-EXCLUDED-state-0123456789"}]}\n' > "runs/$id/storage_state.json"
+          printf 'PK-fake-zip CANARY-EXCLUDED-trace-0123456789\n' > "runs/$id/trace.zip"
+          printf 'msgpack-blob CANARY-EXCLUDED-ckpt-0123456789\n' > "runs/$id/checkpoint.db"
+
+          scripts/collect-live-run.sh "$id"                                   # (a) exits 0
+          bundle="live-results/live-$id.tar.gz"
+          test -f "$bundle"                                                   # (b) bundle written
+          # (c) the three files that must never ship by default
+          for forbidden in 'trace\.zip' 'storage_state' 'checkpoint'; do
+            if tar tzf "$bundle" | grep -q "$forbidden"; then
+              echo "::error::$forbidden is in the default bundle"; exit 1
+            fi
+          done
+          # (d) ACCEPTANCE CRITERION — decompress to disk first (a bad archive now HARD-fails via set -e
+          # instead of masquerading as an empty grep), then assert no canary of ANY mechanism survives.
+          work="$(mktemp -d)"
+          tar xzf "$bundle" -C "$work"
+          if grep -rhoE 'CANARY[A-Z0-9-]*' "$work" | sort -u | grep .; then
+            echo "::error::the canaries listed above survived redaction"; exit 1
+          fi
+          # (e) analysis-critical fields are NOT collateral damage (real values that would break analysis
+          # if scrubbed: a 64-hex plan_hash, a legit model name under a SAFE_KEY field, an int counter)
+          grep -rq 'deadbeefdeadbeef' "$work" || { echo "::error::plan_hash was scrubbed"; exit 1; }
+          grep -rq 'claude-opus-4-8'  "$work" || { echo "::error::a legit model name was over-masked"; exit 1; }
+          grep -rq '"prompt_tokens": 11' "$work" || { echo "::error::token counters were mangled"; exit 1; }
+          # (f) the opt-in path still works (and ships the trace unredacted, by design)
+          scripts/collect-live-run.sh "$id" --with-trace
+          tar tzf "$bundle" | grep -q 'trace\.zip' || { echo "::error::--with-trace did not include trace.zip"; exit 1; }
+          # (g) guards: traversal-shaped id and an unknown run must both be refused
+          if scripts/collect-live-run.sh '../etc' >/dev/null 2>&1; then echo "::error::traversal id accepted"; exit 1; fi
+          if scripts/collect-live-run.sh 'nosuchrun' >/dev/null 2>&1; then echo "::error::missing run accepted"; exit 1; fi
+          echo "collect-live-run-smoke: OK (no canary survived; trace/storage_state/checkpoint excluded; opt-in honoured)"
+
+  # ---------------------------------------------------------------------------
+  # install-ps1-smoke: M11-DIST — the Windows peer of install-smoke. Cross-builds agentctl.exe,
+  # packages a fake windows release, serves it, runs install.ps1 (positive) + a tampered-checksum
+  # negative (must exit non-zero). windows-latest has go/python/tar.exe/pwsh. cosign absent ->
+  # install.ps1 takes its warn-and-continue path. Real signed-release E2E = maintainer v* tag.
+  # ---------------------------------------------------------------------------
+  install-ps1-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      - name: install.ps1 e2e vs a local fake release (+ tampered-checksum negative)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v0.0.0-citest'; $out = "sentinel-$tag-windows-amd64"
+          $stage = Join-Path $env:RUNNER_TEMP 'stage'
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "$tag/$out") | Out-Null
+          $env:GOOS='windows'; $env:GOARCH='amd64'
+          go build -ldflags "-X main.version=$tag" -o (Join-Path $stage "$tag/$out/agentctl.exe") ./cmd/agentctl
+          Copy-Item LICENSE (Join-Path $stage "$tag/$out/") -ErrorAction SilentlyContinue
+          Remove-Item Env:\GOOS, Env:\GOARCH
+          tar.exe -C (Join-Path $stage $tag) -czf (Join-Path $stage "$tag/$out.tar.gz") $out
+          Push-Location (Join-Path $stage $tag)
+          Remove-Item -Recurse -Force $out
+          $hash = (Get-FileHash -Algorithm SHA256 "$out.tar.gz").Hash.ToLower()
+          "$hash  $out.tar.gz" | Out-File -Encoding ascii -NoNewline checksums.sha256
+          Pop-Location
+          $srv = Start-Process python -ArgumentList '-m','http.server','8099' -WorkingDirectory $stage -PassThru
+          Start-Sleep -Seconds 2
+          try {
+            $env:SENTINEL_VERSION = $tag
+            $env:SENTINEL_BASE_URL = 'http://localhost:8099'
+            $env:SENTINEL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'bin'
+            # positive
+            $p = Start-Process pwsh -ArgumentList '-NoProfile','-File','./install.ps1' -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "install.ps1 (positive) exited $($p.ExitCode)" }
+            $bin = Join-Path $env:SENTINEL_BIN_DIR 'agentctl.exe'
+            if (-not (Test-Path $bin)) { throw "agentctl.exe not installed" }
+            $v = & $bin --version
+            if ($v -ne $tag) { throw "agentctl --version mismatch: '$v' != '$tag'" }
+            # negative: tampered checksum MUST make install.ps1 exit non-zero
+            ('0' * 64 + "  $out.tar.gz") | Out-File -Encoding ascii -NoNewline (Join-Path $stage "$tag/checksums.sha256")
+            $env:SENTINEL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'bin2'
+            $n = Start-Process pwsh -ArgumentList '-NoProfile','-File','./install.ps1' -Wait -PassThru -NoNewWindow
+            if ($n.ExitCode -eq 0) { throw "install.ps1 accepted a tampered checksum" }
+            Write-Host "install-ps1-smoke: OK (positive install + tampered-checksum rejection)"
+          } finally {
+            Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          }
+
+  # ---------------------------------------------------------------------------
+  # lint: ADVISORY (M11-DIST PR-B, from the 2026-07-06 CI audit) — golangci-lint (Go) + ruff (Python
+  # brain/tests). NON-BLOCKING by design: these run on an existing codebase and surface findings as
+  # annotations without reddening the PR (job `continue-on-error` + golangci `--issues-exit-code=0` +
+  # ruff `|| true`). Making them blocking is a follow-up after a cleanup pass. If a golangci-lint
+  # release lags the repo's Go toolchain, this job is advisory-only — that's acceptable here.
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+      # golangci-lint's latest release (v1.64.x) is still built with an older Go and REFUSES to lint a
+      # go1.26 target ("Go version go1.24 ... lower than 1.26", exit 3). Wired here for when golangci
+      # ships a go1.26 build; step-level continue-on-error keeps the job GREEN and lets ruff still run.
+      - name: golangci-lint (advisory)
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --issues-exit-code=0
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - name: ruff (advisory — brain + tests)
+        run: uvx ruff check brain/ tests/ || true

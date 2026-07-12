@@ -31,8 +31,8 @@ code and without a new "profile" knob** (ADR-029): provider profiles are *docume
 | Property | Value (verified against code) | Source |
 |---|---|---|
 | Output type | structured JSON (index-pick / scenario), **not** long-form generation | `brain/planner.py` |
-| Output size | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:87,146,187,231` · `healing.py:122,168` |
-| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:183` · `healing.py:118` |
+| Output size | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:116,177,228,282` · `healing.py:131,176` |
+| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:222` · `healing.py:126` |
 | Vision input | one PNG (≈1280×720) + tiny marks menu | `healing.py:168` |
 | Temperature | **0** (deterministic selection) | `planner.py` / `healing.py` |
 | Replay (hot path) | **LLM-free**, 0 tokens | `brain/replay.py` |
@@ -42,7 +42,7 @@ of a broken locator, VISION needs a **VLM that can read numbered marks** on a sc
 achievable by models from 3–4B and above — see §3 and the VRAM calculator (§5).
 
 > **In-code defaults remain `claude-*`** (`_DEFAULT_MODEL = {"planner": "claude-opus-4-8",
-> "heal": "claude-sonnet-4-6"}`, `llm.py:179`). Offline runs use `FakeBackend` (determinism/CI);
+> "heal": "claude-sonnet-4-6"}`, `llm.py:233`). Offline runs use `FakeBackend` (determinism/CI);
 > a real local model is **opt-in** via the env profile below. RTX 2060 12 GB is **one example**
 > among the 8/12/16/24 GB tiers, not the basis of the methodology.
 
@@ -50,9 +50,9 @@ achievable by models from 3–4B and above — see §3 and the VRAM calculator (
 
 ## 2. Env profile
 
-All variables are read by `make_backend` (`llm.py:182–223`). **Priority: role-specific
+All variables are read by `make_backend` (`llm.py:241–279`). **Priority: role-specific
 `LLM_<KEY>_<ROLE>` > global `LLM_<KEY>`.** Roles: `PLANNER`, `HEAL`. Keys: `BACKEND`, `MODEL`,
-`BASE_URL`, `API_KEY`, `VISION`.
+`BASE_URL`, `API_KEY`, `VISION`, `STRUCTURED`.
 
 | Env | Purpose | Note |
 |---|---|---|
@@ -61,6 +61,7 @@ All variables are read by `make_backend` (`llm.py:182–223`). **Priority: role-
 | `LLM_BASE_URL` | URL of OpenAI-compat endpoint (`…/v1`) | local: Ollama/vLLM/llama.cpp |
 | `LLM_API_KEY` | key; for local — any non-empty string (`noauth`) | fallback to `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` |
 | `LLM_VISION` | `1` → enable vision on OpenAI-compat HEAL backend | text-only model skips vision |
+| `LLM_STRUCTURED` | `1` → strict structured-output (Anthropic tool_use / OpenAI json_schema, ADR-057) on the OpenAI-compat backend | default OFF; otherwise falls back to `complete`+`extract_json` |
 | suffix `_PLANNER` / `_HEAL` | overrides the global key for that role | e.g. `LLM_MODEL_PLANNER` |
 
 **Degradation is safe:** when a key/SDK is absent `make_backend` → `None` ⇒ PLAN falls back to
@@ -146,7 +147,7 @@ Ready-made env blocks for each runtime are in §4.
 
 ---
 
-### 3.4 Cloud models — illustrative pricing (⚠ verify, cutoff Jan-2026)
+### 3.4 Cloud models — illustrative pricing (⚠ verify; cloud figures re-verified 2026-07-04)
 
 Price source for the cost-explorer (`docs/index.html`). **Editable, illustrative** — NOT a claim of current
 cost (cloud pricing drifts). Claude is from the claude-api skill (2026-06-04); others were researched
@@ -156,13 +157,15 @@ cost (cloud pricing drifts). Claude is from the claude-api skill (2026-06-04); o
 | Model | $/1M in | $/1M out | Context | reasoning | vision | fit | Source |
 |---|---|---|---|---|---|---|---|
 | Claude Opus 4.8 | 5 | 25 | 1M | ✓ | ✓ | high | [anthropic](https://www.anthropic.com/pricing) (skill 06-04) |
-| Claude Sonnet 4.6 | 3 | 15 | 1M | ✓ | ✓ | high | anthropic (skill 06-04) |
+| Claude Sonnet 5 | 2 | 10 | 1M | ✓ | ✓ | high | anthropic (verified 07-04; intro 2/10 → 3/15 from 09-01) |
 | Claude Haiku 4.5 | 1 | 5 | 200K | — | ✓ | high | anthropic (skill 06-04) |
-| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | [openai](https://openai.com/api/pricing/) ⚠ |
+| GPT-5.5 (flagship) | 5 | 30 | 1M | ✓ | ✓ | high | [openai](https://developers.openai.com/api/docs/pricing) (verified 07-04) |
+| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | openai (verified 07-04) |
 | GPT-5.4-mini | 0.75 | 4.5 | 400K | — | ✓ | high | openai ⚠ |
 | OpenAI o3 | 2 | 8 | 200K | ✓ | — | med | openai ⚠ (vision unconfirmed) |
 | xAI Grok 4.3 | 1.25 | 2.5 | 1M | — | ✓ | med | [x.ai](https://docs.x.ai/developers/models) ⚠ |
-| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) ⚠ |
+| Zhipu GLM-5.2 | 1.4 | 4.4 | — | ✓ | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) (verified 07-04; MIT claim unverified) |
+| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | z.ai (verified 07-04) |
 | Zhipu GLM-4.7 | 0.6 | 2.2 | — | — | — | med | z.ai ⚠ |
 | DeepSeek-V4-flash | 0.14 | 0.28 | 1M | ✓ | — | high | [deepseek](https://api-docs.deepseek.com/quick_start/pricing) ⚠ |
 | DeepSeek-V4-pro | 0.435 | 0.87 | 1M | ✓ | — | high | deepseek ⚠ (a secondary source disputes this — verify) |

@@ -30,10 +30,20 @@ Russian is the primary, authoritative documentation; English copies live in `*.e
 | **M9.1 — Form/Login/Validation primitives** | ✅ done (offline) — pw-executor `fill`/`type`/`press`/`select` + storageState auth (login-as-test) + assert/negative layer, ADR-026 |
 | **M9.2a — GoalPlanner (NL→plan)** | ✅ done (offline) — a goal-directed grounded planner (explore-first, never hallucinates selectors) + `--goal` auto-mode + a minimal RunConfig YAML, ADR-027 |
 | **M9.2b — Two-phase + describe-first** | ✅ done (offline) — full explore→site map→one-shot scenario from a goal/description (cross-page, grounded in real elements); `--describe` + a rich RunConfig (auth/scenarios), ADR-028 |
-| **M9.3 — Control-API (non-MCP)** | ✅ done (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); chat front + CI templates remain (GAP-M9-03), ADR-023/032 |
+| **M9.3 — Control-API (non-MCP)** | ✅ done (Wave B) — Go `cmd/control-api` (localhost-bind + bearer-token + CORS); chat front (`docs/chat/`) + CI templates (`docs/ci-templates/`) — ✅ (M9.3-tail, GAP-M9-03 closed), ADR-023/032/040 |
 | **M9.4 + M9.5 — Tabs + backend correlation** | ✅ done (offline, Wave A) — in-app tabs (`[role=tab]`) + browser tabs (multi-page) + `traceparent` injection into requests, ADR-022/024 |
 | **M9.6 — Browser modes** | ✅ done (offline, Wave D) — headed + CDP-attach (env toggle `PW_HEADLESS=0` / `PW_CDP_ENDPOINT`); **Chromium-only by design**, ADR-036/037 |
-| **M11.x — Distribution/Pages** | ✅ partial — docker-compose · Helm/Flux + Secret plumbing (M11.3) · GitHub Pages hub + calculators (M11.6/b). Details — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M9.7 — Pluggable adapters** | 🔶 partial — model/backend via the LiteLLM router (ADR-045); auth/deploy adapters remain (GAP-M9-08) |
+| **M9.8-R3 — Co-pilot takeover (brain-side)** | ✅ done — takeover/return over RunControl gRPC (`interrupt()`/`Command(resume)`, abort>takeover), ADR-054; MV3 extension → @0xCoDSnet |
+| **M9.9 — Replay-in-UI (R1)** | ✅ done — ▶/🔁/📌 run/replay/baseline + verdict across the vanilla consoles (`mode=replay\|baseline`, `from_run`), ADR-047 |
+| **M9.10 — Multi-turn authoring (R2)** | ✅ done — multi-turn dialogue (`conversation_id` → checkpointer resume, `messages` channel), ADR-048 |
+| **M11.x — Distribution/install** | ✅ done — release pipeline + Cosign-keyless + syft SBOM (M11.1, ADR-030) · Helm/Flux + Secret plumbing (M11.3, ADR-035) · air-gapped bundle + offline verifier (M11.4) · installer (`install.sh`/`install.ps1`/Homebrew) + schema-driven wizard + config domain + `/readyz` (M11.5, ADR-059..062) · Pages hub + calculators (M11.6/b). Tail: a signed release/bundle on the first `v*` tag. Details — [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) |
+| **M12 — OpenAI-compat shim + unified console** | ✅ done — `POST /v1/chat/completions` (1 turn→1 run) + unified `docs/index.html` (#connect/#build/#chat), ADR-041 |
+| **M13 — Persistence / 6-domain store-gateway** | ✅ done — store-gateway across 6 domains (`runs`·`scenarios`/`tests`·`chats`·`results`·`metrics` + `config`), SQLite-first, ADR-049/050/062 |
+| **M14 — Rich AG-UI co-pilot (in-house vanilla)** | ✅ done — server→client AG-UI over WS `/v1/stream`; split Settings\|Tests + live timeline + auto-HITL; CopilotKit dropped, `frontend/` frozen (ADR-052/055). Tails: the terminal `run.finished` (#86) + AG-UI/auto-HITL signal in replay (#87) |
+| **M-STRUCTURED-OUT — Strict structured output** | ✅ done — strict `tool_use`/`json_schema` + `extract_json` for authoring/heal (ADR-057) |
+| **M15 — Metrics-in-UI + token-cost** | ✅ done — native SVG results/metrics panels; **M15.1** — the 8th token-cost metric (`tokens` block → `cost_usd`), ADR-051 |
+| **M9-LIVE-prep — Live-run preparation** | ✅ done — an executable `docs/M9_LIVE_PLAN.md` (8 factual errors) + `scripts/collect-live-run.sh` (a redacting artifact collector), #88 |
 
 Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -46,7 +56,7 @@ control-plane / CLI                perceive→plan→act→verify→heal        
 - **Python** — the brain: LangGraph state machine + planning/healing logic.
 - **TypeScript** — `pw-executor`: our own Playwright server (we **build**, never adopt a turnkey product — see ADR-001).
 
-Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (47 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
+Full design: [`ARCHITECTURE.md`](ARCHITECTURE.md) (62 ADRs) · deep-dives in [`docs/`](docs/) · design provenance in [`docs/DESIGN_RECORD.md`](docs/DESIGN_RECORD.md).
 
 > **Browser modes (M9.6):** own-headless by default; `PW_HEADLESS=0` — headed (visible), `PW_CDP_ENDPOINT` — CDP-attach to the user's existing Chrome. The engine is **Chromium-only by design** (ADR-036); deterministic golden replay is headless-only (see [`docs/DETERMINISM.md`](docs/DETERMINISM.md)).
 

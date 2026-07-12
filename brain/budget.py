@@ -34,13 +34,28 @@ class BudgetTracker:
         self.heal_limit = heal_limit if heal_limit is not None else _limit("HEAL_TOKEN_LIMIT", 20000)
         self.total_limit = total_limit if total_limit is not None else _limit("TOTAL_TOKEN_LIMIT", 0)
         self.spent: dict = {"plan": 0, "heal": 0}
+        # M15.1: prompt/completion split (spent[role] is their sum) so a run's cost can price in-vs-out
+        # tokens separately (they have different $/1M). Accumulated in add(), summarized in summary().
+        self.prompt: dict = {"plan": 0, "heal": 0}
+        self.completion: dict = {"plan": 0, "heal": 0}
 
     def add(self, role: str, result) -> None:
-        n = int(getattr(result, "prompt_tokens", 0) or 0) + int(getattr(result, "completion_tokens", 0) or 0)
-        self.spent[role] = self.spent.get(role, 0) + n
+        p = int(getattr(result, "prompt_tokens", 0) or 0)
+        c = int(getattr(result, "completion_tokens", 0) or 0)
+        self.spent[role] = self.spent.get(role, 0) + p + c
+        self.prompt[role] = self.prompt.get(role, 0) + p
+        self.completion[role] = self.completion.get(role, 0) + c
 
     def total(self) -> int:
         return sum(self.spent.values())
+
+    def summary(self) -> dict:
+        """M15.1: per-run token summary written into the report artifacts (plan.json / heal-report.json);
+        the control-API prices it into `cost_usd`. `spent` == prompt+completion per role."""
+        return {"prompt": sum(self.prompt.values()), "completion": sum(self.completion.values()),
+                "total": self.total(),
+                "plan": {"prompt": self.prompt.get("plan", 0), "completion": self.completion.get("plan", 0)},
+                "heal": {"prompt": self.prompt.get("heal", 0), "completion": self.completion.get("heal", 0)}}
 
     def _role_limit(self, role: str) -> int:
         return self.plan_limit if role == "plan" else self.heal_limit
@@ -54,6 +69,8 @@ class BudgetTracker:
 
     def reset(self) -> None:
         self.spent = {"plan": 0, "heal": 0}
+        self.prompt = {"plan": 0, "heal": 0}
+        self.completion = {"plan": 0, "heal": 0}
 
 
 _tracker = BudgetTracker()

@@ -31,8 +31,8 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 | Свойство | Значение (проверено по коду) | Источник |
 |---|---|---|
 | Тип вывода | структурированный JSON (index-pick / scenario), **не** длинная генерация | `brain/planner.py` |
-| Размер вывода | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:87,146,187,231` · `healing.py:122,168` |
-| Контекст входа | ≤ **8000** симв. (PLAN-меню) / ≤ **3000** симв. (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:183` · `healing.py:118` |
+| Размер вывода | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:116,177,228,282` · `healing.py:131,176` |
+| Контекст входа | ≤ **8000** симв. (PLAN-меню) / ≤ **3000** симв. (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:222` · `healing.py:126` |
 | Vision-вход | один PNG (≈1280×720) + крошечное меню марок | `healing.py:168` |
 | Temperature | **0** (детерминированный выбор) | `planner.py` / `healing.py` |
 | Replay (hot path) | **LLM-free**, 0 токенов | `brain/replay.py` |
@@ -42,7 +42,7 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 от 3–4B и выше — см. §3 и калькулятор VRAM (§5).
 
 > **In-code дефолты остаются `claude-*`** (`_DEFAULT_MODEL = {"planner": "claude-opus-4-8",
-> "heal": "claude-sonnet-4-6"}`, `llm.py:179`). Offline-прогоны используют `FakeBackend` (детерминизм/CI);
+> "heal": "claude-sonnet-4-6"}`, `llm.py:233`). Offline-прогоны используют `FakeBackend` (детерминизм/CI);
 > реальная локальная модель — **opt-in** через env-профиль ниже. RTX 2060 12 ГБ — это **один пример**
 > среди тиров 8/12/16/24 ГБ, а не основа методики.
 
@@ -50,9 +50,9 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 
 ## 2. Env-профиль
 
-Все переменные читаются `make_backend` (`llm.py:182–223`). **Приоритет: role-specific
+Все переменные читаются `make_backend` (`llm.py:241–279`). **Приоритет: role-specific
 `LLM_<KEY>_<ROLE>` > глобальный `LLM_<KEY>`.** Роли: `PLANNER`, `HEAL`. Ключи: `BACKEND`, `MODEL`,
-`BASE_URL`, `API_KEY`, `VISION`.
+`BASE_URL`, `API_KEY`, `VISION`, `STRUCTURED`.
 
 | Env | Назначение | Примечание |
 |---|---|---|
@@ -61,6 +61,7 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 | `LLM_BASE_URL` | URL OpenAI-compat endpoint (`…/v1`) | local: Ollama/vLLM/llama.cpp |
 | `LLM_API_KEY` | ключ; для local — любая непустая строка (`noauth`) | fallback к `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` |
 | `LLM_VISION` | `1` → включить vision на OpenAI-compat HEAL-бэкенде | text-only модель vision пропускает |
+| `LLM_STRUCTURED` | `1` → строгий structured-output (Anthropic tool_use / OpenAI json_schema, ADR-057) на OpenAI-compat бэкенде | дефолт OFF; иначе `complete`+`extract_json`-fallback |
 | суффикс `_PLANNER` / `_HEAL` | переопределяет глобальный ключ для роли | напр. `LLM_MODEL_PLANNER` |
 
 **Деградация безопасна:** при отсутствии ключа/SDK `make_backend` → `None` ⇒ PLAN падает на
@@ -146,24 +147,26 @@ export LLM_VISION=1
 
 ---
 
-### 3.4 Облачные модели — ориентировочные цены (⚠ verify, cutoff Jan-2026)
+### 3.4 Облачные модели — ориентировочные цены (⚠ verify; cloud-цены re-verified 2026-07-04)
 
 Источник цен для cost-explorer (`docs/index.html`). **Редактируемые, ориентировочные** — не утверждение об
 актуальной стоимости (облачные цены дрейфуют). Claude — из claude-api skill (2026-06-04); остальные —
-исследование 2026-06-28 по страницам провайдеров. Обновляются: CI `prices-refresh.yml` (еженедельно, через
+исследование 2026-06-28, **cloud-цены re-verified 2026-07-04** (WebFetch первичных pricing-страниц). Обновляются: CI `prices-refresh.yml` (еженедельно, через
 OpenRouter → PR) + кнопка «Обновить из OpenRouter» на странице. **Пригодность (fit)** для structured-JSON
 Sentinel — **мнение**, не бенчмарк.
 
 | Модель | $/1M вход | $/1M выход | Контекст | reasoning | vision | fit | Источник |
 |---|---|---|---|---|---|---|---|
 | Claude Opus 4.8 | 5 | 25 | 1M | ✓ | ✓ | high | [anthropic](https://www.anthropic.com/pricing) (skill 06-04) |
-| Claude Sonnet 4.6 | 3 | 15 | 1M | ✓ | ✓ | high | anthropic (skill 06-04) |
+| Claude Sonnet 5 | 2 | 10 | 1M | ✓ | ✓ | high | anthropic (verified 07-04; intro 2/10 → 3/15 с 09-01) |
 | Claude Haiku 4.5 | 1 | 5 | 200K | — | ✓ | high | anthropic (skill 06-04) |
-| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | [openai](https://openai.com/api/pricing/) ⚠ |
+| GPT-5.5 (флагман) | 5 | 30 | 1M | ✓ | ✓ | high | [openai](https://developers.openai.com/api/docs/pricing) (verified 07-04) |
+| GPT-5.4 | 2.5 | 15 | 1M | — | ✓ | high | openai (verified 07-04) |
 | GPT-5.4-mini | 0.75 | 4.5 | 400K | — | ✓ | high | openai ⚠ |
 | OpenAI o3 | 2 | 8 | 200K | ✓ | — | med | openai ⚠ (vision не подтверждён) |
 | xAI Grok 4.3 | 1.25 | 2.5 | 1M | — | ✓ | med | [x.ai](https://docs.x.ai/developers/models) ⚠ |
-| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) ⚠ |
+| Zhipu GLM-5.2 | 1.4 | 4.4 | — | ✓ | — | med | [z.ai](https://docs.z.ai/guides/overview/pricing) (verified 07-04; MIT-claim не проверен) |
+| Zhipu GLM-5 | 1.0 | 3.2 | — | — | — | med | z.ai (verified 07-04) |
 | Zhipu GLM-4.7 | 0.6 | 2.2 | — | — | — | med | z.ai ⚠ |
 | DeepSeek-V4-flash | 0.14 | 0.28 | 1M | ✓ | — | high | [deepseek](https://api-docs.deepseek.com/quick_start/pricing) ⚠ |
 | DeepSeek-V4-pro | 0.435 | 0.87 | 1M | ✓ | — | high | deepseek ⚠ (вторичный источник спорит — проверьте) |

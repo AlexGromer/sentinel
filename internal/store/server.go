@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -41,17 +42,61 @@ CREATE TABLE IF NOT EXISTS step_failures (
   PRIMARY KEY (plan_id, step_key)
 );`
 
+// storeSchema (M13, ADR-050): the 5 StoreService domains. Portable SQL only (no INSERT OR REPLACE /
+// SQLite pragmas) so a Postgres backend (M13-service) drops in behind STORE_DSN with the same DDL.
+const storeSchema = `
+CREATE TABLE IF NOT EXISTS runs (
+  run_id TEXT PRIMARY KEY, conversation_id TEXT, mode TEXT, target TEXT, planner TEXT,
+  state TEXT, exit_code INTEGER, artifact_dir TEXT, error TEXT, started_at TEXT, finished_at TEXT
+);
+CREATE TABLE IF NOT EXISTS scenarios (
+  scenario_id TEXT PRIMARY KEY, name TEXT, target TEXT, run_mode TEXT, plan_hash TEXT,
+  steps_json TEXT, unmatched INTEGER, tags TEXT, source_run_id TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS tests (
+  test_id TEXT PRIMARY KEY, scenario_id TEXT, plan_hash TEXT, name TEXT, schedule TEXT,
+  enabled INTEGER, last_status TEXT, last_run_id TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS chats (
+  conversation_id TEXT PRIMARY KEY, last_target TEXT, turn_count INTEGER, last_active TEXT,
+  last_goal TEXT, summary TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS results (
+  run_id TEXT PRIMARY KEY, plan_id TEXT, mode TEXT, verdict TEXT, exit_code INTEGER,
+  healed INTEGER, failed INTEGER, regressions_json TEXT, steps_json TEXT, coverage REAL,
+  duration_ms INTEGER, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS metrics (
+  run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT
+);
+CREATE TABLE IF NOT EXISTS config (
+  key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
+CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics(run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
+CREATE INDEX IF NOT EXISTS idx_scenarios_target ON scenarios(target);`
+
 func now() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
-// Server is the SQLite-backed PersistenceService. Writes are serialized (single-writer).
+// Server is the SQLite-backed store-gateway: the legacy heal/trust PersistenceService (M2b) plus the
+// M13 StoreService (5 domains, ADR-050). Writes are serialized (single-writer, ADR-007).
 type Server struct {
 	pb.UnimplementedPersistenceServiceServer
-	db        *sql.DB
-	mu        sync.Mutex
-	goldenKey []byte // #24: HMAC key for golden_snapshots integrity (state/golden.key)
+	pb.UnimplementedStoreServiceServer // M13 (ADR-050): runs/scenarios/tests/chats/results/metrics
+	db                                 *sql.DB
+	mu                                 sync.Mutex
+	goldenKey                          []byte // #24: HMAC key for golden_snapshots integrity (state/golden.key)
 }
 
 func New(path string) (*Server, error) {
+	// M13 (ADR-050) scaffold: a Postgres backend behind STORE_DSN is deferred to M13-service
+	// (M11/ADR-053). Recognize the env now and fail loudly rather than silently serving SQLite when
+	// Postgres was requested (mirrors CHECKPOINT_DSN in brain/__main__.py:_checkpointer).
+	if dsn := os.Getenv("STORE_DSN"); dsn != "" {
+		return nil, fmt.Errorf("STORE_DSN is set but the Postgres backend is deferred to M13-service "+
+			"(M11/ADR-053); unset STORE_DSN to use the SQLite path %q", path)
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
@@ -60,6 +105,9 @@ func New(path string) (*Server, error) {
 		return nil, err
 	}
 	if _, err = db.Exec(schema); err != nil {
+		return nil, err
+	}
+	if _, err = db.Exec(storeSchema); err != nil { // M13: the 5 StoreService domains
 		return nil, err
 	}
 	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)

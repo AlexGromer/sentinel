@@ -37,6 +37,8 @@ SINGLE_LANGUAGE: set[str] = {
     # project management process; a bilingual copy would immediately diverge.
     "BACKLOG.md",               # sprint backlog; tooling-managed, not end-user docs
     "FILEMAP.md",               # auto-updated file-map index; internal working file
+    "docs/GTM_STRATEGY.md",     # internal GTM/monetization strategy draft (proposed ADR-056)
+    "docs/M9_LIVE_PLAN.md",     # internal live-test plan + feedback protocol
     # Community-health files — GitHub ecosystem convention is English-only for
     # these standard files; translating them would break platform integrations.
     "CODE_OF_CONDUCT.md",       # standard GitHub community health file

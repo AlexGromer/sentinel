@@ -82,7 +82,7 @@ What to check:
 - Call `replay` (deterministic, **no LLM**) on an existing `plan.json` — needs no sampling.
 - Call `explore`/`heal` — they request the model from the host via `sampling/createMessage`; **in UI mode the
   Inspector prompts you to answer the sampling request** (you act as the model) → this exercises `SamplingBackend`
-  (`brain/llm.py:150-175`). No sampling → the backend is unavailable → fallback to heuristic/L1–L6.
+  (`brain/llm.py:203-229`). No sampling → the backend is unavailable → fallback to heuristic/L1–L6.
 
 CLI mode (`--cli`) is handy for scripted checks of tools/resources/prompts; **verify sampling support against your
 Inspector version** (sampling is interactive, usually via the UI). The offline analogue without a live host is

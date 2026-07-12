@@ -20,13 +20,35 @@ import sys
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
-from . import runcontrol
+from . import agui, runcontrol
 from .otel import span
 from .state import RunState, normalize_url, semantic_id, canonical_plan_hash
 
 
 def log(*a: object) -> None:
     print("[brain]", *a, file=sys.stderr, flush=True)
+
+
+def _agui(event_type: str, run_id: str, **data) -> None:
+    """Best-effort AG-UI emission (M14, ADR-055; docs/M14_CONTRACT.md §2/§4): additive stdout only,
+    UNCONDITIONAL — never gates on run outcome and never touches plan_hash/exit codes/artifacts. A
+    failure to emit (e.g. a non-JSON-serializable data value) is swallowed so it can never break the
+    run; callers below are plain node code, not wrapped in their own try/except."""
+    try:
+        agui.emit(event_type, run_id, **data)
+    except Exception as e:
+        log("agui emit failed:", e)
+
+
+def _tool_args_summary(p: dict) -> str:
+    """A short, non-secret one-line description of a pending action for `tool.call.args_summary`
+    (§2). Reuses the already-unsanitized `intent`/`target` fields the codebase already logs/persists
+    elsewhere (tx_write, log) — never the raw locator dict or a fill/type value (M9.1 secrets stay as
+    `secretRef`, resolved only inside pw-executor; see replay.py `_act`)."""
+    at = p.get("action_type", "")
+    if at == "navigate":
+        return f"navigate -> {p.get('target', '')}"
+    return p.get("intent") or f"{at} {p.get('name') or p.get('semantic_id', '')}"
 
 
 def _elements_from_interactives(elements: list, path: str) -> list:
@@ -95,6 +117,30 @@ def _user_turns(messages: list) -> list:
     return out
 
 
+_REFINE_HISTORY_KEEP = int(os.environ.get("SENTINEL_REFINE_HISTORY_KEEP", "6"))
+
+
+def _rolling_summary(user_turns: list) -> str:
+    """M9.10/GAP-M9-20: a bounded one-line summary of a conversation (turn count + the opening request).
+    Feeds the chats projection (brain/store.py) and the 'earlier context' prefix when older turns are
+    capped out of the refine prompt — so neither the prompt nor the stored summary grows with length."""
+    turns = user_turns or []
+    if not turns:
+        return ""
+    return f"{len(turns)} turn(s); started: {(turns[0] or '')[:80]!r}"
+
+
+def _capped_history(user_turns: list, keep: int = _REFINE_HISTORY_KEEP) -> list:
+    """GAP-M9-20: cap refine history to the last `keep` user-turns; older turns collapse into a single
+    summary line so the refine prompt (and its token cost) stays bounded as a conversation grows. A
+    short conversation (<= keep turns) is returned unchanged — byte-identical to the pre-cap behavior."""
+    turns = list(user_turns or [])
+    if len(turns) <= keep:
+        return turns
+    older, recent = turns[:-keep], turns[-keep:]
+    return [f"[earlier: {_rolling_summary(older)}]"] + recent
+
+
 def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
@@ -109,6 +155,15 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
 
     def perceive(state: RunState) -> dict:
         """Snapshot the current page (URL + accessibility tree). No LLM."""
+        rid = state.get("run_id", "")
+        if not state.get("page_model"):
+            # M14 (ADR-055): the explore loop re-enters perceive once per step (via checkpoint), but
+            # page_model is only ever empty on the very first pass (both real __main__.py init states
+            # and the offline harnesses seed current_step=1 for a synthetic pre-recorded nav step, so
+            # current_step can't be used as the cold-start signal here — page_model can).
+            _agui("run.started", rid, mode=state.get("run_mode", ""), target=state.get("target_url", ""),
+                  planner=planner.name)
+        _agui("state.transition", rid, to="perceive")
         cur = ex.call("browser.currentUrl")
         snap = ex.call("browser.snapshot")
         return {"current_url": cur.get("url", ""),
@@ -200,6 +255,10 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         p = state.get("_pending")
         if not p:
             return {"_last_ok": False}
+        rid = state.get("run_id", "")
+        _agui("tool.call", rid, name=p.get("action_type", ""), args_summary=_tool_args_summary(p))
+        _agui("step.progress", rid, n=p.get("step_id", 0), total=state.get("max_steps", 40),
+              desc=p.get("intent", ""))
         try:
             at = p["action_type"]
             if at == "navigate":
@@ -233,13 +292,30 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                 "current_step": p["step_id"], "_last_ok": True}
 
     def verify(state: RunState) -> dict:
-        """Explore-mode verify: trust act's result. Replay-mode healing lives in brain/replay.py."""
-        return {"_verify_ok": bool(state.get("_last_ok", True))}
+        """Explore-mode verify: trust act's result. Replay-mode healing lives in brain/replay.py.
+
+        M14 (ADR-055): a successful verify is the auto-HITL failure-streak's ONLY reset point (the
+        heal node below is a stub that can never itself succeed in explore mode)."""
+        ok = bool(state.get("_last_ok", True))
+        _agui("state.transition", state.get("run_id", ""), to=("checkpoint" if ok else "heal"))
+        out = {"_verify_ok": ok}
+        if ok:
+            out["consecutive_heal_failures"] = 0
+        else:
+            out["failed_steps"] = state.get("failed_steps", 0) + 1
+        return out
 
     def heal(state: RunState) -> dict:
-        """STUB in the explore graph (explore discovers, it does not heal). See brain/replay.py."""
+        """STUB in the explore graph (explore discovers, it does not heal). See brain/replay.py.
+
+        M14 (ADR-055): still the auto-HITL failure signal — every entry means the prior act+verify
+        failed and this stub cannot recover it, so it always counts as a miss. The reset lives in
+        verify() above, on the next successful action."""
         log("heal node: explore-mode stub (real healing is in replay)")
-        return {}
+        rid = state.get("run_id", "")
+        n = state.get("consecutive_heal_failures", 0) + 1
+        _agui("heal", rid, step=state.get("current_step", 0), strategy="stub", ok=False)
+        return {"consecutive_heal_failures": n}
 
     def checkpoint(state: RunState) -> dict:
         """LangGraph persists at each superstep boundary.
@@ -252,13 +328,26 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         abort > takeover: if the orchestrator ABORTS (budget breach / external Abort) while or after a
         takeover, converge immediately instead of resuming the walk. This node is re-entered on resume
         (bypassing plan()'s own abort check), so it must honour abort here too. No-op / no arm when no
-        orchestrator is wired (poll() -> "continue"), so the standalone/offline path is byte-identical."""
-        verb = rc.poll(state.get("run_id", ""), "checkpoint")
+        orchestrator is wired (poll() -> "continue"), so the standalone/offline path is byte-identical.
+
+        M14 (ADR-055): full auto-escalate-to-HITL. Past SENTINEL_AUTO_HITL_THRESHOLD consecutive heal
+        failures, arm the SAME `_takeover_armed` latch an operator takeover would — route_checkpoint
+        already routes an armed latch to the `takeover` node, so no new pause machine is needed.
+        Default threshold is 0 (env unset/0 = OFF): the check below never fires, so
+        `_takeover_armed`/plan_hash/exit-code behavior is byte-identical to pre-M14."""
+        rid = state.get("run_id", "")
+        verb = rc.poll(rid, "checkpoint")
         if verb == runcontrol.ABORT:
             log("checkpoint: orchestrator abort -> converging (abort > takeover)")
             return {"exploration_complete": True, "_takeover_armed": False}
         if verb == runcontrol.TAKEOVER:
             log("checkpoint: operator takeover pending -> arming pause")
+            return {"_takeover_armed": True}
+        threshold = int(os.environ.get("SENTINEL_AUTO_HITL_THRESHOLD", "0"))
+        n = state.get("consecutive_heal_failures", 0)
+        if threshold > 0 and n >= threshold:
+            log(f"checkpoint: auto-HITL threshold reached ({n} >= {threshold}) -> arming pause")
+            _agui("hitl_needed", rid, reason="consecutive_heal_failures", count=n)
             return {"_takeover_armed": True}
         return {}
 
@@ -289,7 +378,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         site_map = state.get("site_map") or {}
         base_id = len(state.get("exploration_plan", []))
         # M9.10: prior user turns (all but the current — which IS this turn's goal/describe) = refine context.
-        prior = _user_turns(state.get("messages"))[:-1]
+        # GAP-M9-20: cap to the last N turns + a rolling-summary prefix so the prompt stays bounded.
+        prior = _capped_history(_user_turns(state.get("messages"))[:-1])
         if scenario_head.name == "goal":
             out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"), history=prior)
             steps, unmatched = ground_scenario(out.get("refs", []), site_map, start_id=base_id + 1)
@@ -319,8 +409,17 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "interactive_seen": len(state.get("interactive_seen", [])),
                     "interactive_exercised": len(state.get("interactive_exercised", [])),
                     "steps": steps}
+        from . import budget  # M15.1: per-run token totals -> persistResult ingests tokens_* + cost_usd
+        plan_obj["tokens"] = budget.tracker().summary()
+        plan_obj["models"] = {"plan": getattr(planner, "model", None)}
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:
             json.dump(plan_obj, f, indent=2)
+        # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen
+        # during explore) — NOT the true process exit code, which __main__.py computes after
+        # app.invoke() returns (outside this graph); that final code is out of scope here.
+        _agui("verdict", state.get("run_id", ""), verdict=("failed" if state.get("errors") else "ok"),
+              exit_code=(1 if state.get("errors") else 0), healed=0,
+              failed=state.get("failed_steps", 0))
         return {"plan_hash": ph}
 
     def route_plan(state: RunState) -> str:

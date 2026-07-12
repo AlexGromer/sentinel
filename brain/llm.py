@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import os
 from dataclasses import dataclass
 from typing import Optional, Protocol
@@ -32,31 +33,43 @@ from .executor import log
 @dataclass
 class LLMResult:
     """Normalized completion. `model` is the model the provider actually used (MCP sampling sets
-    this); for fixed backends it mirrors `backend.model`."""
+    this); for fixed backends it mirrors `backend.model`. `data` is the parsed JSON object when the
+    completion came from a structured-output call (native tool_use/json_schema) or was extracted
+    downstream; None for a plain text completion."""
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
     model: Optional[str] = None
+    data: Optional[dict] = None
 
 
 class LLMBackend(Protocol):
     """Provider-neutral chat surface. `name` is the provider ("anthropic"|"openai"|"sampling") —
-    distinct from a planner's `name`. `model` is fixed per backend, never per call."""
+    distinct from a planner's `name`. `model` is fixed per backend, never per call.
+
+    `supports_structured` advertises native structured output (Anthropic tool_use / OpenAI
+    json_schema): when True, callers use `complete_json` for a guaranteed JSON object; when False
+    (MCP sampling, local models with it disabled) they fall back to `complete` + `extract_json`."""
     name: str
     model: str
     supports_vision: bool
+    supports_structured: bool
 
     def complete(self, prompt: str, *, max_tokens: int, temperature: float) -> LLMResult: ...
 
     def complete_vision(self, prompt: str, image_b64: str, *, max_tokens: int,
                         temperature: float) -> LLMResult: ...
 
+    def complete_json(self, prompt: str, *, schema: dict, max_tokens: int,
+                      temperature: float) -> LLMResult: ...
+
 
 class AnthropicBackend:
-    """Native Anthropic (the calibrated default). Vision-capable."""
+    """Native Anthropic (the calibrated default). Vision-capable + native structured output."""
 
     name = "anthropic"
     supports_vision = True
+    supports_structured = True
 
     def __init__(self, model: str, api_key: Optional[str] = None) -> None:
         import anthropic
@@ -87,6 +100,25 @@ class AnthropicBackend:
                 {"type": "text", "text": prompt}]}])
         return self._result(msg)
 
+    def complete_json(self, prompt: str, *, schema: dict, max_tokens: int,
+                      temperature: float) -> LLMResult:
+        """Structured output via a single forced tool call: the model MUST return `emit(input=…)`
+        matching `schema`, so `.data` is the parsed object (no text-slicing)."""
+        msg = self._client.messages.create(
+            model=self.model, max_tokens=max_tokens, temperature=temperature,
+            tools=[{"name": "emit", "description": "Return the result as structured JSON.",
+                    "input_schema": schema}],
+            tool_choice={"type": "tool", "name": "emit"},
+            messages=[{"role": "user", "content": prompt}])
+        data = next((getattr(b, "input", None) for b in msg.content
+                     if getattr(b, "type", "") == "tool_use"), None)
+        u = getattr(msg, "usage", None)
+        pt = int(getattr(u, "input_tokens", 0) or 0) if u else 0
+        ct = int(getattr(u, "output_tokens", 0) or 0) if u else 0
+        text = json.dumps(data) if data is not None else \
+            "".join(getattr(b, "text", "") for b in msg.content).strip()
+        return LLMResult(text, pt, ct, model=getattr(msg, "model", None), data=data)
+
 
 class OpenAICompatBackend:
     """Any OpenAI-compatible endpoint (base_url + key). Covers ChatGPT, DeepSeek, Qwen (DashScope
@@ -96,10 +128,14 @@ class OpenAICompatBackend:
     name = "openai"
 
     def __init__(self, model: str, *, base_url: Optional[str] = None,
-                 api_key: Optional[str] = None, supports_vision: bool = False) -> None:
+                 api_key: Optional[str] = None, supports_vision: bool = False,
+                 supports_structured: bool = False) -> None:
         import openai
         self.model = model
         self.supports_vision = supports_vision
+        # opt-in: many OpenAI-compatible endpoints (Ollama/vLLM) reject response_format=json_schema,
+        # so structured output is OFF by default and those fall back to complete()+extract_json.
+        self.supports_structured = supports_structured
         kwargs: dict = {}
         if base_url:
             kwargs["base_url"] = base_url
@@ -131,6 +167,23 @@ class OpenAICompatBackend:
                 {"type": "text", "text": prompt}]}])
         return self._result(resp)
 
+    def complete_json(self, prompt: str, *, schema: dict, max_tokens: int,
+                      temperature: float) -> LLMResult:
+        """Structured output via `response_format=json_schema`: the reply content is the JSON object.
+        Only used when `supports_structured` (opt-in `LLM_STRUCTURED=1`); `.data` is None if the
+        endpoint returned non-JSON, letting `complete_structured` salvage via `extract_json`."""
+        resp = self._client.chat.completions.create(
+            model=self.model, max_tokens=max_tokens, temperature=temperature,
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "out", "schema": schema}},
+            messages=[{"role": "user", "content": prompt}])
+        r = self._result(resp)
+        try:
+            r.data = json.loads(r.text) if r.text else None
+        except Exception:
+            r.data = None
+        return r
+
 
 # MCP sampling session, set by the brain MCP server (M7, ADR-020) for the duration of a tool call.
 # Holds (event_loop, mcp.ServerSession). `asyncio.to_thread` copies this contextvar into the worker
@@ -156,6 +209,7 @@ class SamplingBackend:
 
     name = "sampling"
     supports_vision = False
+    supports_structured = False
 
     def __init__(self, loop, session, model: str = "mcp-sampling", timeout: float = 120.0) -> None:
         self._loop, self._session, self.model, self._timeout = loop, session, model, timeout
@@ -214,10 +268,72 @@ def make_backend(role: str) -> Optional[LLMBackend]:
                 log(f"make_backend[{role}]: openai needs a key or base_url -> fallback")
                 return None
             supports_vision = (_env(role, "VISION") or "") == "1"
+            supports_structured = (_env(role, "STRUCTURED") or "") == "1"
             return OpenAICompatBackend(model, base_url=base_url, api_key=key,
-                                       supports_vision=supports_vision)
+                                       supports_vision=supports_vision,
+                                       supports_structured=supports_structured)
         log(f"make_backend[{role}]: unknown LLM_BACKEND={provider!r} -> fallback")
         return None
     except Exception as e:  # missing SDK / bad config -> fallback, never crash a run
         log(f"make_backend[{role}]: {provider} unavailable -> fallback:", e)
         return None
+
+
+def extract_json(text: str) -> dict:
+    """Parse the first complete JSON object out of a (possibly noisy) model reply.
+
+    Robust replacement for the fragile `text[text.find("{"): text.rfind("}") + 1]` slice: scans
+    balanced braces (string-aware) from the first `{` to its matching `}`, so a markdown code fence,
+    trailing commentary, or a stray `}` in prose no longer corrupts the parse. Raises on a missing or
+    invalid object — every caller already degrades to heuristic/empty on exception."""
+    s = text.strip()
+    start = s.find("{")
+    if start < 0:
+        raise ValueError("no JSON object in text")
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(s[start:i + 1])
+    # unbalanced (truncated reply) -> last-ditch: the original first-{ .. last-} span
+    return json.loads(s[start:s.rfind("}") + 1])
+
+
+def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
+                        temperature: float) -> LLMResult:
+    """Obtain a JSON object from `backend`, preferring native structured output.
+
+    When the backend advertises `supports_structured`, use `complete_json` (Anthropic tool_use /
+    OpenAI json_schema) — the reply is a guaranteed object, no text-slicing. Otherwise (MCP sampling,
+    local models with structured OFF) fall back to `complete` + `extract_json`. The returned
+    NEVER raises on an unparseable reply: it returns the `LLMResult` with `.data=None` so the CALLER
+    can still charge `budget.tracker().add(role, result)` with the tokens the model already spent
+    (ADR-021 over-budget guard) and THEN degrade to the heuristic / an empty result on `data is None`.
+    Only a backend (network/SDK) error propagates — and there no tokens were produced to book."""
+    if getattr(backend, "supports_structured", False):
+        r = backend.complete_json(prompt, schema=schema, max_tokens=max_tokens,
+                                  temperature=temperature)
+    else:
+        r = backend.complete(prompt, max_tokens=max_tokens, temperature=temperature)
+    if r.data is None:  # fallback path, or a native reply with no structured payload -> salvage
+        try:
+            r.data = extract_json(r.text)
+        except Exception:
+            r.data = None  # caller charges budget, then degrades on `data is None`
+    return r

@@ -146,7 +146,9 @@ func TestRunEventsStream(t *testing.T) {
 		t.Fatalf("events content-type: %q want text/event-stream", ct)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"event: state", "event: log", "planning step 1", "walking page", `"exit_code":1`, "event: done"} {
+	// M14 tail 1: the injected run.finished reaches SSE as a RAW @@AGUI line inside a log event (SSE is
+	// never AG-UI-typed — that is WS-only; here we just confirm the terminal line is present).
+	for _, want := range []string{"event: state", "event: log", "planning step 1", "walking page", `"exit_code":1`, "run.finished", "event: done"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("events body missing %q:\n%s", want, body)
 		}
@@ -640,6 +642,112 @@ func TestConfigSchemaIncludesConversationID(t *testing.T) {
 	}
 	if _, ok := body.Fields["conversation_id"]; !ok {
 		t.Fatalf("config-schema fields missing conversation_id: %v", body.Fields)
+	}
+}
+
+// TestConfigSchemaIncludesLLMBackend: M11.5 PR-3 (ADR-060) — the form source-of-truth advertises the
+// LLM-backend surface (brain/llm.py make_backend) so the wizard can render its Model & Auth step, and
+// api_key is described as a secret but never carries a value.
+func TestConfigSchemaIncludesLLMBackend(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestServer().mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config-schema: got %d want 200", rec.Code)
+	}
+	var body struct {
+		Backends []string                  `json:"backends"`
+		Roles    []string                  `json:"roles"`
+		LLM      map[string]map[string]any `json:"llm"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("config-schema body: %v", err)
+	}
+	// backends enum mirrors brain/llm.py make_backend (anthropic|openai|sampling)
+	hasB := map[string]bool{}
+	for _, b := range body.Backends {
+		hasB[b] = true
+	}
+	for _, want := range []string{"anthropic", "openai", "sampling"} {
+		if !hasB[want] {
+			t.Fatalf("config-schema backends missing %q: %v", want, body.Backends)
+		}
+	}
+	// roles advertise the LLM_<KEY>_<ROLE> override surface
+	if len(body.Roles) != 2 || body.Roles[0] != "planner" || body.Roles[1] != "heal" {
+		t.Fatalf("config-schema roles = %v, want [planner heal]", body.Roles)
+	}
+	// the nested llm.backend.enum must stay in lockstep with the top-level backends (built from one slice)
+	enumRaw, _ := body.LLM["backend"]["enum"].([]any)
+	if len(enumRaw) != len(body.Backends) {
+		t.Fatalf("llm.backend.enum %v disagrees with backends %v", enumRaw, body.Backends)
+	}
+	for i, v := range enumRaw {
+		if s, _ := v.(string); s != body.Backends[i] {
+			t.Fatalf("llm.backend.enum[%d]=%v != backends[%d]=%q", i, v, i, body.Backends[i])
+		}
+	}
+	// every LLM descriptor is present and carries the exact env var name from brain/llm.py
+	wantEnv := map[string]string{
+		"backend": "LLM_BACKEND", "model": "LLM_MODEL", "base_url": "LLM_BASE_URL",
+		"api_key": "LLM_API_KEY", "vision": "LLM_VISION", "structured": "LLM_STRUCTURED",
+	}
+	for field, env := range wantEnv {
+		d, ok := body.LLM[field]
+		if !ok {
+			t.Fatalf("config-schema llm missing field %q: %v", field, body.LLM)
+		}
+		if d["env"] != env {
+			t.Fatalf("config-schema llm.%s env = %v, want %q", field, d["env"], env)
+		}
+	}
+	// api_key must be flagged secret (wizard renders a password field) and must NOT carry a value
+	if body.LLM["api_key"]["secret"] != true {
+		t.Fatalf("config-schema llm.api_key must be secret:true, got %v", body.LLM["api_key"]["secret"])
+	}
+	if _, leaked := body.LLM["api_key"]["default"]; leaked {
+		t.Fatalf("config-schema llm.api_key must never carry a default/value")
+	}
+}
+
+// TestBackendPresetsParseAndMatchSchema: M11.5 PR-3 (ADR-060) — docs/backend-presets.json parses and
+// every preset's backend is one the schema advertises (the "parses and matches" acceptance gate).
+func TestBackendPresetsParseAndMatchSchema(t *testing.T) {
+	// go test runs with CWD = the package dir (cmd/control-api); the presets live at repo-root docs/.
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "backend-presets.json"))
+	if err != nil {
+		t.Fatalf("read docs/backend-presets.json (must run from cmd/control-api): %v", err)
+	}
+	var doc struct {
+		Presets map[string]struct {
+			Backend string `json:"backend"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("docs/backend-presets.json does not parse: %v", err)
+	}
+	if len(doc.Presets) < 9 {
+		t.Fatalf("docs/backend-presets.json: got %d presets, want >=9", len(doc.Presets))
+	}
+	// the schema-advertised backend enum is the source of truth
+	rec := httptest.NewRecorder()
+	newTestServer().mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	var schema struct {
+		Backends []string `json:"backends"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &schema); err != nil {
+		t.Fatalf("config-schema body: %v", err)
+	}
+	allowed := map[string]bool{}
+	for _, b := range schema.Backends {
+		allowed[b] = true
+	}
+	for name, p := range doc.Presets {
+		if p.Backend == "" {
+			t.Fatalf("preset %q is missing a backend", name)
+		}
+		if !allowed[p.Backend] {
+			t.Fatalf("preset %q backend %q not in schema enum %v", name, p.Backend, schema.Backends)
+		}
 	}
 }
 

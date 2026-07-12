@@ -51,51 +51,53 @@ explore run (non-deterministic, human-supervised, one-time)
 ## Заморозка плана и схема `plan.json`
 
 По завершении успешного запуска explore мозг сериализует упорядоченную последовательность
-`PlannedAction` — включая разрешённые локаторы, альтернативы L1–L6, ожидаемые результаты
-и хеши эталонных снимков — в `plan.json`. Этот файл фиксируется в репозитории приложения
-и становится авторитетным определением теста.
+`PlannedAction` — включая разрешённые локаторы и их альтернативные стратегии восстановления —
+в `plan.json`. Этот файл фиксируется в репозитории приложения и становится авторитетным
+определением теста. Golden-хеши (`a11y_hash`/`screenshot_hash`) в `plan.json` **не входят** —
+они живут отдельно, в SQL-таблице `golden_snapshots`, и пишутся только явной командой
+`agentctl baseline update` (см. «Неизменяемые эталонные базовые линии» ниже).
 
 ### Схема
 
+Реальные top-level ключи (`brain/graph.py:401-416`):
+
 ```json
 {
-  "plan_id":          "<UUIDv4>",
-  "plan_hash":        "<SHA-256 of canonical JSON>",
-  "target_url":       "https://app.local",
-  "aut_version":      "<git SHA of the app under test at explore time>",
-  "exploration_seed": "<SHA-256(target_url + nav_structure_fingerprint)>",
-  "coverage_achieved": 0.91,
+  "plan_id":               "<UUIDv4>",
+  "plan_hash":              "<SHA-256 канонического JSON над steps[]>",
+  "target_url":             "https://app.local",
+  "run_mode":               "explore",
+  "coverage_target":        0.85,
+  "coverage_achieved":      0.91,
+  "interactive_seen":       42,
+  "interactive_exercised":  38,
   "steps": [
     {
-      "step_id":             "step-001",
-      "intent":              "Sign in as a standard user",
-      "semantic_id":         "auth/sign-in-button",
-      "action_type":         "click",
-      "locator":             "[data-testid='sign-in-btn']",
-      "locator_alternatives": {
-        "L1": "[data-testid='sign-in-btn']",
-        "L2": "role=button[name='Sign in']",
-        "L3": "[aria-label='Sign in']",
-        "L4": "text='Sign in' >> role=button",
-        "L5": ".auth-form button[type='submit']",
-        "L6": "//form[@class='auth-form']//button"
-      },
-      "value":              null,
-      "expected_outcome":   "URL changes to /dashboard",
-      "assertion":          "url_contains:/dashboard",
-      "is_critical":        true,
-      "is_milestone":       true,
-      "healed":             false
+      "step_id":       1,
+      "intent":        "click button 'Sign in'",
+      "semantic_id":   "auth/sign-in-button",
+      "action_type":   "click",
+      "target":        null,
+      "locator":       {"role": "button", "name": "Sign in"},
+      "alternatives": [
+        {"strategy": "testid",    "locator": {"testid": "sign-in-btn"}, "prior": 0.95},
+        {"strategy": "role_name", "locator": {"role": "button", "name": "Sign in"}, "prior": 0.90},
+        {"strategy": "label",     "locator": {"label": "Sign in"}, "prior": 0.88}
+      ],
+      "is_milestone":  false
     }
   ],
-  "golden_snapshots": {
-    "step-001": {
-      "a11y_hash":       "<SHA-256 of normalised a11y tree post-action>",
-      "screenshot_hash": "<perceptual hash of post-action screenshot>"
-    }
-  }
+  "tokens": { "...": "budget.tracker().summary()" },
+  "models": { "plan": "<имя модели планировщика>" }
 }
 ```
+
+Каждый объект `steps[]` содержит **ровно** эти 8 ключей (`brain/graph.py:237-241`): `step_id`,
+`intent`, `semantic_id`, `action_type`, `target`, `locator`, `alternatives`, `is_milestone`.
+`alternatives` — плоский список стратегий восстановления `{strategy, locator, prior}`
+(`brain/graph.py:90-98`), а не карта `L1..L6`. Полей `aut_version`, `exploration_seed`,
+`value`, `expected_outcome`, `assertion`, `is_critical`, `healed` в реальной схеме нет.
+`golden_snapshots` в `plan.json` тоже не встраивается — см. примечание к заголовку выше.
 
 **Канонизация хеша:** `plan_hash` — это SHA-256 от компактной JSON-сериализации **всего** массива
 `steps[]` (`json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)`): ключи объектов
@@ -118,7 +120,7 @@ Python-мозга, поэтому представление float детерм�
 или случайно слитый план никогда не может выполниться молча в режиме replay.
 
 ```
-agentctl run --ci --plan-id <id> --aut-version $(git rev-parse HEAD)
+agentctl run --replay --plan plan.json --target https://app.local --ci --aut-version $(git rev-parse HEAD)
 
 [sentinel] Loading plan.json — plan_id=3f7a...
 [sentinel] Stored plan_hash:   sha256:aef9c2...
@@ -136,12 +138,15 @@ agentctl run --ci --plan-id <id> --aut-version $(git rev-parse HEAD)
 
 ## Успешный путь replay без LLM
 
-В режимах replay и CI узел `plan` **полностью пропускается**. Узел `ground` направляет
-управление прямо в `act`, который выполняет замороженный локатор без какого-либо участия LLM.
+Режимы replay и CI **не** проходят через LangGraph-граф explore вообще — они выполняются
+отдельным standalone-циклом `run_replay()` (`brain/replay.py`, диспатчится из
+`brain/__main__.py`). Узла `plan` нет и LLM-планирования нет; для каждого замороженного
+шага цикл резолвит локатор (кеш / замороженный `locator`), выполняет действие и проверяет,
+вызывая `HealingEngine.heal()` только при живом отказе локатора.
 
 ```
-perceive → ground → act → verify → checkpoint → (next step)
-                                  └── heal (only on live locator failure)
+run_replay(): для каждого замороженного шага → резолв локатора → act → verify
+                                              └── HealingEngine.heal (только при живом отказе локатора)
 ```
 
 Следствия:
@@ -156,12 +161,16 @@ perceive → ground → act → verify → checkpoint → (next step)
 
 ## Неизменяемые эталонные базовые линии
 
-Каждый этапный шаг записывает два хеша во время explore:
+**As-built:** эти два хеша **не** записываются обычным explore-запуском. Они пишутся только явной
+командой `agentctl baseline update` (`RUN_MODE=baseline` → `brain/replay.py:253-266`, где
+`save_golden()` вызывается только `if baseline:`) — и не «на этапный шаг», а один раз на страницу,
+при первом заходе на неё. Обычный replay/CI **читает и сравнивает** с этими эталонами, но никогда
+их не пишет.
 
 | Хеш | Что охватывает | Тип обнаруживаемой регрессии |
 |------|---------------|----------------------|
-| `a11y_hash` | SHA-256 нормализованного дерева доступности после шага | Структурное изменение DOM — новые/удалённые элементы, дрейф role/label |
-| `screenshot_hash` | Перцептивный хеш снимка экрана после действия | Исключительно визуальная регрессия — CSS-вёрстка, цвет, скрытые элементы |
+| `a11y_hash` | SHA-256 нормализованного дерева доступности при первом заходе на страницу | Структурное изменение DOM — новые/удалённые элементы, дрейф role/label |
+| `screenshot_hash` | Перцептивный хеш снимка экрана при первом заходе на страницу | Исключительно визуальная регрессия — CSS-вёрстка, цвет, скрытые элементы |
 
 > **Стабильность хэшей (M9.6 / ADR-037):** `screenshot_hash` байт-стабилен **только в headless Chromium** — именно в этом режиме голден-replay и валидируется. **headed** и **CDP-attach** (а также не-Chromium движки, отложенные в GAP-OPS-001) — режимы наблюдения: иной путь рендера / viewport пользователя → байты не воспроизводимы, голден-replay в них не выполняется.
 
@@ -169,16 +178,20 @@ perceive → ground → act → verify → checkpoint → (next step)
 путь изменения — явная команда оператора:
 
 ```bash
-agentctl baseline update --plan-id <id> --aut-version $(git rev-parse HEAD)
+agentctl baseline update --plan plan.json [--target <URL>]
 ```
 
 Эта команда:
 1. Выполняет полный replay на живом AUT.
-2. Принимает все текущие снимки как новое эталонное состояние.
-3. Записывает **новый** `plan_hash`, архивируя старый со ссылкой `superseded_by`
-   в `golden_snapshots`.
+2. На первом заходе на каждую страницу перезаписывает её строку в SQL-таблице
+   `golden_snapshots` (`INSERT OR REPLACE`) текущими `a11y_hash`/`screenshot_hash`.
 
-Такая конструкция структурно исключает ситуацию «тесты перезаписали собственный эталон».
+**As-built:** `plan_hash` при этом не пересчитывается и `plan.json` не изменяется — версионирования
+или архивирования старой записи (`superseded_by`) в коде нет; «новая» golden-версия просто заменяет
+старую строку в SQL. Такая конструкция всё равно структурно исключает ситуацию «тесты переписали
+собственный эталон»: запись в `golden_snapshots` доступна только через этот отдельный, явно
+вызываемый оператором путь, а не изнутри обычного CI-replay.
+
 Двойное хеширование выявляет исключительно визуальные (CSS/вёрстка) регрессии, которые
 чистый a11y-diff не замечает. По умолчанию визуальная регрессия — **advisory** (`VISUAL_WARN`,
 не влияет на код завершения; cross-process байт-стабильность скриншотов ещё не доказана —
@@ -195,10 +208,14 @@ GAP-RISK-009). Развёртывание, доказавшее байт-ста�
 
 ## Правило запрета самомутирующего плана
 
-Если replay обнаруживает устаревание плана — определяемое как ≥ 2 попыток восстановления
-на ≥ 3 различных `semantic_id` за один запуск — он генерирует событие `PLAN_STALE` и
-рекомендацию в отчёте запуска. Он **не** запускает автоматически новый explore или
-перезаписывает `plan_hash`.
+**As-built:** отдельного события `PLAN_STALE` или порога «≥ 2 попыток восстановления на ≥ 3
+`semantic_id`» в коде нет (грепом по `brain/` — ноль совпадений). Реально существуют два смежных
+механизма: (1) счётчик подряд идущих неудач шага (`consecutive_heal_failures`, `brain/graph.py` и
+`brain/replay.py`), который при достижении `SENTINEL_AUTO_HITL_THRESHOLD` испускает AG-UI-событие
+`hitl_needed` — сигнал для баннера «взять управление» в co-pilot (M14) — и (2) карантин
+нестабильных шагов по AUT SHA (см. «Политика дрейфа версии AUT» ниже). Ни один из них **не**
+запускает автоматически новый explore и **не** переписывает `plan_hash`: `brain/replay.py` вообще
+никогда не пишет в `plan.json`; единственный писатель — узел `report()` в конце explore-запуска.
 
 Повторный explore — всегда **явное действие оператора**:
 
@@ -208,47 +225,48 @@ agentctl run --explore --target https://app.local --aut-version $(git rev-parse 
 
 Это создаёт **новый** `plan_id` — старый план остаётся нетронутым и может быть архивирован.
 
-Когда авто-восстановление обновляет замороженный локатор во время replay, изменение
-выгружается как **артефакт PR** (предложенный diff `plan.json`) для проверки человеком.
-Оно никогда не фиксируется автоматически в файле плана без уведомления. Инженеры
-проверяют, одобряют и фиксируют diff вручную.
+**As-built:** когда авто-восстановление находит новый локатор во время replay, изменение остаётся
+только в кеше (`healed_locators`/`healing_audit`, SQL) — механизма, который выгружает его как
+«артефакт PR» (предложенный diff `plan.json`), в коде нет (грепом по `brain/` и `cmd/` — ноль
+совпадений). Оно в любом случае никогда не пишется в `plan.json` автоматически: `brain/replay.py`
+не открывает `plan.json` на запись. Если инженер хочет зафиксировать найденный локатор как новый
+`locator`/`alternatives` в плане, это требует ручного редактирования `plan.json` и повторной
+заморозки — сегодня нет отдельного тулинга, которое делает это за него.
 
 ---
 
 ## Политика дрейфа версии AUT
 
 Каждый запуск принимает флаг `--aut-version` (обычно `$(git rev-parse HEAD)`).
-Sentinel сравнивает его с `aut_version`, сохранённым в `plan.json`.
 
-| Соотношение | Поведение по умолчанию | Переопределение |
-|---|---|---|
-| Совпадение | Продолжить в штатном режиме | — |
-| Несоответствие | `--on-aut-mismatch=warn` (по умолчанию): записать предупреждение, включить восстановление, пометить восстановленные шаги как отмеченные | `--on-aut-mismatch=heal` или `--on-aut-mismatch=abort` |
-
-Сохранённый `aut_version` также является ключом для карантина нестабильных тестов с учётом
-AUT SHA: шаг помещается в карантин только после N неудач из 5 последних запусков **без**
-изменения AUT SHA. Изменения SHA сбрасывают счётчик неудач, разделяя реальную регрессию
-от нестабильности окружения.
+**As-built:** этот SHA **не** сравнивается ни с каким значением в `plan.json` — `plan.json` вообще
+не хранит `aut_version` (см. схему выше) — и в коде нет ни политики `--on-aut-mismatch=warn|heal|abort`,
+ни события `PLAN_STALE` (грепом по `brain/` и `cmd/` — ноль совпадений). Единственная роль
+`--aut-version` — быть ключом карантина нестабильных шагов (`brain/store.py`, таблица
+`step_failures`, `record_step()` вызывается из `brain/replay.py:232`): шаг помещается в карантин,
+если среди последних 5 попыток на данном AUT SHA было **≥ 3 неудачи** (`brain/store.py:188`).
+Смена `--aut-version` между запусками сбрасывает историю (`last5`) и снимает карантин, разделяя
+реальную регрессию от нестабильности окружения.
 
 ---
 
 ## Засеянное исследование
 
-Запуск explore засеян, но без гарантии побитовой идентичности. Мозг записывает:
+**As-built:** отдельного поля `exploration_seed` в коде нет — ни вычисления
+`SHA-256(target_url + nav_structure_fingerprint)`, ни такого ключа в `plan.json`, ни в
+`llm-transcript.jsonl` (грепом по `brain/` — ноль совпадений).
 
-```
-exploration_seed = SHA-256(target_url + nav_structure_fingerprint)
-```
-
-Все вызовы LLM при планировании используют `temperature=0`. Seed и temperature записываются
-в `plan.json` и транскрипт LLM, делая контекст исследования полностью проверяемым и
-повторно запускаемым с тем же якорем — хотя недетерминированность провайдера LLM означает,
-что вывод не является побитово идентичным при разных версиях модели или изменениях на стороне
-провайдера.
+Что реально существует: все вызовы LLM при планировании и восстановлении используют
+`temperature=0` (`brain/planner.py`, `brain/healing.py`). Это снижает, но не устраняет
+недетерминированность провайдера (потоковая токенизация, обновления модели — см. контракт
+explore-once выше). Проверяемый след даёт `llm-transcript.jsonl` — по одной записи на решение
+планировщика, с полями `step`, `planner`, `model`, `decision`, `reason`, `prompt_tokens`,
+`completion_tokens` (`brain/__main__.py:113-115`, `brain/graph.py:225-245`) — но ни `seed`,
+ни `temperature` в этих записях не сохраняются.
 
 Это правильный компромисс: замороженный `plan.json` поглощает недетерминированность
-постфактум. Seed обеспечивает проверяемость, а не гарантию воспроизводимости,
-которую провайдер не может дать (см. ADR-006 в `../ARCHITECTURE.md`).
+постфактум, а транскрипт даёт проверяемость решений — не гарантию побитовой
+воспроизводимости, которую провайдер дать не может (см. ADR-006 в `../ARCHITECTURE.md`).
 
 ---
 
@@ -292,7 +310,7 @@ AGENT_CKPT_PATH=/tmp/agent-{run_id}-ckpt.db  # LangGraph checkpoint DB (separate
 
 ### Триггер миграции на Postgres
 
-Postgres с `AsyncPostgresSaver` вводится **только** при достижении одного из этих явных триггеров:
+Postgres для checkpointer'а (синхронный `PostgresSaver` через `CHECKPOINT_DSN`; store-gateway-БД через `STORE_DSN` пока отклоняется → M13-service) вводится **только** при достижении одного из этих явных триггеров:
 
 - Более 50 одновременных писателей в общую БД, **или**
 - Распределённые воркеры, охватывающие несколько хостов
@@ -359,11 +377,11 @@ nav frontier и оставшийся бюджет. Возвращает след
 **Сходимость.** Когда `coverage_achieved ≥ 0.85` И `nav_frontier` пуст,
 `ground` устанавливает `exploration_complete = True` и направляет в `report`.
 
-**Заморозка и выгрузка.** Мозг замораживает `plan.json` (вычисляет `plan_hash`,
-записывает двойные эталонные базовые линии для каждого этапного шага), останавливает
-трассировку `pw-executor` и передаёт `trace_path` в Go через gRPC. `report-service`
-генерирует HTML/JSON-артефакты и экспортированный `.spec.ts`, сгенерированный из
-`RunState.executed_actions`.
+**Заморозка и выгрузка.** Мозг замораживает `plan.json` (узел `report()`, вычисляет `plan_hash`
+над упорядоченным массивом `steps[]`) — golden-базовые линии на этом шаге **не** пишутся, это
+отдельный явный шаг (см. «Неизменяемые эталонные базовые линии» выше). Мозг останавливает
+трассировку `pw-executor` и передаёт `trace_path` в Go через gRPC. Отдельно генерируются
+HTML/JSON-артефакты и экспортированный `.spec.ts` из `RunState.executed_actions`.
 
 **Проверка инженером.** Инженер проверяет отмеченные восстановления в отчёте, затем:
 
@@ -379,8 +397,7 @@ git commit -m "feat(sentinel): add explore plan for https://app.local"
 CI запускает:
 
 ```bash
-agentctl run --ci \
-  --plan-id 3f7a... \
+agentctl run --replay --plan plan.json --target https://app.local --ci \
   --aut-version $(git rev-parse HEAD)
 ```
 
@@ -389,13 +406,15 @@ agentctl run --ci \
 **Проверка целостности хеша.** Мозг загружает `plan.json` и **немедленно**
 пересчитывает `plan_hash`. Хеши совпадают — продолжить.
 
-**Валидация эталонных базовых линий.** Узел `ground` проверяет `a11y_hash` и
-`screenshot_hash` каждого этапного шага по неизменяемым эталонным базовым линиям,
-хранящимся в `golden_snapshots`. Дрейф не обнаружен — продолжить.
+**Валидация эталонных базовых линий.** При первом заходе на страницу replay вычисляет
+`a11y_hash` и `screenshot_hash` и сверяет их с неизменяемыми эталонными базовыми линиями,
+хранящимися в SQL-таблице `golden_snapshots` (не в `plan.json`) — они были записаны туда
+явной командой `agentctl baseline update`, а не текущим CI-replay-запуском. Дрейф не
+обнаружен — продолжить.
 
-**Выполнение без LLM.** Узел `plan` **пропускается**. `ground → act` использует
-замороженный локатор для каждого шага. Токены планирования не расходуются. Большинство
-шагов проходят детерминированно.
+**Выполнение без LLM.** Прогон идёт в `run_replay()` (не в графе): для каждого шага
+берётся замороженный локатор и выполняется действие. Токены планирования не расходуются.
+Большинство шагов проходят детерминированно.
 
 **Амортизированное кеш-восстановление.** Атрибут `data-testid` одного шага был
 переименован разработчиком в недавнем коммите. `verify → heal`, поиск в кеше находит
@@ -414,6 +433,8 @@ agentctl run --ci \
 карантин (не блокирует); его неудача не влияет на код завершения.
 
 **Завершение и артефакты.** Запуск завершается с кодом **0** (нет регрессии golden,
-нет критических неудач вне карантина). `report-service` публикует JSON + HTML + `trace.zip`.
-Предложенный diff `plan.json` для изменения локатора при амортизированном переиспользовании
-выгружается как артефакт PR — для проверки человеком, никогда не фиксируется автоматически.
+нет критических неудач вне карантина). Мозг пишет `heal-report.json`, из которого
+`brain/report.py::generate()` формирует `report.json` + `report.html` + `metrics.prom`;
+`trace.zip` уже на диске от `pw-executor`. Изменение локатора при амортизированном
+переиспользовании остаётся только в кеше (`healed_locators`/`healing_audit`) —
+`plan.json` этим шагом не переписывается (см. «Правило запрета самомутирующего плана» выше).
