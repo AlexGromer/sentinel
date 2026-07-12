@@ -31,8 +31,8 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 | Свойство | Значение (проверено по коду) | Источник |
 |---|---|---|
 | Тип вывода | структурированный JSON (index-pick / scenario), **не** длинная генерация | `brain/planner.py` |
-| Размер вывода | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:87,146,187,231` · `healing.py:122,168` |
-| Контекст входа | ≤ **8000** симв. (PLAN-меню) / ≤ **3000** симв. (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:183` · `healing.py:118` |
+| Размер вывода | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:116,177,228,282` · `healing.py:131,176` |
+| Контекст входа | ≤ **8000** симв. (PLAN-меню) / ≤ **3000** симв. (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:222` · `healing.py:126` |
 | Vision-вход | один PNG (≈1280×720) + крошечное меню марок | `healing.py:168` |
 | Temperature | **0** (детерминированный выбор) | `planner.py` / `healing.py` |
 | Replay (hot path) | **LLM-free**, 0 токенов | `brain/replay.py` |
@@ -42,7 +42,7 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 от 3–4B и выше — см. §3 и калькулятор VRAM (§5).
 
 > **In-code дефолты остаются `claude-*`** (`_DEFAULT_MODEL = {"planner": "claude-opus-4-8",
-> "heal": "claude-sonnet-4-6"}`, `llm.py:179`). Offline-прогоны используют `FakeBackend` (детерминизм/CI);
+> "heal": "claude-sonnet-4-6"}`, `llm.py:233`). Offline-прогоны используют `FakeBackend` (детерминизм/CI);
 > реальная локальная модель — **opt-in** через env-профиль ниже. RTX 2060 12 ГБ — это **один пример**
 > среди тиров 8/12/16/24 ГБ, а не основа методики.
 
@@ -50,9 +50,9 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 
 ## 2. Env-профиль
 
-Все переменные читаются `make_backend` (`llm.py:182–223`). **Приоритет: role-specific
+Все переменные читаются `make_backend` (`llm.py:241–279`). **Приоритет: role-specific
 `LLM_<KEY>_<ROLE>` > глобальный `LLM_<KEY>`.** Роли: `PLANNER`, `HEAL`. Ключи: `BACKEND`, `MODEL`,
-`BASE_URL`, `API_KEY`, `VISION`.
+`BASE_URL`, `API_KEY`, `VISION`, `STRUCTURED`.
 
 | Env | Назначение | Примечание |
 |---|---|---|
@@ -61,6 +61,7 @@ Sentinel **уже** провайдер-агностичен (M6, ADR-019): тр�
 | `LLM_BASE_URL` | URL OpenAI-compat endpoint (`…/v1`) | local: Ollama/vLLM/llama.cpp |
 | `LLM_API_KEY` | ключ; для local — любая непустая строка (`noauth`) | fallback к `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` |
 | `LLM_VISION` | `1` → включить vision на OpenAI-compat HEAL-бэкенде | text-only модель vision пропускает |
+| `LLM_STRUCTURED` | `1` → строгий structured-output (Anthropic tool_use / OpenAI json_schema, ADR-057) на OpenAI-compat бэкенде | дефолт OFF; иначе `complete`+`extract_json`-fallback |
 | суффикс `_PLANNER` / `_HEAL` | переопределяет глобальный ключ для роли | напр. `LLM_MODEL_PLANNER` |
 
 **Деградация безопасна:** при отсутствии ключа/SDK `make_backend` → `None` ⇒ PLAN падает на

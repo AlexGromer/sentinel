@@ -17,7 +17,7 @@ milestone contracts in this folder (`M0_CONTRACT.md`, `M1_CONTRACT.md`, …).
 |------|--------------|-------|
 | Go | 1.26.x | control-plane |
 | Node | 24.x + npm 11.x | pw-executor |
-| Python | 3.12+ | brain (LangGraph) |
+| Python | 3.11+ | brain (LangGraph) |
 | uv | 0.10.x | Python env/dep manager |
 | Playwright browser | chromium-headless-shell (matches pinned playwright) | one-time download |
 
@@ -32,12 +32,13 @@ cd ..
 
 # Go — control-plane (if /tmp is full: `go env -w GOTMPDIR=/opt/go/tmp` first — Go build scratch)
 go build -o bin/agentctl ./cmd/agentctl
-go build -o bin/store-gateway ./cmd/store-gateway   # M2b-1: gRPC persistence; agentctl auto-spawns it
+go build -o bin/store-gateway ./cmd/store-gateway     # M2b-1: gRPC persistence; agentctl auto-spawns it
+go build -o bin/control-api ./cmd/control-api         # M9.3: HTTP control-plane for the setup-WebUI/CI
+go build -o bin/orchestrator ./cmd/orchestrator       # M8: gRPC RunControl supervisor (budget/abort/takeover)
+go build -o bin/report-service ./cmd/report-service   # M8: HTTP report/metrics server (long-lived mode)
 
 # Python — brain (LangGraph)
-uv venv                                    # creates .venv
-uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai
-#   openai is optional — only needed for OpenAI-compatible providers (M6); import-guarded
+cd brain && UV_PROJECT_ENVIRONMENT=../.venv uv sync --frozen && cd ..   # 13 locked deps from brain/uv.lock; UV_PROJECT_ENVIRONMENT puts the venv at repo-root ./.venv (where agentctl looks), like the Dockerfile's UV_PROJECT_ENVIRONMENT=/app/.venv
 ```
 `agentctl` auto-uses `./.venv/bin/python` to run the brain (override with `BRAIN_PYTHON`).
 
@@ -74,6 +75,7 @@ Qwen, Gemini-compat, OpenRouter, Ollama, vLLM), set env **per role**. Precedence
 | `LLM_BASE_URL` | yes | `LLM_BASE_URL_PLANNER` / `_HEAL` | — |
 | `LLM_API_KEY` | yes | `LLM_API_KEY_PLANNER` / `_HEAL` | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 | `LLM_VISION` | yes | `LLM_VISION_HEAL` | provider default (anthropic=on) |
+| `LLM_STRUCTURED` | yes | `LLM_STRUCTURED_PLANNER` / `_HEAL` | off (opt-in `1` — OpenAI-compatible backend only; Anthropic is always native `tool_use`; ADR-057) |
 
 ```bash
 # planner on OpenRouter/DeepSeek, heal stays on the Anthropic default
@@ -114,7 +116,7 @@ A=$(./bin/agentctl run --target "file://$PWD/testdata/site/index.html" >/dev/nul
 
 ```bash
 # offline suite (no network/binaries): the full M3..M9 regression
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism m13_chats; do .venv/bin/python tests/test_${t}_offline.py; done
+for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do .venv/bin/python tests/test_${t}_offline.py; done
 ```
 
 ## 5. Wire contracts (where the boundaries are defined)
@@ -151,7 +153,7 @@ for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinis
 ### Secret plumbing (Helm/Flux, M11.3 · ADR-035)
 The secret chain **chart → agentctl → brain** (closes the Helm half of GAP-SEC-001):
 
-1. **agentctl filters env by default** (`filteredEnv()`, default-on): only curated names reach the brain from the host (PATH/…, ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/…, prefixes `LLM_`/`OTEL_`/`PW_`/`SENTINEL_` — **not** `NODE_`/`GIT_` (#25: narrowed to the exact `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` so `NODE_AUTH_TOKEN`/`GIT_ASKPASS` no longer leak), + M11.3 PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_*/HTTP(S)\_PROXY) **plus** names from `SENTINEL_ENV_ALLOW`. Escape hatch — `SENTINEL_ENV_ALLOWLIST=0` (full passthrough, for debugging). Functional run vars are untouched (injected after the filter in `spawnBrain`).
+1. **agentctl filters env by default** (`filteredEnv()`, default-on): only curated names reach the brain from the host (PATH/…, ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/…, prefixes `LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_` — **not** `NODE_`/`GIT_` (#25: narrowed to the exact `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` so `NODE_AUTH_TOKEN`/`GIT_ASKPASS` no longer leak), + M11.3 PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_*/HTTP(S)\_PROXY) **plus** names from `SENTINEL_ENV_ALLOW`. Escape hatch — `SENTINEL_ENV_ALLOWLIST=0` (full passthrough, for debugging). Functional run vars are untouched (injected after the filter in `spawnBrain`).
 2. **The chart supplies secrets via `secretKeyRef`** when `secrets.enabled: true` (`values-prod.yaml`): `llmApiKey` (envName default `ANTHROPIC_API_KEY`) and `checkpointDsn` (when `checkpointDsn.enabled: true`), plus arbitrary `extraSecretEnv[]`. When `enabled: false` (dev/staging/offline) — plaintext `value:` fallback (`checkpointDsn` only), API key from `extraEnv`/host.
 3. **The chart auto-allows its own names:** the `sentinel.envAllow` helper (`_helpers.tpl`) gathers `extraEnv` keys + `extraSecretEnv` names + a custom `llmApiKey.envName` into `SENTINEL_ENV_ALLOW`, and sets `SENTINEL_ENV_ALLOWLIST=1`. Otherwise the default-on filter would strip chart-supplied vars before the brain.
 

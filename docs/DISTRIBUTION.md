@@ -115,7 +115,7 @@ docker compose run --rm sentinel run \
 
 ### Что поставляется
 
-Четыре Go-бинарника (`agentctl`, `store-gateway`, `orchestrator`, `report-service`) для пяти платформ:
+Пять Go-бинарников (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `report-service`) для шести платформ:
 
 | Платформа | GOOS | GOARCH |
 |---|---|---|
@@ -124,8 +124,9 @@ docker compose run --rm sentinel run \
 | macOS Apple Silicon | darwin | arm64 |
 | macOS Intel | darwin | amd64 |
 | Windows x86-64 | windows | amd64 |
+| Windows ARM64 | windows | arm64 |
 
-Итого: 20 бинарников + Docker-образ (multi-arch: linux/amd64 + linux/arm64).
+Итого: 30 бинарников (6 платформ × 5 бинарников) + Docker-образ (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 
@@ -150,7 +151,7 @@ docker compose run --rm sentinel run \
 
 ### Критерии приёмки M11.1
 
-- [ ] GitHub Release содержит 20 бинарников (5 платформ × 4 бинарника) в `.tar.gz`
+- [ ] GitHub Release содержит 30 бинарников (6 платформ × 5 бинарников) в `.tar.gz`
 - [ ] `checksums.sha256` присутствует и проходит `sha256sum -c checksums.sha256`
 - [ ] Cosign bundle верифицируется: `cosign verify-blob --bundle=sentinel.bundle sentinel.tar.gz`
 - [ ] Docker образ доступен на `ghcr.io/alexgromer/sentinel:<tag>` для linux/amd64 + linux/arm64
@@ -257,7 +258,7 @@ env:
 
 **1. env-allowlist в agentctl — теперь default-on** (`cmd/agentctl/main.go`, `filteredEnv()`)
 
-`filteredEnv()` ведёт **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3-добавки** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY) **+ prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`/`NODE_`/`GIT_`) **+** имена из `SENTINEL_ENV_ALLOW` (comma-sep — для secretKeyRef-переменных вроде `AUT_PASSWORD`).
+`filteredEnv()` ведёт **exact-map** (PATH/HOME/… + ANTHROPIC_API_KEY/OPENAI_API_KEY/CHECKPOINT_DSN/STORAGE_STATE/ORCH_ADDR/… **+ M11.3-добавки** PROM_PUSHGATEWAY/HEAL_VISUAL/SSL_CERT_FILE/SSL_CERT_DIR/HTTP(S)\_PROXY/NO_PROXY/`NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH`) **+ prefix-list** (`LLM_`/`OTEL_`/`PW_`/`PLAYWRIGHT_`/`SENTINEL_`) — `NODE_`/`GIT_` умышленно НЕ входят в prefix-list (широкий префикс раньше протекал `NODE_AUTH_TOKEN`/`GIT_ASKPASS`; конкретные легитимные имена — exact-allowed выше) **+** имена из `SENTINEL_ENV_ALLOW` (comma-sep — для secretKeyRef-переменных вроде `AUT_PASSWORD`).
 
 M11.3 переворачивает флаг в **default-on**: фильтр активен всегда, кроме явного **opt-out** `SENTINEL_ENV_ALLOWLIST=0` (escape hatch для отладки/нестандартных локальных setup'ов). Функциональные run-переменные (RUN_ID/TARGET_URL/RUN_MODE/PLANNER/…) фильтр **не трогает** — они добавляются после `filteredEnv()` в `spawnBrain`, не наследуются из хоста. Unit-тест: `cmd/agentctl/main_test.go` (default-on исключает `AWS_SECRET_ACCESS_KEY`, пропускает curated + `SENTINEL_ENV_ALLOW`-extras; `=0` → полный passthrough).
 
@@ -442,16 +443,30 @@ QA или devops-инженер, у которого есть Docker, но не�
 Не плоская форма + «подложи YAML руками», а пошаговый мастер, который знает про режимы работы и сам собирает
 корректную конфигурацию, персистит её и переиспользует при повторном запуске.
 
-**1. `install.sh` — single-command installer** (POSIX `sh`)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` для Linux/macOS; нативный PowerShell-пир для Windows, без Docker/WSL)
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
-- `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}` (Windows — через Docker/WSL, не через этот installer);
+```powershell
+# Windows (нативно, без admin)
+iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
+```
+- `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: нативный Windows,
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), Docker/WSL не требуется;
 - резолвит последний GitHub Release, качает `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (ненулевой код при несовпадении) → **`cosign verify-blob`** с **pinned identity** (тот же
   regex/issuer, что `scripts/offline-verify.sh`; если `cosign` нет — громкое предупреждение, не жёсткий фейл);
-- кладёт `agentctl` в `~/.local/bin` (default, **без root**) или `/usr/local/bin` (opt-in); проверяет `$PATH`;
+- `install.sh` кладёт `agentctl` в `~/.local/bin` (default, **без root**) или `/usr/local/bin` (opt-in);
+  `install.ps1` — в `%LOCALAPPDATA%\Programs\sentinel` (**без admin**); оба проверяют `$PATH`;
 - post-install `agentctl --version` (sanity) + указатель на setup-WebUI и `docs/QUICKSTART.md`; опц. качает `docker-compose.yml`.
+
+**Homebrew (macOS):** репозиторий — собственный tap; `Formula/sentinel.rb` генерируется на каждый `v*`-тег
+(`scripts/gen-brew-formula.sh` в `release.yml`):
+```bash
+brew tap AlexGromer/sentinel https://github.com/AlexGromer/sentinel
+brew install sentinel
+```
 
 **2. setup-WebUI → пошаговый wizard** (переписывает `docs/setup/index.html`, ADR-031→ADR-059)
 - Шаги: **Runtime → Model&Auth → Run-params → Review** (переиспользует `.tabbar`/`.subtabbar`-паттерн `docs/index.html`).
@@ -497,7 +512,7 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 - [x] **PR-1 (этот freeze):** ADR-059 + переписанный §7 + bilingual-parity. *(docs, проверяемо сейчас)*
 - [x] **PR-2 (этот PR):** `install.sh` верифицирует checksum+cosign (ненулевой код при несовпадении), ставит без root в `~/.local/bin`, `agentctl --version` печатает версию; CI install-smoke в чистом контейнере (fake-release + tamper-negative). *(полный E2E = maintainer `v*`-tag, как M11.1)*
 - [x] **PR-3 (этот PR):** `/v1/config-schema` покрывает LLM-backend-поверхность (`backends`/`roles`/`llm`-дескрипторы из `brain/llm.py`; `api_key`=secret-без-значения); `backend-presets.json` (9 пресетов) парсится и каждый `backend` ⊆ enum схемы (гейт `TestBackendPresetsParseAndMatchSchema`). *(env-истина — `brain/llm.py` `make_backend`; `runconfig.py` = RunConfig-ядро, LLM_* там нет)*
-- [x] **PR-4 (этот PR):** wizard пошаговый (Runtime→Model&Auth→Run-params→Review), schema-driven (рендер из `/v1/config-schema` + встроенный снимок для offline и live-override, ADR-061), валидирует ввод (target/бюджеты/openai-правила `make_backend`), персистит черновик (секреты — никогда), двуязычный (`data-lang`), air-gapped (`node --check` в CI теперь на всех `docs/*.html`; `file://` — снимок вместо `fetch`). *(DOM-прогон автоматизирован — `scripts/wizard-dom-check.mjs`, 11 проверок в headless-Chromium в CI; синтаксис-гейт — на всех 6 страницах `docs/`; + 2 anti-drift-гейта)*
+- [x] **PR-4 (этот PR):** wizard пошаговый (Runtime→Model&Auth→Run-params→Review), schema-driven (рендер из `/v1/config-schema` + встроенный снимок для offline и live-override, ADR-061), валидирует ввод (target/бюджеты/openai-правила `make_backend`), персистит черновик (секреты — никогда), двуязычный (`data-lang`), air-gapped (`node --check` в CI теперь на всех `docs/*.html`; `file://` — снимок вместо `fetch`). *(DOM-прогон автоматизирован — `scripts/wizard-dom-check.mjs`, 12 проверок в headless-Chromium в CI; синтаксис-гейт — на всех 6 страницах `docs/`; + 2 anti-drift-гейта)*
 - [x] **PR-5 (этот PR):** `config`-домен в store-gateway (6-й домен `StoreService`, ADR-062); секреты **отвергаются** (`internal/configguard`, одно правило на гейтвей и control-API — 14 попыток обхода в тестах); control-API читает конфиг на старте и пишет из мастера (`PUT /v1/config`, token-gated); `/readyz` → `503` до готовности зависимостей, `200` когда готов (несконфигурированная зависимость = `skipped`, поэтому standalone остаётся ready). *(сквозной DOM-гейт: браузер → control-API → gRPC → SQLite → `/readyz`)*
 - [x] Новый пользователь с Docker завершает первый explore за ≤ 10 минут по `docs/QUICKSTART.md`. **Измерено (2026-07-11):** `docker compose build` **208 с** + `docker compose run … --target https://example.com --planner heuristic` **21 с** = **~3 мин 49 с** end-to-end, exit 0, `plan.json`+`trace.zip` произведены. *(Оговорка: base-образ `playwright` был закэширован; полностью холодный пул добавляет ~2.44 ГБ загрузки → ~7 мин на канале ~100 Мбит/с — тоже под бюджетом, но зависит от сети.)*
 
