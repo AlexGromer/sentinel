@@ -6,7 +6,7 @@
 
 Каноническая, скорректированная с учётом ограничений архитектура находится в [`../ARCHITECTURE.md`](../ARCHITECTURE.md). Настоящий документ сохраняет исходные предложения и вердикты, из которых она сложилась.
 
-> **NOTE: the synthesis's ADR-001 recommended _BUYING_ the official `@playwright/mcp` server. This was later REVERSED to _BUILD_ our own `pw-executor` by a hard build-only user constraint — see ARCHITECTURE.md §0. The proposals/verdicts below are preserved verbatim as historical record and still reference "buy".**
+> **ПРИМЕЧАНИЕ: ADR-001 синтеза рекомендовал _КУПИТЬ_ (BUY) официальный сервер `@playwright/mcp`. Позднее это было РАЗВЁРНУТО в _ПОСТРОИТЬ_ (BUILD) собственный `pw-executor` — из-за жёсткого build-only-ограничения пользователя (см. ARCHITECTURE.md §0). Предложения и вердикты ниже сохранены дословно как исторический архив и всё ещё ссылаются на «buy».**
 
 ---
 

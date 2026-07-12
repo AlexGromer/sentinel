@@ -26,30 +26,20 @@ OTel-спаны вводятся в **M4** — не с первого дня. Э
 и gRPC-вызовы Go являются дочерними спанами охватывающего спана узла, формируя полную
 иерархию parent-child для каждого запуска.
 
-**Атрибуты спана узла:**
+**Атрибуты спанов (as-built):** спаны отдельных узлов (`node.<name>`, по одному на узел
+LangGraph) **не несут атрибутов** — `_traced()` открывает спан без kwargs
+(`brain/graph.py:447-452`). Атрибуты выставляются только на двух видах спанов:
 
-| Атрибут | Описание |
-|---|---|
-| `run_id` | UUID текущего запуска |
-| `node_name` | Узел LangGraph (perceive, ground, plan, act, verify, heal, checkpoint, report) |
-| `step_index` | Индекс выполняемого шага плана |
-| `run_mode` | `explore` / `replay` / `ci` |
-| `model` | Идентификатор модели, использованной в данном узле (если присутствует вызов LLM) |
+| Спан | Атрибуты | Источник |
+|---|---|---|
+| `sentinel.run` (спан всего запуска) | `run_id`, `mode`, `transport`, `store` | `brain/__main__.py:238,509-511` |
+| `heal.llm` (LLM-вызов в узле heal) | `model`, `prompt_hash`, `llm.prompt_tokens`, `llm.completion_tokens` | `brain/healing.py:129`, `brain/otel.py:53-64` |
 
-**Дополнительные атрибуты для спанов вызовов LLM:**
+`step_index`, `run_mode` (на узел), `latency_ms`, `cost_usd`, `decision_type`, `confidence` —
+целевая схема раннего дизайна; в коде не выставляются.
 
-| Атрибут | Описание |
-|---|---|
-| `prompt_tokens` | Количество токенов промпта |
-| `completion_tokens` | Количество токенов ответа |
-| `latency_ms` | Сквозная задержка вызова LLM в миллисекундах |
-| `cost_usd` | Вычисленная стоимость из конфигурируемой таблицы цен |
-| `decision_type` | Классификация принятого LLM-решения (например, `plan_action`, `heal_locator`) |
-| `confidence` | Оценка уверенности, испущенная узлом |
-| `prompt_HASH` | SHA-256 текста промпта — **никогда не само содержимое промпта** |
-
-Хранение хеша вместо содержимого предотвращает появление секретов, встроенных в состояние
-страницы, в бэкендах трассировки.
+Хранение `prompt_hash` (SHA-256 текста промпта), а не самого промпта, предотвращает появление
+секретов, встроенных в состояние страницы, в бэкендах трассировки.
 
 **Распространение контекста:** W3C Trace Context распространяется в gRPC-метаданных
 (граница Go↔Python) и в метаданных MCP-вызовов (граница Python↔pw-executor), поэтому
@@ -68,7 +58,7 @@ OTel-спаны вводятся в **M4** — не с первого дня. Э
 
 Каждый вызов LLM дописывает ровно одну JSON-строку. Файл выполняет `fsync` в конце запуска
 и **никогда не перезаписывается и не изменяется** после этого момента. Он испускается как
-CI-артефакт вместе с `run_report.json`.
+CI-артефакт вместе с `report.json`/`report.html` (`brain/report.py::generate()`).
 
 **Схема записи:**
 
@@ -111,8 +101,9 @@ Brain поддерживает dict `token_usage` с ключом `model_id → 
 | `heal_token_limit` | Sonnet 4.6 (по умолчанию) | 20 000 токенов/запуск |
 
 > **M6 (ADR-019):** модели в таблице — **дефолты**, маршрутизируются через `LLMBackend`
-> (per-role `LLM_BACKEND*`). Метка/метрика `model` (`agent_tokens_total`, `agent_cost_usd_total`)
-> после M6 может нести идентификатор не-Anthropic модели; сама метка остаётся generic.
+> (per-role `LLM_BACKEND*`). Токены/стоимость после M6 могут нести идентификатор не-Anthropic
+> модели — но это не Prometheus-метка: с M15.1 `model` пишется в `labels_json` метрик-точек
+> в SQLite `metrics`-домене store-gateway (`cmd/control-api/main.go:660`), см. §5.
 
 ### Уровень 2 — Жёсткий потолок на стороне Go (оркестратор)
 
@@ -130,8 +121,12 @@ Brain поддерживает dict `token_usage` с ключом `model_id → 
 - **Узел heal:** откатывается на детерминированную ротацию стратегий L1–L6 только; вызовы
   модели heal/plan (по умолчанию Sonnet/Opus) не выполняются.
 
-При **80% использования** brain испускает событие `BUDGET_WARNING` (отображается в журнале
-оркестратора и выводится в отчёт о запуске).
+Порог — не 80%, а полное исчерпание лимита: `BudgetTracker.exceeded(role)` возвращает `True`,
+когда счётчик роли (или `total_limit`) достигает лимита (`brain/budget.py:63-68`), и вызывающий
+узел деградирует, как описано выше. Отдельного события `BUDGET_WARNING` в коде нет — это было
+частью раннего дизайна и не реализовано. Фактический расход (`prompt`/`completion`/`total` по
+ролям, `summary()`) пишется в отчётные артефакты (`plan.json` / `heal-report.json`); контрол-API
+конвертирует его в `cost_usd` (§5) — не в Prometheus.
 
 ---
 
@@ -142,8 +137,10 @@ Brain поддерживает dict `token_usage` с ключом `model_id → 
 артефактов, настроенную при запуске сервера.
 
 **Путь передачи:** `pw-executor` → путь, возвращённый в ответе MCP-инструмента → Python brain →
-gRPC `RunEvent` → оркестратор Go → `report-service` предоставляет доступ по адресу
-`/runs/{run_id}/trace`.
+gRPC `RunEvent` → оркестратор Go, который записывает файл в `runs/{run_id}/trace.zip`.
+`report-service` его не раздаёт — сервис предоставляет ровно три маршрута: `/healthz`, `/report/`
+и `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` читается напрямую из директории
+запуска (или из CI-артефакта).
 
 **Просмотр:** `playwright show-trace trace.zip`
 
@@ -155,28 +152,39 @@ Playwright (сеть, консоль, снимки DOM, скриншоты, вр
 
 ## 5. Метрики Prometheus
 
-Предоставляются `report-service` по адресу `/metrics` (стандартная точка сбора Prometheus).
-В репозитории поставляется шаблон дашборда Grafana.
+Предоставляются `report-service` по адресу `/metrics` — конкатенация `<run_dir>/metrics.prom`
+по всем запускам (текстовый Prometheus-формат, `_metrics()` в `brain/report.py:14-35`). Дашборда
+Grafana и файла правил Alertmanager в репозитории нет.
 
 | Метрика | Метки | Описание |
 |---|---|---|
-| `agent_run_total` | `mode`, `status` | Счётчик завершённых запусков по режиму и статусу завершения |
-| `agent_run_duration_seconds` | — | Гистограмма общего настенного времени запуска |
-| `agent_tokens_total` | `model`, `node` | Счётчик потреблённых токенов по модели и узлу LangGraph |
-| `agent_cost_usd_total` | `model` | Счётчик стоимости в USD по модели |
-| `agent_heal_attempts_total` | `strategy`, `outcome` | Счётчик попыток исцеления по стратегии (L1–L6, llm_a11y, llm_visual, cache) и результату |
-| `agent_heal_success_rate` | — | Gauge: скользящее соотношение успешных исцелений к общему числу попыток |
-| `healing_confidence_histogram` | `strategy` | Гистограмма итоговых оценок уверенности по стратегии исцеления — сигнал калибровки |
-| `agent_flake_quarantine_count` | — | Gauge: количество шагов, находящихся в карантине |
-| `agent_a11y_completeness_ratio` | `url` | Гистограмма completeness_ratio на страницу (раннее предупреждение для приложений с обилием canvas) |
-| `agent_budget_remaining_ratio` | — | Gauge: доля оставшегося токенового бюджета (plan + heal в сумме) |
+| `sentinel_run_steps` | — | Число шагов в запуске |
+| `sentinel_run_exit_code` | — | Структурированный exit-код запуска |
+| `sentinel_heal_total` | — | Количество исцелённых шагов |
+| `sentinel_heal_by_strategy_total` | `strategy` | Количество исцелений по стратегии — `strategy` ∈ ключам `PRIORS` (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), плюс `cache`/`unknown` |
+| `sentinel_regression_total` | `kind` | Количество регрессий по виду — `kind` ∈ {`a11y`, `visual`} |
+| `sentinel_quarantined_total` | — | Число шагов в карантине |
+| `sentinel_failed_total` | — | Число упавших шагов |
+
+**Токены и стоимость не являются Prometheus-метрикой.** С M15.1 они считаются контрол-API
+(`cmd/control-api/main.go:666-675`, цена — `costUSD` на `:561`) и пишутся как точки в
+`metrics`-домен store-gateway (SQLite, ADR-050/051) с `model` в `labels_json`; UI рендерит их
+нативно — не через `/metrics`.
+
+**Отдельный путь (опционально):** `push_metrics()` (`brain/report.py:70-85`) пушит 5
+gauge-значений в Prometheus Pushgateway на запуск — `sentinel_run_steps`, `sentinel_run_exit_code`,
+`sentinel_heal_total`, `sentinel_failed_total` и `sentinel_regression_a11y_total` (имя отличается
+от `sentinel_regression_total{kind="a11y"}` в текстовом пути выше — не путать одно с другим).
 
 ---
 
-## 6. Правила Alertmanager
+## 6. Alertmanager — дизайн-таргет (не поставляется)
 
-| Название алерта | Условие | Важность | Действие |
+В репозитории нет ни файла правил Alertmanager, ни `BUDGET_WARNING`-события — оно не существует
+в коде (см. §3). Ниже — дизайн-таргет из раннего синтеза, выраженный через реальные метрики §5,
+не as-built поведение.
+
+| Название алерта | Условие (target) | Важность | Действие |
 |---|---|---|---|
-| `DOM_INSTABILITY` | Скорость `agent_heal_attempts_total` > 0.20 на запуск | warning | Исследовать DOM-чёрн AUT; проверить события strategy_degradation |
-| `BUDGET_WARNING` | `agent_budget_remaining_ratio` < 0.20 (то есть бюджет потреблён более чем на 80%) | warning | Пересмотреть охват explore; рассмотреть увеличение лимитов или сужение поверхности AUT |
-| `CI_QUARANTINE_THRESHOLD` | `agent_flake_quarantine_count` > 5 | critical | **Блокирует CI-конвейер**; проверить шаги в карантине с помощью `agentctl locators list` |
+| `DOM_INSTABILITY` | Скорость `sentinel_heal_by_strategy_total` > 0.20 на запуск | warning | Исследовать DOM-чёрн AUT |
+| `CI_QUARANTINE_THRESHOLD` | `sentinel_quarantined_total` > 5 | critical | **Блокирует CI-конвейер**; проверить шаги в карантине с помощью `agentctl locators list` |

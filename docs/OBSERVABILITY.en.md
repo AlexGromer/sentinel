@@ -26,30 +26,20 @@ choice: the framework is stable before the telemetry layer is added.
 gRPC calls are child spans of their enclosing node span, forming a complete parent-child
 hierarchy per run.
 
-**Span attributes per node span:**
+**Span attributes (as-built):** individual node spans (`node.<name>`, one per LangGraph node)
+carry **no attributes** — `_traced()` opens the span with no kwargs (`brain/graph.py:447-452`).
+Attributes are set on only two span kinds:
 
-| Attribute | Description |
-|---|---|
-| `run_id` | UUID of the current run |
-| `node_name` | LangGraph node (perceive, ground, plan, act, verify, heal, checkpoint, report) |
-| `step_index` | Index of the plan step being executed |
-| `run_mode` | `explore` / `replay` / `ci` |
-| `model` | Model identifier used in this node (if LLM call present) |
+| Span | Attributes | Source |
+|---|---|---|
+| `sentinel.run` (whole-run span) | `run_id`, `mode`, `transport`, `store` | `brain/__main__.py:238,509-511` |
+| `heal.llm` (LLM call in the heal node) | `model`, `prompt_hash`, `llm.prompt_tokens`, `llm.completion_tokens` | `brain/healing.py:129`, `brain/otel.py:53-64` |
 
-**Additional attributes on LLM-call spans:**
+`step_index`, per-node `run_mode`, `latency_ms`, `cost_usd`, `decision_type`, `confidence` are
+target schema from the early design; they are never set in code.
 
-| Attribute | Description |
-|---|---|
-| `prompt_tokens` | Prompt token count |
-| `completion_tokens` | Completion token count |
-| `latency_ms` | End-to-end LLM call latency in milliseconds |
-| `cost_usd` | Computed cost from config-driven price table |
-| `decision_type` | Classification of the LLM decision (e.g., `plan_action`, `heal_locator`) |
-| `confidence` | Confidence score emitted by the node |
-| `prompt_HASH` | SHA-256 of the prompt text — **never the prompt content itself** |
-
-Storing the hash, not the content, prevents secrets embedded in page state from appearing
-in trace backends.
+Storing `prompt_hash` (SHA-256 of the prompt text), not the prompt itself, prevents secrets
+embedded in page state from appearing in trace backends.
 
 **Context propagation:** W3C Trace Context is propagated in gRPC metadata (Go↔Python
 boundary) and in MCP call metadata (Python↔pw-executor boundary), so a single trace ID
@@ -68,7 +58,7 @@ trust; no head-based dropping.
 
 Every LLM call appends exactly one JSON line. The file is `fsync`-ed at run end and is
 **never overwritten or mutated** after that point. It is emitted as a CI artifact alongside
-`run_report.json`.
+`report.json`/`report.html` (`brain/report.py::generate()`).
 
 **Record schema:**
 
@@ -111,8 +101,10 @@ pattern discarded from earlier proposals.
 | `heal_token_limit` | Sonnet 4.6 (default) | 20 000 tokens/run |
 
 > **M6 (ADR-019):** the models in this table are **defaults**, routed through the `LLMBackend`
-> (per-role `LLM_BACKEND*`). The `model` label/metric (`agent_tokens_total`, `agent_cost_usd_total`)
-> may now carry a non-Anthropic model id post-M6; the label itself stays generic.
+> (per-role `LLM_BACKEND*`). Post-M6 token/cost data may carry a non-Anthropic model id — but
+> this isn't a Prometheus label: as of M15.1, `model` is written into the metric points'
+> `labels_json` in the store-gateway SQLite `metrics` domain (`cmd/control-api/main.go:660`),
+> see §5.
 
 ### Layer 2 — Go-side hard ceiling (orchestrator)
 
@@ -130,8 +122,12 @@ Budget exhaustion does **not** hard-abort the run. Instead:
 - **Heal node:** falls back to L1–L6 deterministic strategy rotation only; no heal/plan
   model calls (Sonnet/Opus by default) are made.
 
-At **80% utilisation** the brain emits a `BUDGET_WARNING` event (visible in the
-orchestrator log and surfaced in the run report).
+The threshold isn't 80% — it's full exhaustion: `BudgetTracker.exceeded(role)` returns `True`
+once that role's counter (or `total_limit`) reaches the limit (`brain/budget.py:63-68`), and the
+calling node degrades as described above. There is no `BUDGET_WARNING` event in code — that was
+part of the early design and was never implemented. Actual spend (per-role `prompt`/`completion`/
+`total`, `summary()`) is written into the report artifacts (`plan.json` / `heal-report.json`);
+the control-API converts it into `cost_usd` (§5) — not Prometheus.
 
 ---
 
@@ -142,7 +138,10 @@ trace per run. One `trace.zip` is written to the shared artifact directory confi
 server launch.
 
 **Relay path:** `pw-executor` → path returned in MCP tool response → Python brain →
-gRPC `RunEvent` → Go orchestrator → report-service serves it at `/runs/{run_id}/trace`.
+gRPC `RunEvent` → Go orchestrator, which writes the file to `runs/{run_id}/trace.zip`.
+`report-service` does not serve it — the service exposes exactly three routes: `/healthz`,
+`/report/`, and `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` is read directly
+from the run directory (or from the CI artifact).
 
 **Viewing:** `playwright show-trace trace.zip`
 
@@ -154,28 +153,40 @@ artifact.
 
 ## 5. Prometheus Metrics
 
-Exposed by `report-service` at `/metrics` (standard Prometheus scrape endpoint).
-A Grafana dashboard template is shipped in the repository.
+Exposed by `report-service` at `/metrics` — a concatenation of `<run_dir>/metrics.prom` across
+all runs (Prometheus text format, `_metrics()` in `brain/report.py:14-35`). No Grafana dashboard
+and no Alertmanager rules file ship in the repository.
 
 | Metric | Labels | Description |
 |---|---|---|
-| `agent_run_total` | `mode`, `status` | Counter of completed runs by mode and exit status |
-| `agent_run_duration_seconds` | — | Histogram of total run wall-clock time |
-| `agent_tokens_total` | `model`, `node` | Counter of tokens consumed, by model and LangGraph node |
-| `agent_cost_usd_total` | `model` | Counter of cost in USD, by model |
-| `agent_heal_attempts_total` | `strategy`, `outcome` | Counter of heal attempts by strategy (L1–L6, llm_a11y, llm_visual, cache) and outcome |
-| `agent_heal_success_rate` | — | Gauge: rolling ratio of successful heals to total attempts |
-| `healing_confidence_histogram` | `strategy` | Histogram of final confidence scores per healing strategy — the calibration signal |
-| `agent_flake_quarantine_count` | — | Gauge: number of currently quarantined steps |
-| `agent_a11y_completeness_ratio` | `url` | Histogram of per-page completeness_ratio (canvas-heavy-app early warning) |
-| `agent_budget_remaining_ratio` | — | Gauge: fraction of token budget remaining (plan + heal combined) |
+| `sentinel_run_steps` | — | Number of steps in the run |
+| `sentinel_run_exit_code` | — | Structured exit code of the run |
+| `sentinel_heal_total` | — | Count of healed steps |
+| `sentinel_heal_by_strategy_total` | `strategy` | Count of heals by strategy — `strategy` ∈ the `PRIORS` keys (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), plus `cache`/`unknown` |
+| `sentinel_regression_total` | `kind` | Count of regressions by kind — `kind` ∈ {`a11y`, `visual`} |
+| `sentinel_quarantined_total` | — | Number of currently quarantined steps |
+| `sentinel_failed_total` | — | Number of failed steps |
+
+**Tokens and cost are not a Prometheus metric.** As of M15.1 they're computed by the control-API
+(`cmd/control-api/main.go:666-675`, priced by `costUSD` at `:561`) and written as points into the
+store-gateway `metrics` domain (SQLite, ADR-050/051) with `model` in `labels_json`; the UI
+renders them natively — not via `/metrics`.
+
+**Separate path (optional):** `push_metrics()` (`brain/report.py:70-85`) pushes 5 gauge values
+to a Prometheus Pushgateway per run — `sentinel_run_steps`, `sentinel_run_exit_code`,
+`sentinel_heal_total`, `sentinel_failed_total`, and `sentinel_regression_a11y_total` (note: this
+name differs from `sentinel_regression_total{kind="a11y"}` in the text-file path above — don't
+conflate the two).
 
 ---
 
-## 6. Alertmanager Rules
+## 6. Alertmanager — design target (not shipped)
 
-| Alert name | Condition | Severity | Action |
+Neither an Alertmanager rules file nor a `BUDGET_WARNING` event exists — the latter is absent
+from code entirely (see §3). The table below is the design target from the early synthesis,
+expressed against the real §5 metrics, not as-built behavior.
+
+| Alert name | Condition (target) | Severity | Action |
 |---|---|---|---|
-| `DOM_INSTABILITY` | `agent_heal_attempts_total` rate > 0.20 per run | warning | Investigate AUT DOM churn; review strategy_degradation events |
-| `BUDGET_WARNING` | `agent_budget_remaining_ratio` < 0.20 (i.e., budget > 80% consumed) | warning | Review explore scope; consider raising limits or scoping AUT surface |
-| `CI_QUARANTINE_THRESHOLD` | `agent_flake_quarantine_count` > 5 | critical | **Blocks CI pipeline**; review quarantined steps with `agentctl locators list` |
+| `DOM_INSTABILITY` | `sentinel_heal_by_strategy_total` rate > 0.20 per run | warning | Investigate AUT DOM churn |
+| `CI_QUARANTINE_THRESHOLD` | `sentinel_quarantined_total` > 5 | critical | **Blocks CI pipeline**; review quarantined steps with `agentctl locators list` |

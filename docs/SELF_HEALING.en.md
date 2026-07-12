@@ -53,8 +53,8 @@ the failure and the heal cycle.
 
 ## Step 3 — Cache Lookup (zero LLM)
 
-Query `store-gateway` → `ReadLocators(page_url)` for `(semantic_id)` where
-`status IN {human_verified, active}`.
+Query `store-gateway` → `Lookup(LocatorKey{page_path, semantic_id, dom_subtree_hash})` where
+`status = active`.
 
 **Cache hit:** if a record exists **and** its stored `dom_subtree_hash` matches the current subtree
 hash → **reuse immediately**. This is the amortization payoff: the LLM is paid once; the healed
@@ -108,18 +108,24 @@ is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
 - The failed-strategy table from Step 4 (which levels were tried and why they missed)
 - Current a11y tree, truncated to budget, target subtree first
 
-**Model output** (structured JSON):
+**Model output** (structured JSON, schema `_SCHEMA_CSS` — a CSS selector only, with no
+self-reported `confidence` / `reasoning` / `strategy`):
 ```json
-{
-  "strategy": "aria_role_name | css | xpath | …",
-  "value": "<the candidate selector string>",
-  "confidence": 0.00,
-  "reasoning": "…"
-}
+{"css": "<precise CSS selector for the current element>"}
+```
+or, if no element matches:
+```json
+{"none": true}
 ```
 
-**Discount applied:** `final_confidence = model_confidence × 0.90`
-(LLM-overconfidence discount — models systematically over-report selector certainty).
+**Discount applied:** the model does not report its own confidence — a FIXED discount is applied
+to the `css` strategy's base prior instead: `final_confidence = PRIORS["css"] × 0.90 = 0.65 × 0.90 = 0.585`.
+
+**Practical consequence:** 0.585 is below the FLAGGED threshold (0.60), so LLM re-grounding always
+lands in `needs_review` (Step 8), even when the candidate passes the live-DOM check in Step 7.
+LLM re-grounding can never reach AUTO-HEAL and can never be FLAGGED — it is always either
+`needs_review` or `failed` (confidence zeroed if the candidate does not resolve to exactly one
+element in Step 7).
 
 The discounted confidence is passed to Step 7.
 
@@ -142,12 +148,18 @@ This step is only reached and only executed when **all three gates pass**:
 **Mechanism:**
 - Numbered overlay marks are rendered on the screenshot captured in Step 2.
 - A `mark → DOM-element` map is built (mark numbers to semantic nodes in the a11y tree).
-- The default heal vision model (Sonnet 4.6) receives the annotated screenshot and returns a `mark_number`.
+- The default heal vision model (Sonnet 4.6) receives the annotated screenshot and returns JSON
+  `{"mark": <int>}` (the chosen mark number) or `{"none": true}` — with no self-reported
+  confidence.
 - We extract a **real semantic locator** from the mapped DOM node — **not** a coordinate click.
   Coordinate clicks are fragile to viewport size, device-pixel-ratio, and scroll position.
 
-**Discount applied:** `final_confidence = model_confidence × 0.85`
-(visual modality discount — pixel rendering adds variance beyond text reasoning).
+**Confidence:** the model does not report a confidence value — a FIXED value is used instead, the
+`visual` strategy's base prior: `final_confidence = PRIORS["visual"] = 0.80` (no discount applied).
+
+**Practical consequence:** 0.80 satisfies the FLAGGED threshold (0.60) but never reaches the
+AUTO-HEAL threshold (0.85), so visual re-grounding — when the candidate passes Step 7 — **always**
+lands in `flagged`. It can never fully auto-heal.
 
 ---
 
@@ -176,20 +188,21 @@ now."
 ## Step 8 — Confidence Gate (calibrated, not magic)
 
 The `final_confidence` computed in Step 7 is evaluated against three tiers. The thresholds are
-not hard-coded constants — they are recalibrated by `agentctl calibrate` against past
-`human_verified` outcomes.
+FIXED module constants (`AUTO, FLAG = 0.85, 0.60` in `brain/healing.py`), used directly in the
+gate (`conf >= AUTO`, `conf >= FLAG`); they are not recalibrated at runtime.
 
 | Confidence band | Decision | Behaviour |
 |---|---|---|
-| **≥ 0.85** | **AUTO-HEAL** | Run one post-heal verification: re-execute the action with the healed locator. On success, persist `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`, update `RunState` and the in-memory plan, continue. On failure, demote to HUMAN GATE. |
+| **≥ 0.85** | **AUTO-HEAL** | Run one post-heal verification: re-execute the action with the healed locator. On success, persist `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`, update `RunState` and the in-memory plan, continue. On post-heal failure the outcome is `needs_review`/`failed` (row below). |
 | **0.60 – 0.84** | **FLAGGED** | Apply optimistically; set `healing_flagged=true`; persist with `review_required=true`. Surfaces in the run report's healing-audit section. Does **not** block execution. |
-| **< 0.60** | **HUMAN GATE** | Do not persist the locator. Emit `NEEDS_HUMAN_REVIEW`. CI mode: skip the step and record `SKIPPED_HEALING_FAILURE`, then continue. Interactive mode: async `checkpoint` pause until `agentctl gate approve/skip/abort` resolves (auto-skip after configurable timeout, default 30 min). |
+| **< 0.60** | **`needs_review` / `failed`** | The locator is **not** persisted. The outcome `needs_review` (a candidate was found but below threshold) or `failed` (no candidate) is recorded in the `healing_audit` table and surfaced in the heal-report. There is **no** per-heal `agentctl gate` CLI (it does not exist in the code); live human takeover is the separate `takeover`-node mechanism (`interrupt`/`Command(resume)`, ADR-054), validated at M9-LIVE. |
 
-**Calibration note — cold-start (0.90 default):** The 0.85 auto-accept threshold is only valid
-once enough labeled outcomes exist. Until a sufficient number of `human_verified` records have
-accumulated (calibration bootstrap), the default auto-accept threshold is raised to **0.90** to
-reduce the risk of seeding the locator store with confidently-wrong healed selectors. The
-threshold lowers toward 0.85 as `agentctl calibrate` produces a reliable precision/recall signal.
+**Calibration reporting — `cold_start` (0.90 default):** `brain/calibrate.py::calibrate()` takes a
+`cold_start=0.90` parameter, but this value is **reporting-only**: it is written into
+`state/calibration.json` (the `RUN_MODE=calibrate` offline path, `_run_calibrate` in
+`brain/__main__.py`) as a reference figure alongside the `confidence` histogram. `healing.py`
+imports nothing from `calibrate.py`; the live gate always uses the FIXED 0.85/0.60 thresholds
+above — there is no "threshold lowers toward 0.85" feedback loop in the code.
 
 ---
 
@@ -207,10 +220,10 @@ forensic-grade record and the ground truth for calibration.
 | `step` | int | Step index within the plan |
 | `semantic_id` | str | The element's semantic identifier |
 | `original_selector` | str | The selector that failed |
-| `strategy_used` | enum | `L1`–`L6` \| `llm_a11y` \| `llm_visual` \| `cache` |
+| `strategy_used` | enum | `testid` \| `role_name` \| `label` \| `text_role` \| `css` \| `xpath` \| `visual` \| `none` (see `PRIORS`, `healing.py:26-27`; `none` on total failure at Steps 4–6) |
 | `healed_selector` | str | The candidate selector (may be `null` on total failure) |
 | `confidence` | float | Final confidence after discounts and live-probe |
-| `outcome` | enum | `auto_healed` \| `flagged` \| `human_gate` \| `failed` |
+| `outcome` | enum | `cache_hit` \| `auto_healed` \| `flagged` \| `needs_review` \| `failed` |
 | `llm_tokens` | int | Tokens consumed by Steps 5–6 (0 for cache/L1–L6 paths) |
 | `duration_ms` | int | Wall-clock time for the full heal cycle |
 | `dom_hash_before` | str | Subtree hash at the time of failure |
@@ -225,15 +238,18 @@ leaking any AUT credentials that may appear in the a11y tree).
 
 ## Step 10 — Bounded Retry and Quarantine
 
-### Attempt cap
+### Single call — no attempt cap
 
-`heal_attempts` is hard-capped per step:
+As-built: there is no `heal_attempts` cap. The heal cycle has no retry counter — each step calls
+`HealingEngine.heal()` at most once per action attempt:
 
-- **3 attempts** in explore mode (allows broader strategy search during plan authoring)
-- **2 attempts** in replay / CI hot path (bounds latency variance; replay correctness matters more
-  than thoroughness)
-
-On reaching the cap without an accepted locator, the step is escalated rather than retried further.
+- **Explore:** the `heal` node in the LangGraph graph (`brain/graph.py`) is a **stub**: it performs
+  no real re-grounding at all, only increments the `consecutive_heal_failures` counter for the
+  auto-HITL signal (M14, ADR-055) and hands control to `checkpoint`. No real healing happens in
+  explore mode.
+- **Replay / CI:** `brain/replay.py` calls `heal.heal(ctx)` **exactly once** on a failed step (no
+  retry loop). The result is applied if `outcome` is `auto_healed`, `flagged`, or `cache_hit`;
+  otherwise the step is marked `failed`.
 
 ### AUT-SHA-gated flake quarantine
 

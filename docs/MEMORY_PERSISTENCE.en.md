@@ -6,7 +6,7 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 
 > **Type:** Explanation
 > **Audience:** backend engineers, operators, contributors
-> **Last updated:** 2026-06-23
+> **Last updated:** 2026-07-12
 > **Related:** [DETERMINISM.md](./DETERMINISM.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ## Overview
@@ -32,28 +32,34 @@ The LangGraph `RunState` object **is** the working memory for a run. It is a typ
 heal attempts, budget counters, and human-gate state throughout the run lifecycle.
 
 `RunState` is checkpointed at every `checkpoint` node transition by a LangGraph
-`SqliteSaver`, which writes to a **separate DB file** from the store-gateway's
-main database.
+checkpointer — a synchronous `SqliteSaver` by default, or a synchronous `PostgresSaver`
+if the `CHECKPOINT_DSN` environment variable is set (`brain/__main__.py:_checkpointer`) —
+which writes to a **separate file/DB** from the store-gateway's main database.
 
 ### Database file locations
 
-| Context | Checkpoint DB path | Main store-gateway DB path |
-|---------|-------------------|---------------------------|
-| CI (per-job) | `/tmp/agent-{run_id}-ckpt.db` | `/tmp/agent-{run_id}.db` |
-| Long-running service | Distinct file configured in `YAML` | Shared service DB |
-| K3s (M5+) | `AsyncPostgresSaver` schema | Postgres (same instance, separate schema) |
+| Context | Checkpoint DB path |
+|---------|-------------------|
+| Explore / replay run | `<artifact_dir>/checkpoint.db` — unique per `run_id` (`brain/__main__.py:135`) |
+| Multi-turn chat (turn-N refine) | `state/conversations.db` — a shared, NON-ephemeral DB, keyed by `thread_id=conversation_id`; overridable via `SENTINEL_CONVERSATIONS_DB`; the thread is NOT deleted at turn end (`brain/__main__.py:_conversations_store_path`) |
+| `CHECKPOINT_DSN` set (any mode) | Postgres via a synchronous `PostgresSaver`, requiring a one-time `saver.setup()` — replaces the SQLite file path above |
 
-These are **never the same file**. The `SqliteSaver` and the Go store-gateway are
-independent single-writers of their respective databases. This is what makes the
+This is **never the same file** as the store-gateway's main DB (default
+`state/locators.db` — the `-db` flag on `cmd/store-gateway`; the same path is a constant
+in `brain/__main__.py:_STORE_PATH`). The LangGraph checkpointer and the Go store-gateway
+are independent single-writers of their respective databases. This is what makes the
 "Go store-gateway is sole writer of the main DB" claim structurally true.
 
-### Episodic buffer and context bounding
+### Refine-history bounding (GAP-M9-20)
 
-`RunState` contains an `episodic_buffer` — a bounded `deque` with a maximum of
-50 events. When the buffer is full, the oldest events are summarised by a model
-call (Sonnet by default) into a ~200-token episode summary before eviction. This bounds the context
-window growth across long explore runs without losing the narrative continuity the
-plan node needs.
+`RunState` does **not** contain a separate `episodic_buffer` — no such field exists in the
+state. The real history-bounding mechanism (`brain/graph.py:105-141`) operates on the
+multi-turn conversation's user turns (`_user_turns`): `_capped_history()` leaves the last
+`SENTINEL_REFINE_HISTORY_KEEP` turns (6 by default) unchanged, and collapses all older
+turns into a single summary line via `_rolling_summary()` — pure string formatting
+(`"{N} turn(s); started: {opening turn text}"`), **with no LLM call**. This bounds the
+refine prompt's growth across long multi-turn conversations without losing the turn count
+or the content of the very first turn.
 
 ### Crash-resume
 
@@ -89,188 +95,148 @@ Long-term state is owned **exclusively** by the Go `store-gateway` component.
 
 #### `healed_locators`
 
-The primary amortisation cache. A healed locator is stored once after its first
-successful heal and reused on subsequent runs until the target subtree's structural
-hash drifts — at which point it is auto-evicted.
+The primary amortisation cache. A healed locator is stored after a successful heal and
+reused on subsequent runs until the target subtree's structural hash drifts — at which
+point it is auto-evicted. Real schema (`internal/store/server.go:28-32`):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | UUID | Primary key |
-| `page_url` | TEXT | URL of the page where healing occurred |
-| `semantic_id` | TEXT | Stable semantic identifier of the element (e.g. `auth/sign-in-button`) |
-| `element_label` | TEXT | Human-readable element description |
-| `original_selector` | TEXT | The broken selector that triggered healing |
-| `healed_selector` | TEXT | The replacement locator produced by the healing engine |
-| `healing_method` | TEXT | Strategy used: `L1`..`L6`, `llm_a11y`, `llm_visual`, or `cache` |
+| `page_path` | TEXT | Path of the page where healing occurred |
+| `semantic_id` | TEXT | Stable semantic identifier of the element |
+| `strategy` | TEXT | Healing strategy used |
+| `value` | TEXT | The healed locator's value |
 | `confidence` | REAL | Grounded confidence score after discounts and live-DOM probe |
-| `dom_subtree_hash` | TEXT | SHA-256 of the scenario's target subtree at heal time |
-| `times_validated` | INTEGER | Number of times this locator has been successfully reused |
-| `status` | TEXT | `active`, `flagged`, `human_verified`, `deprecated`, or `quarantined` |
-| `human_verified` | BOOLEAN | True if an operator has manually approved this locator |
-| `created_at` | TIMESTAMP | When the heal was first persisted |
-| `last_used_at` | TIMESTAMP | When the locator was last successfully reused |
+| `dom_subtree_hash` | TEXT | SHA-256 of the target subtree at heal time |
+| `status` | TEXT | `active` by default; `deprecated` after auto-eviction (`EvictStale`) |
+| `times_used` | INTEGER | Reuse counter for this locator (default 0, incremented via `BumpUsed`) |
+| `created_at` | REAL | Unix time (seconds, float) the record was first persisted |
 
-**Primary lookup key:** `(page_url, semantic_id)`
+**Primary key:** `(page_path, semantic_id, dom_subtree_hash)` — not just
+`(page_path, semantic_id)`: distinct `dom_subtree_hash` values for the same element
+coexist as separate rows.
 
-**Amortisation and auto-eviction:** on cache lookup, the stored `dom_subtree_hash`
-is compared to the current subtree hash. Match → reuse with zero LLM cost.
-Mismatch → mark record `deprecated`, proceed with fresh healing. This scopes
-invalidation to the element's structural neighbourhood, not the whole page —
-an unrelated ad, banner, or analytics widget cannot invalidate all cached locators.
+**Amortisation and auto-eviction:** on lookup (`Lookup`), the row is looked up by
+`page_path` + `semantic_id` + the current `dom_subtree_hash` and `status='active'`.
+Match → reuse with zero LLM cost. Mismatch → `EvictStale` marks the element's prior rows
+`deprecated`, and fresh healing proceeds. This scopes invalidation to the element's
+structural neighbourhood, not the whole page — an unrelated ad, banner, or analytics
+widget cannot invalidate all cached locators.
 
 ---
 
-#### `page_models`
-
-Structural state of each page as last observed. Used for drift detection and as
-context for the `ground` node during replay.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `url_hash` | TEXT | SHA-256 of the page URL (primary key) |
-| `a11y_tree_json` | TEXT | Full serialised accessibility tree (normalised) |
-| `landmarks_json` | TEXT | Page landmark regions (header, nav, main, footer, etc.) |
-| `form_count` | INTEGER | Number of `<form>` elements detected |
-| `interactive_count` | INTEGER | Number of interactive elements in the a11y tree |
-| `a11y_hash` | TEXT | SHA-256 of the normalised a11y tree (structural fingerprint) |
-| `screenshot_hash` | TEXT | Perceptual hash of the page screenshot |
-| `last_updated` | TIMESTAMP | When this record was last written |
-
-Used by `ground` in replay to detect `STRUCTURAL_CHANGE` (a11y_hash divergence)
-and `VISUAL_WARN` (screenshot_hash divergence) before executing any step.
+> **Note:** there is no separate long-term `page_models` table in the store-gateway —
+> neither in the legacy heal/trust schema nor in the 5 M13 domains
+> (`internal/store/server.go`). `page_model` is a `RunState` field (`brain/state.py`) — part
+> of the run's short-term checkpoint memory, not a row in long-term storage.
 
 ---
 
 #### `golden_snapshots`
 
-The immutable regression baselines captured at each milestone step during an
-explore run. Never auto-updated by a CI run.
+The immutable regression baselines, keyed by page/step (`page_key`). Never auto-updated
+by a CI run. Real schema (`internal/store/server.go:37-39`):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `plan_id` | UUID | Plan this snapshot belongs to |
-| `step_id` | TEXT | Step identifier within the plan |
+| `page_key` | TEXT | Page/step key this snapshot belongs to (primary key) |
 | `a11y_hash` | TEXT | SHA-256 of the normalised a11y tree after the step completes |
 | `screenshot_hash` | TEXT | Perceptual hash of the post-action screenshot |
-| `content_path` | TEXT | Filesystem path to the stored snapshot content |
-| `created_at` | TIMESTAMP | When the baseline was recorded |
-| `superseded_by` | UUID | `plan_id` of the replacement snapshot if a baseline update was performed; `NULL` otherwise |
+| `created_at` | REAL | Unix time (seconds, float) the row was written |
+| `mac` | TEXT | HMAC-SHA256 (#24) of `page_key`+`a11y_hash`+`screenshot_hash`, keyed by `state/golden.key`; protects against tampering with the row outside `SaveGolden` |
 
-**Mutation path:** `agentctl baseline update --plan-id <id> --aut-version <sha>` is
-the **only** command that writes new rows. It archives the previous record by
-setting `superseded_by` and writes a new `plan_hash`. CI runs have no code path
+**Mutation path:** `agentctl baseline update --plan <plan.json> [--target <URL>]` is
+the **only** command that updates baselines. The write is an `INSERT OR REPLACE` keyed
+on `page_key` (it overwrites the previous row entirely; the table keeps no separate
+archive of prior versions and has no `superseded_by` field). CI runs have no code path
 that touches this table as a writer.
+
+**Integrity check:** every read (`GetGolden`) recomputes and compares `mac`; a missing
+or invalid MAC is rejected as `codes.DataLoss` ("golden integrity: missing or invalid
+MAC … tampered or DB swapped"), which the brain maps to a controlled exit code rather
+than silently trusting a swapped-in row.
 
 ---
 
 #### `healing_audit`
 
-An append-only forensic ledger of every heal attempt. No `UPDATE` or `DELETE`
-statement is ever issued against this table. It is the source of truth for
-`agentctl calibrate` and the `healing-audit.jsonl` CI artifact.
+An append-only forensic ledger of every heal attempt (`INSERT` only, no `UPDATE`/`DELETE`
+is ever issued against this table). Real schema (`internal/store/server.go:33-36`) — no
+`mac` column (unlike `golden_snapshots`, this table is not HMAC-protected):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `run_id` | UUID | Run in which the attempt occurred |
+| `run_id` | TEXT | Run in which the attempt occurred |
 | `step` | INTEGER | Step index within the plan |
 | `semantic_id` | TEXT | Target element's semantic identifier |
-| `original_selector` | TEXT | The locator that failed |
-| `strategy_used` | TEXT | `L1`..`L6`, `llm_a11y`, `llm_visual`, or `cache` |
-| `healed_selector` | TEXT | Candidate locator produced by the strategy |
-| `confidence` | REAL | Final score after all discounts and the verify-before-accept probe |
-| `outcome` | TEXT | `persisted`, `flagged`, `human_gate`, `quarantined`, or `skipped` |
-| `llm_tokens` | INTEGER | Tokens consumed if an LLM strategy was invoked; `0` otherwise |
-| `duration_ms` | INTEGER | Total wall time of the heal cycle |
-| `dom_hash_before` | TEXT | Subtree hash before the heal attempt |
-| `dom_hash_after` | TEXT | Subtree hash after the heal attempt (may be identical) |
-| `timestamp` | TIMESTAMP | Row append time |
+| `page_path` | TEXT | Path of the page where the attempt occurred |
+| `strategy` | TEXT | Healing strategy used |
+| `original` | TEXT | The locator that failed |
+| `healed` | TEXT | Candidate locator produced by the strategy |
+| `confidence` | REAL | Final score after all discounts |
+| `outcome` | TEXT | The attempt's outcome (the exact value set is defined by the brain's calling code, not the DB) |
+| `dom_hash` | TEXT | Subtree hash at the time of the heal attempt |
+| `ts` | REAL | Unix time (seconds, float) the row was appended |
 
-This table is the input to `agentctl calibrate`, which computes precision and
-recall of auto-healed locators against `human_verified` outcomes over a rolling
-window, and recalibrates the auto-accept confidence threshold away from the cold-
-start default of 0.90.
+This table is the data source for `agentctl calibrate` and a CI artifact that computes
+precision/recall of auto-healed locators over a rolling window.
 
 ---
 
 #### `step_failures`
 
-Per-step failure tracking for the AUT-SHA-gated flake quarantine logic.
+Per-step failure tracking for the AUT-SHA-gated flake quarantine logic. Real schema
+(`internal/store/server.go:40-43`):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `plan_id` | UUID | Plan the step belongs to |
+| `plan_id` | TEXT | Plan the step belongs to |
 | `step_key` | TEXT | Composite key identifying the step (e.g. `plan_id:step_id`) |
-| `fail_count` | INTEGER | Consecutive failure count |
-| `last_5_results` | TEXT | JSON array of the last 5 outcomes (`pass`, `fail`, `healed`, `quarantined`) |
-| `last_seen_aut_sha` | TEXT | AUT git SHA recorded on the most recent failure |
-| `quarantine_status` | TEXT | `none`, `quarantined`, or `cleared` |
+| `last5` | TEXT | JSON array of the last up-to-5 binary outcomes: `1` = pass, `0` = fail |
+| `last_aut_sha` | TEXT | AUT git SHA recorded on the most recent run |
+| `quarantined` | INTEGER | `1` if the step is quarantined, else `0` — derived from `last5` on every `RecordStep`; there is no separate `fail_count` counter in the schema |
 
-**Quarantine logic:** a step is only quarantined after failing in N-of-5 recent
-runs **without** an AUT SHA change between those failures. If the AUT SHA changes,
-the `fail_count` and `last_seen_aut_sha` are reset. Quarantined steps are cleared
-by `agentctl locators clear-quarantine` or by 3 consecutive passes.
+**Primary key:** `(plan_id, step_key)`
+
+**Quarantine logic** (`RecordStep`, `internal/store/server.go:334-390`): `last5` is
+reset when the AUT SHA changes. A step is quarantined once `last5` accumulates **>=3**
+`0` (fail) entries out of the last up-to-5. It is auto-cleared on **3 consecutive** `1`
+(pass) entries at the end of `last5` — or manually via `agentctl locators
+clear-quarantine`.
 
 ---
 
 #### `runs`
 
-One row per run. The primary cost and trend data source for Grafana and
-`agentctl report`.
+One row per run (M13, ADR-050) — survives a `control-api`/`agentctl` restart, unlike the
+prior in-memory run map. Real schema (`internal/store/server.go:48-51`); the RPC
+`RunRecord` (`proto/store.proto:15-28`) carries the same 11 columns plus a read-only
+`found` (not stored in the DB — a "no such run" signal on `GetRun`):
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `run_id` | UUID | Unique run identifier |
-| `target_url` | TEXT | AUT URL |
-| `plan_hash` | TEXT | SHA-256 of plan steps at run start |
-| `run_mode` | TEXT | `explore`, `replay`, or `ci` |
-| `status` | TEXT | `PENDING`, `RUNNING`, `HEALING`, `PAUSED`, `PARTIAL`, `DONE`, `FAILED`, `ABORTED` |
-| `aut_version` | TEXT | git SHA of the AUT at run start |
-| `token_cost_usd` | REAL | Total LLM spend across all nodes |
-| `plan_tokens` | INTEGER | Tokens consumed in the `plan` node (Opus 4.8 by default) |
-| `heal_tokens` | INTEGER | Tokens consumed in the `heal` node (Sonnet 4.6 by default) |
-| `duration_ms` | INTEGER | Total wall time of the run |
-| `steps_pass` | INTEGER | Count of steps that passed |
-| `steps_fail` | INTEGER | Count of steps that failed |
-| `steps_healed` | INTEGER | Count of steps successfully auto-healed |
-| `steps_quarantined` | INTEGER | Count of steps currently quarantined |
-| `coverage_achieved` | REAL | Final `len(exercised) / max(1, len(seen))` ratio |
-| `started` | TIMESTAMP | Run start time |
-| `completed` | TIMESTAMP | Run completion time (`NULL` if in progress) |
+| `run_id` | TEXT | Unique run identifier (primary key) |
+| `conversation_id` | TEXT | The runs<->chats join (M13) — previously lived only in argv and was lost on restart |
+| `mode` | TEXT | `explore` \| `goal` \| `describe` \| `replay` \| `baseline` \| `chat` |
+| `target` | TEXT | AUT URL |
+| `planner` | TEXT | Planner used |
+| `state` | TEXT | `running` \| `done` \| `failed` |
+| `exit_code` | INTEGER | The brain process's exit code |
+| `artifact_dir` | TEXT | Path to the run's artifact directory |
+| `error` | TEXT | Error text if the run failed |
+| `started_at` | TEXT | Run start time (RFC3339) |
+| `finished_at` | TEXT | Run completion time (RFC3339; empty while running) |
+
+Detailed step/coverage results and token metrics live not in `runs` but in the
+neighbouring M13 domains `results` and `metrics` (`proto/store.proto`), not documented
+in depth here.
 
 ---
 
-#### `run_transcripts`
-
-File references to per-run LLM transcript files. Does not store transcript
-content inline to keep the DB size bounded.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `run_id` | UUID | Foreign key to `runs` |
-| `transcript_path` | TEXT | Absolute filesystem path to the `llm-transcript.jsonl` file |
-| `byte_size` | INTEGER | File size at the time of registration |
-| `recorded_at` | TIMESTAMP | When the path was registered |
-
-The `.jsonl` file itself contains one JSON object per LLM call:
-`{ts, run_id, step_id, node, model, prompt_tokens, completion_tokens, latency_ms,
-cost_usd, decision_summary, temperature}`. It is written with `fsync` at run end
-and never overwritten.
-
----
-
-#### `page_object_cache`
-
-Generated Playwright test code keyed by URL pattern. Populated by `report-service`
-when it generates `.spec.ts` exports from `RunState.executed_actions`.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `url_pattern` | TEXT | Normalised URL pattern (primary key; query strings stripped) |
-| `spec_path` | TEXT | Filesystem path to the generated `.spec.ts` file |
-| `page_object_path` | TEXT | Filesystem path to the generated page-object class file |
-| `plan_id` | UUID | Plan from which this code was generated |
-| `generated_at` | TIMESTAMP | Generation timestamp |
-| `invalidated_at` | TIMESTAMP | Set when the plan is superseded; `NULL` if current |
+> **Note:** the `run_transcripts` and `page_object_cache` tables do not exist in the
+> store-gateway (neither in the legacy heal/trust schema nor in the 5 M13 domains). The
+> LLM transcript (`llm-transcript.jsonl`) is written to disk in the run's artifact
+> directory (`brain/__main__.py:_run_explore`) with no separate index table; there is no
+> code in the repository that generates a `page_object_cache`.
 
 ---
 
@@ -290,30 +256,35 @@ when it generates `.spec.ts` exports from `RunState.executed_actions`.
 
 ### Why the checkpoint DB is separate
 
-Keeping the LangGraph `SqliteSaver` in its own file makes the ownership contract
-unambiguous: Go store-gateway is the sole writer of the main database, Python
-brain is the sole writer of the checkpoint database, TypeScript `pw-executor`
-writes nothing to either. Two independent single-writer guarantees, verified by
-inspection rather than convention.
+Keeping the LangGraph checkpointer (`SqliteSaver`/`PostgresSaver`) in its own file/DB
+makes the ownership contract unambiguous: Go store-gateway is the sole writer of the
+main database, Python brain is the sole writer of the checkpoint database, TypeScript
+`pw-executor` writes nothing to either. Two independent single-writer guarantees,
+verified by inspection rather than convention.
 
-### Postgres and AsyncPostgresSaver
+### Postgres: checkpoint DB vs. the store-gateway's main DB
 
-Postgres is **not pre-built**. It is introduced at M5 and only when one of these
-explicit triggers is hit:
+For the **brain's checkpoint DB**, switching to Postgres is already implemented and is
+operator-controlled via the `CHECKPOINT_DSN` environment variable
+(`brain/__main__.py:_checkpointer`, M5-3): when set, the brain uses a synchronous
+LangGraph `PostgresSaver` instead of `SqliteSaver`, with a one-time `saver.setup()` call
+on connect. This is **not** `AsyncPostgresSaver` — the brain's loop is synchronous.
 
-- More than 50 concurrent shared-DB writers, **or**
-- Workers distributed across multiple hosts (K3s multi-node).
-
-When triggered: `store-gateway` switches its `database/sql` driver from
-`modernc.org/sqlite` to `lib/pq`; LangGraph's `SqliteSaver` is replaced by
-`AsyncPostgresSaver` (one constructor change in the brain). The schema requires
-no changes.
+For the **store-gateway's main DB**, Postgres is not implemented: `STORE_DSN` is
+recognized and **explicitly refused** with a startup error
+(`internal/store/server.go:96-99`, "the Postgres backend is deferred to M13-service")
+rather than silently falling back to SQLite. Switching the driver from
+`modernc.org/sqlite` to Postgres is M13-service work (M11/ADR-053); the schema is
+already written portably for that transition.
 
 ### Checkpoint GC
 
-Checkpoints for completed runs accumulate over time. A maintenance goroutine in
-`store-gateway` prunes checkpoint records for runs in a terminal state
-(`DONE`, `FAILED`, `ABORTED`) that are older than N runs (default: keep the 10
-most recent completed runs per `target_url`). The checkpoint DB files themselves
-are deleted from disk after the corresponding run's retention window expires. This
-bounds checkpoint DB growth without manual intervention.
+There is **no** automatic checkpoint-DB cleanup in the store-gateway: the Go
+store-gateway (`internal/store/server.go`) never reads or deletes `checkpoint.db` or
+`state/conversations.db` — those files belong exclusively to the Python brain's
+checkpointer (LangGraph `SqliteSaver`/`PostgresSaver`), not to the store-gateway. The
+per-run `<artifact_dir>/checkpoint.db` is naturally bounded by the lifetime of the run's
+artifact directory; `state/conversations.db` is the shared, non-ephemeral DB (see above)
+and is not pruned automatically today. Managing its growth (archiving/rotating old
+conversation threads) is an operational concern not implemented in the store-gateway's
+code.
