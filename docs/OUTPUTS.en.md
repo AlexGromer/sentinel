@@ -53,7 +53,7 @@ The primary CI-consumption artifact, emitted at the end of every run.
 
 **As-built:** the names `run_report.json`/`run_report.html` do not exist in the code. In
 reality, `brain/report.py::generate()` (`brain/report.py:88-97`) reads `heal-report.json`
-(the replay/baseline run's artifact) and writes three files: `report.json`, `report.html`,
+(the **replay** run's artifact; a baseline run writes `baseline-report.json`) and writes three files: `report.json`, `report.html`,
 and `metrics.prom` (Prometheus textfile format, node_exporter textfile-collector).
 
 **JSON** is machine-readable: it drives the process exit code and is parseable by any CI

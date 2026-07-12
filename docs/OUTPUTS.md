@@ -50,7 +50,7 @@ coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[],
 Основной артефакт для CI-потребления, испускаемый в конце каждого запуска.
 
 **As-built:** имён `run_report.json`/`run_report.html` в коде нет. Реально `brain/report.py::generate()`
-(`brain/report.py:88-97`) читает `heal-report.json` (артефакт replay/baseline-запуска) и пишет три
+(`brain/report.py:88-97`) читает `heal-report.json` (артефакт **replay**-запуска; baseline-прогон пишет `baseline-report.json`) и пишет три
 файла: `report.json`, `report.html` и `metrics.prom` (Prometheus textfile-формат,
 node_exporter textfile-collector).
 

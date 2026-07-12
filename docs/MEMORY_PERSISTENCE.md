@@ -29,8 +29,9 @@ LangGraph checkpointer писать в тот же файл.
 
 Объект LangGraph `RunState` **и есть** рабочая память для запуска. Это типизированный
 `TypedDict`, который накапливает наблюдения за страницей, запланированные действия, выполненные
-результаты, попытки исцеления, счётчики бюджета и состояние human-gate на протяжении всего
-жизненного цикла запуска.
+результаты и счётчик подряд идущих неудач восстановления (`consecutive_heal_failures`) на протяжении
+всего жизненного цикла запуска. Бюджет токенов — это процесс-глобальный `BudgetTracker`
+(`brain/budget.py`), а не поле `RunState`; полей human-gate в `RunState` нет.
 
 `RunState` сохраняется в checkpoint при каждом переходе узла `checkpoint` через LangGraph-
 чекпойнтер — синхронный `SqliteSaver` по умолчанию, либо синхронный `PostgresSaver`, если
@@ -85,7 +86,7 @@ LangGraph checkpointer писать в тот же файл.
   в режиме SQLite WAL без блокировки писателя.
 - **Миграции схемы (реальность на M13):** сегодня — идемпотентный `CREATE TABLE
   IF NOT EXISTS` (+ разовые `ALTER`) в `store-gateway` при старте, для heal/trust-
-  таблиц и **5 доменов M13** (runs·scenarios/tests·chats·results·metrics, ADR-050).
+  таблиц и **6 доменов M13** (runs·scenarios/tests·chats·results·metrics + `config`, ADR-050/062).
   SQL написан портируемо (`ON CONFLICT DO UPDATE`, без SQLite-only-синтаксиса в M13-
   доменах). `golang-migrate` + Postgres-бэкенд (за `STORE_DSN`) — **аспирация,
   отложено в M13-service** (M11/ADR-053); `STORE_DSN` сейчас распознаётся и
@@ -126,7 +127,7 @@ LangGraph checkpointer писать в тот же файл.
 ---
 
 > **Примечание:** отдельной долгосрочной таблицы `page_models` в store-gateway не
-> существует — ни в legacy heal/trust-схеме, ни в 5 доменах M13 (`internal/store/server.go`).
+> существует — ни в legacy heal/trust-схеме, ни в 6 доменах M13 (`internal/store/server.go`).
 > `page_model` — это поле `RunState` (`brain/state.py`), то есть часть краткосрочной
 > checkpoint-памяти запуска, а не отдельная запись в долгосрочном хранилище.
 
@@ -235,7 +236,7 @@ M13-доменах `results` и `metrics` (`proto/store.proto`), не описа
 ---
 
 > **Примечание:** таблиц `run_transcripts` и `page_object_cache` в store-gateway не
-> существует (ни в legacy heal/trust-схеме, ни в 5 доменах M13). Транскрипт LLM
+> существует (ни в legacy heal/trust-схеме, ни в 6 доменах M13). Транскрипт LLM
 > (`llm-transcript.jsonl`) пишется на диск в каталог артефактов запуска
 > (`brain/__main__.py:_run_explore`) без отдельной таблицы-индекса; кода, генерирующего
 > `page_object_cache`, в репозитории нет.

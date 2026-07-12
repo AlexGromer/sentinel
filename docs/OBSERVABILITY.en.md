@@ -32,7 +32,8 @@ Attributes are set on only two span kinds:
 
 | Span | Attributes | Source |
 |---|---|---|
-| `sentinel.run` (whole-run span) | `run_id`, `mode`, `transport`, `store` | `brain/__main__.py:238,509-511` |
+| `sentinel.run` — chat (`brain/__main__.py:238`) | `run_id`, `mode`, `conversation_id`, `store` | — |
+| `sentinel.run` — explore/replay (`brain/__main__.py:509-511`) | `run_id`, `mode`, `transport`, `store` | — |
 | `heal.llm` (LLM call in the heal node) | `model`, `prompt_hash`, `llm.prompt_tokens`, `llm.completion_tokens` | `brain/healing.py:129`, `brain/otel.py:53-64` |
 
 `step_index`, per-node `run_mode`, `latency_ms`, `cost_usd`, `decision_type`, `confidence` are
@@ -64,17 +65,19 @@ Every LLM call appends exactly one JSON line. The file is `fsync`-ed at run end 
 
 | Field | Type | Description |
 |---|---|---|
-| `ts` | ISO-8601 | Timestamp of the call |
-| `run_id` | string | Run identifier |
-| `step_id` | string | Plan step this call belongs to |
-| `node` | string | LangGraph node name |
-| `model` | string | Model identifier |
-| `prompt_tokens` | int | Prompt token count |
-| `completion_tokens` | int | Completion token count |
-| `latency_ms` | int | Wall-clock latency |
-| `cost_usd` | float | Cost for this call |
-| `decision_summary` | string | Human-readable summary of the decision (not the full output) |
-| `temperature` | float | Temperature used |
+The real record (`tx_write`, `brain/graph.py:225-245` → `brain/__main__.py:113-115`) is exactly **7 fields**:
+
+| Field | Type | Description |
+|---|---|---|
+| `step` | int | Step number |
+| `planner` | string | Decision planner (`llm` \| `heuristic`) |
+| `model` | string \| null | Model identifier (null for heuristic) |
+| `decision` | string | The action taken |
+| `reason` | string | Rationale for the decision |
+| `prompt_tokens` | int \| null | Prompt tokens |
+| `completion_tokens` | int \| null | Completion tokens |
+
+The fields `ts`/`run_id`/`step_id`/`node`/`latency_ms`/`cost_usd`/`decision_summary`/`temperature` are **not** in the record.
 
 **Use cases:** offline decision debugging; per-node cost attribution; prompt iteration
 without re-hitting the API; compliance audit ("what did the agent decide and why").
@@ -137,9 +140,11 @@ the control-API converts it into `cost_usd` (§5) — not Prometheus.
 trace per run. One `trace.zip` is written to the shared artifact directory configured at
 server launch.
 
-**Relay path:** `pw-executor` → path returned in MCP tool response → Python brain →
-gRPC `RunEvent` → Go orchestrator, which writes the file to `runs/{run_id}/trace.zip`.
-`report-service` does not serve it — the service exposes exactly three routes: `/healthz`,
+**Relay path:** the **brain** computes the trace path itself (`brain/__main__.py:95`) and passes it to
+`pw-executor` via `browser.traceStop(path=…)` (`:143`); `pw-executor` writes the file through Playwright
+(`pw-executor/src/server.ts:421-428`) and merely **echoes** the path back — it never originates it.
+The gRPC `RunEvent` carries no trace field, and no Go code writes `trace.zip` (only `sweepTraces` deletes
+old ones). `report-service` does not serve it — the service exposes exactly three routes: `/healthz`,
 `/report/`, and `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` is read directly
 from the run directory (or from the CI artifact).
 
@@ -162,7 +167,7 @@ and no Alertmanager rules file ship in the repository.
 | `sentinel_run_steps` | — | Number of steps in the run |
 | `sentinel_run_exit_code` | — | Structured exit code of the run |
 | `sentinel_heal_total` | — | Count of healed steps |
-| `sentinel_heal_by_strategy_total` | `strategy` | Count of heals by strategy — `strategy` ∈ the `PRIORS` keys (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), plus `cache`/`unknown` |
+| `sentinel_heal_by_strategy_total` | `strategy` | Count of heals by strategy — `strategy` ∈ the `PRIORS` keys (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), or `unknown` (on a cache hit the cached locator's own strategy — a `PRIORS` key — is returned; the literal `cache` is never emitted as a label) |
 | `sentinel_regression_total` | `kind` | Count of regressions by kind — `kind` ∈ {`a11y`, `visual`} |
 | `sentinel_quarantined_total` | — | Number of currently quarantined steps |
 | `sentinel_failed_total` | — | Number of failed steps |

@@ -32,7 +32,8 @@ LangGraph) **не несут атрибутов** — `_traced()` открыва
 
 | Спан | Атрибуты | Источник |
 |---|---|---|
-| `sentinel.run` (спан всего запуска) | `run_id`, `mode`, `transport`, `store` | `brain/__main__.py:238,509-511` |
+| `sentinel.run` — chat (`brain/__main__.py:238`) | `run_id`, `mode`, `conversation_id`, `store` | — |
+| `sentinel.run` — explore/replay (`brain/__main__.py:509-511`) | `run_id`, `mode`, `transport`, `store` | — |
 | `heal.llm` (LLM-вызов в узле heal) | `model`, `prompt_hash`, `llm.prompt_tokens`, `llm.completion_tokens` | `brain/healing.py:129`, `brain/otel.py:53-64` |
 
 `step_index`, `run_mode` (на узел), `latency_ms`, `cost_usd`, `decision_type`, `confidence` —
@@ -62,19 +63,19 @@ CI-артефакт вместе с `report.json`/`report.html` (`brain/report.p
 
 **Схема записи:**
 
+Реальная запись (`tx_write`, `brain/graph.py:225-245` → `brain/__main__.py:113-115`) — ровно **7 полей**:
+
 | Поле | Тип | Описание |
 |---|---|---|
-| `ts` | ISO-8601 | Временная метка вызова |
-| `run_id` | string | Идентификатор запуска |
-| `step_id` | string | Шаг плана, к которому относится вызов |
-| `node` | string | Имя узла LangGraph |
-| `model` | string | Идентификатор модели |
-| `prompt_tokens` | int | Количество токенов промпта |
-| `completion_tokens` | int | Количество токенов ответа |
-| `latency_ms` | int | Настенное время задержки |
-| `cost_usd` | float | Стоимость данного вызова |
-| `decision_summary` | string | Человекочитаемый итог решения (не полный вывод) |
-| `temperature` | float | Использованная температура |
+| `step` | int | Номер шага |
+| `planner` | string | Планировщик решения (`llm` \| `heuristic`) |
+| `model` | string \| null | Идентификатор модели (null для heuristic) |
+| `decision` | string | Принятое действие |
+| `reason` | string | Обоснование решения |
+| `prompt_tokens` | int \| null | Токены промпта |
+| `completion_tokens` | int \| null | Токены ответа |
+
+Полей `ts`/`run_id`/`step_id`/`node`/`latency_ms`/`cost_usd`/`decision_summary`/`temperature` в записи **нет**.
 
 **Сценарии использования:** отладка решений в offline-режиме; атрибуция затрат по узлам;
 итерация промптов без повторного обращения к API; аудит соответствия («что решил агент и почему»).
@@ -136,10 +137,12 @@ Brain поддерживает dict `token_usage` с ключом `model_id → 
 трассировку для каждого запуска. Один файл `trace.zip` записывается в общую директорию
 артефактов, настроенную при запуске сервера.
 
-**Путь передачи:** `pw-executor` → путь, возвращённый в ответе MCP-инструмента → Python brain →
-gRPC `RunEvent` → оркестратор Go, который записывает файл в `runs/{run_id}/trace.zip`.
-`report-service` его не раздаёт — сервис предоставляет ровно три маршрута: `/healthz`, `/report/`
-и `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` читается напрямую из директории
+**Путь передачи:** **brain** сам вычисляет путь трейса (`brain/__main__.py:95`) и передаёт его
+`pw-executor` в `browser.traceStop(path=…)` (`:143`); `pw-executor` записывает файл через Playwright
+(`pw-executor/src/server.ts:421-428`) и лишь **возвращает** путь обратно — он его не порождает.
+gRPC-`RunEvent` поля трейса не несёт, и никакой Go-код `trace.zip` не пишет (только `sweepTraces`
+удаляет старые). `report-service` его не раздаёт — сервис предоставляет ровно три маршрута: `/healthz`,
+`/report/` и `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` читается напрямую из директории
 запуска (или из CI-артефакта).
 
 **Просмотр:** `playwright show-trace trace.zip`
@@ -161,7 +164,7 @@ Grafana и файла правил Alertmanager в репозитории нет
 | `sentinel_run_steps` | — | Число шагов в запуске |
 | `sentinel_run_exit_code` | — | Структурированный exit-код запуска |
 | `sentinel_heal_total` | — | Количество исцелённых шагов |
-| `sentinel_heal_by_strategy_total` | `strategy` | Количество исцелений по стратегии — `strategy` ∈ ключам `PRIORS` (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), плюс `cache`/`unknown` |
+| `sentinel_heal_by_strategy_total` | `strategy` | Количество исцелений по стратегии — `strategy` ∈ ключам `PRIORS` (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), либо `unknown` (при cache-hit возвращается стратегия закешированного локатора — из `PRIORS`; литерал `cache` меткой не эмитится) |
 | `sentinel_regression_total` | `kind` | Количество регрессий по виду — `kind` ∈ {`a11y`, `visual`} |
 | `sentinel_quarantined_total` | — | Число шагов в карантине |
 | `sentinel_failed_total` | — | Число упавших шагов |

@@ -4,10 +4,12 @@
 
 > Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTURE.md.
 
-**Scope:** This document describes the complete self-healing pipeline executed inside the `heal` node
-via the `healing-engine` Python module. The entry contract is a `HealingContext` struct:
-`{semantic_id, failure_type, attempted_locator, element_description}`. The pipeline is bounded,
-calibrated, and verify-before-trust.
+**Scope:** This document describes the complete self-healing pipeline (`HealingEngine.heal`,
+`brain/healing.py`). It runs **not** in the graph `heal` node (that is a stub in the explore graph)
+but in the standalone `run_replay()` loop (`brain/replay.py`), which calls `heal.heal(ctx)` on a live
+locator failure. The `ctx` input is a plain dict (`brain/replay.py:207-210`):
+`{step, semantic_id, page_path, intent, attempted_locator, alternatives, dom_hash, interactives}`.
+The pipeline is bounded, calibrated, and verify-before-trust.
 
 **Browser interface note (BUILD_ONLY_DELTA):** All MCP tool calls referenced below
 (`accessibility_snapshot`, locator resolution/probe, screenshot) are issued to **`pw-executor`** —
@@ -17,20 +19,13 @@ is a bespoke implementation, not an off-the-shelf product.
 
 ---
 
-## Step 1 — Failure Classification
+## Step 1 — Heal Trigger
 
-Catch the MCP error returned from the `act` node and classify it into one of four categories before
-any healing attempt begins:
-
-| Class | Meaning | Action |
-|---|---|---|
-| `LOCATOR_STALE` | Element present in a11y tree but selector no longer matches | Proceed through the healing pipeline |
-| `ELEMENT_GONE` | Element absent from tree — removed, conditional, or A/B variant | Proceed through the healing pipeline |
-| `TIMING` | Element present but not interactable at call time | Retry `act` once with a short wait **before** escalating to healing |
-| `UNEXPECTED_ERROR` | Navigation / network / JS error | Do NOT heal — emit event, route directly to `report` |
-
-Only `LOCATOR_STALE` and `ELEMENT_GONE` enter the full healing pipeline. `TIMING` gets one
-cheap retry first. `UNEXPECTED_ERROR` is never a healing candidate.
+There is **no** four-class failure classifier (`LOCATOR_STALE`/`ELEMENT_GONE`/`TIMING`/`UNEXPECTED_ERROR`)
+in the code. The real trigger is a single check in `run_replay()` (`brain/replay.py:194-198`): for a
+locator-bearing step, `browser.probe` is run on the frozen primary locator, and if it does **not**
+resolve to exactly 1 element (`count != 1`), `heal.heal(ctx)` is invoked. Non-locator steps
+(navigation, etc.) are not healing candidates.
 
 ---
 
@@ -39,12 +34,12 @@ cheap retry first. `UNEXPECTED_ERROR` is never a healing candidate.
 Do not reuse the stale snapshot from the previous cycle.
 
 1. Call `pw-executor` → `accessibility_snapshot()` fresh.
-2. Recompute `completeness_ratio` = named interactive elements / total interactive elements.
-3. If `completeness_ratio < 0.30` (canvas, shadow DOM, custom elements, or cross-origin iframe),
-   **also** capture a screenshot via `pw-executor` → `screenshot()` for the gated visual attempt
+2. Take the page's current interactive elements (`current_elements`) to feed the reground.
+3. When needed, capture a screenshot via `pw-executor` → `screenshot()` for the gated visual attempt
    in Step 6.
-4. Recompute the **subtree-scoped** `dom_hash` for the scenario's target container only (not the
-   whole page — see Risk note in ../ARCHITECTURE.md §Risks).
+4. Recompute `dom_hash = _a11y_hash(ariaSnapshot)[:16]` — a hash of the **whole page** a11y snapshot
+   (`brain/replay.py:210`; the same value is the cache key `dom_subtree_hash`). There is no
+   `completeness_ratio` in the code.
 
 The fresh snapshot prevents healing against DOM state that may have already changed again between
 the failure and the heal cycle.
@@ -102,11 +97,12 @@ Invoked **only if Steps 3–4 both fail** to produce a unique live match.
 **Budget pre-check:** verify remaining heal-model token budget (Sonnet by default) before calling the model. If budget
 is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
 
-**Prompt inputs:**
-- Original intent and `element_description`
-- `attempted_locator` (the one that failed)
-- The failed-strategy table from Step 4 (which levels were tried and why they missed)
-- Current a11y tree, truncated to budget, target subtree first
+**Prompt inputs** (`brain/healing.py:121-128` — exactly three fields):
+- `intent` — the step's intent
+- `original_locator` — the failed `attempted_locator`
+- `current_elements` — the page's current interactive elements
+
+(the prompt sends exactly these three; there is no failed-strategy table and no `element_description`)
 
 **Model output** (structured JSON, schema `_SCHEMA_CSS` — a CSS selector only, with no
 self-reported `confidence` / `reasoning` / `strategy`):

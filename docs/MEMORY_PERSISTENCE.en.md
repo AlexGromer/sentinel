@@ -28,8 +28,10 @@ the LangGraph checkpointer to write the same file.
 ### Mechanism
 
 The LangGraph `RunState` object **is** the working memory for a run. It is a typed
-`TypedDict` that accumulates page observations, planned actions, executed outcomes,
-heal attempts, budget counters, and human-gate state throughout the run lifecycle.
+`TypedDict` that accumulates page observations, planned actions, executed outcomes, and a
+consecutive-heal-failure counter (`consecutive_heal_failures`) throughout the run lifecycle.
+The token budget is the process-global `BudgetTracker` (`brain/budget.py`), not a `RunState`
+field; there are no human-gate fields in `RunState`.
 
 `RunState` is checkpointed at every `checkpoint` node transition by a LangGraph
 checkpointer — a synchronous `SqliteSaver` by default, or a synchronous `PostgresSaver`
@@ -85,8 +87,8 @@ Long-term state is owned **exclusively** by the Go `store-gateway` component.
   under SQLite WAL mode without blocking the writer.
 - **Schema migrations (reality as of M13):** today — idempotent `CREATE TABLE
   IF NOT EXISTS` (+ one-off `ALTER`s) in `store-gateway` at startup, for the
-  heal/trust tables and the **5 M13 domains** (runs·scenarios/tests·chats·results·
-  metrics, ADR-050). The SQL is written portably (`ON CONFLICT DO UPDATE`, no
+  heal/trust tables and the **6 M13 domains** (runs·scenarios/tests·chats·results·
+  metrics + `config`, ADR-050/062). The SQL is written portably (`ON CONFLICT DO UPDATE`, no
   SQLite-only syntax in the M13 domains). `golang-migrate` + a Postgres backend
   (behind `STORE_DSN`) are **aspirational, deferred to M13-service** (M11/ADR-053);
   `STORE_DSN` is currently recognized and refused (fail-loud), not silently SQLite.
@@ -125,7 +127,7 @@ widget cannot invalidate all cached locators.
 ---
 
 > **Note:** there is no separate long-term `page_models` table in the store-gateway —
-> neither in the legacy heal/trust schema nor in the 5 M13 domains
+> neither in the legacy heal/trust schema nor in the 6 M13 domains
 > (`internal/store/server.go`). `page_model` is a `RunState` field (`brain/state.py`) — part
 > of the run's short-term checkpoint memory, not a row in long-term storage.
 
@@ -233,7 +235,7 @@ in depth here.
 ---
 
 > **Note:** the `run_transcripts` and `page_object_cache` tables do not exist in the
-> store-gateway (neither in the legacy heal/trust schema nor in the 5 M13 domains). The
+> store-gateway (neither in the legacy heal/trust schema nor in the 6 M13 domains). The
 > LLM transcript (`llm-transcript.jsonl`) is written to disk in the run's artifact
 > directory (`brain/__main__.py:_run_explore`) with no separate index table; there is no
 > code in the repository that generates a `page_object_cache`.
