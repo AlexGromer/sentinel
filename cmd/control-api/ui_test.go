@@ -132,6 +132,29 @@ func TestUIDoesNotSwallowTheAPI(t *testing.T) {
 	}
 }
 
+// The "GET /v1/" guard sits between the real endpoints and the catch-all, so a routing regression
+// would silently turn a working endpoint into a 404 (or worse, into the HTML page). Every registered
+// GET route must still reach its own handler with the UI on.
+func TestUIDoesNotShadowRegisteredRoutes(t *testing.T) {
+	h := uiTestServer(t, enabledUI(t)).mux()
+	// Status codes vary legitimately (403 unauthenticated, 404 "no such run" from the handler itself),
+	// so the assertion is on WHO answered: the guard's own message must never appear, and neither must
+	// the catch-all's HTML.
+	for _, p := range []string{
+		"/v1/config", "/v1/runs", "/v1/runs/abc", "/v1/runs/abc/events", "/v1/runs/abc/artifact",
+		"/v1/stream", "/v1/scenarios", "/v1/scenarios/abc", "/v1/tests", "/v1/tests/abc",
+		"/v1/chats", "/v1/chats/abc", "/v1/results", "/v1/results/abc", "/v1/trends",
+	} {
+		body := get(t, h, p).Body.String()
+		if strings.Contains(body, "unknown endpoint") {
+			t.Errorf("GET %s hit the /v1/ guard — a registered route was shadowed", p)
+		}
+		if strings.Contains(strings.ToLower(body), "<html") {
+			t.Errorf("GET %s fell through to the UI page", p)
+		}
+	}
+}
+
 // A directory listing is the only way the FileServer could disclose names we do not serve.
 func TestUINeverListsDirectories(t *testing.T) {
 	h := uiTestServer(t, enabledUI(t)).mux()

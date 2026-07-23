@@ -65,6 +65,54 @@ docker compose --profile webui up                        # setup-WebUI + calcula
 | `webui` | `webui` | Local air-gapped **setup-WebUI + calculators** (bundled into the image under `/app/docs`); `python -m http.server` on :8088. Open `http://localhost:8088/setup/`. ADR-031 phase-1. |
 | `ollama` | `ollama` | OpenAI-compatible endpoint `http://ollama:11434/v1`. Start with: `docker compose --profile ollama up -d ollama`, then `docker compose exec ollama ollama pull <model>`. |
 
+### UI deployment modes and the access token (ADR-064)
+
+The only difference between the three modes is who serves the browser UI:
+
+| Mode | How to start | Ports | CORS | Token in the UI |
+|---|---|---|---|---|
+| 1 — headless | `docker compose --profile control-api up control-api` | 8090 | not needed | no UI; the client sends `Bearer` itself |
+| 2 — split (the previous default) | `docker compose --profile control-api --profile webui up` | 8088 + 8090 | an allowlist is required (`CONTROL_API_CORS_ORIGINS`) | the operator copy-pastes it into Settings |
+| 3 — single-service (recommended) | `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api` → open `http://localhost:8090/` | 8090 | none — same-origin requests are not CORS requests, so the allowlist can be left empty | the one-time `?bootstrap=<nonce>` link printed at startup |
+
+**Token lifecycle (all modes).** You no longer have to invent `CONTROL_API_TOKEN` before the first start: if the
+variable is unset, control-api generates 32 random bytes (hex) itself and atomically persists them to
+`state/control-api.token` (mode 0600); it reuses that file on the next start, so a token already pasted into the
+UI survives a restart.
+
+Token source precedence: `CONTROL_API_TOKEN` (env) → else `CONTROL_API_AUTOTOKEN=0` gives a deliberately
+tokenless read-only instance (every mutation is 403, the pre-ADR-064 behaviour) → else the persisted file → else
+a freshly generated token. If the file exists but is unreadable or holds content control-api cannot use, it is
+NEVER overwritten: the process warns and runs with a throwaway in-memory token instead.
+
+`CONTROL_API_TOKEN_FILE` overrides the file location. `CONTROL_API_PRINT_TOKEN=0` stops the value being printed
+at startup (in modes 1-2 it is printed by default, because the terminal is the only channel the operator has).
+The token file lives under `state/` (gitignored); on Windows the 0600 mode maps onto ACL semantics rather than
+POSIX bits — treat the file as user-scoped and do not rely on the permission bits.
+
+**Mode 3 specifics.** `CONTROL_API_SERVE_UI=1` serves the UI from assets embedded in the binary — no checkout
+needed, a release binary is enough. `CONTROL_API_UI_DIR=<path>` serves the pages from disk instead (for
+live-editing the pages during development). At startup control-api prints, on stderr:
+
+```
+control-api: serving the UI (embedded) at http://127.0.0.1:8090/
+control-api: open http://127.0.0.1:8090/?bootstrap=<nonce>  (one-time, valid 5m0s)
+```
+
+Opening that link fills the page's control-API URL and bearer-token fields automatically and strips the nonce
+from the URL. The token stays in tab memory — never `localStorage`.
+
+The nonce is single-use and expires (default 5 minutes, `CONTROL_API_UI_BOOTSTRAP_TTL`, e.g. `90s`; a
+non-positive value disables the bootstrap entirely). Replaying it, using it after expiry, five wrong guesses, or
+calling from a cross-origin page all return 403. If you miss the window: read the token out of
+`state/control-api.token` and paste it into the page's Settings field, or restart control-api for a fresh nonce.
+Reaching the port after startup does NOT get you a token by itself — that is deliberate and preserves the
+ADR-032 security invariant.
+
+Pages served: `/` (hub), `/setup/` (wizard), `/chat/` (chat console), `/calculators/*.html`, plus `prices.json`
+and `backend-presets.json`. Prose `.md` docs are not served (they are linked to GitHub). Modes 1 and 2 are
+byte-for-byte unchanged when `CONTROL_API_SERVE_UI`/`CONTROL_API_UI_DIR` are unset.
+
 ### Environment variables
 
 The env block is defined in `docker-compose.yml` or passed via a `.env` file:

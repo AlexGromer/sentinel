@@ -79,8 +79,16 @@ docker compose --profile demo up
 # …or against your own target (goal mode; needs a key or a local model):
 docker compose run --rm sentinel run --target "https://your-app.example" --goal "log in and open billing"
 ```
-**setup-WebUI locally (air-gapped, part of the bundle):** `docker compose --profile webui up` → open
-`http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.
+**Live UI as a single service (the recommended path, ADR-064):**
+```bash
+CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api
+```
+→ open the `?bootstrap=…` link control-API prints at startup: one port (`:8090`), no CORS, and the UI picks up
+its token by itself (one-time). The token is generated automatically and kept in `state/control-api.token` —
+you no longer have to invent one up front.
+
+**setup-WebUI as a separate service (static, air-gapped, part of the bundle):** `docker compose --profile webui up` →
+open `http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.
 
 **Local model** (no cloud): uncomment the `LLM_*` block in [`docker-compose.yml`](docker-compose.yml) and
 start an endpoint — `docker compose --profile ollama up -d ollama` (or the multi-provider LiteLLM router — `docker compose --profile litellm up -d litellm`, see [`docs/ADAPTERS.md`](docs/ADAPTERS.md)). Model/hardware sizing lives in
