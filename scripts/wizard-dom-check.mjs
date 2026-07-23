@@ -115,6 +115,38 @@ async function startControlAPI(port, corsOrigin, storeAddr) {
   proc.kill('SIGKILL');
   throw new Error('control-api did not become healthy within 5s');
 }
+// ADR-064 mode 3: the SAME binary serving the UI from its own port, with no token supplied and no CORS
+// allowlist. It must generate its own token and print a one-time bootstrap nonce — which is the only
+// place that nonce ever appears, so we scrape it from stderr exactly like an operator reads their log.
+// cwd is the temp dir on purpose: state/control-api.token must not land in the repo during CI.
+async function startModeThreeAPI(port, cwd) {
+  const proc = spawn(path.join(REPO, 'bin', 'control-api'), [], {
+    cwd,
+    env: { ...process.env,
+           CONTROL_API_ADDR: `127.0.0.1:${port}`,
+           CONTROL_API_TOKEN: '', CONTROL_API_AUTOTOKEN: '', CONTROL_API_TOKEN_FILE: '',
+           CONTROL_API_CORS_ORIGINS: '',   // mode 3 is same-origin — no allowlist needed at all
+           CONTROL_API_SERVE_UI: '1', CONTROL_API_UI_DIR: '',
+           CONTROL_API_STORE_ADDR: '', LLM_BASE_URL: '' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log = '';
+  proc.stderr.on('data', (b) => { log += b; if (process.env.DOM_GATE_VERBOSE) process.stderr.write(`[capi3] ${b}`); });
+  for (let i = 0; i < 100; i++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/healthz`);
+      if (r.ok) {
+        const m = /[?&]bootstrap=([0-9a-f]+)/.exec(log);
+        if (!m) { proc.kill('SIGKILL'); throw new Error(`no bootstrap nonce in the startup log:\n${log}`); }
+        return { proc, nonce: m[1] };
+      }
+    } catch (e) { if (String(e.message).startsWith('no bootstrap')) throw e; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  proc.kill('SIGKILL');
+  throw new Error('mode-3 control-api did not become healthy within 5s');
+}
+
 function freePort() {
   return new Promise((resolve) => {
     const s = createServer();
@@ -178,6 +210,7 @@ async function launchBrowser() {
 // Every resource is acquired INSIDE the try. Acquiring bin/control-api before it meant a failing
 // chromium.launch() skipped the only capi.kill() in the script, orphaning a live process on a live port.
 let staticSrv = null, capi = null, store = null, browser = null, tmp = null, base = '', capiURL = '';
+let capi3 = null;
 try {
   staticSrv = await startStatic();
   base = `http://127.0.0.1:${staticSrv.port}`;
@@ -498,9 +531,47 @@ try {
     eq(dead.body.checks.config.status, 'ok', 'config is still stored');
     await ctx.close();
   });
+
+  /* 9 — ADR-064 mode 3: one process, one port, same-origin, self-bootstrapping token */
+  await check('mode 3: control-api serves the UI, auto-generates its token, bootstraps it once', async () => {
+    const port3 = await freePort();
+    capi3 = await startModeThreeAPI(port3, tmp);
+    const ui = `http://127.0.0.1:${port3}`;
+
+    // The pages come from the binary's embedded FS, not from the static server used above.
+    eq((await fetch(`${ui}/setup/`)).status, 200, 'GET /setup/ from the embedded UI');
+    eq((await fetch(`${ui}/COMPETITIVE_ANALYSIS.internal.md`)).status, 404, 'internal doc must not be served');
+    eq((await fetch(`${ui}/v1/not-an-endpoint`)).status, 404, 'unknown /v1 path must not fall through to the UI');
+
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(`${ui}/setup/?bootstrap=${capi3.nonce}`, { waitUntil: 'load' });
+    await settled(page);
+    await page.waitForFunction(() => document.getElementById('capitok').value.length > 0, null, { timeout: 10000 });
+
+    const tok = await page.inputValue('#capitok');
+    ok(/^[0-9a-f]{64}$/.test(tok), `bootstrapped token has the wrong shape: ${tok}`);
+    eq(await page.inputValue('#capi'), ui, 'control-API URL prefilled with the serving origin');
+    ok(!page.url().includes('bootstrap='), `the nonce was left in the URL: ${page.url()}`);
+
+    // Same invariant as check 5, now for a token the page was GIVEN rather than typed.
+    const blob = await page.evaluate(() => JSON.stringify(localStorage));
+    ok(!blob.includes(tok), `the bootstrapped token leaked into localStorage: ${blob}`);
+
+    // Single-use: replaying the nonce an operator may still have in their scrollback buys nothing.
+    eq((await fetch(`${ui}/v1/ui-token?nonce=${capi3.nonce}`)).status, 403, 'replayed nonce');
+
+    // …and the token it handed over really is the one that authorises mutations.
+    const authed = await fetch(`${ui}/v1/config`, { headers: { Authorization: `Bearer ${tok}` } });
+    ok(authed.status !== 403, `the bootstrapped token was rejected by the API (HTTP ${authed.status})`);
+    eq((await fetch(`${ui}/v1/config`)).status, 403, 'unauthenticated /v1/config');
+    await ctx.close();
+  });
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (capi) capi.kill('SIGTERM');
+  if (capi3) capi3.proc.kill('SIGTERM');
   if (store) store.proc.kill('SIGTERM');
   if (staticSrv) staticSrv.srv.close();
   if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {});

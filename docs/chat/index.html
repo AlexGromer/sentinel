@@ -318,6 +318,31 @@ function download(filename, content){
 
 initLang();
 syncMode();
+
+/* ADR-064 Mode 3: same-origin auto-connect + one-time token bootstrap. See docs/index.html for the
+   full rationale. Fails silently on Pages / file:// / a Mode-2 split deploy; the token stays in tab
+   memory only. */
+(async function adr064Bootstrap(){
+  try {
+    if (location.protocol !== "http:" && location.protocol !== "https:") return;
+    const origin = location.origin.replace(/\/+$/,"");
+    const r = await fetch(origin + "/healthz", {cache:"no-store"});
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j || j.status !== "ok") return;
+    if (!$("capi").value.trim()) $("capi").value = origin;
+    const m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
+    if (m) {
+      try {
+        const t = await fetch(origin + "/v1/ui-token?nonce=" + m[1], {cache:"no-store"});
+        if (t.ok) { const b = await t.json(); if (b && b.token) $("capitok").value = b.token; }
+      } finally {
+        history.replaceState({}, "", location.pathname + location.hash);
+      }
+    }
+    $("check").click();   // reuse the existing liveness path (status + enable Send)
+  } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
+})();
 </script>
 </body>
 </html>
