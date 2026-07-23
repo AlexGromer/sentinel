@@ -90,3 +90,24 @@ func TestFindSecretKeyReportsPath(t *testing.T) {
 		t.Errorf("clean document reported %q", got)
 	}
 }
+
+// TestSecretishExtendedNames guards the names added for the ADR-063 per-run llm gate; the legitimate `auth`
+// config container (storage_state login block) must stay allowed.
+func TestSecretishExtendedNames(t *testing.T) {
+	for _, name := range []string{"authorization", "Authorization", "cookie", "Cookie", "jwt", "JWT", "signature", "x-signature"} {
+		if !Secretish(name) {
+			t.Errorf("Secretish(%q) = false, want true", name)
+		}
+	}
+	if Secretish("auth") {
+		t.Errorf(`Secretish("auth") = true, want false (auth is a legitimate config container)`)
+	}
+	if err := Validate(`{"auth":{"storage_state":"s.json","pw_no_trace":true}}`); err != nil {
+		t.Errorf("Validate rejected a legitimate auth container: %v", err)
+	}
+	var doc any
+	_ = json.Unmarshal([]byte(`{"llm":{"authorization":"Bearer x"}}`), &doc)
+	if hit := FindSecretKey(doc, ""); hit != "llm.authorization" {
+		t.Errorf("FindSecretKey missed llm.authorization, got %q", hit)
+	}
+}

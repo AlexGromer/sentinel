@@ -25,6 +25,9 @@ const MaxConfigBytes = 64 << 10
 // secretNameParts are matched as substrings of a lower-cased JSON member name.
 var secretNameParts = []string{
 	"password", "passwd", "secret", "credential", "api_key", "apikey", "private_key", "bearer",
+	"authorization", "cookie", "jwt", "signature",
+	// NB: not the bare word "auth" — it would reject the legitimate `auth` config container (storage_state
+	// login block). "token"/"key" are matched as whole words below.
 }
 
 // Secretish reports whether a JSON member name looks like a credential.
