@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -166,19 +167,87 @@ func TestUINeverListsDirectories(t *testing.T) {
 	}
 }
 
+// Run against BOTH sources. Against the embedded FS this is nearly free — the neighbours simply are
+// not in the binary — so on its own it would pass even with the allowlist filter removed (verified by
+// mutation). The disk source is where it bites: CONTROL_API_UI_DIR points at the real docs/ tree,
+// where ARCHITECTURE.md, embed.go, _config.yml and the INTERNAL-ONLY files genuinely exist.
 func TestUIRejectsTraversal(t *testing.T) {
-	h := uiTestServer(t, enabledUI(t)).mux()
-	for _, p := range []string{
+	paths := []string{
 		"/setup/../../etc/passwd",
 		"/etc/passwd",
 		"/../go.mod",
 		"/%2e%2e/go.mod",
+		"/setup/%2e%2e/embed.go",
+		"/setup/../ARCHITECTURE.md",
+		"/setup//../embed.go",
 		"/ARCHITECTURE.md",
-	} {
-		rec := get(t, h, p)
-		if rec.Code == http.StatusOK {
-			t.Errorf("GET %s = 200 — served something outside the allowlist", p)
+		"/embed.go",
+		"/_config.yml",
+	}
+	for _, src := range uiSources(t) {
+		h := uiTestServer(t, src.ui).mux()
+		for _, p := range paths {
+			if rec := get(t, h, p); rec.Code == http.StatusOK {
+				t.Errorf("[%s] GET %s = 200 — served something outside the allowlist", src.name, p)
+			}
 		}
+	}
+}
+
+// uiSources yields the embedded UI and, when the repo tree is reachable, the disk-backed one, so a
+// behavioural assertion can be made against both without duplicating the test body.
+func uiSources(t *testing.T) []struct {
+	name string
+	ui   *uiServer
+} {
+	t.Helper()
+	out := []struct {
+		name string
+		ui   *uiServer
+	}{{"embedded", enabledUI(t)}}
+
+	docs := filepath.Join("..", "..", "docs")
+	if _, err := os.Stat(filepath.Join(docs, "index.html")); err != nil {
+		t.Logf("docs/ tree not reachable (%v) — disk source not exercised", err)
+		return out
+	}
+	t.Setenv("CONTROL_API_SERVE_UI", "")
+	t.Setenv("CONTROL_API_UI_DIR", docs)
+	u := newUIServer()
+	if !u.enabled || u.source != docs {
+		t.Fatalf("newUIServer with CONTROL_API_UI_DIR: enabled=%v source=%q", u.enabled, u.source)
+	}
+	return append(out, struct {
+		name string
+		ui   *uiServer
+	}{"disk:" + docs, u})
+}
+
+// The nonce is single-use; concurrency must not turn that into "at least once".
+func TestBootstrapConcurrentRedeemHandsOutTheTokenOnce(t *testing.T) {
+	s := uiTestServer(t, enabledUI(t))
+	nonce := s.ui.arm(time.Minute)
+	h := s.mux()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wins := 0
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/ui-token?nonce="+nonce, nil))
+			if rec.Code == http.StatusOK {
+				mu.Lock()
+				wins++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("%d of 64 concurrent redeems succeeded, want exactly 1", wins)
 	}
 }
 
