@@ -52,7 +52,10 @@ import (
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
-const version = "0.1.0"
+// version is stamped by the release build (`go build -ldflags "-X main.version=<tag>"`, .github/workflows/
+// release.yml). It MUST stay a var — the linker cannot write into a const, so declaring it const made the
+// -X flag a silent no-op and /healthz reported "0.1.0" on every tagged release (fixed with ADR-064).
+var version = "0.1.0"
 
 // run is the tracked state of a spawned agentctl run.
 type run struct {
@@ -1430,10 +1433,14 @@ func main() {
 		os.Exit(1)
 	}
 	addr := envOr("CONTROL_API_ADDR", "127.0.0.1:8090")
+	// M-UI-MODES (ADR-064): the operator no longer has to invent a secret before the first start —
+	// resolveToken reuses (or creates, 0600) state/control-api.token. CONTROL_API_TOKEN still wins, and
+	// CONTROL_API_AUTOTOKEN=0 keeps the pre-ADR-064 fail-closed read-only instance. See token.go.
+	tok, tokSrc, tokPath, tokWarnings := resolveToken(repo)
 	s := &server{
 		repo:       repo,
 		agentctl:   envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),
-		token:      os.Getenv("CONTROL_API_TOKEN"),
+		token:      tok,
 		corsAllow:  map[string]bool{},
 		orchAddr:   os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
 		publicBind: !isLocalBind(addr),
@@ -1457,8 +1464,22 @@ func main() {
 			go s.loadStartupConfig() // M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe
 		}
 	}
-	if s.token == "" {
-		fmt.Fprintln(os.Stderr, "control-api: WARNING — CONTROL_API_TOKEN unset; POST /v1/runs will 403 (read-only).")
+	for _, w := range tokWarnings {
+		fmt.Fprintf(os.Stderr, "control-api: WARNING — %s\n", w)
+	}
+	switch tokSrc {
+	case tokenDisabled:
+		fmt.Fprintln(os.Stderr, "control-api: WARNING — no bearer token (CONTROL_API_AUTOTOKEN=0); POST /v1/runs will 403 (read-only).")
+	case tokenFromEnv:
+		fmt.Fprintln(os.Stderr, "control-api: bearer token from CONTROL_API_TOKEN")
+	default:
+		fmt.Fprintf(os.Stderr, "control-api: bearer token (%s) → %s\n", tokSrc, tokPath)
+		// The operator has to get the value into the UI's Settings field somehow, and their terminal is
+		// the only channel we have here. Opt out with CONTROL_API_PRINT_TOKEN=0 (then read the file).
+		// Mode 3 (ADR-064) replaces this with a single-use bootstrap link — see the ui block below.
+		if !envDisabled("CONTROL_API_PRINT_TOKEN") {
+			fmt.Fprintf(os.Stderr, "control-api: CONTROL_API_TOKEN=%s\n", tok)
+		}
 	}
 	if !strings.HasPrefix(addr, "127.0.0.1") && !strings.HasPrefix(addr, "localhost") {
 		fmt.Fprintf(os.Stderr, "control-api: WARNING — binding non-local %q; spawning runs is sensitive (ADR-032).\n", addr)
