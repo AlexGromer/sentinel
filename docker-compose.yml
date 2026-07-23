@@ -111,8 +111,24 @@ services:
       CONTROL_API_TOKEN: ${CONTROL_API_TOKEN:-}
       CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS:-http://localhost:8088,https://alexgromer.github.io}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # ADR-062/063 service tier: point at the `store` profile below to enable PUT/GET /v1/config and
+      # persisted-config-driven runs. Unset (default) = standalone tier (config is 501, per-run llm still works).
+      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
     ports:
       - "127.0.0.1:8090:8090"
+
+  # Dedicated store-gateway for the control-API config/runs domains (M13, ADR-062) — the SERVICE tier.
+  # Enables PUT/GET /v1/config and persisted-config-driven runs (ADR-063). Listens on a Unix socket in the
+  # shared ./state volume; control-api reaches it via CONTROL_API_STORE_ADDR=unix:/app/state/store.sock.
+  #   CONTROL_API_TOKEN=secret CONTROL_API_STORE_ADDR=unix:/app/state/store.sock \
+  #     docker compose --profile store --profile control-api --profile webui up -d
+  # Both services run the same image (same UID), so the store-gateway peer-cred guard accepts control-api;
+  # cross-container socket sharing over ./state is verified on the live host. --no-auth keeps the local
+  # demo keyless (the socket is already owner-restricted, 0600 + peer-cred).
+  store-gateway:
+    <<: *sentinel-base
+    profiles: ["store"]
+    entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
 
 volumes:
   ollama:

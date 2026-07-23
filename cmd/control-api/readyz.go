@@ -26,9 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -188,22 +186,11 @@ func (s *server) probeLLM(base string) readyCheck {
 	if base == "" {
 		return readyCheck{Status: "skipped", Detail: "no LLM_BASE_URL and no llm.base_url in the config (anthropic native, or offline heuristic)"}
 	}
-	u, err := url.Parse(base)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return readyCheck{Status: "error", Detail: fmt.Sprintf("base_url must be an absolute http(s) URL, got %q", base)}
-	}
-	// A base_url of the form https://user:sk-live@host/v1 buries a credential in a value the name-based
-	// guard cannot see, and probing it would SEND that credential outbound. Refuse it: OpenAI-compatible
-	// endpoints authenticate with LLM_API_KEY, never with URL userinfo.
-	if u.User != nil {
-		return readyCheck{Status: "error", Detail: "base_url must not embed credentials (user:pass@); use LLM_API_KEY"}
-	}
-	// /readyz is unauthenticated, so refuse to let it probe the cloud-metadata address (169.254.169.254 /
-	// fe80::/10). Only a LITERAL link-local IP is blocked: RFC1918 (a homelab `ollama`/`vllm` on 10.x/172.x/
-	// 192.168.x) and loopback (a local llama.cpp) are legitimate targets and stay allowed. A hostname is not
-	// resolved here — this blocks the common single case, not DNS-rebinding.
-	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLinkLocalUnicast() {
-		return readyCheck{Status: "error", Detail: "base_url must not point at a link-local address (169.254.0.0/16)"}
+	// Shared shape check (validateLLMBase, llmenv.go / ADR-063): absolute http(s), no embedded
+	// credential (which probing would send outbound), no link-local cloud-metadata target. Only a LITERAL
+	// link-local IP is blocked; RFC1918 homelab hosts and loopback stay allowed (not DNS-rebinding-proof).
+	if err := validateLLMBase(base); err != nil {
+		return readyCheck{Status: "error", Detail: "base_url " + err.Error()}
 	}
 	resp, err := s.client().Get(base + "/models")
 	if err != nil {

@@ -1536,6 +1536,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
     bSetControls(false);
   }
+  /* ADR-063: per-run LLM override sent with POST /v1/runs (control-api materializes it into the run env,
+     unless the control-api process env already sets that var). No api_key — secrets stay in the server env. */
+  function bLLM(){
+    var be=bVal('b-backend');
+    if (!be) return null;                 // no backend chosen -> let control-api env/persisted config decide
+    var o={ backend:be };
+    var bu=bVal('b-baseurl').trim(), mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim();
+    if (be==='openai' && bu) o.base_url=bu;
+    if (mp) o.model_planner=mp;
+    if (mh) o.model_heal=mh;
+    if (ge('b-vision').checked) o.vision=true;
+    return o;
+  }
   ge('b-run').addEventListener('click', function(){
     var target=bVal('b-target').trim(), mode=bVal('b-mode');
     if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
@@ -1544,7 +1557,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       goal:     mode==='goal'     ? ge('b-goal').value.trim()     : '',
       describe: mode==='describe' ? ge('b-describe').value.trim() : '',
       coverage_target: bVal('b-coverage'),
-      max_steps:       bVal('b-maxsteps')
+      max_steps:       bVal('b-maxsteps'),
+      llm:             bLLM()
     });
   });
   ge('b-rerun').addEventListener('click', function(){ if (bLastRunId) bSubmit({ mode:'replay', from_run:bLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' from_run='+esc(bLastRunId)); });
@@ -1655,6 +1669,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
     var body={ target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic',
       goal: mode==='goal'?text:'', describe: mode==='describe'?text:'' };
+    body.llm=bLLM();   // ADR-063: same #build LLM connection applies to chat runs
     // M9.10: goal/describe = a multi-turn conversation (attach conversation_id; server resumes the thread).
     // explore has no goal/describe → brain chat-mode can't use it → keep it one-shot.
     var turnLabel='', convMeta=esc(target);

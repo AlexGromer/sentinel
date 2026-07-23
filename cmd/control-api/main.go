@@ -278,7 +278,7 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 // VALUED — actual keys live in the control-api process env, never in this payload (M11.5 PR-3, ADR-060).
 func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 	// single source for the backend enum so the top-level list and llm.backend.enum can't drift apart
-	backends := []string{"anthropic", "openai", "sampling"} // mirrors brain/llm.py make_backend; "sampling" = MCP host-supplied (mcp-server mode), not a wizard preset
+	backends := llmBackends // single source (llmenv.go); mirrors brain/llm.py make_backend; "sampling" = MCP host-supplied (mcp-server mode), not a wizard preset
 	writeJSON(w, http.StatusOK, map[string]any{
 		"modes":    []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
 		"planner":  []string{"heuristic", "llm", "goal"},
@@ -311,17 +311,19 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 }
 
 type runRequest struct {
-	Target         string `json:"target"`
-	Mode           string `json:"mode"`
-	Goal           string `json:"goal"`
-	Describe       string `json:"describe"`
-	Planner        string `json:"planner"`
-	CoverageTarget string `json:"coverage_target"`
-	MaxSteps       string `json:"max_steps"`
-	FromRun        string `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
-	ConversationID string `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
+	Target         string          `json:"target"`
+	Mode           string          `json:"mode"`
+	Goal           string          `json:"goal"`
+	Describe       string          `json:"describe"`
+	Planner        string          `json:"planner"`
+	CoverageTarget string          `json:"coverage_target"`
+	MaxSteps       string          `json:"max_steps"`
+	FromRun        string          `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
+	ConversationID string          `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
+	LLM            json.RawMessage `json:"llm"`             // ADR-063: per-run LLM override (backend/base_url/model/vision); validated+parsed into `llm` below
 
-	plan string // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
+	plan string        // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
+	llm  *llmRunConfig // ADR-063: parsed+validated per-run LLM config; unexported → never client-settable
 }
 
 func validTarget(t string) bool {
@@ -424,7 +426,9 @@ func (s *server) spawnRun(req runRequest) *run {
 	}
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
-	cmd.Env = os.Environ() // inherits LLM_* etc. from the control-api process (operator-controlled)
+	// ADR-063: layer the LLM connection into the spawn env — process env > per-run > persisted config.
+	// os.Environ() (operator-controlled) still wins; resolveRunEnv only fills LLM_* it does not already set.
+	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.getPersistedLLM())
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
@@ -693,6 +697,14 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
 		return
 	}
+	// ADR-063: a per-run LLM override applies to every mode (replay/baseline heal LLM too). Validated
+	// here (backend enum, base_url shape, secret refusal) so a bad value is a 400, not a broken spawn.
+	llmCfg, err := parseRunLLM(req.LLM)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "llm: " + err.Error()})
+		return
+	}
+	req.llm = llmCfg
 	switch req.Mode {
 	case "replay", "baseline": // M9.9: re-run / baseline-update a prior run's frozen plan
 		planPath, planTarget, err := s.resolveFromRun(req.FromRun)

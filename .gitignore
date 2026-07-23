@@ -1189,6 +1189,18 @@ PRIVATE_*.md
 !docs/LOCAL_MODELS.md
 !docs/LOCAL_MODELS.en.md
 
+# Internal strategy/reference notes (liability shape; never commit/publish)
+*.internal.md
+*.internal.json
+*.internal.docx
+docs/COMPETITIVE_ANALYSIS.internal.md
+docs/COMPETITIVE_ANALYSIS.raw.internal.json
+docs/DOC_CONVENTIONS.internal.md
+# Generated personal runbooks + office binaries (also caught by *.local.* above)
+docs/WINDOWS_TESTING.local.md
+docs/WINDOWS_TESTING.local.docx
+*.docx
+
 # Experimental/draft content
 experimental/
 sandbox/
