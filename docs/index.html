@@ -1539,15 +1539,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   /* ADR-063: per-run LLM override sent with POST /v1/runs (control-api materializes it into the run env,
      unless the control-api process env already sets that var). No api_key — secrets stay in the server env. */
   function bLLM(){
+    var o={};
     var be=bVal('b-backend');
-    if (!be) return null;                 // no backend chosen -> let control-api env/persisted config decide
-    var o={ backend:be };
-    var bu=bVal('b-baseurl').trim(), mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim();
-    if (be==='openai' && bu) o.base_url=bu;
-    if (mp) o.model_planner=mp;
+    if (be){ o.backend=be; var bu=bVal('b-baseurl').trim(); if (be==='openai' && bu) o.base_url=bu; }
+    var mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim();
+    if (mp) o.model_planner=mp;   // models/vision apply even at the default backend (server accepts backend:"")
     if (mh) o.model_heal=mh;
     if (ge('b-vision').checked) o.vision=true;
-    return o;
+    return Object.keys(o).length ? o : null;   // nothing set -> null (no per-run override)
   }
   ge('b-run').addEventListener('click', function(){
     var target=bVal('b-target').trim(), mode=bVal('b-mode');

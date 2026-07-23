@@ -19,10 +19,13 @@ func TestValidateLLMBase(t *testing.T) {
 		}
 	}
 	bad := []string{
-		"ftp://host/v1",                  // wrong scheme
-		"not-a-url",                      // no scheme/host
-		"http://user:pass@host:11434/v1", // embedded credentials
-		"http://169.254.169.254/latest",  // cloud-metadata link-local
+		"ftp://host/v1",                       // wrong scheme
+		"not-a-url",                           // no scheme/host
+		"http://user:pass@host:11434/v1",      // embedded credentials
+		"http://169.254.169.254/latest",       // cloud-metadata link-local
+		"http://[fe80::1%25eth0]/v1",          // IPv6 link-local with a zone id — must not bypass the guard
+		"http://169.254.169.254./v1",          // trailing-dot link-local
+		"http://ollama:11434/v1?api_key=sk-x", // credential smuggled in the query string
 	}
 	for _, b := range bad {
 		if err := validateLLMBase(b); err == nil {
@@ -97,6 +100,43 @@ func TestResolveRunEnvNoauthDefault(t *testing.T) {
 	env2 := resolveRunEnv([]string{"LLM_API_KEY=sk-real"}, &llmRunConfig{Backend: "openai"}, nil)
 	if got := envValue(env2, "LLM_API_KEY"); got != "sk-real" {
 		t.Errorf("LLM_API_KEY = %q, want sk-real (process env wins)", got)
+	}
+	// a real OPENAI_API_KEY (no LLM_API_KEY) is the documented fallback — noauth must NOT shadow it
+	env3 := resolveRunEnv([]string{"LLM_BACKEND=openai", "OPENAI_API_KEY=sk-cloud"}, nil, nil)
+	if got := envValue(env3, "LLM_API_KEY"); got != "" {
+		t.Errorf("LLM_API_KEY = %q, want empty (OPENAI_API_KEY present -> no noauth placeholder)", got)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// TestResolveRunEnvPerRunBeatsPersisted: same key set by BOTH layers, no process env -> per-run wins.
+// (Guards the precedence claim the earlier tests left vacuous — disjoint keys never exercised it.)
+func TestResolveRunEnvPerRunBeatsPersisted(t *testing.T) {
+	env := resolveRunEnv([]string{"PATH=/x"},
+		&llmRunConfig{ModelPlanner: "from-per-run"},
+		map[string]string{"LLM_MODEL_PLANNER": "from-persisted"})
+	if got := envValue(env, "LLM_MODEL_PLANNER"); got != "from-per-run" {
+		t.Errorf("LLM_MODEL_PLANNER = %q, want from-per-run (per-run > persisted)", got)
+	}
+}
+
+// TestResolveRunEnvPerRunBoolOverridesPersisted: an explicit per-run vision:false must beat persisted true.
+func TestResolveRunEnvPerRunBoolOverridesPersisted(t *testing.T) {
+	env := resolveRunEnv([]string{"PATH=/x"},
+		&llmRunConfig{Vision: boolPtr(false)},
+		map[string]string{"LLM_VISION": "1"})
+	if got := envValue(env, "LLM_VISION"); got == "1" {
+		t.Errorf("LLM_VISION = %q, want not \"1\" (per-run vision:false overrides persisted true)", got)
+	}
+}
+
+// TestResolveRunEnvEmptyEnvIsOverridable: a present-but-empty process var (compose interpolation of an unset
+// value) must NOT block a lower layer — else the brain reads "" as falsy and silently downgrades the backend.
+func TestResolveRunEnvEmptyEnvIsOverridable(t *testing.T) {
+	env := resolveRunEnv([]string{"LLM_BACKEND=", "PATH=/x"}, &llmRunConfig{Backend: "openai"}, nil)
+	if got := envValue(env, "LLM_BACKEND"); got != "openai" {
+		t.Errorf("LLM_BACKEND = %q, want openai (empty env var must be overridable)", got)
 	}
 }
 

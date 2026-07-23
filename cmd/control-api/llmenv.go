@@ -66,8 +66,22 @@ func validateLLMBase(base string) error {
 	if u.User != nil {
 		return fmt.Errorf("must not embed credentials (user:pass@); keys live in the process env")
 	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLinkLocalUnicast() {
-		return fmt.Errorf("must not point at a link-local address (169.254.0.0/16)")
+	// A key can also ride in the query string (?api_key=…, ?key=…); refuse a secret-shaped param name so a
+	// caller cannot smuggle a credential into base_url (which the run would send outbound).
+	for name := range u.Query() {
+		if configguard.Secretish(name) {
+			return fmt.Errorf("must not embed a credential in the query string (%q); keys live in the process env", name)
+		}
+	}
+	// Normalize the host before the literal link-local check: strip an IPv6 zone id (fe80::1%25eth0) and a
+	// trailing dot — both make net.ParseIP return nil, which would otherwise skip the guard entirely.
+	host := u.Hostname()
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.TrimSuffix(host, ".")
+	if ip := net.ParseIP(host); ip != nil && ip.IsLinkLocalUnicast() {
+		return fmt.Errorf("must not point at a link-local address (169.254.0.0/16, fe80::/10)")
 	}
 	return nil
 }
@@ -103,49 +117,71 @@ func parseRunLLM(raw json.RawMessage) (*llmRunConfig, error) {
 }
 
 // resolveRunEnv builds the subprocess env from `base` (os.Environ()) plus the per-run and persisted LLM
-// layers. Precedence is process env > per-run > persisted: a set() is a no-op when the key already exists,
-// so applying per-run before persisted makes per-run win, and neither ever overrides the process env.
+// layers. Precedence process env > per-run > persisted: a non-empty value already present wins, so applying
+// per-run before persisted makes per-run win, and neither overrides a set process-env value. A PRESENT-BUT-
+// EMPTY value (e.g. `LLM_BACKEND=` from an unset compose interpolation) is treated as unset — the brain reads
+// "" as falsy and would silently downgrade the backend, so a lower layer is allowed to fill it. The output
+// carries no duplicate keys.
 func resolveRunEnv(base []string, perRun *llmRunConfig, persisted map[string]string) []string {
-	have := make(map[string]bool, len(base))
+	vals := make(map[string]string, len(base))
+	order := make([]string, 0, len(base))
 	for _, kv := range base {
+		k, v := kv, ""
 		if i := strings.IndexByte(kv, '='); i >= 0 {
-			have[kv[:i]] = true
+			k, v = kv[:i], kv[i+1:]
 		}
+		if _, seen := vals[k]; !seen {
+			order = append(order, k)
+		}
+		vals[k] = v
 	}
+	isSet := func(k string) bool { return vals[k] != "" } // non-empty = authoritative
 	set := func(k, v string) {
-		if v == "" || have[k] {
+		if v == "" || isSet(k) {
 			return
 		}
-		base = append(base, k+"="+v)
-		have[k] = true
+		if _, seen := vals[k]; !seen {
+			order = append(order, k)
+		}
+		vals[k] = v
 	}
 	if perRun != nil {
 		set("LLM_BACKEND", perRun.Backend)
 		set("LLM_BASE_URL", perRun.BaseURL)
 		set("LLM_MODEL_PLANNER", perRun.ModelPlanner)
 		set("LLM_MODEL_HEAL", perRun.ModelHeal)
-		if perRun.Vision != nil && *perRun.Vision {
-			set("LLM_VISION", "1")
+		if perRun.Vision != nil { // an explicit false must win over a persisted true — write "1"/"0", not skip
+			set("LLM_VISION", boolEnv(*perRun.Vision))
 		}
-		if perRun.Structured != nil && *perRun.Structured {
-			set("LLM_STRUCTURED", "1")
+		if perRun.Structured != nil {
+			set("LLM_STRUCTURED", boolEnv(*perRun.Structured))
 		}
 	}
 	for k, v := range persisted {
 		set(k, v)
 	}
-	// Local OpenAI-compatible endpoints (Ollama) authenticate with any non-empty key; default a
-	// placeholder so a UI-configured openai run needs no key. Cloud keys stay in the process env and are
-	// already present in `base` if set, so this never shadows a real ANTHROPIC_API_KEY/OPENAI_API_KEY.
-	backend := envValue(base, "LLM_BACKEND")
-	if backend == "openai" && !have["LLM_API_KEY"] {
+	// Local OpenAI-compatible endpoints (Ollama) take any non-empty key; default a placeholder so a
+	// UI-configured openai run needs none. Guard on EVERY key brain/llm.py's fallback honors for openai
+	// (LLM_API_KEY -> OPENAI_API_KEY) so a real cloud key in the process env is never shadowed.
+	if vals["LLM_BACKEND"] == "openai" && !isSet("LLM_API_KEY") && !isSet("OPENAI_API_KEY") {
 		set("LLM_API_KEY", "noauth")
 	}
-	return base
+	out := make([]string, 0, len(order))
+	for _, k := range order {
+		out = append(out, k+"="+vals[k])
+	}
+	return out
 }
 
-// envValue returns the value of key in an os.Environ()-shaped slice ("" if absent). Last occurrence wins,
-// matching exec semantics, though resolveRunEnv never writes a duplicate.
+func boolEnv(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+// envValue returns the value of key in an os.Environ()-shaped slice ("" if absent). resolveRunEnv emits no
+// duplicate keys, so the last-match scan is unambiguous. Used by the tests.
 func envValue(env []string, key string) string {
 	pfx := key + "="
 	val := ""

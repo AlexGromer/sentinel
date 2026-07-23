@@ -308,11 +308,11 @@ func (s *server) invalidateReadiness() {
 // dependency here — the fail-open philosophy ("runs stay in-memory") extends to "start serving, let
 // /readyz reflect eventual consistency".
 //
-// NOTE (ADR-062 boundary): the stored config is the persistence substrate + the /readyz signal. It is
-// NOT yet materialized into `agentctl run` spawns — spawnRun still uses the control-API process env
-// (os.Environ()). Wiring stored-config -> run env introduces env-vs-store precedence questions and is
-// deliberately deferred; "Save to server" changes what survives a restart and what /readyz sees, not
-// (yet) live run behaviour.
+// NOTE (ADR-063): the stored config's `llm` block IS now materialized into `agentctl run` spawns — it is
+// the lowest-precedence layer in resolveRunEnv (process env > per-run > persisted; see getPersistedLLM,
+// cmd/control-api/llmenv.go). This function stays informational (it only logs); readiness re-reads the
+// document live, and the run path reads it per spawn. The REST of the persisted document (run/auth blocks)
+// is still not fed into the run env.
 func (s *server) loadStartupConfig() {
 	if s.store == nil {
 		return
