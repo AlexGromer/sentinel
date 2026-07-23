@@ -16,3 +16,10 @@ theme: jekyll-theme-cayman
 # at the domain root once a layout is applied.
 baseurl: "/sentinel"
 url: "https://alexgromer.github.io"
+
+# embed.go is Go source, not content: it is the ADR-064 go:embed manifest that lets `control-api`
+# serve these same pages from its own port (mode 3). It has to live here because go:embed patterns
+# cannot reach outside the containing file's directory. Excluded so Jekyll does not publish a source
+# file onto the Pages site.
+exclude:
+  - embed.go

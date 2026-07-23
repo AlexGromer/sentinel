@@ -12,10 +12,15 @@ deploy
 docs/**
 !docs/setup/**
 !docs/calculators/**
+!docs/chat/**
 !docs/index.html
 !docs/index.md
 !docs/_config.yml
 !docs/LOCAL_MODELS.md
+# ADR-064: the go:embed manifest — control-api compiles `package webui` (docs/embed.go), so the
+# Go build inside the image needs it (and every file its patterns name; chat/ fixed above — it was
+# missing from the bundle entirely, so the webui profile's /chat/ 404'd. KEEP IN SYNC with embed.go).
+!docs/embed.go
 # data files the bundled pages fetch at runtime: the setup wizard's runtime presets (M11.5 PR-4) and the
 # hub's live-pricing seeds. Without these the `webui` profile serves pages whose fetch() 404s.
 !docs/backend-presets.json

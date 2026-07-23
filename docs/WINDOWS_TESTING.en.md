@@ -107,22 +107,25 @@ Without `LLM_BACKEND=openai` the default backend is anthropic, the `LLM_BASE_URL
 
 ## Running via the web UI
 
-This is the primary path: runs are configured and started from the browser, the steps are visible on a live timeline. Both phases below are run this way. Two services are needed: `control-api` (starts runs over HTTP, listens on `127.0.0.1:8090`) and `webui` (pages on port 8088).
+This is the primary path: runs are configured and started from the browser, the steps are visible on a live timeline. Both phases below are run this way. The recommended mode on a Windows host (ADR-064) is single-service: one port, zero CORS wiring, zero copy-paste of the token. Only one service is needed, `control-api` - in this mode it serves both the HTTP API and the UI pages, listening on `127.0.0.1:8090`.
 
-Start both services. control-api needs only an access token - the LLM connection is set in the UI itself (ADR-063):
+Start the service in single-service mode. The access token is generated automatically on first start - there is no need to set it by hand; the LLM connection is still set in the UI itself (ADR-063):
 ```powershell
-$env:CONTROL_API_TOKEN = "demo-token"                     # enables starting runs from the UI; without a token the API is read-only
+$env:CONTROL_API_SERVE_UI = "1"
+$env:CONTROL_API_CORS_ORIGINS = ""
 docker compose --profile control-api up -d control-api    # 127.0.0.1:8090
-docker compose --profile webui up -d webui                # http://localhost:8088
+docker compose logs -f control-api                        # find the line "open http://127.0.0.1:8090/?bootstrap=<nonce>"
 ```
 
-Open the hub `http://localhost:8088/`. It is the co-pilot (ADR-055) with Settings (connection and run configurator) and Tests (scenario and test library, run history, conversations, the live AG-UI timeline with auto-HITL).
+On first start control-api generates the access token itself (32 random bytes, saved to `state/control-api.token` and reused on restart). Open the `http://127.0.0.1:8090/?bootstrap=<nonce>` link from the log - it is one-time, valid for 5 minutes, and fills in the control-api address and the token in Settings itself, stripping the nonce from the URL. If the log window is closed or the link has expired - read the token from `state/control-api.token` and paste it into Settings by hand, or restart control-api for a fresh link.
 
-1. In Settings set the control-api address `http://localhost:8090` and the token `demo-token`.
+Open the hub `http://localhost:8090/`. It is the co-pilot (ADR-055) with Settings (connection and run configurator) and Tests (scenario and test library, run history, conversations, the live AG-UI timeline with auto-HITL).
+
+1. The bootstrap link has already filled in the control-api address and the token in Settings - there is no need to enter them by hand.
 2. In the #build section set the LLM connection: backend `openai`, base_url `http://host.docker.internal:11434/v1`, planner model `qwen3:14b`, heal model `qwen2.5-vl:7b`, vision as needed. These fields travel with the run and control-api materializes them into the env (ADR-063) - you do not set `LLM_*` in the control-api environment separately. A local Ollama needs no key (control-api defaults `noauth`).
 3. For each run set target, goal (a natural-language goal) and mode (usually `goal`), click Run and watch the live timeline; the verdict and artifacts appear there, the run lands in Tests history with an id like `control-<...>`.
 
-LLM source precedence: **control-api process env > per-run from the UI > persisted config**. So to pin a model on the control-api side, set `LLM_*` in its environment - the UI will not override it. The wizard `http://localhost:8088/setup/` collects the same fields and its "Save to server" button writes them to the persisted config (needs the `store` profile, see "Database and chat mode"). Chat is at `http://localhost:8088/chat/`.
+LLM source precedence: **control-api process env > per-run from the UI > persisted config**. So to pin a model on the control-api side, set `LLM_*` in its environment - the UI will not override it. The wizard `http://localhost:8090/setup/` collects the same fields and its "Save to server" button writes them to the persisted config (needs the `store` profile, see "Database and chat mode"). Chat is at `http://localhost:8090/chat/`.
 
 ## How to read run artifacts
 
@@ -253,7 +256,7 @@ A multi-turn dialog (chat) keeps context between turns in a database, so the sec
 
 The default store is SQLite in the `./state` directory (mounted by compose): conversations in `state/conversations.db`, locators and golden snapshots there too. Persistence comes from the `./state` mount, so the dialogs survive a container restart. Postgres (optional, for several runners or K3s): set `CHECKPOINT_DSN=postgresql://user:pass@host:5432/sentinel` on the service and the conversation checkpointer switches from SQLite to Postgres (`langgraph PostgresSaver`). The store-gateway for the runs, scenarios, tests, results, metrics domains is still SQLite; Postgres for it is a separate M13 service, ahead.
 
-Chat via the web UI: open `http://localhost:8088/chat/`. The console generates a `conversation_id` itself, the thread accumulates between turns, the "New conversation" button starts a new one. Under the hood control-api starts `agentctl run --mode chat --conversation-id` via `POST /v1/runs` with the `conversation_id` field. Hold the dialog over several turns on one goal (for example: "log in as demo/demo", then "now click logout") - the second turn works on top of the site map from the first.
+Chat via the web UI: open `http://localhost:8090/chat/` (in split mode, where the `webui` service serves the static pages, `http://localhost:8088/chat/`). The console generates a `conversation_id` itself, the thread accumulates between turns, the "New conversation" button starts a new one. Under the hood control-api starts `agentctl run --mode chat --conversation-id` via `POST /v1/runs` with the `conversation_id` field. Hold the dialog over several turns on one goal (for example: "log in as demo/demo", then "now click logout") - the second turn works on top of the site map from the first.
 
 Persistence check from the command line (two turns with one `conversation-id`):
 ```powershell
@@ -286,11 +289,13 @@ Each call creates `live-results/live-<id>.tar.gz`. Redaction is on by default an
 
 What to send: all the `live-results/live-*.tar.gz` files plus your log `runs/LIVE_NOTES.md` (the collect script does not put it in the bundle, copy it separately). Transfer: USB or scp, not via git (`.gitignore` silently swallows `*.tar.gz`, gitleaks does not look inside gzip). Drop everything on the dev host in the directory `/opt/agent_development/live-results/`, then say "analyse the live runs".
 
+⚠ Do not send the control-api logs: in modes 1-2 they print the `CONTROL_API_TOKEN` value, and in mode 3 the one-time bootstrap link. Do not hand over `state/control-api.token` either - the collector does not pick it up (it lives outside `runs/<id>/`), and that is deliberate.
+
 ## Network access
 
-For running against the fixtures and the real sites the host address is not needed: everything runs locally. The web UI (port 8088) and control-api (`127.0.0.1:8090`) open from the same host over `localhost`. The host address on the local network (find it with `ipconfig`) is needed to reach the services from another machine:
+For running against the fixtures and the real sites the host address is not needed: everything runs locally. In single-service mode (recommended above) the UI and the API live on the same port `127.0.0.1:8090` and open from the same host over `localhost`; port 8088 exists only in split mode, where a separate `webui` service serves the static pages. The host address on the local network (find it with `ipconfig`) is needed to reach the services from another machine:
 
-- Open the web UI from another host: `http://<host-address>:8088`. Check the Windows firewall rules. control-api listens on `127.0.0.1:8090` by default, so to reach the API from another host publish its port separately and add the origin to the `CONTROL_API_CORS_ORIGINS` variable.
+- Open the UI and the API from another host: control-api listens on `127.0.0.1:8090` by default. To expose it, set `CONTROL_API_ADDR=0.0.0.0:8090`, publish the port and add a Windows firewall rule - then `http://<host-address>:8090` serves both the pages and the API **with no CORS configuration at all**: they are one origin. Open the bootstrap link from the log against that same host address (the log prints `127.0.0.1`; substitute it by hand). ⚠ A public bind exposes run spawning to the network; the bearer token is the only gate (ADR-032). Trusted home network only.
 - Reach Ollama from another host: set the system variable `OLLAMA_HOST=0.0.0.0`, restart Ollama, then set `LLM_BASE_URL=http://<host-address>:11434/v1`. This opens Ollama on the local network without authentication, use it only on a trusted network.
 
 ## Windows specifics

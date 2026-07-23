@@ -79,8 +79,16 @@ docker compose --profile demo up
 # …или против своей цели (goal-режим, нужен ключ или локальная модель):
 docker compose run --rm sentinel run --target "https://your-app.example" --goal "залогиниться и открыть биллинг"
 ```
-**Setup-WebUI локально (air-gapped, в составе бандла):** `docker compose --profile webui up` → открой
-`http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
+**Живой UI одним сервисом (рекомендуемый путь, ADR-064):**
+```bash
+CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api
+```
+→ открой ссылку `?bootstrap=…`, которую control-API печатает при старте: один порт (`:8090`), никакого CORS,
+токен подставляется в UI сам (одноразово). Токен генерируется автоматически и хранится в
+`state/control-api.token` — придумывать его заранее больше не нужно.
+
+**Setup-WebUI отдельным сервисом (статика, air-gapped, в составе бандла):** `docker compose --profile webui up` →
+открой `http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
 
 **Локальная модель** (без облака): раскомментируйте блок `LLM_*` в [`docker-compose.yml`](docker-compose.yml) и
 поднимите endpoint — `docker compose --profile ollama up -d ollama` (или мульти-провайдер роутер LiteLLM — `docker compose --profile litellm up -d litellm`, см. [`docs/ADAPTERS.md`](docs/ADAPTERS.md)). Подбор модели/железа — в

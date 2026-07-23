@@ -67,4 +67,7 @@ Details: `docs/DISTRIBUTION.md` §6.
 
 - The full testing guide and run model: `docs/TESTING.md`.
 - The local-model and runtime catalog: `docs/LOCAL_MODELS.md`.
-- The co-pilot UI (Settings\|Tests, live timeline): `docs/index.html`.
+- The co-pilot UI (Settings\|Tests, live timeline): `docs/index.html` — the fastest way to bring it up (ADR-064,
+  single-service, no CORS wiring): `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api`,
+  then open the one-time link `http://127.0.0.1:8090/?bootstrap=<nonce>` printed in the startup log (valid for 5
+  minutes, fills in the address and token itself). The three UI deployment modes and the access token — `docs/DISTRIBUTION.md` §2.

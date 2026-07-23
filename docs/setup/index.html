@@ -1051,6 +1051,32 @@ document.querySelectorAll('.dl').forEach(function (b) {
       }
     })
     .catch(function () { /* file:// or offline — the snapshot stays */ });
+
+  /* ADR-064 Mode 3: same-origin auto-connect + one-time token bootstrap. See docs/index.html for
+     the full rationale. Fails silently on Pages / file:// / a Mode-2 split deploy. #capi carries
+     data-draft (a restored draft wins); #capitok deliberately does not, so the token stays in
+     tab memory only. */
+  (async function adr064Bootstrap() {
+    try {
+      if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+      var origin = location.origin.replace(/\/+$/, '');
+      var r = await fetch(origin + '/healthz', { cache: 'no-store' });
+      if (!r.ok) return;
+      var j = await r.json();
+      if (!j || j.status !== 'ok') return;
+      if (!$('capi').value.trim()) $('capi').value = origin;
+      var m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
+      if (m) {
+        try {
+          var t = await fetch(origin + '/v1/ui-token?nonce=' + m[1], { cache: 'no-store' });
+          if (t.ok) { var b = await t.json(); if (b && b.token) $('capitok').value = b.token; }
+        } finally {
+          history.replaceState({}, '', location.pathname + location.hash);
+        }
+      }
+      checkCapi();  /* liveness + pull the LIVE schema, exactly as the button does */
+    } catch (e) { /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
+  })();
 })();
 </script>
 </body>

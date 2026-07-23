@@ -67,4 +67,7 @@ docker compose --profile webui up           # → http://localhost:8088/setup/
 
 - Полное руководство по тестированию и модели прогонов: `docs/TESTING.md`.
 - Каталог локальных моделей и рантаймов: `docs/LOCAL_MODELS.md`.
-- Co-pilot UI (Settings\|Tests, live-таймлайн): `docs/index.html`.
+- Co-pilot UI (Settings\|Tests, live-таймлайн): `docs/index.html` — самый быстрый способ поднять (ADR-064,
+  single-service, без CORS-настройки): `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api`,
+  затем открыть одноразовую ссылку `http://127.0.0.1:8090/?bootstrap=<nonce>` из лога запуска (действует 5 минут,
+  сама подставляет адрес и токен). Три режима запуска UI и токен доступа — `docs/DISTRIBUTION.md` §2.

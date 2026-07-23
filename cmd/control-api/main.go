@@ -52,7 +52,10 @@ import (
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
-const version = "0.1.0"
+// version is stamped by the release build (`go build -ldflags "-X main.version=<tag>"`, .github/workflows/
+// release.yml). It MUST stay a var — the linker cannot write into a const, so declaring it const made the
+// -X flag a silent no-op and /healthz reported "0.1.0" on every tagged release (fixed with ADR-064).
+var version = "0.1.0"
 
 // run is the tracked state of a spawned agentctl run.
 type run struct {
@@ -176,6 +179,7 @@ type server struct {
 	orchAddr   string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
 	store      *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
 	publicBind bool         // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
+	ui         *uiServer    // ADR-064 Mode 3: serves the browser UI from this port (nil/disabled = Modes 1-2)
 	mu         sync.RWMutex
 	runs       map[string]*run
 
@@ -1413,7 +1417,36 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/results", s.handleListResults)
 	m.HandleFunc("GET /v1/results/{id}", s.handleGetResult)
 	m.HandleFunc("GET /v1/trends", s.handleTrends)
+	// ADR-064 Mode 3 — registered only when the UI is actually served, so Modes 1/2 keep exactly the
+	// mux they had. Order does not matter: net/http picks the most specific pattern, so "/v1/" only
+	// ever sees paths no real endpoint claimed, and "GET /" only what is neither /v1/ nor /healthz.
+	if s.ui != nil && s.ui.enabled {
+		if s.token != "" {
+			m.HandleFunc("GET /v1/ui-token", s.handleUIToken)
+		}
+		// Method-scoped on purpose: a bare "/v1/" conflicts with "GET /" — net/http refuses to rank a
+		// pattern matching fewer methods but a more general path, and panics at registration. A "GET"
+		// pattern also matches HEAD, so these two cover every method that has a catch-all below; an
+		// unknown POST /v1/... still falls through to the mux's own 404, exactly as it does today.
+		m.HandleFunc("GET /v1/", s.handleV1NotFound)
+		m.Handle("GET /", s.ui.handler())
+	}
 	return s.cors(m)
+}
+
+// displayAddr turns a bind address into something clickable in a terminal: a wildcard bind (which is
+// what the container uses so the compose port map works) is shown as loopback, because that is where
+// the operator actually reaches it.
+func displayAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch strings.Trim(host, "[]") {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func envOr(k, def string) string {
@@ -1430,13 +1463,18 @@ func main() {
 		os.Exit(1)
 	}
 	addr := envOr("CONTROL_API_ADDR", "127.0.0.1:8090")
+	// M-UI-MODES (ADR-064): the operator no longer has to invent a secret before the first start —
+	// resolveToken reuses (or creates, 0600) state/control-api.token. CONTROL_API_TOKEN still wins, and
+	// CONTROL_API_AUTOTOKEN=0 keeps the pre-ADR-064 fail-closed read-only instance. See token.go.
+	tok, tokSrc, tokPath, tokWarnings := resolveToken(repo)
 	s := &server{
 		repo:       repo,
 		agentctl:   envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),
-		token:      os.Getenv("CONTROL_API_TOKEN"),
+		token:      tok,
 		corsAllow:  map[string]bool{},
 		orchAddr:   os.Getenv("CONTROL_API_ORCH_ADDR"), // M9.8 F4 (ADR-054): e.g. "unix:/abs/state/sentinel-orch-<id>.sock"
 		publicBind: !isLocalBind(addr),
+		ui:         newUIServer(), // ADR-064: disabled unless CONTROL_API_SERVE_UI / CONTROL_API_UI_DIR
 		runs:       map[string]*run{},
 		llmBaseURL: os.Getenv("LLM_BASE_URL"), // M11.5 PR-5: the /readyz llm probe target (env wins over the stored config)
 	}
@@ -1457,8 +1495,39 @@ func main() {
 			go s.loadStartupConfig() // M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe
 		}
 	}
-	if s.token == "" {
-		fmt.Fprintln(os.Stderr, "control-api: WARNING — CONTROL_API_TOKEN unset; POST /v1/runs will 403 (read-only).")
+	for _, w := range tokWarnings {
+		fmt.Fprintf(os.Stderr, "control-api: WARNING — %s\n", w)
+	}
+	switch tokSrc {
+	case tokenDisabled:
+		fmt.Fprintln(os.Stderr, "control-api: WARNING — no bearer token (CONTROL_API_AUTOTOKEN=0); POST /v1/runs will 403 (read-only).")
+	case tokenFromEnv:
+		fmt.Fprintln(os.Stderr, "control-api: bearer token from CONTROL_API_TOKEN")
+	default:
+		fmt.Fprintf(os.Stderr, "control-api: bearer token (%s) → %s\n", tokSrc, tokPath)
+		// In Modes 1-2 the operator has to get the value into the UI's Settings field (or a script) and
+		// their terminal is the only channel we have. Mode 3 replaces this with the single-use bootstrap
+		// link below, so the secret never needs to sit in the log. Opt out: CONTROL_API_PRINT_TOKEN=0.
+		if !s.ui.enabled && !envDisabled("CONTROL_API_PRINT_TOKEN") {
+			fmt.Fprintf(os.Stderr, "control-api: CONTROL_API_TOKEN=%s\n", tok)
+		}
+	}
+	// ADR-064 Mode 3: announce the UI and mint the one-time bootstrap nonce. The nonce appears ONLY
+	// here, on the operator's own terminal — that is what keeps "can reach the port" from meaning
+	// "holds the token" once the process is up.
+	if s.ui.enabled {
+		base := "http://" + displayAddr(addr)
+		fmt.Fprintf(os.Stderr, "control-api: serving the UI (%s) at %s/\n", s.ui.source, base)
+		switch {
+		case s.token == "":
+			fmt.Fprintln(os.Stderr, "control-api: no token → the UI is read-only; unset CONTROL_API_AUTOTOKEN=0 to enable runs.")
+		default:
+			if n := s.ui.arm(bootstrapTTL()); n != "" {
+				fmt.Fprintf(os.Stderr, "control-api: open %s/?bootstrap=%s  (one-time, valid %s)\n", base, n, bootstrapTTL())
+			} else {
+				fmt.Fprintf(os.Stderr, "control-api: bootstrap disabled — paste the token from %s into the UI\n", tokPath)
+			}
+		}
 	}
 	if !strings.HasPrefix(addr, "127.0.0.1") && !strings.HasPrefix(addr, "localhost") {
 		fmt.Fprintf(os.Stderr, "control-api: WARNING — binding non-local %q; spawning runs is sensitive (ADR-032).\n", addr)
