@@ -9,6 +9,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
+# ADR-064: control-api embeds the browser UI, so `package webui` (docs/embed.go) must be present at
+# compile time. Only the embedded allowlist is copied — `COPY docs/ docs/` would invalidate this
+# layer, and rebuild every Go binary, on every prose edit. KEEP IN SYNC WITH docs/embed.go: widening
+# the go:embed patterns without adding the file here fails this build loudly, which is the intent.
+COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json docs/
+COPY docs/setup/ docs/setup/
+COPY docs/chat/ docs/chat/
+COPY docs/calculators/ docs/calculators/
 RUN CGO_ENABLED=0 go build -o /out/agentctl ./cmd/agentctl \
  && CGO_ENABLED=0 go build -o /out/store-gateway ./cmd/store-gateway \
  && CGO_ENABLED=0 go build -o /out/control-api ./cmd/control-api
