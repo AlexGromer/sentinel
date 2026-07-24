@@ -117,6 +117,8 @@ docker compose --profile control-api up -d control-api    # 127.0.0.1:8090
 docker compose logs -f control-api                        # find the line "open http://127.0.0.1:8090/?bootstrap=<nonce>"
 ```
 
+About the `$env:CONTROL_API_CORS_ORIGINS = ""` line. In PowerShell, assigning an empty string to an environment variable does not set it empty - it removes the variable, so compose substitutes its own default allowlist instead. That used to break the live timeline: the `/v1/stream` socket got a 403 and the browser reported close 1006. In single-service mode the allowlist no longer affects the socket at all - one origin serves both the page and the API, and such a handshake passes on a host match rather than on the list. You can keep the line: it is harmless under either outcome.
+
 On first start control-api generates the access token itself (32 random bytes, saved to `state/control-api.token` and reused on restart). Open the `http://127.0.0.1:8090/?bootstrap=<nonce>` link from the log - it is one-time, valid for 5 minutes, and fills in the control-api address and the token in Settings itself, stripping the nonce from the URL. If the log window is closed or the link has expired - read the token from `state/control-api.token` and paste it into Settings by hand, or restart control-api for a fresh link.
 
 Open the hub `http://localhost:8090/`. It is the co-pilot (ADR-055) with Settings (connection and run configurator) and Tests (scenario and test library, run history, conversations, the live AG-UI timeline with auto-HITL).
