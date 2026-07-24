@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from brain import budget, otel                          # noqa: E402
 from brain.budget import BudgetTracker                  # noqa: E402
 from brain.llm import LLMResult                          # noqa: E402
-from brain.planner import HeuristicPlanner, LLMPlanner   # noqa: E402
+from brain.planner import HeuristicPlanner, LLMPlanner, _PICK_TOKENS   # noqa: E402
 
 
 class FakeBackend:
@@ -86,7 +86,7 @@ def test_planner_records_spend_when_under_budget():
     p.propose({"current_url": "u", "coverage_achieved": 0.0, "coverage_target": 0.85},
               [{"kind": "click", "role": "b", "name": "A", "target": None}])
     assert budget.tracker().spent["plan"] == 18, budget.tracker().spent
-    assert fb.calls == [(200, 0)]
+    assert fb.calls == [(_PICK_TOKENS, 0)]   # reasoning-aware pick budget (M9-LIVE); not the old literal 200
     budget.reset()
 
 

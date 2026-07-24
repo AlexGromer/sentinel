@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from brain.llm import LLMResult, make_backend       # noqa: E402
-from brain.planner import LLMPlanner, HeuristicPlanner  # noqa: E402
+from brain.planner import LLMPlanner, HeuristicPlanner, _PICK_TOKENS  # noqa: E402
 from brain.otel import set_llm_tokens                # noqa: E402
 
 
@@ -69,7 +69,7 @@ def test_planner_generic_backend_picks_index():
     d = p.propose(_state(), cands)
     assert d["action"] is cands[0], d
     assert d["tokens"] == {"prompt": 3, "completion": 5}, d
-    assert fb.calls[0] == ("complete", 200, 0), fb.calls   # max_tokens/temperature preserved
+    assert fb.calls[0] == ("complete", _PICK_TOKENS, 0), fb.calls   # reasoning-aware pick budget (M9-LIVE); temperature preserved
 
 
 def test_planner_done_reply_stops():
