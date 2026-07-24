@@ -57,13 +57,13 @@ func TestPerRunLLMMaterialized(t *testing.T) {
 	body := runBodyJSON(t, map[string]any{
 		"target": "file:///x.html", "mode": "goal", "goal": "do it",
 		"llm": map[string]any{"backend": "openai", "base_url": "http://ollama:11434/v1",
-			"model_planner": "qwen3:14b", "model_heal": "qwen2.5-vl:7b", "vision": true},
+			"model_planner": "qwen3:14b", "model_heal": "qwen2.5vl:7b", "vision": true},
 	})
 	postRunAndWait(t, s, body)
 	env := readEnvFile(t, envPath)
 	want := map[string]string{
 		"LLM_BACKEND": "openai", "LLM_BASE_URL": "http://ollama:11434/v1",
-		"LLM_MODEL_PLANNER": "qwen3:14b", "LLM_MODEL_HEAL": "qwen2.5-vl:7b",
+		"LLM_MODEL_PLANNER": "qwen3:14b", "LLM_MODEL_HEAL": "qwen2.5vl:7b",
 		"LLM_VISION": "1", "LLM_API_KEY": "noauth",
 	}
 	for k, v := range want {

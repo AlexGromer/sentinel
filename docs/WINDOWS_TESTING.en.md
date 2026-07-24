@@ -24,7 +24,7 @@ Sentinel runs in two phases, and each uses its own model. The models solve diffe
 | Phase | When it runs | What the model does | Role | Model |
 |---|---|---|---|---|
 | explore, author | First pass: the tool studies the page and builds a plan | Reads the page tree (DOM and accessibility), picks a real element by index, forms the plan steps | planner, text | `qwen3:14b` |
-| replay, heal | Replay of a ready plan | If a saved locator broke because of a layout change, finds the element again, including by screenshot (set-of-marks) | heal, vision | `qwen2.5-vl:7b` |
+| replay, heal | Replay of a ready plan | If a saved locator broke because of a layout change, finds the element again, including by screenshot (set-of-marks) | heal, vision | `qwen2.5vl:7b` |
 
 Consequences:
 - the planner never fabricates a selector: it picks an index among the elements actually found on the page (grounding). This guards against locator hallucination.
@@ -40,7 +40,7 @@ The Sentinel workload does not need a large model: the output is short structure
 | Role | Model (12 GB) | Model (8 GB) | Note |
 |---|---|---|---|
 | Planner (explore, author) | `qwen3:14b` Q4_K_M, about 9.5 GB | `qwen3:8b` Q5, about 6 GB | Non-reasoning mode. On 8 GB the 14B partially offloads to CPU and is slow. |
-| Heal (replay, vision) | `qwen2.5-vl:7b` Q4, about 7 GB | `qwen2.5-vl:7b` Q4 | Supported by Ollama, ScreenSpot 84.7. The vision heal path is currently disabled. |
+| Heal (replay, vision) | `qwen2.5vl:7b` Q4, about 7 GB | `qwen2.5vl:7b` Q4 | Supported by Ollama, ScreenSpot 84.7. The vision heal path is currently disabled. |
 
 A precise per-config estimate is in the calculator `docs/calculators/vram.html`, the method is in `LOCAL_MODELS.md §5`.
 
@@ -64,7 +64,7 @@ Set the limit on simultaneously loaded models. Without it the planner and heal t
 Pull the models:
 ```powershell
 ollama pull qwen3:14b
-ollama pull qwen2.5-vl:7b
+ollama pull qwen2.5vl:7b
 ollama pull qwen3:8b
 ollama list
 ```
@@ -98,8 +98,8 @@ Without `LLM_BACKEND=openai` the default backend is anthropic, the `LLM_BASE_URL
 | `LLM_BASE_URL` | Address of the OpenAI-compatible endpoint | Ollama port 11434 | from the container `http://host.docker.internal:11434/v1`; native `http://localhost:11434/v1` | a value with the `/v1` suffix |
 | `LLM_API_KEY` | Access key | Ollama does not check the key | any non-empty string | `noauth` |
 | `LLM_MODEL_PLANNER` | Model for the planner role | The `ollama list` output | `qwen3:14b`; `qwen3:8b` | the exact tag name |
-| `LLM_MODEL_HEAL` | Model for the heal role | The `ollama list` output | `qwen2.5-vl:7b` | the exact tag name |
-| `LLM_VISION` | Vision for the heal role | A vision model is required | `1` to enable; empty to disable | `1` for `qwen2.5-vl` |
+| `LLM_MODEL_HEAL` | Model for the heal role | The `ollama list` output | `qwen2.5vl:7b` | the exact tag name |
+| `LLM_VISION` | Vision for the heal role | A vision model is required | `1` to enable; empty to disable | `1` for `qwen2.5vl` |
 | `LLM_STRUCTURED` | Strict structured output (ADR-057) | Optional | `1` to enable; empty to disable | enable after checking the endpoint supports `json_schema` |
 | `OLLAMA_MAX_LOADED_MODELS` | Limit of models in memory | A Windows system variable | `1` | value `1`, then restart Ollama |
 
@@ -122,7 +122,7 @@ On first start control-api generates the access token itself (32 random bytes, s
 Open the hub `http://localhost:8090/`. It is the co-pilot (ADR-055) with Settings (connection and run configurator) and Tests (scenario and test library, run history, conversations, the live AG-UI timeline with auto-HITL).
 
 1. The bootstrap link has already filled in the control-api address and the token in Settings - there is no need to enter them by hand.
-2. In the #build section set the LLM connection: backend `openai`, base_url `http://host.docker.internal:11434/v1`, planner model `qwen3:14b`, heal model `qwen2.5-vl:7b`, vision as needed. These fields travel with the run and control-api materializes them into the env (ADR-063) - you do not set `LLM_*` in the control-api environment separately. A local Ollama needs no key (control-api defaults `noauth`).
+2. In the #build section set the LLM connection: backend `openai`, base_url `http://host.docker.internal:11434/v1`, planner model `qwen3:14b`, heal model `qwen2.5vl:7b`, vision as needed. These fields travel with the run and control-api materializes them into the env (ADR-063) - you do not set `LLM_*` in the control-api environment separately. A local Ollama needs no key (control-api defaults `noauth`).
 3. For each run set target, goal (a natural-language goal) and mode (usually `goal`), click Run and watch the live timeline; the verdict and artifacts appear there, the run lands in Tests history with an id like `control-<...>`.
 
 LLM source precedence: **control-api process env > per-run from the UI > persisted config**. So to pin a model on the control-api side, set `LLM_*` in its environment - the UI will not override it. The wizard `http://localhost:8090/setup/` collects the same fields and its "Save to server" button writes them to the persisted config (needs the `store` profile, see "Database and chat mode"). Chat is at `http://localhost:8090/chat/`.
@@ -260,7 +260,7 @@ Chat via the web UI: open `http://localhost:8090/chat/` (in split mode, where th
 
 Persistence check from the command line (two turns with one `conversation-id`):
 ```powershell
-$LLM = @("-e","LLM_BACKEND=openai","-e","LLM_BASE_URL=http://host.docker.internal:11434/v1","-e","LLM_API_KEY=noauth","-e","LLM_MODEL_PLANNER=qwen3:14b","-e","LLM_MODEL_HEAL=qwen2.5-vl:7b")
+$LLM = @("-e","LLM_BACKEND=openai","-e","LLM_BASE_URL=http://host.docker.internal:11434/v1","-e","LLM_API_KEY=noauth","-e","LLM_MODEL_PLANNER=qwen3:14b","-e","LLM_MODEL_HEAL=qwen2.5vl:7b")
 docker compose run --rm $LLM sentinel run --mode chat --conversation-id demo-conv-1 --goal "log in as demo with password demo" --target "file:///app/testdata/fixtures/l2.html" --artifact-dir /app/runs/chat1
 docker compose run --rm $LLM sentinel run --mode chat --conversation-id demo-conv-1 --goal "now click the logout button" --target "file:///app/testdata/fixtures/l2.html" --artifact-dir /app/runs/chat2
 ```
@@ -314,7 +314,7 @@ $LLM = @(
   "-e","LLM_BASE_URL=http://host.docker.internal:11434/v1",
   "-e","LLM_API_KEY=noauth",
   "-e","LLM_MODEL_PLANNER=qwen3:14b",
-  "-e","LLM_MODEL_HEAL=qwen2.5-vl:7b",
+  "-e","LLM_MODEL_HEAL=qwen2.5vl:7b",
   "-e","LLM_VISION=1"
 )
 docker compose run --rm $LLM sentinel run --goal "<goal>" --target "<target>" --artifact-dir /app/runs/l1
@@ -330,7 +330,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 go build -o bin/agentctl ./cmd/agentctl && go build -o bin/store-gateway ./cmd/store-gateway && go build -o bin/control-api ./cmd/control-api
 cd pw-executor && npm i && npm run build && npx playwright install chromium && cd ..
 cd brain && UV_PROJECT_ENVIRONMENT=../.venv uv sync --frozen && cd ..
-export LLM_BACKEND=openai LLM_BASE_URL=http://localhost:11434/v1 LLM_API_KEY=noauth LLM_MODEL_PLANNER=qwen3:14b LLM_MODEL_HEAL=qwen2.5-vl:7b
+export LLM_BACKEND=openai LLM_BASE_URL=http://localhost:11434/v1 LLM_API_KEY=noauth LLM_MODEL_PLANNER=qwen3:14b LLM_MODEL_HEAL=qwen2.5vl:7b
 bin/agentctl run --goal "log in with username demo and password demo" --target "file://$PWD/testdata/fixtures/l2.html" --artifact-dir runs/l2
 ```
 The Python virtual environment must be at the repo root (`UV_PROJECT_ENVIRONMENT=../.venv`), otherwise agentctl uses the system python3 and exits with an error.
