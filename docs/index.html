@@ -639,7 +639,9 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div id="b-runout" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem">
       <pre id="b-runlog" class="mono" style="font-size:.8rem;white-space:pre-wrap;word-break:break-word;margin:0;max-height:14rem;overflow:auto"></pre>
     </div>
-    <div id="b-verdict" style="margin-top:.5rem;font-weight:700"></div>
+    <div id="b-verdict" style="margin-top:.5rem"></div>
+    <div id="b-phases" style="margin-top:.5rem"></div>
+    <div id="b-steps" style="margin-top:.5rem"></div>
     <div id="b-arts" class="ctl-row" style="margin-top:.3rem"></div>
   </section>
   </div><!-- /panel-settings -->
@@ -1475,15 +1477,92 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('b-rerun').disabled=disabled||!bLastRunId;
     ge('b-baseline').disabled=disabled||!bLastRunId;
   }
-  function renderBuildVerdict(st){
-    var code=st.exit_code, state=st.state, v;
-    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+'</span>';
-    else if (code===0)         v='<span style="color:var(--ok)">✓ '+bi('пройдено (exit 0)','pass (exit 0)')+'</span>';
-    else if (code===1)         v='<span style="color:var(--warn)">⚠ '+bi('тест нашёл проблему (exit 1)','the test found a problem (exit 1)')+'</span>';
-    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌','visual/golden regression (exit 2) — you can update the baseline 📌')+'</span>';
-    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)','integrity/config (plan_hash/golden) — needs a human (exit 3)')+'</span>';
-    else                       v='<span>exit '+esc(code)+'</span>';
-    ge('b-verdict').innerHTML=v;
+  /* Prominent pass/fail badge + a plain-language line + the actionable cause on failure.
+     Replaces the old thin one-liner (M9-LIVE: "не видно, что тест прошёл"). */
+  function renderBuildVerdict(st, cause){
+    var code=st.exit_code, state=st.state, icon, col, head;
+    if      (state==='failed'){ icon='✖'; col='var(--no)';   head=bi('ПРОГОН НЕ ЗАПУСТИЛСЯ','RUN DID NOT START'); }
+    else if (code===0)        { icon='✓'; col='var(--ok)';   head=bi('ПРОЙДЕНО','PASSED'); }
+    else if (code===1)        { icon='⚠'; col='var(--warn)'; head=bi('ТЕСТ НАШЁЛ ПРОБЛЕМУ','TEST FOUND A PROBLEM'); }
+    else if (code===2)        { icon='⚠'; col='var(--warn)'; head=bi('РЕГРЕССИЯ ОТ ЭТАЛОНА','REGRESSION VS BASELINE'); }
+    else if (code===3)        { icon='✖'; col='var(--no)';   head=bi('ЦЕЛОСТНОСТЬ / КОНФИГУРАЦИЯ','INTEGRITY / CONFIG'); }
+    else                      { icon='•'; col='var(--mut)';  head='exit '+esc(code); }
+    var sub={0:bi('сценарий отработал без ошибок','the scenario ran without errors'),
+             1:bi('шаг не прошёл или проверка провалилась','a step failed or an assertion did not hold'),
+             2:bi('расхождение с golden-эталоном — можно обновить эталон кнопкой 📌','differs from the golden baseline — you can update it with 📌'),
+             3:bi('несовпадение plan_hash/golden — нужен человек','plan_hash/golden mismatch — needs a human')}[code];
+    var html='<div style="display:flex;align-items:center;gap:.6rem;padding:.6rem .8rem;border-radius:9px;'
+      +'border:1px solid '+col+';background:color-mix(in srgb,'+col+' 12%,transparent)">'
+      +'<span style="font-size:1.5rem;line-height:1;color:'+col+'">'+icon+'</span>'
+      +'<div style="min-width:0"><div style="font-weight:750;letter-spacing:.02em;color:'+col+'">'+head
+      +' <span style="opacity:.65;font-weight:600;font-size:.82em">exit '+esc(code==null?'?':code)+'</span></div>';
+    if (state!=='failed' && sub) html+='<div style="font-size:.86rem;color:var(--mut)">'+sub+'</div>';
+    if ((state==='failed' || (code!=null && code!==0)) && cause)
+      html+='<div style="font-size:.86rem;margin-top:.15rem"><b>'+bi('причина','cause')+':</b> '+cause+'</div>'; // cause is HTML-safe (see bExtractCause)
+    html+='</div></div>';
+    ge('b-verdict').innerHTML=html;
+  }
+  /* Every run starts with a deterministic EXPLORE phase (heuristic walk → UI map); goal/describe then
+     hand the complete map to the LLM to AUTHOR a grounded scenario (ADR-028). This strip makes that
+     pipeline — and where the LLM actually took over — visible, from plan.json (explore) + scenario.json
+     (authoring). A pure explore run shows only the first phase. */
+  async function renderRunPhases(base, id){
+    var box=ge('b-phases'); box.innerHTML='';
+    var planRaw=await fetchArtifact(base,id,'plan.json'); if (!planRaw) return;
+    var plan; try { plan=JSON.parse(planRaw); } catch(e){ return; }
+    var scRaw=await fetchArtifact(base,id,'scenario.json'); var sc=null;
+    if (scRaw){ try { sc=JSON.parse(scRaw); } catch(e){} }
+    function row(n, ok, title, detail){
+      var mark=ok===true?'<span style="color:var(--ok)">✓</span>':ok==='warn'?'<span style="color:var(--warn)">⚠</span>':'<span style="color:var(--mut)">•</span>';
+      return '<div style="display:flex;gap:.5rem;align-items:baseline;padding:.15rem 0">'
+        +'<span style="flex:none;color:var(--mut);font-variant-numeric:tabular-nums">'+n+'</span>'
+        +'<span style="flex:none">'+mark+'</span>'
+        +'<span style="min-width:0"><b>'+title+'</b>'+(detail?' <span style="color:var(--mut);font-size:.9em">— '+detail+'</span>':'')+'</span></div>';
+    }
+    var seen=plan.interactive_seen, cov=plan.coverage_achieved;
+    var steps=Array.isArray(plan.steps)?plan.steps.length:plan.steps;  // plan.json .steps is the array of explore steps
+    var covPct=(cov!=null)?Math.round(cov*100)+'%':null;
+    var exDetail=[ (seen!=null?bi('карта: ','map: ')+'<b>'+seen+'</b> '+bi('элем.','elem.'):null),
+                   (covPct?bi('покрытие ','coverage ')+covPct:null),
+                   (steps!=null?'<b>'+steps+'</b> '+bi('шагов','steps'):null),
+                   bi('эвристика, без LLM','heuristic, no LLM') ].filter(Boolean).join(' · ');
+    var html=row('1', true, bi('Исследование UI','UI exploration'), exDetail);
+    // phase 2 exists only for goal/describe (scenario_head wired -> scenario.json with run_mode "scenario")
+    if (sc && (sc.run_mode==='scenario' || (sc.steps&&sc.steps.length) || sc.unmatched!=null)){
+      var g=(sc.steps&&sc.steps.length)||0, unm=sc.unmatched;
+      var model=bVal('b-modelp').trim();
+      var ok = g>0 ? (unm>0?'warn':true) : 'warn';
+      var d=[ (model?bi('модель ','model ')+'<code style="font-size:.85em">'+esc(model)+'</code>':bi('LLM','LLM')),
+              bi('сценарий: ','scenario: ')+'<b>'+g+'</b> '+bi('шагов','steps'),
+              (unm!=null?(unm>0?'<span style="color:var(--warn)">'+unm+' unmatched</span>':'0 unmatched'):null) ].filter(Boolean).join(' · ');
+      html+=row('2', ok, bi('Составление сценария (LLM)','Scenario authoring (LLM)'), d
+        + (g===0?' — <span style="color:var(--warn)">'+bi('LLM не составил ни одного шага','the LLM produced no steps')+'</span>':''));
+    }
+    box.innerHTML='<div style="background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.55rem .8rem;font-size:.9rem">'
+      +'<div style="font-size:.78rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem">'+bi('Этапы прогона','Run pipeline')+'</div>'
+      +html+'</div>';
+  }
+  /* Render the executed plan as a readable step list (scenario.json for goal/describe, else plan.json)
+     so the operator sees WHAT ran, not just an exit code — works after the run, no live stream needed. */
+  async function renderRunSteps(base, id){
+    var box=ge('b-steps'); box.innerHTML='';
+    var raw=await fetchArtifact(base,id,'scenario.json'); var kind='scenario';
+    if (!raw){ raw=await fetchArtifact(base,id,'plan.json'); kind='plan'; }
+    if (!raw) return;
+    var doc; try { doc=JSON.parse(raw); } catch(e){ return; }
+    var steps=doc.steps||doc.plan||[]; if (!Array.isArray(steps)||!steps.length) return;
+    var unm=(doc.unmatched!=null)?doc.unmatched:(doc.meta&&doc.meta.unmatched);
+    var rows=steps.map(function(s,i){
+      var verb=esc(s.action_type||s.verb||s.kind||'?');
+      var what=esc(s.intent||s.target||(s.locator&&s.locator.strategies&&s.locator.strategies[0]&&s.locator.strategies[0].value)||s.name||'');
+      return '<li style="display:flex;gap:.5rem;padding:.18rem 0"><span style="flex:none;color:var(--mut);font-variant-numeric:tabular-nums;min-width:1.6rem;text-align:right">'+(i+1)+'</span>'
+        +'<span style="flex:none;font-family:var(--mono,monospace);font-size:.78rem;color:var(--accent-soft,#ff5c78);background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:0 .35rem">'+verb+'</span>'
+        +'<span style="min-width:0;word-break:break-word">'+what+'</span></li>';
+    }).join('');
+    box.innerHTML='<div style="background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.6rem .8rem">'
+      +'<div style="font-size:.82rem;color:var(--mut);margin-bottom:.3rem">'+bi('Шаги','Steps')+' ('+kind+'): <b>'+steps.length+'</b>'
+      +(unm!=null?' · unmatched '+(unm>0?'<span style="color:var(--warn)">'+esc(unm)+'</span>':'0'):'')+'</div>'
+      +'<ol style="list-style:none;margin:0;padding:0;font-size:.9rem">'+rows+'</ol></div>';
   }
   async function bShowArtifacts(base, id){
     var box=ge('b-arts'); box.innerHTML='';
@@ -1517,10 +1596,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     } catch(e){ bRunLog('✗ '+esc(e.message)); bSetControls(false); return; }
 
     var lastState=null;
+    var cause=null;
     try {
       await streamEvents(base,id,{
         onState: function(s){ lastState=s; },
-        onLog:   function(l){ bRunLog(bLogHtml+(bLogHtml?'\n':'')+esc(l)); }
+        onLog:   function(l){ bRunLog(bLogHtml+(bLogHtml?'\n':'')+esc(l)); var c=bExtractCause(l); if (c) cause=c; }
       });
     } catch(e2){
       bRunLog(bLogHtml+'\n'+bi('стрим недоступен — опрашиваю','stream unavailable — polling')+' ('+esc(e2.message)+')');
@@ -1530,12 +1610,30 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
         (lastState.error?' · err='+esc(lastState.error):''));
-      renderBuildVerdict(lastState);
+      renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null));
+      await renderRunPhases(base,id);  // pipeline strip: explore (map) -> LLM authoring
+      await renderRunSteps(base,id);   // human-readable step breakdown from scenario.json / plan.json
       await bShowArtifacts(base,id);
       bLastRunId=id;            // remember only a CONFIRMED-complete run (for re-run / baseline)
     }
     bSetControls(false);
   }
+  /* Pick the single most informative diagnostic line out of the run log, so a non-zero verdict
+     comes with a PLAIN cause instead of a bare exit code (M9-LIVE: "не видно, какую проблему нашёл тест").
+     Ordered by specificity — a later, more specific match wins for the same run. */
+  function bExtractCause(line){
+    if (!line) return null;
+    var L=String(line);
+    // hard crashes and explicit failures the operator can act on
+    if (/ERR_FILE_NOT_FOUND/.test(L))        return bi('целевой файл не найден внутри контейнера — путь file:// должен указывать на /app/… (путь ХОСТА не виден контейнеру)','target file not found inside the container — a file:// path must point at /app/… (the HOST path is invisible to the container)');
+    if (/offline fallback|no Anthropic key/.test(L)) return bi('LLM не подключилась — прогон свалился на эвристику (проверь backend/base_url в разделе выше и что control-api не старее конфигурации LLM)','the LLM did not connect — the run fell back to the heuristic (check backend/base_url above, and that control-api is not older than the UI-LLM feature)');
+    if (/finish_reason=length|no parseable structured output/.test(L)) return bi('модель не уложилась в лимит токенов до ответа — планировщик вернул пустой сценарий','the model ran out of token budget before answering — the planner returned an empty scenario');
+    if (/0 grounded/.test(L))                 return bi('планировщик не привязал ни одного шага к элементам страницы (пустой сценарий)','the planner grounded no steps to page elements (empty scenario)');
+    if (/RuntimeError:|Exception:|FATAL/.test(L)) return esc(L.replace(/^\s*\[[^\]]*\]\s*/,'').slice(0,200)); // raw log -> escape
+    return null;
+  }
+  /* bExtractCause returns HTML-safe markup: the bi(ru,en) branches are trusted constants, the raw-log
+     branch is esc()'d above. A plain state.error string is untrusted, so callers esc() it themselves. */
   /* ADR-063: per-run LLM override sent with POST /v1/runs (control-api materializes it into the run env,
      unless the control-api process env already sets that var). No api_key — secrets stay in the server env. */
   function bLLM(){
