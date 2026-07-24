@@ -24,7 +24,7 @@ Sentinel работает в две фазы, и в каждой задейст�
 | Фаза | Когда работает | Что делает модель | Роль | Модель |
 |---|---|---|---|---|
 | explore, author | Первый проход: тулз изучает страницу и строит план | Читает дерево страницы (DOM и accessibility), выбирает реальный элемент по индексу, формирует шаги плана | planner, текстовая | `qwen3:14b` |
-| replay, heal | Повторный проход готового плана | Если сохранённый локатор сломался из-за смены вёрстки, находит элемент заново, в том числе по скриншоту (set-of-marks) | heal, vision | `qwen2.5-vl:7b` |
+| replay, heal | Повторный проход готового плана | Если сохранённый локатор сломался из-за смены вёрстки, находит элемент заново, в том числе по скриншоту (set-of-marks) | heal, vision | `qwen2.5vl:7b` |
 
 Следствия:
 - planner никогда не выдумывает селектор: он выбирает индекс среди реально найденных на странице элементов (grounding). Это защищает от галлюцинации локатора.
@@ -40,7 +40,7 @@ Sentinel работает в две фазы, и в каждой задейст�
 | Роль | Модель (12 ГБ) | Модель (8 ГБ) | Примечание |
 |---|---|---|---|
 | Planner (explore, author) | `qwen3:14b` Q4_K_M, около 9.5 ГБ | `qwen3:8b` Q5, около 6 ГБ | Режим без reasoning. На 8 ГБ 14B частично выгружается в CPU и работает медленно. |
-| Heal (replay, vision) | `qwen2.5-vl:7b` Q4, около 7 ГБ | `qwen2.5-vl:7b` Q4 | Поддерживается Ollama, ScreenSpot 84.7. Vision-путь heal пока отключён. |
+| Heal (replay, vision) | `qwen2.5vl:7b` Q4, около 7 ГБ | `qwen2.5vl:7b` Q4 | Поддерживается Ollama, ScreenSpot 84.7. Vision-путь heal пока отключён. |
 
 Точный расчёт под конфигурацию - калькулятор `docs/calculators/vram.html`, методика - `LOCAL_MODELS.md §5`.
 
@@ -64,7 +64,7 @@ Sentinel работает в две фазы, и в каждой задейст�
 Загрузи модели:
 ```powershell
 ollama pull qwen3:14b
-ollama pull qwen2.5-vl:7b
+ollama pull qwen2.5vl:7b
 ollama pull qwen3:8b
 ollama list
 ```
@@ -98,8 +98,8 @@ docker compose run --rm sentinel run --target "file:///app/testdata/fixtures/l3.
 | `LLM_BASE_URL` | Адрес OpenAI-совместимого эндпоинта | Порт Ollama 11434 | из контейнера `http://host.docker.internal:11434/v1`; нативно `http://localhost:11434/v1` | значение с суффиксом `/v1` |
 | `LLM_API_KEY` | Ключ доступа | Ollama ключ не проверяет | любая непустая строка | `noauth` |
 | `LLM_MODEL_PLANNER` | Модель роли planner | Список `ollama list` | `qwen3:14b`; `qwen3:8b` | точное имя тега |
-| `LLM_MODEL_HEAL` | Модель роли heal | Список `ollama list` | `qwen2.5-vl:7b` | точное имя тега |
-| `LLM_VISION` | Vision у роли heal | Нужна vision-модель | `1` включить; пусто выключить | `1` для `qwen2.5-vl` |
+| `LLM_MODEL_HEAL` | Модель роли heal | Список `ollama list` | `qwen2.5vl:7b` | точное имя тега |
+| `LLM_VISION` | Vision у роли heal | Нужна vision-модель | `1` включить; пусто выключить | `1` для `qwen2.5vl` |
 | `LLM_STRUCTURED` | Строгий структурированный вывод (ADR-057) | Опционально | `1` включить; пусто выключить | включать после проверки поддержки `json_schema` эндпоинтом |
 | `OLLAMA_MAX_LOADED_MODELS` | Лимит моделей в памяти | Системная переменная Windows | `1` | значение `1`, затем перезапуск Ollama |
 
@@ -124,7 +124,7 @@ control-api при первом запуске сам генерирует то�
 Открой хаб `http://localhost:8090/`. Это co-pilot (ADR-055) с разделами Settings (подключение и конфигуратор прогона) и Tests (библиотека сценариев и тестов, история прогонов, разговоры, живой AG-UI timeline с auto-HITL).
 
 1. Bootstrap-ссылка уже заполнила адрес control-api и токен в Settings - вводить их вручную не нужно.
-2. В разделе #build задай LLM-подключение: backend `openai`, base_url `http://host.docker.internal:11434/v1`, модель planner `qwen3:14b`, модель heal `qwen2.5-vl:7b`, vision по необходимости. Эти поля уходят с прогоном, и control-api материализует их в env (ADR-063) - отдельно прописывать `LLM_*` в окружение control-api не нужно. Ключ для локального Ollama не требуется (control-api подставляет `noauth`).
+2. В разделе #build задай LLM-подключение: backend `openai`, base_url `http://host.docker.internal:11434/v1`, модель planner `qwen3:14b`, модель heal `qwen2.5vl:7b`, vision по необходимости. Эти поля уходят с прогоном, и control-api материализует их в env (ADR-063) - отдельно прописывать `LLM_*` в окружение control-api не нужно. Ключ для локального Ollama не требуется (control-api подставляет `noauth`).
 3. На каждый прогон задаёшь target (мишень), goal (цель на естественном языке) и режим (обычно `goal`), жмёшь Run и смотришь живой timeline; вердикт и артефакты появляются там же, прогон попадает в историю Tests с идентификатором вида `control-<...>`.
 
 Приоритет источников LLM: **process env control-api > per-run из UI > persisted-конфиг**. То есть если очень нужно зафиксировать модель на стороне control-api, задай `LLM_*` в его окружении - тогда UI её не переопределит. Мастер `http://localhost:8090/setup/` собирает те же поля в форму и кнопкой «Сохранить на сервер» пишет их в persisted-конфиг (нужен профиль `store`, см. «База данных и чат-режим»). Чат - на `http://localhost:8090/chat/`.
@@ -262,7 +262,7 @@ control-api при первом запуске сам генерирует то�
 
 Проверка персистентности из командной строки (два хода одним `conversation-id`):
 ```powershell
-$LLM = @("-e","LLM_BACKEND=openai","-e","LLM_BASE_URL=http://host.docker.internal:11434/v1","-e","LLM_API_KEY=noauth","-e","LLM_MODEL_PLANNER=qwen3:14b","-e","LLM_MODEL_HEAL=qwen2.5-vl:7b")
+$LLM = @("-e","LLM_BACKEND=openai","-e","LLM_BASE_URL=http://host.docker.internal:11434/v1","-e","LLM_API_KEY=noauth","-e","LLM_MODEL_PLANNER=qwen3:14b","-e","LLM_MODEL_HEAL=qwen2.5vl:7b")
 docker compose run --rm $LLM sentinel run --mode chat --conversation-id demo-conv-1 --goal "войди как demo с паролем demo" --target "file:///app/testdata/fixtures/l2.html" --artifact-dir /app/runs/chat1
 docker compose run --rm $LLM sentinel run --mode chat --conversation-id demo-conv-1 --goal "теперь нажми кнопку выхода" --target "file:///app/testdata/fixtures/l2.html" --artifact-dir /app/runs/chat2
 ```
@@ -316,7 +316,7 @@ $LLM = @(
   "-e","LLM_BASE_URL=http://host.docker.internal:11434/v1",
   "-e","LLM_API_KEY=noauth",
   "-e","LLM_MODEL_PLANNER=qwen3:14b",
-  "-e","LLM_MODEL_HEAL=qwen2.5-vl:7b",
+  "-e","LLM_MODEL_HEAL=qwen2.5vl:7b",
   "-e","LLM_VISION=1"
 )
 docker compose run --rm $LLM sentinel run --goal "<цель>" --target "<мишень>" --artifact-dir /app/runs/l1
@@ -332,7 +332,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 go build -o bin/agentctl ./cmd/agentctl && go build -o bin/store-gateway ./cmd/store-gateway && go build -o bin/control-api ./cmd/control-api
 cd pw-executor && npm i && npm run build && npx playwright install chromium && cd ..
 cd brain && UV_PROJECT_ENVIRONMENT=../.venv uv sync --frozen && cd ..
-export LLM_BACKEND=openai LLM_BASE_URL=http://localhost:11434/v1 LLM_API_KEY=noauth LLM_MODEL_PLANNER=qwen3:14b LLM_MODEL_HEAL=qwen2.5-vl:7b
+export LLM_BACKEND=openai LLM_BASE_URL=http://localhost:11434/v1 LLM_API_KEY=noauth LLM_MODEL_PLANNER=qwen3:14b LLM_MODEL_HEAL=qwen2.5vl:7b
 bin/agentctl run --goal "войди с логином demo и паролем demo" --target "file://$PWD/testdata/fixtures/l2.html" --artifact-dir runs/l2
 ```
 Виртуальное окружение Python строго в корне репозитория (`UV_PROJECT_ENVIRONMENT=../.venv`), иначе agentctl использует системный python3 и завершается с ошибкой.

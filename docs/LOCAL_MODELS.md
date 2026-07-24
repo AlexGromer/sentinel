@@ -73,7 +73,7 @@ export LLM_BACKEND=openai
 export LLM_BASE_URL=http://localhost:11434/v1
 export LLM_API_KEY=noauth
 export LLM_MODEL_PLANNER=qwen3:14b        # рассуждения/структурированный JSON
-export LLM_MODEL_HEAL=qwen2.5-vl:7b       # VLM для re-grounding + set-of-marks
+export LLM_MODEL_HEAL=qwen2.5vl:7b       # VLM для re-grounding + set-of-marks
 export LLM_VISION=1
 ```
 Готовые env-блоки на каждый runtime — в §4.
@@ -190,8 +190,8 @@ Sentinel — **мнение**, не бенчмарк.
   LLM_BASE_URL=http://localhost:11434/v1
   LLM_MODEL=qwen3:14b
   LLM_API_KEY=noauth
-  # VISION: ollama pull qwen2.5-vl:7b
-  LLM_MODEL_HEAL=qwen2.5-vl:7b
+  # VISION: ollama pull qwen2.5vl:7b
+  LLM_MODEL_HEAL=qwen2.5vl:7b
   LLM_VISION=1
   ```
 - **LM Studio** (`https://lmstudio.ai`) — GUI; Developer→Start Server (порт 1234); `LLM_BASE_URL=http://localhost:1234/v1`, `LLM_MODEL=<slug-из-Developer-tab>`, `LLM_API_KEY=lm-studio`.
