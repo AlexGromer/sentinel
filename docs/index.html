@@ -640,6 +640,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <pre id="b-runlog" class="mono" style="font-size:.8rem;white-space:pre-wrap;word-break:break-word;margin:0;max-height:14rem;overflow:auto"></pre>
     </div>
     <div id="b-verdict" style="margin-top:.5rem"></div>
+    <div id="b-phases" style="margin-top:.5rem"></div>
     <div id="b-steps" style="margin-top:.5rem"></div>
     <div id="b-arts" class="ctl-row" style="margin-top:.3rem"></div>
   </section>
@@ -1501,6 +1502,46 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     html+='</div></div>';
     ge('b-verdict').innerHTML=html;
   }
+  /* Every run starts with a deterministic EXPLORE phase (heuristic walk → UI map); goal/describe then
+     hand the complete map to the LLM to AUTHOR a grounded scenario (ADR-028). This strip makes that
+     pipeline — and where the LLM actually took over — visible, from plan.json (explore) + scenario.json
+     (authoring). A pure explore run shows only the first phase. */
+  async function renderRunPhases(base, id){
+    var box=ge('b-phases'); box.innerHTML='';
+    var planRaw=await fetchArtifact(base,id,'plan.json'); if (!planRaw) return;
+    var plan; try { plan=JSON.parse(planRaw); } catch(e){ return; }
+    var scRaw=await fetchArtifact(base,id,'scenario.json'); var sc=null;
+    if (scRaw){ try { sc=JSON.parse(scRaw); } catch(e){} }
+    function row(n, ok, title, detail){
+      var mark=ok===true?'<span style="color:var(--ok)">✓</span>':ok==='warn'?'<span style="color:var(--warn)">⚠</span>':'<span style="color:var(--mut)">•</span>';
+      return '<div style="display:flex;gap:.5rem;align-items:baseline;padding:.15rem 0">'
+        +'<span style="flex:none;color:var(--mut);font-variant-numeric:tabular-nums">'+n+'</span>'
+        +'<span style="flex:none">'+mark+'</span>'
+        +'<span style="min-width:0"><b>'+title+'</b>'+(detail?' <span style="color:var(--mut);font-size:.9em">— '+detail+'</span>':'')+'</span></div>';
+    }
+    var seen=plan.interactive_seen, cov=plan.coverage_achieved;
+    var steps=Array.isArray(plan.steps)?plan.steps.length:plan.steps;  // plan.json .steps is the array of explore steps
+    var covPct=(cov!=null)?Math.round(cov*100)+'%':null;
+    var exDetail=[ (seen!=null?bi('карта: ','map: ')+'<b>'+seen+'</b> '+bi('элем.','elem.'):null),
+                   (covPct?bi('покрытие ','coverage ')+covPct:null),
+                   (steps!=null?'<b>'+steps+'</b> '+bi('шагов','steps'):null),
+                   bi('эвристика, без LLM','heuristic, no LLM') ].filter(Boolean).join(' · ');
+    var html=row('1', true, bi('Исследование UI','UI exploration'), exDetail);
+    // phase 2 exists only for goal/describe (scenario_head wired -> scenario.json with run_mode "scenario")
+    if (sc && (sc.run_mode==='scenario' || (sc.steps&&sc.steps.length) || sc.unmatched!=null)){
+      var g=(sc.steps&&sc.steps.length)||0, unm=sc.unmatched;
+      var model=bVal('b-modelp').trim();
+      var ok = g>0 ? (unm>0?'warn':true) : 'warn';
+      var d=[ (model?bi('модель ','model ')+'<code style="font-size:.85em">'+esc(model)+'</code>':bi('LLM','LLM')),
+              bi('сценарий: ','scenario: ')+'<b>'+g+'</b> '+bi('шагов','steps'),
+              (unm!=null?(unm>0?'<span style="color:var(--warn)">'+unm+' unmatched</span>':'0 unmatched'):null) ].filter(Boolean).join(' · ');
+      html+=row('2', ok, bi('Составление сценария (LLM)','Scenario authoring (LLM)'), d
+        + (g===0?' — <span style="color:var(--warn)">'+bi('LLM не составил ни одного шага','the LLM produced no steps')+'</span>':''));
+    }
+    box.innerHTML='<div style="background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.55rem .8rem;font-size:.9rem">'
+      +'<div style="font-size:.78rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem">'+bi('Этапы прогона','Run pipeline')+'</div>'
+      +html+'</div>';
+  }
   /* Render the executed plan as a readable step list (scenario.json for goal/describe, else plan.json)
      so the operator sees WHAT ran, not just an exit code — works after the run, no live stream needed. */
   async function renderRunSteps(base, id){
@@ -1570,6 +1611,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
         (lastState.error?' · err='+esc(lastState.error):''));
       renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null));
+      await renderRunPhases(base,id);  // pipeline strip: explore (map) -> LLM authoring
       await renderRunSteps(base,id);   // human-readable step breakdown from scenario.json / plan.json
       await bShowArtifacts(base,id);
       bLastRunId=id;            // remember only a CONFIRMED-complete run (for re-run / baseline)
