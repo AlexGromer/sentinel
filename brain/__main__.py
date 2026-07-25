@@ -14,7 +14,8 @@ import traceback
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from . import runcontrol
-from .executor import log, make_executor
+from .eventlog import log
+from .executor import make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
 from .planner import make_planner
@@ -51,6 +52,7 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe)
     if is_describe:
         with open(out / "reconcile-report.json", "w") as f:
             json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
+    log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
           + (" + reconcile-report.json" if is_describe else ""))
     if is_describe and unmatched:
@@ -74,11 +76,11 @@ def _resume_through_takeovers(app, final, cfg, rc, run_id):
     except ValueError:
         timeout = 1800.0
     while final.get("__interrupt__"):
-        log("explore: paused for operator takeover; awaiting return (Command(resume) on Return)")
+        log("hitl.takeover_paused")
         deadline = None if timeout <= 0 else time.monotonic() + timeout
         while rc.poll(run_id, "checkpoint") == runcontrol.TAKEOVER:
             if deadline is not None and time.monotonic() > deadline:
-                log("explore: takeover exceeded SENTINEL_TAKEOVER_TIMEOUT -> resuming anyway")
+                log("hitl.takeover_timeout")
                 break
             time.sleep(0.5)
         final = app.invoke(Command(resume={"returned": True}), config=cfg)
@@ -97,7 +99,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
     goal = os.environ.get("GOAL", "").strip()            # M9.2a goal-mode
     describe = os.environ.get("DESCRIBE", "").strip()    # M9.2b describe-mode
     if goal and describe:
-        log("FATAL: GOAL and DESCRIBE are mutually exclusive -> exit 3")
+        log("fatal.goal_describe_conflict")
         return 3
     from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
     if goal:
@@ -106,8 +108,9 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         planner, scenario_head = HeuristicPlanner(), DescribePlanner(describe)
     else:
         planner, scenario_head = make_planner(), None    # pure explore (heuristic|llm)
-    log(f"explore: planner={planner.name} scenario={getattr(scenario_head, 'name', None)} "
-        f"goal={goal!r} describe={describe!r} coverage_target={coverage_target} target={target}")
+    log("run.explore_config", planner=planner.name, target=target,
+        scenario=getattr(scenario_head, "name", None), goal=goal, describe=describe,
+        coverage_target=coverage_target)
     tx = open(out / "llm-transcript.jsonl", "w")
 
     def tx_write(rec: dict) -> None:
@@ -146,6 +149,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         cov, ph = final.get("coverage_achieved", 0.0), final.get("plan_hash", "")
         scenario_steps = final.get("scenario_steps", [])
         scenario_unmatched = final.get("scenario_unmatched", [])
+        log("test.explore_complete", steps=len(steps), coverage=f"{cov:.2f}")
         print("=" * 60)
         print(f"EXPLORE COMPLETE — {len(steps)} steps, coverage={cov:.2f}, plan_hash={ph[:16]}")
         for s in steps:
@@ -218,10 +222,10 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
     goal = os.environ.get("GOAL", "").strip()
     describe = os.environ.get("DESCRIBE", "").strip()
     if goal and describe:
-        log("FATAL: GOAL and DESCRIBE are mutually exclusive -> exit 3")
+        log("fatal.goal_describe_conflict")
         return 3
     if not goal and not describe:
-        log("FATAL: chat mode needs GOAL or DESCRIBE -> exit 3")
+        log("fatal.chat_no_intent")
         return 3
     from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
     scenario_head = GoalPlanner(goal) if goal else DescribePlanner(describe)
@@ -252,19 +256,17 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 # probe on the warm turn, which has no browser → that half is M9-LIVE.)
                 reverify = os.environ.get("SENTINEL_REFINE_REVERIFY") == "1"
                 if has_map and reverify:
-                    log("chat: SENTINEL_REFINE_REVERIFY=1 — re-exploring instead of warm refine "
-                        "(GAP-M9-19: refresh a possibly-stale site map)")
+                    log("run.chat_reverify")
                 warm = has_map and not reverify
                 if warm:
-                    log(f"chat: RESUME conversation={conversation_id} "
-                        f"(warm — refine over persisted site map, no browser)")
+                    log("run.chat_resume", conversation_id=conversation_id)
                     final = probe.invoke({"messages": [user_msg], "goal": goal, "describe": describe,
                                           "run_id": run_id, "artifact_dir": str(out)}, config=cfg)
                 else:
                     if not target:
-                        log("FATAL: chat cold-start needs TARGET_URL -> exit 2")
+                        log("fatal.chat_no_target")
                         return 2
-                    log(f"chat: COLD conversation={conversation_id} (explore + author) target={target}")
+                    log("run.chat_cold", conversation_id=conversation_id, target=target)
                     trace_path = str((out / "trace.zip").resolve())
                     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
                     ex = make_executor(os.environ["PW_EXECUTOR_CMD"])   # only the cold turn spawns a browser
@@ -301,6 +303,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 scenario_unmatched = final.get("scenario_unmatched", [])
                 eff_target = target or final.get("target_url", "")
                 _project_chat(conversation_id, eff_target, final)  # M13: browsable chats projection (best-effort)
+                log("test.chat_turn_complete", conversation=conversation_id, steps=len(scenario_steps))
                 print("=" * 60)
                 print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
@@ -320,32 +323,32 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
     budget.tracker().reset()
 
     if not plan_file or not pathlib.Path(plan_file).exists():
-        log(f"FATAL: --plan file not found: {plan_file}")
+        log("fatal.plan_missing", path=plan_file)
         return 2
     try:
         plan = json.loads(pathlib.Path(plan_file).read_text())
     except Exception as e:
-        log(f"PLAN INTEGRITY: cannot parse plan ({e}) -> exit 3")
+        log("fatal.plan_unparseable", error=e)
         return 3
     if not target:
         target = plan.get("target_url", "")
     if ci and force:
-        log("FATAL: --force-replay is not allowed under --ci")
+        log("fatal.force_replay_in_ci")
         return 3
     # M9.1/GAP-RISK-010: fail closed — a secretRef fill must never run while tracing is on (it would
     # leak the credential into trace.zip). The login-as-test workflow sets PW_NO_TRACE=1.
     if os.environ.get("PW_NO_TRACE") != "1" and any(
             s.get("secretRef") is not None for s in plan.get("steps", [])):
-        log("FATAL: plan has a secretRef fill but PW_NO_TRACE != '1' "
-            "(would leak the secret into trace.zip) -> exit 3")
+        log("fatal.secret_would_leak_to_trace")
         return 3
     trace_path = str((out / "trace.zip").resolve())
     store = make_store(_STORE_PATH)
-    log(f"store={'grpc@' + os.environ['STORE_ADDR'] if os.environ.get('STORE_ADDR') else 'local'}")
+    log("run.store_mode",
+        store="grpc@" + os.environ["STORE_ADDR"] if os.environ.get("STORE_ADDR") else "local")
     heal = HealingEngine(ex, store, run_id, use_llm=use_llm,
                          use_visual=os.environ.get("HEAL_VISUAL") == "1")
-    log(f"{'baseline' if baseline else 'replay'}: plan={plan_file} target={target} "
-        f"aut={aut_version or '-'} ci={ci}")
+    log("run.replay_config", kind="baseline" if baseline else "replay", plan=plan_file,
+        target=target, aut=aut_version or "-", ci=ci)
     try:
         report = run_replay(ex, store, heal, plan, target, str(out),
                             baseline=baseline, aut_version=aut_version, ci=ci, force=force, run_id=run_id)
@@ -355,31 +358,49 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
             try:
                 pathlib.Path(save_state).parent.mkdir(parents=True, exist_ok=True)
                 ex.call("browser.saveStorageState", path=save_state)
-                log(f"storageState saved -> {save_state}")
+                log("system.storage_state_saved", path=save_state)
             except Exception as e:
-                log("saveStorageState error:", e)
+                log("system.storage_state_error", error=e)
         try:
             ex.call("browser.traceStop", path=trace_path)
             ex.call("shutdown")
         except Exception:
             pass
         code = report.get("exit_code", 1)
-        print("=" * 60)
-        if report.get("reason"):
-            print(f"ABORT — {report['reason']}")
         head = "BASELINE" if baseline else "REPLAY"
+        if report.get("reason"):
+            log("test.aborted", reason=report["reason"])
+        log("test.summary", kind=head, steps=len(report["steps"]), healed=report.get("healed", 0),
+            failed=report.get("failed", 0), regressions=len(report.get("regressions", [])))
+        # One event per step, so "which step went wrong" is a filterable record rather than a line of
+        # prose. The human console keeps its compact table too — a CLI operator should not have to read
+        # structured records to see the outcome at a glance.
+        print("=" * 60)
         print(f"{head} COMPLETE — {len(report['steps'])} steps, healed={report.get('healed', 0)}, "
               f"failed={report.get('failed', 0)}, regressions={len(report.get('regressions', []))}, "
               f"exit={code}")
         for r in report["steps"]:
+            sid, stype, outcome = r["step_id"], r["type"], r["outcome"]
+            if r.get("regression"):
+                log("test.step_regression", step=sid, type=stype, what=",".join(r["regression"]))
+            elif outcome == "healed":
+                log("test.step_healed", step=sid, type=stype,
+                    strategy=(r.get("heal") or {}).get("strategy"),
+                    confidence=(r.get("heal") or {}).get("confidence"))
+            elif outcome in ("failed", "fail", "error"):
+                log("test.step_failed", step=sid, type=stype)
+            else:
+                log("test.step_passed", step=sid, type=stype)
+            if r.get("quarantined"):
+                log("test.step_quarantined", step=sid, type=stype)
             extra = ""
-            if r["outcome"] == "healed":
-                extra = f" via {r['heal'].get('strategy')} (conf {r['heal'].get('confidence')})"
+            if outcome == "healed":
+                extra = f" via {(r.get('heal') or {}).get('strategy')} (conf {(r.get('heal') or {}).get('confidence')})"
             if r.get("regression"):
                 extra += f"  [GOLDEN REGRESSION: {','.join(r['regression'])}]"
             if r.get("quarantined"):
                 extra += "  [quarantined]"
-            print(f"  #{r['step_id']:>2} {r['type']:<9} {r['outcome']}{extra}")
+            print(f"  #{sid:>2} {stype:<9} {outcome}{extra}")
         print("=" * 60)
         return code
     finally:
@@ -390,7 +411,7 @@ def _run_export_spec(out, plan_file, spec_out) -> int:
     """M4: emit a Playwright .spec.ts from a frozen plan (no browser)."""
     from .exporter import export_spec
     if not plan_file or not pathlib.Path(plan_file).exists():
-        log(f"FATAL: --plan not found: {plan_file}")
+        log("fatal.plan_missing_export", path=plan_file)
         return 2
     plan = json.loads(pathlib.Path(plan_file).read_text())
     dest = spec_out or str(out / "exported.spec.ts")
@@ -404,7 +425,7 @@ def _run_report(run_dir) -> int:
     """M4: generate report.html + report.json + metrics.prom from a run's heal-report.json."""
     from .report import generate
     if not (pathlib.Path(run_dir) / "heal-report.json").exists():
-        log(f"FATAL: heal-report.json not found in {run_dir}")
+        log("fatal.heal_report_missing", dir=run_dir)
         return 2
     generate(run_dir)
     gw = os.environ.get("PROM_PUSHGATEWAY")
@@ -413,9 +434,9 @@ def _run_report(run_dir) -> int:
         try:
             rep = json.loads((pathlib.Path(run_dir) / "heal-report.json").read_text())
             push_metrics(rep, gw)
-            log(f"metrics pushed -> {gw}")
+            log("system.metrics_pushed", gateway=gw)
         except Exception as e:
-            log("pushgateway error:", e)
+            log("system.metrics_push_error", error=e)
     print(f"report -> {run_dir}/report.html, report.json, metrics.prom")
     return 0
 
@@ -464,9 +485,9 @@ def main() -> int:
         from .runconfig import load_run_config, apply_run_config
         try:
             apply_run_config(load_run_config(run_config))
-            log(f"run-config applied: {run_config}")
+            log("run.config_applied", path=run_config)
         except Exception as e:
-            log(f"FATAL: bad --run-config {run_config}: {e}")
+            log("fatal.run_config_invalid", path=run_config, error=e)
             return 3
 
     # --- no-browser modes (M3/M4) --------------------------------------------
@@ -483,7 +504,7 @@ def main() -> int:
     target = os.environ.get("TARGET_URL")
     pw_cmd = os.environ.get("PW_EXECUTOR_CMD")
     if not pw_cmd:
-        log("FATAL: PW_EXECUTOR_CMD not set")
+        log("fatal.executor_cmd_unset")
         return 2
     if run_mode == "mcp-server":
         # M7 (ADR-020): expose the brain as an MCP server; the host drives + supplies the model.
@@ -494,16 +515,16 @@ def main() -> int:
         # refine turn must not spawn a browser; _run_chat creates the executor lazily on a cold turn only.
         conversation_id = os.environ.get("SENTINEL_CONVERSATION_ID", "").strip()
         if not conversation_id:
-            log("FATAL: chat mode requires SENTINEL_CONVERSATION_ID -> exit 2")
+            log("fatal.chat_no_conversation_id")
             return 2
         return _run_chat(run_id, out, conversation_id, target,
                          float(os.environ.get("COVERAGE_TARGET", "0.85")),
                          int(os.environ.get("MAX_STEPS", "40")))
     if run_mode == "explore" and not target:
-        log("FATAL: TARGET_URL not set")
+        log("fatal.target_unset")
         return 2
 
-    log(f"run_id={run_id} mode={run_mode} transport={os.environ.get('MCP_TRANSPORT', 'jsonrpc')}")
+    log("run.config", run_id=run_id, mode=run_mode)
     ex = make_executor(pw_cmd)
     rc = 1
     _run_span = span("sentinel.run", run_id=run_id, mode=run_mode,

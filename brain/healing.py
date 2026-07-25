@@ -10,8 +10,8 @@ pw-executor format, one of: {testid}, {role,name}, {label}, {text}, {css}, {xpat
 from __future__ import annotations
 
 import json
-import sys
 
+from .eventlog import log
 from .llm import complete_structured, extract_json
 from .otel import prompt_hash, set_llm_tokens, span
 from .sanitize import safe_json, safe_text
@@ -28,8 +28,6 @@ PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "
 AUTO, FLAG = 0.85, 0.60  # confidence gate thresholds
 
 
-def log(*a: object) -> None:
-    print("[heal]", *a, file=sys.stderr, flush=True)
 
 
 class HealingEngine:
@@ -44,13 +42,13 @@ class HealingEngine:
             from .llm import make_backend
             self._backend = backend if backend is not None else make_backend("heal")
             if not self._backend:
-                log("no LLM backend -> deterministic L1-L6 only")
+                log("heal.no_llm_backend")
 
     def _probe(self, locator: dict) -> int:
         try:
             return int(self.ex.call("browser.probe", locator=locator).get("count", 0))
         except Exception as e:
-            log("probe error:", e)
+            log("heal.probe_error", error=e)
             return 0
 
     def heal(self, ctx: dict) -> dict:
@@ -115,7 +113,7 @@ class HealingEngine:
         """Text fallback: pick a CSS selector for the broken element. Returns (strategy,locator,conf)|None."""
         from . import budget
         if budget.tracker().exceeded("heal"):
-            log("heal: heal token budget exceeded -> L1-L6 only (M8, ADR-021)")
+            log("heal.budget_exhausted")
             return None
         try:
             prompt = (
@@ -135,7 +133,7 @@ class HealingEngine:
             if j is not None and j.get("css"):  # j None on unparseable reply -> fall through to None
                 return ("css", {"css": j["css"]}, PRIORS["css"] * 0.90)  # overconfidence discount
         except Exception as e:
-            log("llm reground error:", e)
+            log("heal.llm_reground_error", error=e)
         return None
 
     @staticmethod
@@ -182,7 +180,7 @@ class HealingEngine:
             loc = self._mark_to_locator(chosen) if chosen else None
             return ("visual", loc, PRIORS["visual"]) if loc else None
         except Exception as e:
-            log("visual reground error:", e)
+            log("heal.visual_reground_error", error=e)
             return None
         finally:
             if img:

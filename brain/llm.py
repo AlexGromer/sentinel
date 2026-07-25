@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from .executor import log
+from .eventlog import log
 
 
 @dataclass
@@ -251,7 +251,7 @@ def make_backend(role: str) -> Optional[LLMBackend]:
     sampling = _sampling_ctx.get()
     if sampling is not None or provider == "sampling":
         if sampling is None:
-            log(f"make_backend[{role}]: sampling requested but no MCP session -> fallback")
+            log("llm.sampling_no_session", role=role)
             return None
         loop, session = sampling
         return SamplingBackend(loop, session)
@@ -261,26 +261,26 @@ def make_backend(role: str) -> Optional[LLMBackend]:
         if provider == "anthropic":
             key = _env(role, "API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
             if not key:
-                log(f"make_backend[{role}]: no Anthropic key -> offline fallback")
+                log("llm.no_anthropic_key", role=role)
                 return None
             return AnthropicBackend(model, api_key=key)
         if provider == "openai":
             if not model:
-                log(f"make_backend[{role}]: openai provider needs LLM_MODEL -> fallback")
+                log("llm.openai_model_missing", role=role)
                 return None
             key = _env(role, "API_KEY") or os.environ.get("OPENAI_API_KEY")
             if not key and not base_url:
-                log(f"make_backend[{role}]: openai needs a key or base_url -> fallback")
+                log("llm.openai_endpoint_missing", role=role)
                 return None
             supports_vision = (_env(role, "VISION") or "") == "1"
             supports_structured = (_env(role, "STRUCTURED") or "") == "1"
             return OpenAICompatBackend(model, base_url=base_url, api_key=key,
                                        supports_vision=supports_vision,
                                        supports_structured=supports_structured)
-        log(f"make_backend[{role}]: unknown LLM_BACKEND={provider!r} -> fallback")
+        log("llm.backend_unknown", provider=provider)
         return None
     except Exception as e:  # missing SDK / bad config -> fallback, never crash a run
-        log(f"make_backend[{role}]: {provider} unavailable -> fallback:", e)
+        log("llm.provider_unavailable", provider=provider, error=e)
         return None
 
 
@@ -423,10 +423,10 @@ def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
         if role is not None:
             from . import budget
             if budget.tracker().exceeded(role):
-                log(f"complete_structured: {role} budget exhausted; not escalating past max_tokens={cap}")
+                log("llm.budget_ceiling_reached", role=role, cap=cap)
                 break
         new_cap = min(cap * 2, _TOKEN_HARD_MAX)
-        log(f"complete_structured: truncated (finish_reason=length) at max_tokens={cap} -> retry at {new_cap}")
+        log("llm.output_truncated_retry", cap=cap, new_cap=new_cap)
         cap = new_cap
         attempt += 1
     r.prompt_tokens, r.completion_tokens = total_pt, total_ct  # true total across attempts (ADR-021)

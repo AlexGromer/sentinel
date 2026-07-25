@@ -532,7 +532,7 @@ function renderRoleModels() {
     var inp = document.createElement('input');
     inp.id = roleId(r);
     inp.setAttribute('data-draft', '');
-    inp.placeholder = r === 'planner' ? 'qwen3:14b  /  claude-opus-4-8' : 'qwen2.5-vl:7b  /  claude-sonnet-4-6';
+    inp.placeholder = r === 'planner' ? 'qwen3:14b  /  claude-opus-4-8' : 'qwen2.5vl:7b  /  claude-sonnet-4-6';
     if (keep[r]) inp.value = keep[r];
     inp.addEventListener('input', onInput);
     var err = document.createElement('div'); err.className = 'err'; err.id = 'e-' + roleId(r); err.setAttribute('aria-live', 'polite');
