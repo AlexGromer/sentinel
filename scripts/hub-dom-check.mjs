@@ -353,6 +353,146 @@ try {
     await page.waitForTimeout(250);
   });
 
+  /* ---------------------------------------------------------------- ADR-067/068: source, register, language */
+  await check('filter language: the grammar means what it says', async () => {
+    // Evaluated INSIDE the shipped page, so this tests the parser that actually runs — not a copy.
+    const bad = await page.evaluate(() => {
+      const R = (o) => Object.assign({ lvl:'info', cat:'run', src:'tool', mod:'brain.x', code:'a.b',
+        msg:'hello world', step:0, n:1, ts:'2026-07-25T10:00:00Z' }, o);
+      const cases = [
+        ['', R({}), true],
+        ['lvl >= warn', R({lvl:'warn'}), true],
+        ['lvl >= warn', R({lvl:'info'}), false],
+        ['src == application', R({src:'application'}), true],
+        ['src == application', R({src:'tool'}), false],
+        ['step == 4', R({step:4}), true],
+        ['step > 2', R({step:3}), true],
+        ['cat in {llm, plan}', R({cat:'plan'}), true],
+        ['cat in {llm, plan}', R({cat:'heal'}), false],
+        ['msg ~ /wor.d/', R({}), true],
+        ['msg contains WORLD', R({}), true],
+        ['!(cat == run)', R({}), false],
+        ['lvl >= warn && src == application', R({lvl:'error', src:'tool'}), false],
+        ['cat == run || cat == heal', R({}), true],
+        ['lvl in {}', R({}), false],
+      ];
+      const out = [];
+      for (const [expr, rec, want] of cases) {
+        const c = lgCompile(expr);
+        if (!c.ok) { out.push(`${expr} -> parse error: ${c.msg}`); continue; }
+        if (c.pred(rec) !== want) out.push(`${expr} -> got ${!want}, want ${want}`);
+      }
+      // Malformed input must be REFUSED, with a message. Silently accepting it would filter wrongly.
+      for (const expr of ['nosuch == 1', 'cat ==', '(cat == run', 'msg ~ /[/', 'lvl >= loud',
+                          'step == abc', 'cat == run xyz']) {
+        const c = lgCompile(expr);
+        if (c.ok) out.push(`${expr} -> accepted, should be refused`);
+        else if (!c.msg || !c.en) out.push(`${expr} -> refused without a bilingual message`);
+      }
+      return out;
+    });
+    ok(bad.length === 0, `grammar failures:\n       ${bad.join('\n       ')}`);
+  });
+
+  await check('filter language: an invalid expression warns without blanking the view', async () => {
+    const before = await rows().count();
+    await page.fill('#lg-expr', 'lvl >= warn && (');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#lg-expr.bad').count() === 1, 'an invalid expression must show as invalid');
+    ok(await page.locator('#lg-exprmsg.bad').count() === 1, 'and must say what is wrong');
+    ok(await rows().count() > 0, 'an invalid expression blanked the view instead of holding the last good filter');
+    await page.fill('#lg-expr', '');
+    await page.waitForTimeout(250);
+    eq(await rows().count(), before, 'clearing the expression did not restore the view');
+  });
+
+  await check('controls WRITE the expression rather than filtering separately', async () => {
+    // The promise this design makes: whatever a click did is visible as text you can read and paste.
+    // Levels are restored first: an earlier check leaves them narrowed, and this fixture emits no
+    // warnings at all, so inheriting that state would blank the view for reasons unrelated to the claim.
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    await page.uncheck('#lg-debug');
+    await page.uncheck('#lg-info');
+    await page.waitForTimeout(250);
+    const expr = await page.locator('#lg-expr').inputValue();
+    ok(/lvl\s*>=\s*warn/.test(expr),
+      `unchecking INFO/DEBUG should read as a threshold, got: ${expr}`);
+    await page.selectOption('#lg-src', 'application');
+    await page.waitForTimeout(250);
+    const expr2 = await page.locator('#lg-expr').inputValue();
+    ok(/src\s*==\s*application/.test(expr2), `the source dropdown did not write a clause: ${expr2}`);
+    ok(/&&/.test(expr2), `clauses must combine with &&: ${expr2}`);
+
+    // The clause must FILTER, not merely describe. Shown by discrimination rather than by "more rows":
+    // this fixture behaves, so it emits nothing from the application, and a level threshold may already
+    // have left nothing to count — an earlier version of this check asserted "more" and failed for that
+    // reason rather than for a defect.
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.selectOption('#lg-src', '');
+    await page.waitForTimeout(250);
+    const all = await rows().count();
+    ok(all > 0, 'no rows with every level on — the fixture produced nothing');
+    await page.selectOption('#lg-src', 'tool');
+    await page.waitForTimeout(250);
+    const tool = await rows().count();
+    await page.selectOption('#lg-src', 'application');
+    await page.waitForTimeout(250);
+    const app = await rows().count();
+    ok(tool > 0, 'filtering to the tool hid the tool\'s own diagnostics');
+    ok(app < tool, `src must discriminate: tool=${tool}, application=${app}, all=${all}`);
+    await page.selectOption('#lg-src', '');
+    await page.waitForTimeout(250);
+    eq(await rows().count(), all, 'clearing the source did not restore the view');
+  });
+
+  await check('hand-editing the expression says so instead of letting controls lie', async () => {
+    await page.fill('#lg-expr', 'cat == browser');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#lg-custom').isVisible(),
+      'a hand-written expression must be announced — otherwise the dropdowns claim to describe it');
+    ok(await page.locator('#lg-src').isDisabled(), 'controls that cannot describe the filter must be disabled');
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(250);
+    ok(!(await page.locator('#lg-custom').isVisible()), 'clearing must hand control back');
+    ok(!(await page.locator('#lg-src').isDisabled()), 'clearing must re-enable the controls');
+  });
+
+  await check('clicking a cell filters by it', async () => {
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    const cell = page.locator('#lg-list .lgclick[data-f="cat"]').first();
+    const val = await cell.getAttribute('data-v');
+    await cell.click();
+    await page.waitForTimeout(250);
+    const expr = await page.locator('#lg-expr').inputValue();
+    ok(expr.indexOf('cat == ' + val) >= 0, `clicking a category cell should add it: got ${expr}`);
+    const shown = await rows().count();
+    ok(shown > 0, 'clicking a cell filtered everything away');
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+  });
+
+  await check('the register toggle changes how a row reads, not which rows there are', async () => {
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    const n1 = await rows().count();
+    const human = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    await page.click('#lg-reg-tech');
+    await page.waitForTimeout(300);
+    const n2 = await rows().count();
+    const tech = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    eq(n2, n1, 'switching register changed the number of rows');
+    ok(human !== tech, 'the technical register reads identically to the human one');
+    ok(/\d{4}-\d{2}-\d{2}T/.test(tech), `the technical register must show a full timestamp: ${tech}`);
+    ok(/[a-z]+\.[a-z_]+/.test(tech), 'the technical register must show the event code');
+    await page.click('#lg-reg-human');
+    await page.waitForTimeout(300);
+  });
+
   await check('a run with no logs says so instead of looking empty', async () => {
     // A never-run id: the endpoint answers recorded:false, and the view must explain that rather than
     // render the same emptiness it shows for "nothing matched".

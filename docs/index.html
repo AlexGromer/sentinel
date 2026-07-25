@@ -225,6 +225,32 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   margin:.3rem 0 .5rem;border-radius:0 3px 3px 0;font-size:.82rem}
 .lgerr{border:1px solid var(--no);border-radius:3px;padding:.5rem .7rem;color:var(--no);font-size:.84rem}
 .lgexp{cursor:pointer;color:var(--acc2);font-size:.74rem;margin-left:.4rem;user-select:none}
+/* ADR-068 filter expression. Live validity is shown by BORDER colour, the way Wireshark does it: the
+   field is invalid most of the time while a regex is being typed, so an error must be quiet, not loud. */
+#lg-expr{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.84rem;
+  padding:.34rem .5rem;border:1px solid var(--line)}
+#lg-expr.ok{border-color:var(--ok);box-shadow:0 0 0 1px rgba(54,211,153,.25)}
+#lg-expr.bad{border-color:var(--no);box-shadow:0 0 0 1px rgba(255,77,109,.25)}
+.lgexprmsg{font-size:.74rem;color:var(--mut);min-height:1rem;font-family:ui-monospace,monospace}
+.lgexprmsg.bad{color:var(--no)}
+.lgreg button{font-size:.78rem;padding:.22rem .5rem}
+.lgpill{font-size:.74rem;padding:.2rem .5rem;border:1px solid var(--line);border-radius:999px;
+  background:var(--bg3);color:var(--tx);cursor:pointer}
+.lgpill:hover{border-color:var(--acc2)}
+.lgpill .x{color:var(--mut);margin-left:.35rem}
+.lghelp{font-size:.8rem;color:var(--mut);margin:.2rem 0 .5rem}
+.lghelp summary{cursor:pointer;color:var(--acc2)}
+.lghelp table{border-collapse:collapse;margin-top:.5rem;font-size:.78rem}
+.lghelp td{padding:.16rem .5rem .16rem 0;vertical-align:top}
+.lghelp code{color:var(--acc2)}
+/* Clicking a cell adds it to the filter — how the syntax gets learned without reading docs. */
+.lgclick{cursor:pointer;border-bottom:1px dotted var(--line)}
+.lgclick:hover{border-bottom-color:var(--acc2);color:var(--acc2)}
+.lgtech{font-family:ui-monospace,monospace;font-size:.78rem}
+.lgtech .k{color:var(--mut)}
+.lgstep{font-family:ui-monospace,monospace;font-size:.72rem;color:var(--acc2);border:1px solid var(--line);border-radius:2px;padding:.08rem .3rem;cursor:pointer}
+.lgsrc{font-size:.72rem;color:var(--mut);cursor:pointer}
+.lgcustom{font-size:.74rem;color:var(--warn)}
 .pass{color:var(--ok);font-weight:700}
 .fail{color:var(--no);font-weight:700}
 .timeline{display:flex;flex-direction:column;gap:.3rem;max-height:26rem;overflow:auto;
@@ -887,6 +913,19 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <label class="lgchk"><input type="checkbox" id="lg-info" checked> <span class="lvl lvl-info">INFO</span></label>
         <label class="lgchk"><input type="checkbox" id="lg-debug"> <span class="lvl lvl-debug">DEBUG</span></label>
       </div>
+      <!-- ADR-067: SOURCE is the coarse axis a tester reaches for first — is my application
+           misbehaving, or the tool? Only then does the subsystem matter. -->
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Источник</span><span data-lang="en">Source</span></span>
+        <select id="lg-src"></select>
+        <span class="lglabel"><span data-lang="ru">Шаг</span><span data-lang="en">Step</span></span>
+        <select id="lg-step"></select>
+        <span class="lglabel"><span data-lang="ru">Вид</span><span data-lang="en">Register</span></span>
+        <span class="toggle lgreg" role="group">
+          <button type="button" id="lg-reg-human" aria-pressed="true"><span data-lang="ru">по-человечески</span><span data-lang="en">plain</span></button>
+          <button type="button" id="lg-reg-tech" aria-pressed="false"><span data-lang="ru">технически</span><span data-lang="en">technical</span></button>
+        </span>
+      </div>
       <div class="lgbar">
         <span class="lglabel"><span data-lang="ru">Категория</span><span data-lang="en">Category</span></span>
         <select id="lg-cat"></select>
@@ -904,6 +943,28 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <button type="button" class="btn" id="lg-reload">&#8635; <span data-lang="ru">Обновить</span><span data-lang="en">Reload</span></button>
         <span id="lg-count" class="libmeta"></span>
       </div>
+      <!-- ADR-068: the filter EXPRESSION is the single thing that filters. The controls above are
+           shortcuts that write clauses into it, so what a click did is always visible as text and can
+           be edited, saved and pasted into a bug report. Editing it by hand puts the controls into an
+           honest "своё" state rather than fighting the text. -->
+      <div class="lgbar" style="align-items:flex-start">
+        <span class="lglabel" style="padding-top:.4rem"><span data-lang="ru">Фильтр</span><span data-lang="en">Filter</span></span>
+        <span style="flex:1;min-width:16rem;display:flex;flex-direction:column;gap:.25rem">
+          <input id="lg-expr" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="lvl >= warn &amp;&amp; src == application">
+          <span id="lg-exprmsg" class="lgexprmsg"></span>
+        </span>
+        <button type="button" class="btn" id="lg-expr-clear">&#10005; <span data-lang="ru">Сбросить</span><span data-lang="en">Clear</span></button>
+        <button type="button" class="btn" id="lg-expr-save">&#9733; <span data-lang="ru">Запомнить</span><span data-lang="en">Save</span></button>
+        <span id="lg-custom" class="lgcustom" style="display:none" title="the controls cannot describe this expression">
+          <span data-lang="ru">своё выражение — выпадашки отключены</span><span data-lang="en">custom expression — controls disabled</span>
+        </span>
+      </div>
+      <div class="lgbar" id="lg-saved"></div>
+      <details class="lghelp">
+        <summary><span data-lang="ru">Как писать фильтр</span><span data-lang="en">Filter syntax</span></summary>
+        <div id="lg-help"></div>
+      </details>
       <div id="lg-err" class="lgerr" style="display:none"></div>
       <div id="lg-list"></div>
     </div>
@@ -2394,7 +2455,194 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      in the log and another in the UI. An unknown code falls back to the server's English `msg`,
      which is also exactly what a stale UI against a newer server should do.
      ===================================================================================== */
+
+  /* ================= ADR-068 — filter expression language ================================
+     Wireshark's LANGUAGE does not fit — it is about packets (tcp.port, ip.src, protocol layers) and we
+     have none of those fields. What transfers is the three things that made it usable, and they are
+     what this implements:
+
+       1. filter by FIELD, not by text        `cat == heal`, not hoping "heal" appears in the message
+       2. live validity shown by colour       an expression is invalid most of the time while typing
+       3. click a cell to add it as a filter  which is how the syntax gets learned without docs
+
+     The expression is the ONLY thing that filters. The dropdowns and checkboxes above are shortcuts
+     that WRITE clauses into it — so what a click did is always visible as text, editable, saveable and
+     pasteable into a bug report. Sync is one-way by design: hand-editing puts the controls into an
+     honest "своё" state rather than two parsers fighting over one string.
+
+     No dependency: a self-contained page cannot fetch a parser library (the CSP forbids it and the
+     air-gapped bundle would break), and a hand-written recursive descent over eight fields is smaller
+     than vendoring one.
+
+       expr    := or
+       or      := and ('||' and)*
+       and     := not ('&&' not)*
+       not     := '!' not | primary
+       primary := '(' expr ')' | comparison
+       comparison := FIELD OP VALUE | FIELD 'in' '{' VALUE (',' VALUE)* '}'
+     ===================================================================================== */
+  var LG_FIELDS = {
+    lvl:  {kind:'level'},  src: {kind:'text'},  cat: {kind:'text'},
+    mod:  {kind:'text'},   code:{kind:'text'},  msg: {kind:'text'},
+    step: {kind:'num'},    n:   {kind:'num'},   ts:  {kind:'text'}
+  };
+  var LG_LVLRANK = {debug:10, info:20, warn:30, error:40};
+
+  function lgTokenize(src){
+    var out = [], i = 0;
+    while (i < src.length){
+      var c = src[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (c === '(' || c === ')' || c === '{' || c === '}' || c === ','){ out.push({t:c, at:i}); i++; continue; }
+      if (src.startsWith('&&', i) || src.startsWith('||', i)){ out.push({t:src.substr(i,2), at:i}); i+=2; continue; }
+      if (src.startsWith('==', i) || src.startsWith('!=', i) || src.startsWith('>=', i) || src.startsWith('<=', i)){
+        out.push({t:'op', v:src.substr(i,2), at:i}); i+=2; continue;
+      }
+      if (c === '>' || c === '<'){ out.push({t:'op', v:c, at:i}); i++; continue; }
+      if (c === '~'){ out.push({t:'op', v:'~', at:i}); i++; continue; }
+      if (c === '!'){ out.push({t:'!', at:i}); i++; continue; }
+      if (c === '"' || c === "'"){
+        var q = c, j = i+1, buf = '';
+        while (j < src.length && src[j] !== q){ if (src[j] === '\\' && j+1 < src.length){ buf += src[j+1]; j += 2; } else { buf += src[j]; j++; } }
+        if (j >= src.length) throw {msg:'незакрытая кавычка', en:'unterminated quote', at:i};
+        out.push({t:'val', v:buf, at:i}); i = j+1; continue;
+      }
+      if (c === '/'){   /* /regex/ — the only place a slash is meaningful */
+        var k = i+1, rx = '';
+        while (k < src.length && src[k] !== '/'){ if (src[k] === '\\' && k+1 < src.length){ rx += src[k] + src[k+1]; k += 2; } else { rx += src[k]; k++; } }
+        if (k >= src.length) throw {msg:'незакрытая /регулярка/', en:'unterminated /regex/', at:i};
+        out.push({t:'val', v:rx, re:true, at:i}); i = k+1; continue;
+      }
+      var m = /^[A-Za-zА-Яа-я0-9_.:\-+]+/.exec(src.slice(i));
+      if (m){ out.push({t:'word', v:m[0], at:i}); i += m[0].length; continue; }
+      throw {msg:'непонятный символ «'+c+'»', en:'unexpected character "'+c+'"', at:i};
+    }
+    return out;
+  }
+
+  /* Compiles to a predicate. Returns {ok:true, pred} or {ok:false, msg, en, at}. */
+  function lgCompile(src){
+    if (!src.trim()) return {ok:true, pred:function(){ return true; }};
+    var toks, i = 0;
+    try { toks = lgTokenize(src); } catch(e){ return {ok:false, msg:e.msg, en:e.en, at:e.at}; }
+    function peek(){ return toks[i]; }
+    function fail(msg, en){ var t = peek(); throw {msg:msg, en:en, at:t ? t.at : src.length}; }
+
+    function parseValue(){
+      var t = peek();
+      if (!t || (t.t !== 'val' && t.t !== 'word')) fail('ожидалось значение', 'expected a value');
+      i++;
+      return t;
+    }
+    function comparison(){
+      var f = peek();
+      if (!f || f.t !== 'word') fail('ожидалось имя поля', 'expected a field name');
+      if (!(f.v in LG_FIELDS)) {
+        throw {msg:'нет поля «'+f.v+'». Есть: '+Object.keys(LG_FIELDS).join(' '),
+               en:'no field "'+f.v+'". Available: '+Object.keys(LG_FIELDS).join(' '), at:f.at};
+      }
+      i++;
+      var field = f.v, nxt = peek();
+      if (nxt && nxt.t === 'word' && (nxt.v === 'in' || nxt.v === 'contains')){
+        i++;
+        if (nxt.v === 'contains'){
+          var cv = parseValue();
+          return function(r){ return String(lgFieldVal(r, field) ?? '').toLowerCase()
+            .indexOf(String(cv.v).toLowerCase()) >= 0; };
+        }
+        if (!peek() || peek().t !== '{') fail('после in ожидалось {', 'expected { after in');
+        i++;
+        var set = [];
+        while (peek() && peek().t !== '}'){
+          set.push(String(parseValue().v));
+          if (peek() && peek().t === ',') i++;
+        }
+        if (!peek()) fail('незакрытая {', 'unterminated {');
+        i++;
+        var low = set.map(function(x){ return x.toLowerCase(); });
+        return function(r){ return low.indexOf(String(lgFieldVal(r, field) ?? '').toLowerCase()) >= 0; };
+      }
+      if (!nxt || nxt.t !== 'op') fail('ожидался оператор (== != >= <= > < ~ contains in)',
+                                       'expected an operator (== != >= <= > < ~ contains in)');
+      i++;
+      var op = nxt.v, val = parseValue();
+      return lgPredicate(field, op, val);
+    }
+    function primary(){
+      var t = peek();
+      if (t && t.t === '('){ i++; var e = or(); if (!peek() || peek().t !== ')') fail('незакрытая (', 'unterminated ('); i++; return e; }
+      return comparison();
+    }
+    function nott(){ if (peek() && peek().t === '!'){ i++; var inner = nott(); return function(r){ return !inner(r); }; } return primary(); }
+    function and(){ var l = nott(); while (peek() && peek().t === '&&'){ i++; var r2 = nott(); l = (function(a,b){ return function(r){ return a(r) && b(r); }; })(l, r2); } return l; }
+    function or(){ var l = and(); while (peek() && peek().t === '||'){ i++; var r2 = and(); l = (function(a,b){ return function(r){ return a(r) || b(r); }; })(l, r2); } return l; }
+
+    try {
+      var pred = or();
+      if (i < toks.length) { var t = toks[i]; throw {msg:'лишнее после выражения: «'+(t.v||t.t)+'»',
+        en:'trailing input after the expression: "'+(t.v||t.t)+'"', at:t.at}; }
+      return {ok:true, pred:pred};
+    } catch(e){ return {ok:false, msg:e.msg||String(e), en:e.en||e.msg||String(e), at:e.at||0}; }
+  }
+
+  /* The value a field takes on a record. `msg` deliberately resolves to the text CURRENTLY DISPLAYED,
+     so searching finds what the reader can see — in the human register that is the Russian phrase, in
+     the technical one the server's English. Searching for what is on screen is the only behaviour that
+     never surprises. */
+  function lgFieldVal(r, f){
+    if (f === 'msg') return lgRegister === 'tech' ? (r.msg || '') : lgText(r);
+    if (f === 'n')   return r.n || 1;
+    return r[f];
+  }
+
+  function lgPredicate(field, op, val){
+    var kind = LG_FIELDS[field].kind;
+    if (op === '~'){
+      var re;
+      try { re = new RegExp(val.v, 'i'); }
+      catch(e){ throw {msg:'плохая регулярка: '+e.message, en:'bad regex: '+e.message, at:val.at}; }
+      return function(r){ return re.test(String(lgFieldVal(r, field) ?? '')); };
+    }
+    if (kind === 'level'){
+      var want = LG_LVLRANK[String(val.v).toLowerCase()];
+      if (want === undefined) throw {msg:'уровень должен быть один из: debug info warn error',
+        en:'a level must be one of: debug info warn error', at:val.at};
+      return function(r){ var got = LG_LVLRANK[r.lvl] || 0; return lgCmp(got, want, op); };
+    }
+    if (kind === 'num'){
+      var num = Number(val.v);
+      if (!isFinite(num)) throw {msg:'ожидалось число', en:'expected a number', at:val.at};
+      return function(r){ return lgCmp(Number(lgFieldVal(r, field)) || 0, num, op); };
+    }
+    var sv = String(val.v).toLowerCase();
+    return function(r){
+      var got = String(lgFieldVal(r, field) ?? '').toLowerCase();
+      if (op === '==') return got === sv;
+      if (op === '!=') return got !== sv;
+      return lgCmp(got, sv, op);   /* lexicographic for the rare >/< on text */
+    };
+  }
+  /* Deliberate test seam: the Logs code lives inside this module's closure, and the DOM gate has to be
+     able to exercise the GRAMMAR against the shipped parser rather than an extracted copy that could
+     drift. Exposing the compiler (a pure function of a string) adds no capability a page script did not
+     already have. */
+  try { window.lgCompile = lgCompile; } catch(e){}
+
+  function lgCmp(a, b, op){
+    switch(op){
+      case '==': return a === b;
+      case '!=': return a !== b;
+      case '>':  return a >  b;
+      case '<':  return a <  b;
+      case '>=': return a >= b;
+      case '<=': return a <= b;
+    }
+    return false;
+  }
+
   var lgLoaded=false, lgCatalog=null, lgRecords=[], lgDegradations=[], lgRunId='';
+  var lgRegister='human';                 /* ADR-067: the register the rows are read in */
+  var lgPred=function(){ return true; };  /* ADR-068: compiled from the expression field */
 
   var LG_SORT_LABEL = {
     asc:  { ru: '↑ по времени',   en: '↑ by time' },
@@ -2456,6 +2704,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var t = lgCatalog && lgCatalog.level_labels && lgCatalog.level_labels[lvl];
     return t ? t[l] : lvl;
   }
+  function lgSrcLabel(src){
+    if (!src) return '';
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var t = lgCatalog && lgCatalog.sources && lgCatalog.sources[src];
+    return t ? t[l] : src;
+  }
   function lgCatLabel(cat){
     var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
     var t = lgCatalog && lgCatalog.category_labels && lgCatalog.category_labels[cat];
@@ -2471,6 +2725,24 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       sel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
         cats.map(function(c){ return '<option value="'+esc(c)+'">'+esc(lgCatLabel(c))+'</option>'; }).join('');
       sel.value = keep;
+    }
+    /* Source comes from the catalogue (a closed axis), step from the records. */
+    var ssel = ge('lg-src');
+    if (ssel){
+      var keeps = ssel.value;
+      var srcs = (lgCatalog && lgCatalog.sources) ? Object.keys(lgCatalog.sources) : [];
+      ssel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
+        srcs.map(function(x){ return '<option value="'+esc(x)+'">'+esc(lgSrcLabel(x))+'</option>'; }).join('');
+      ssel.value = keeps;
+    }
+    var stepsel = ge('lg-step');
+    if (stepsel){
+      var keepstep = stepsel.value, steps = {};
+      lgRecords.forEach(function(r){ if (r.step) steps[r.step]=1; });
+      stepsel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
+        Object.keys(steps).map(Number).sort(function(a,b){ return a-b; })
+          .map(function(n){ return '<option value="'+n+'">'+n+'</option>'; }).join('');
+      stepsel.value = keepstep;
     }
     /* Modules come from the RECORDS, not the catalogue: only the ones this run actually produced are
        worth offering, and a module list that offers empty choices reads as broken. */
@@ -2492,8 +2764,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       catch(e){ lgCatalog = null; }
     }
     lgRefreshOptionLabels();
+    lgRenderHelp();
+    lgRenderSaved();
     await lgLoadRunList();
     await lgLoad();
+    lgSyncExpr();   /* the controls' defaults become the visible expression, not a hidden state */
   }
 
   async function lgLoadRunList(){
@@ -2544,24 +2819,168 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     lgRender();
   }
 
+  /* One filter, one source of truth. The controls write clauses into the expression (lgSyncExpr), the
+     expression compiles to lgPred, and lgPred decides. Two filtering paths would eventually disagree,
+     and then the visible text would stop describing what the reader is looking at. */
   function lgMatches(rec){
-    if (!ge('lg-'+rec.lvl) || !ge('lg-'+rec.lvl).checked) return false;
-    var c = ge('lg-cat').value; if (c && rec.cat !== c) return false;
-    var m = ge('lg-mod').value; if (m && rec.mod !== m) return false;
-    if (ge('lg-degronly').checked && !rec.degrades) return false;
+    if (ge('lg-degronly') && ge('lg-degronly').checked && !rec.degrades) return false;
     var q = ge('lg-q').value.trim();
     if (q){
       var hay = (lgText(rec)||'') + ' ' + (rec.msg||'') + ' ' + (rec.code||'');
       if (ge('lg-re').checked){
         var re; try { re = new RegExp(q, ge('lg-case').checked ? '' : 'i'); }
-        catch(e){ return true; } /* an in-progress regex must not blank the view mid-typing */
+        catch(e){ return lgPred(rec); } /* an in-progress regex must not blank the view mid-typing */
         if (!re.test(hay)) return false;
       } else if (ge('lg-case').checked ? hay.indexOf(q)<0 : hay.toLowerCase().indexOf(q.toLowerCase())<0){
         return false;
       }
     }
-    return true;
+    return lgPred(rec);
   }
+
+  /* ---- controls -> expression (one way, by design) ---------------------------------------- */
+  var LG_LVL_ORDER = ['error','warn','info','debug'];
+
+  function lgClauses(){
+    var out = [];
+    var on = LG_LVL_ORDER.filter(function(l){ var e = ge('lg-'+l); return e && e.checked; });
+    if (on.length === 0){
+      /* Nothing checked means nothing shown, and saying so as a clause is more honest than an empty
+         expression that would silently show everything. */
+      out.push('lvl in {}');
+    } else if (on.length < LG_LVL_ORDER.length){
+      var idx = on.map(function(l){ return LG_LVL_ORDER.indexOf(l); }).sort(function(a,b){ return a-b; });
+      /* A run starting at ERROR collapses to a threshold — which is what a person would write by hand.
+         Any other selection needs the set form. */
+      var fromTop = idx[0] === 0 && idx.every(function(v, k){ return v === k; });
+      if (fromTop) out.push('lvl >= ' + LG_LVL_ORDER[idx[idx.length - 1]]);
+      else out.push('lvl in {' + on.join(', ') + '}');
+    }
+    [['lg-src','src'], ['lg-cat','cat'], ['lg-mod','mod'], ['lg-step','step']].forEach(function(pair){
+      var el = ge(pair[0]);
+      if (el && el.value) out.push(pair[1] + ' == ' + el.value);
+    });
+    return out;
+  }
+
+  var lgExprIsCustom = false;
+
+  function lgSyncExpr(){
+    if (lgExprIsCustom) return;   /* the reader owns the text once they have edited it by hand */
+    var el = ge('lg-expr'); if (!el) return;
+    el.value = lgClauses().join(' && ');
+    lgApplyExpr();
+  }
+
+  function lgApplyExpr(){
+    var el = ge('lg-expr'), msg = ge('lg-exprmsg');
+    if (!el) return;
+    var res = lgCompile(el.value);
+    var en = document.body.classList.contains('lang-en');
+    if (res.ok){
+      lgPred = res.pred;
+      el.className = el.value.trim() ? 'ok' : '';
+      msg.className = 'lgexprmsg';
+      msg.textContent = el.value.trim() ? (en ? 'valid' : 'выражение верное') : '';
+    } else {
+      /* An invalid expression must NOT blank the view — it is invalid on most keystrokes while a regex
+         is being typed. The last good predicate keeps filtering, and the message says what and where. */
+      el.className = 'bad';
+      msg.className = 'lgexprmsg bad';
+      msg.textContent = '▲ ' + (en ? res.en : res.msg) +
+        (res.at !== undefined ? (en ? '  (at ' + res.at + ')' : '  (позиция ' + res.at + ')') : '');
+    }
+    lgRender();
+  }
+
+  /* Adds `field == value` from a clicked cell. This is how the syntax gets learned: you point at what
+     you want and read back the expression it produced. */
+  function lgAddClause(field, value){
+    var el = ge('lg-expr'); if (!el) return;
+    var clause = field + ' == ' + (/[\s"']/.test(String(value)) ? JSON.stringify(String(value)) : value);
+    var cur = el.value.trim();
+    if (cur.indexOf(clause) >= 0) return;      /* already asked for; clicking twice should be a no-op */
+    lgExprIsCustom = true;
+    el.value = cur ? cur + ' && ' + clause : clause;
+    lgMarkCustom();
+    lgApplyExpr();
+  }
+
+  function lgMarkCustom(){
+    /* The controls can no longer describe the expression, and pretending otherwise would make them lie
+       about what is being filtered. They say so instead. */
+    var lbl = ge('lg-custom');
+    if (lbl) lbl.style.display = lgExprIsCustom ? '' : 'none';
+    ['lg-src','lg-cat','lg-mod','lg-step'].forEach(function(id){
+      var el = ge(id); if (el) el.disabled = lgExprIsCustom;
+    });
+    LG_LVL_ORDER.forEach(function(l){ var el = ge('lg-'+l); if (el) el.disabled = lgExprIsCustom; });
+  }
+
+  function lgResetExpr(){
+    lgExprIsCustom = false;
+    lgMarkCustom();
+    lgSyncExpr();
+  }
+
+  /* ---- saved filters -------------------------------------------------------------------------
+     Kept in localStorage: they are the reader's own shortcuts, contain no run data and no secret, and
+     losing them on every reload would defeat the point of naming them. */
+  function lgSavedList(){
+    try { return JSON.parse(localStorage.getItem('sentinel_log_filters') || '[]'); } catch(e){ return []; }
+  }
+  function lgSavedWrite(list){
+    try { localStorage.setItem('sentinel_log_filters', JSON.stringify(list.slice(0, 12))); } catch(e){}
+  }
+  function lgRenderSaved(){
+    var host = ge('lg-saved'); if (!host) return;
+    var list = lgSavedList();
+    var en = document.body.classList.contains('lang-en');
+    host.innerHTML = list.length
+      ? '<span class="lglabel">' + (en ? 'saved' : 'запомненные') + '</span>' +
+        list.map(function(f, k){
+          return '<button type="button" class="lgpill" data-use="' + k + '" title="' + esc(f) + '">' +
+            esc(f.length > 34 ? f.slice(0, 33) + '…' : f) +
+            '<span class="x" data-del="' + k + '">✕</span></button>';
+        }).join('')
+      : '';
+    host.querySelectorAll('[data-use]').forEach(function(b){
+      b.addEventListener('click', function(ev){
+        if (ev.target && ev.target.getAttribute('data-del') !== null){
+          var l = lgSavedList(); l.splice(Number(ev.target.getAttribute('data-del')), 1);
+          lgSavedWrite(l); lgRenderSaved(); return;
+        }
+        lgExprIsCustom = true;
+        ge('lg-expr').value = lgSavedList()[Number(b.getAttribute('data-use'))] || '';
+        lgMarkCustom(); lgApplyExpr();
+      });
+    });
+  }
+
+  /* ---- syntax help, built FROM the catalogue so it cannot describe fields that do not exist ---- */
+  function lgRenderHelp(){
+    var host = ge('lg-help'); if (!host) return;
+    var en = document.body.classList.contains('lang-en');
+    var rows = [
+      ['lvl >= warn', en ? 'warnings and errors' : 'предупреждения и ошибки'],
+      ['src == application', en ? 'only the tested application' : 'только проверяемое приложение'],
+      ['step == 4', en ? 'everything that happened during step 4' : 'всё, что случилось на шаге 4'],
+      ['cat in {llm, plan}', en ? 'either category' : 'любая из категорий'],
+      ['msg ~ /budget|fallback/', en ? 'regex over the visible text' : 'регулярка по видимому тексту'],
+      ['msg contains корзин', en ? 'substring, case-insensitive' : 'подстрока, без учёта регистра'],
+      ['!(cat == browser) && lvl >= warn', en ? 'negation and grouping' : 'отрицание и группировка']
+    ];
+    host.innerHTML =
+      '<p style="margin:.4rem 0">' +
+      (en ? 'Fields: ' : 'Поля: ') + '<code>' + Object.keys(LG_FIELDS).join('</code> <code>') + '</code><br>' +
+      (en ? 'Operators: ' : 'Операторы: ') + '<code>==</code> <code>!=</code> <code>&gt;=</code> ' +
+      '<code>&lt;=</code> <code>~</code> <code>contains</code> <code>in {…}</code> · ' +
+      '<code>&amp;&amp;</code> <code>||</code> <code>!</code> <code>( )</code></p>' +
+      '<table>' + rows.map(function(r){
+        return '<tr><td><code>' + esc(r[0]) + '</code></td><td>' + esc(r[1]) + '</td></tr>';
+      }).join('') + '</table>';
+  }
+
 
   var LG_RANK = {error:0, warn:1, info:2, debug:3};
   function lgRender(){
@@ -2597,27 +3016,52 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     list.innerHTML = shown.map(function(r){
       var kids = byParent[r.seq] || [];
-      var head =
-        '<div class="lgrow'+(r.degrades?' deg':'')+'">'+
+      /* Two registers of the SAME record. Human: the catalogue phrase in the reader's language, with the
+         step and the source named in words. Technical: precise timestamp, code, module and the server's
+         own English — what you paste into an issue. Same rows, same order, same filters, so switching
+         never loses your place. */
+      var body;
+      if (lgRegister === 'tech'){
+        body =
+          '<span class="lgts">'+esc(r.ts||'')+'</span>'+
+          '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(r.lvl)+'</span>'+
+          '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+esc(r.cat)+'</span>'+
+          '<span class="lgmsg lgtech">'+
+            '<span class="lgclick" data-f="code" data-v="'+esc(r.code||'')+'">'+esc(r.code||'')+'</span>'+
+            (r.mod ? ' <span class="k">mod=</span><span class="lgclick" data-f="mod" data-v="'+esc(r.mod)+'">'+esc(r.mod)+'</span>' : '')+
+            (r.step ? ' <span class="k">step=</span><span class="lgclick" data-f="step" data-v="'+r.step+'">'+r.step+'</span>' : '')+
+            ' <span class="k">src=</span><span class="lgclick" data-f="src" data-v="'+esc(r.src||'')+'">'+esc(r.src||'')+'</span>'+
+            (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
+            '<br>'+esc(r.msg||'')+
+            (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
+          '</span>';
+      } else {
+        /* No source chip on the row: `src` is DERIVED from `cat`, so printing both says the same thing
+           twice ("приложение приложение"). It stays a filter axis, where being coarse is the point. */
+        body =
           '<span class="lgts">'+esc((r.ts||'').slice(11,19))+'</span>'+
           '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(lgLevelLabel(r.lvl))+'</span>'+
-          '<span class="lgcat">'+esc(lgCatLabel(r.cat))+'</span>'+
-          '<span class="lgmsg">'+esc(lgText(r))+
+          '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+esc(lgCatLabel(r.cat))+'</span>'+
+          '<span class="lgmsg">'+
+            (r.step ? '<span class="lgstep lgclick" data-f="step" data-v="'+r.step+'">'+
+                       bi('шаг ','step ')+r.step+'</span> ' : '')+
+            esc(lgText(r))+
             (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
             '<span class="lgcode">'+esc(r.code||'')+'</span>'+
             (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
-          '</span>'+
-        '</div>' +
+          '</span>';
+      }
+      return '<div class="lgrow'+(r.degrades?' deg':'')+'">'+body+'</div>' +
         kids.map(function(k){
           return '<div class="lgrow child" data-child="'+r.seq+'" style="display:none">'+
             '<span class="lgts"></span><span></span><span></span>'+
-            '<span class="lgmsg">'+esc(k.raw||k.msg||'')+'</span></div>';
+            '<span class="lgmsg lgtech">'+esc(k.raw||k.msg||'')+'</span></div>';
         }).join('');
-      return head;
     }).join('');
 
     list.querySelectorAll('.lgexp').forEach(function(el){
-      el.addEventListener('click', function(){
+      el.addEventListener('click', function(ev){
+        ev.stopPropagation();
         var seq = el.getAttribute('data-exp');
         var open = false;
         list.querySelectorAll('[data-child="'+seq+'"]').forEach(function(c){
@@ -2627,10 +3071,48 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         el.textContent = (open ? '▾ ' : '▸ ') + el.textContent.replace(/^[▸▾]\s*/,'');
       });
     });
+    /* Click a cell to filter by it (ADR-068, borrowed from Wireshark's "apply as filter"): the fastest
+       path from "this looks wrong" to "show me only this", and it teaches the syntax by example. */
+    list.querySelectorAll('.lgclick').forEach(function(el){
+      el.addEventListener('click', function(){
+        var f = el.getAttribute('data-f'), v = el.getAttribute('data-v');
+        if (f && v) lgAddClause(f, v);
+      });
+    });
   }
 
-  ['lg-error','lg-warn','lg-info','lg-debug','lg-cat','lg-mod','lg-degronly','lg-re','lg-case','lg-sort']
+  /* Level boxes and the field dropdowns WRITE the expression; the rest filter or reorder directly. */
+  ['lg-error','lg-warn','lg-info','lg-debug','lg-src','lg-cat','lg-mod','lg-step']
+    .forEach(function(id){ var el=ge(id); if (el) el.addEventListener('change', lgSyncExpr); });
+  ['lg-degronly','lg-re','lg-case','lg-sort']
     .forEach(function(id){ var el=ge(id); if (el) el.addEventListener('change', lgRender); });
+  (function(){
+    var e = ge('lg-expr');
+    if (e) e.addEventListener('input', function(){ lgExprIsCustom = true; lgMarkCustom(); lgApplyExpr(); });
+    var c = ge('lg-expr-clear');
+    if (c) c.addEventListener('click', function(){ ge('lg-expr').value=''; lgResetExpr(); });
+    var sv = ge('lg-expr-save');
+    if (sv) sv.addEventListener('click', function(){
+      var v = (ge('lg-expr').value||'').trim();
+      if (!v) return;
+      var list = lgSavedList();
+      if (list.indexOf(v) < 0){ list.unshift(v); lgSavedWrite(list); lgRenderSaved(); }
+    });
+    var h = ge('lg-reg-human'), t = ge('lg-reg-tech');
+    function setReg(which){
+      lgRegister = which;
+      if (h) h.setAttribute('aria-pressed', which==='human' ? 'true':'false');
+      if (t) t.setAttribute('aria-pressed', which==='tech'  ? 'true':'false');
+      try { localStorage.setItem('sentinel_log_register', which); } catch(e){}
+      lgRender();
+    }
+    if (h) h.addEventListener('click', function(){ setReg('human'); });
+    if (t) t.addEventListener('click', function(){ setReg('tech'); });
+    try {
+      var saved = localStorage.getItem('sentinel_log_register');
+      if (saved === 'tech') setReg('tech');
+    } catch(e){}
+  })();
   (function(){ var q=ge('lg-q'); if (q) q.addEventListener('input', lgRender); })();
   (function(){ var b=ge('lg-reload'); if (b) b.addEventListener('click', function(){ lgLoad(); }); })();
   (function(){ var r=ge('lg-run'); if (r) r.addEventListener('change', function(){ lgRunId=r.value; lgLoad(); }); })();
@@ -2638,7 +3120,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      themselves are resolved per language from the catalogue. */
   ['lang-ru','lang-en'].forEach(function(id){
     var b=document.getElementById(id);
-    if (b) b.addEventListener('click', function(){ if (lgLoaded){ lgRefreshOptionLabels(); lgRender(); } });
+    if (b) b.addEventListener('click', function(){ if (lgLoaded){ lgRefreshOptionLabels(); lgRenderHelp(); lgRenderSaved(); lgRender(); } });
   });
 
 
