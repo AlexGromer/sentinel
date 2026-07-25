@@ -343,3 +343,15 @@ func TestSinkDoesNotStampStepOnSummary(t *testing.T) {
 		t.Fatalf("a report-phase summary must carry no step, got %d", recs[1].Step)
 	}
 }
+
+// `__main__` must read as `brain.main`, not `brain.main__` — trimming only the prefix left the
+// trailing underscores on screen in the technical register.
+func TestSinkModuleNameIsReadable(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{`[info|run] run.config: Run abc started: mode explore`})
+	if len(recs) != 1 {
+		t.Fatalf("want one record, got %+v", recs)
+	}
+	if recs[0].Mod != "brain.main" {
+		t.Fatalf("module should read as brain.main, got %q", recs[0].Mod)
+	}
+}

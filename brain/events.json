@@ -1155,7 +1155,7 @@
       ]
     }
   },
-  "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins.",
+  "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
   "foreign_patterns": [
     {
       "code": "browser.launched",
@@ -1189,6 +1189,14 @@
       "cat": "browser",
       "ru": "Браузер: {raw}",
       "en": "Browser: {raw}"
+    },
+    {
+      "code": "system.console_table",
+      "match": "^(=+$|\\s*#\\s*\\d+\\s|(EXPLORE|REPLAY|BASELINE|SCENARIO|CHAT TURN|ABORT)\\b)",
+      "lvl": "debug",
+      "cat": "system",
+      "ru": "Консольная сводка: {raw}",
+      "en": "Console summary: {raw}"
     },
     {
       "code": "system.agentctl",

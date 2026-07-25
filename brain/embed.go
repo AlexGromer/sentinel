@@ -103,7 +103,8 @@ func load() {
 			// the line itself cannot say which one it came from, so the field is left empty rather
 			// than guessed — an unfilterable field beats a wrong one.
 			if len(e.Modules) == 1 {
-				byMod[code] = "brain." + strings.TrimPrefix(e.Modules[0], "__")
+				// `__main__` reads as `brain.main`: trimming only the prefix left `brain.main__`.
+				byMod[code] = "brain." + strings.Trim(e.Modules[0], "_")
 			}
 		}
 	})
