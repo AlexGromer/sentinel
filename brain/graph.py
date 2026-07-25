@@ -95,8 +95,14 @@ def _elements_from_interactives(elements: list, path: str) -> list:
         if text and text != name:
             alts.append({"strategy": "text_role", "locator": {"text": text}, "prior": 0.80})
         primary = {"role": role, "name": name} if name else (alts[0]["locator"] if alts else None)
+        # M9-LIVE: `disabled` rides along so plan() can skip a control that cannot be actuated right
+        # now. It is NOT used to drop the element from perception: the same button is usually enabled
+        # later in a filled form, and a page model that forgets it would report coverage over a
+        # smaller page than the one under test. plan_hash is unaffected — it hashes the STEPS, and no
+        # step carries this field (state.py canonical_plan_hash).
         out.append({"semantic_id": semantic_id(path, role, anchor), "role": role, "name": name,
-                    "testid": testid, "locator": primary, "alternatives": alts, "page": path})
+                    "testid": testid, "locator": primary, "alternatives": alts, "page": path,
+                    "disabled": bool(e.get("disabled"))})
     return out
 
 
@@ -116,6 +122,13 @@ def _user_turns(messages: list) -> list:
 
 
 _REFINE_HISTORY_KEEP = int(os.environ.get("SENTINEL_REFINE_HISTORY_KEEP", "6"))
+
+# How many times explore may fail on the SAME element before dropping it from the candidate set.
+# Two, not one: the first failure is worth a retry (an overlay mid-animation, a control that enables a
+# beat later), the second says the page is not going to change its mind. Nothing recovers in between —
+# the explore graph's heal node is a stub by design (healing belongs to replay) — so a third attempt
+# can only produce the same exception. Env-tunable because a slow real app may legitimately want 3.
+_EXPLORE_FAIL_LIMIT = max(1, int(os.environ.get("SENTINEL_EXPLORE_FAIL_LIMIT", "2")))
 
 
 def _rolling_summary(user_turns: list) -> str:
@@ -203,15 +216,30 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         """Assemble candidates, enforce convergence, ask the planner for the next action."""
         pm = state.get("page_model") or {}
         exercised = set(state.get("interactive_exercised", []))
+        # An element that has raised `_EXPLORE_FAIL_LIMIT` times is out of the candidate set. Retrying
+        # is right the first time — a transient overlay, an animation still settling — and pointless
+        # after that: the explore graph's heal node is a stub, so nothing between attempts has changed.
+        failed = state.get("interactive_failed", {}) or {}
+        spent = {sid for sid, n in failed.items() if n >= _EXPLORE_FAIL_LIMIT}
         candidates = []
+        blocked = 0
         for b in pm.get("buttons", []):
-            if b["semantic_id"] not in exercised:
-                candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
-                                   "role": "button", "name": b["name"], "target": None,
-                                   "intent": f"click button '{b['name']}'",
-                                   "locator": b["locator"], "alternatives": b["alternatives"]})
+            if b["semantic_id"] in exercised:
+                continue
+            # Two distinct reasons not to propose it, counted together because the tester's question is
+            # the same either way: "why does coverage say 60% when I can see ten buttons?"
+            if b["semantic_id"] in spent or b.get("disabled"):
+                blocked += 1
+                continue
+            candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
+                               "role": "button", "name": b["name"], "target": None,
+                               "intent": f"click button '{b['name']}'",
+                               "locator": b["locator"], "alternatives": b["alternatives"]})
         for nu in state.get("nav_frontier", []):
-            candidates.append({"kind": "navigate", "semantic_id": semantic_id(nu, "navigate", ""),
+            nav_sid = semantic_id(nu, "navigate", "")
+            if nav_sid in spent:      # a link that cannot be followed loops exactly the same way
+                continue
+            candidates.append({"kind": "navigate", "semantic_id": nav_sid,
                                "role": None, "name": None, "target": nu, "alternatives": None,
                                "locator": None, "intent": f"navigate to {nu}"})
         step = state.get("current_step", 0)
@@ -220,6 +248,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         if step >= state.get("max_steps", 40) or not candidates or (cov_ok and frontier_empty):
             reason = ("max_steps" if step >= state.get("max_steps", 40)
                       else "converged" if (cov_ok and frontier_empty) else "no_candidates")
+            # Said once, at the only moment the question arises: the run is stopping short of its
+            # coverage target and the reader needs to know it was the page, not the planner giving up.
+            # Ending on `no_candidates` with nothing blocked is a different situation (everything was
+            # exercised) and stays quiet.
+            if reason == "no_candidates" and blocked:
+                log("plan.unactionable_elements", blocked=blocked,
+                    coverage=round(state.get("coverage_achieved", 0.0) * 100))
             tx_write({"step": step, "planner": planner.name, "model": planner.model,
                       "decision": "done", "reason": reason,
                       "prompt_tokens": None, "completion_tokens": None})
@@ -279,7 +314,24 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             else:
                 ex.call("browser.click", locator=p["locator"])
         except Exception as e:
+            # M9-LIVE: record the failure AGAINST THE ELEMENT, not just the step. Success marks an
+            # element exercised and so removes it from the candidate set; failure used to mark
+            # nothing, which meant a control that can never be actuated (a disabled button) stayed a
+            # candidate and was proposed again on the very next step. Live logs showed the same click
+            # 34 times, ~5s apart, until max_steps — the run burned its whole budget on one element
+            # and reported it as exploration.
+            sid_el = p.get("semantic_id") or ""
+            failed = dict(state.get("interactive_failed", {}))
+            if sid_el:
+                failed[sid_el] = failed.get(sid_el, 0) + 1
+                if failed[sid_el] == _EXPLORE_FAIL_LIMIT:
+                    # Logged exactly on the crossing, so the line means "this is where we gave up on
+                    # it" rather than repeating once per attempt — which would recreate the noise the
+                    # blacklist exists to remove.
+                    log("plan.element_blacklisted", element=sid_el,
+                        intent=p.get("intent", ""), attempts=failed[sid_el])
             return {"errors": list(state.get("errors", [])) + [f"act#{p['step_id']}: {e}"],
+                    "interactive_failed": failed,
                     "_last_ok": False, "current_step": p["step_id"]}
         exercised = list(state.get("interactive_exercised", []))
         if p["action_type"] == "click":

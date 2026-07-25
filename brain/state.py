@@ -38,6 +38,11 @@ class RunState(TypedDict, total=False):
     current_step: int
     interactive_seen: list        # semantic_ids (dedup'd, JSON-safe)
     interactive_exercised: list
+    # M9-LIVE: semantic_id -> how many times acting on it RAISED. `act` marks an element exercised
+    # only on success, so before this existed a permanently unactionable control (a disabled button)
+    # stayed a candidate forever and the planner proposed it every step until max_steps — the ×34
+    # repeat live logs made visible. A dict, not a list, because the retry budget is per element.
+    interactive_failed: dict
     visited_paths: list
     nav_frontier: list
     coverage_achieved: float
