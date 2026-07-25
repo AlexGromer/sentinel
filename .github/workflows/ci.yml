@@ -105,8 +105,16 @@ jobs:
       - name: Setup-wizard DOM gate (headless Chromium; M11.5)
         run: node scripts/wizard-dom-check.mjs
 
+
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
+
+      # ADR-065: the Logs view's claims are all about what a person SEES — the narrative staying out of
+      # the diagnostics, a loop reading as one counted row, filters that filter, Russian with real
+      # values, and <option> labels that switch language (they cannot be CSS-toggled). None of that is
+      # reachable from Go or Python, so a real Chromium drives a real run against the real page.
+      - name: Hub Logs-view DOM gate (headless Chromium; ADR-065)
+        run: node scripts/hub-dom-check.mjs
 
       - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize + m13_chats + m14_agui + m14_replay_agui + m_structured_out + m11_4 + adaptive_budget + event_catalog — FakeBackend/FakeExecutor, no network)
         env:

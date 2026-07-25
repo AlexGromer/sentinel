@@ -58,8 +58,10 @@ type Foreign struct {
 func (f *Foreign) Matches(line string) bool { return f.re != nil && f.re.MatchString(line) }
 
 type catalogue struct {
-	Events  map[string]Event `json:"events"`
-	Foreign []*Foreign       `json:"foreign_patterns"`
+	Events     map[string]Event `json:"events"`
+	Foreign    []*Foreign       `json:"foreign_patterns"`
+	Categories []string         `json:"categories"`
+	Levels     []string         `json:"levels"`
 }
 
 var (
@@ -104,6 +106,19 @@ func Lookup(code string) (Event, bool) {
 func Module(code string) string {
 	load()
 	return byMod[code]
+}
+
+// Categories returns the closed category vocabulary. Config validation reads it from here so a
+// category added to the catalogue is immediately accepted, and one that was never defined is refused.
+func Categories() []string {
+	load()
+	return parsed.Categories
+}
+
+// Levels returns the closed level vocabulary, ordered from least to most severe.
+func Levels() []string {
+	load()
+	return parsed.Levels
 }
 
 // ForeignRules returns the ordered classification rules for third-party output.
