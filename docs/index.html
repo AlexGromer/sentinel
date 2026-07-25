@@ -35,6 +35,43 @@ a{color:var(--acc2);text-decoration:none}
 a:hover{text-decoration:underline}
 code,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
 .wrap{max-width:980px;margin:0 auto;padding:0 16px 72px}
+/* ---- ADR-066: vertical rail. The IA is organised by what a PERSON is doing (talk to it, run it,
+   watch it, look at what accumulated, read results, diagnose, calculate, configure) rather than by
+   which code module owns the feature — which is what put the product's main action, launching a run,
+   under a tab called "Settings" next to four calculators. */
+.shell{display:flex;align-items:flex-start;gap:0;max-width:1240px;margin:0 auto}
+.rail{position:sticky;top:96px;flex:0 0 208px;padding:14px 10px 40px;display:flex;
+  flex-direction:column;gap:2px}
+.rail .rgroup{font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);
+  padding:.9rem .6rem .3rem}
+.rail a{display:flex;align-items:center;gap:.55rem;padding:.46rem .6rem;border-radius:5px;
+  color:var(--tx);font-size:.9rem;text-decoration:none;border:1px solid transparent}
+.rail a:hover{background:var(--bg2);text-decoration:none}
+.rail a[aria-current="page"]{background:var(--bg3);border-color:var(--line);font-weight:600}
+.rail a[aria-current="page"] .ric{color:var(--acc)}
+.rail .ric{width:1.15rem;text-align:center;flex:0 0 auto}
+/* The same icon span is reused in a view's own heading, where the rail's flex sizing does not
+   apply — it needs its own breathing room. */
+h2 > .ric{margin-right:.45rem}
+.rail .shell-main{min-width:0}
+.railfoot{margin-top:auto;padding:.9rem .6rem 0;border-top:1px solid var(--line);
+  font-size:.74rem;color:var(--mut);display:flex;flex-direction:column;gap:.25rem}
+.dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;background:var(--mut);
+  margin-right:.4rem}
+.dot.ok{background:var(--ok)} .dot.no{background:var(--no)}
+.shell > .wrap{flex:1 1 auto;margin:0;max-width:none}
+/* A `hidden` attribute must win over a component's own display rule — .nav sets display:flex,
+   which silently overrides the UA stylesheet's [hidden]{display:none}. */
+[hidden]{display:none !important}
+/* One column below the fold-out width: the rail becomes a horizontal strip so no view is unreachable
+   on a narrow screen. */
+@media (max-width:900px){
+  .shell{display:block}
+  .rail{position:static;flex:none;flex-direction:row;overflow-x:auto;gap:.3rem;
+    padding:8px 12px;border-bottom:1px solid var(--line)}
+  .rail .rgroup,.railfoot{display:none}
+  .rail a{white-space:nowrap}
+}
 /* header */
 header.top{position:sticky;top:0;z-index:20;background:rgba(11,11,16,.93);
   -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
@@ -219,7 +256,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </span>
   </div>
   <div class="neon"></div>
-  <nav class="nav" aria-label="sections">
+  <nav class="nav" aria-label="sections" hidden>
     <a href="#inputs"><span data-lang="ru">Параметры</span><span data-lang="en">Inputs</span></a>
     <a href="#rec"><span data-lang="ru">Рекомендация</span><span data-lang="en">Recommendation</span></a>
     <a href="#cost"><span data-lang="ru">Стоимость</span><span data-lang="en">Cost</span></a>
@@ -233,9 +270,32 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </nav>
 </header>
 
+<div class="shell">
+<!-- ADR-066: the rail is the whole navigation. Items are ordered by how a session actually goes:
+     describe what you want, run it, watch it, then look at what came out — and only then the
+     supporting surfaces. -->
+<nav class="rail" aria-label="Sections">
+  <a href="#v=chat" data-nav="chat"><span class="ric">💬</span><span data-lang="ru">Чат</span><span data-lang="en">Chat</span></a>
+  <a href="#v=run" data-nav="run"><span class="ric">▶</span><span data-lang="ru">Новый прогон</span><span data-lang="en">New run</span></a>
+  <a href="#v=live" data-nav="live"><span class="ric">📡</span><span data-lang="ru">Live</span><span data-lang="en">Live</span></a>
+
+  <div class="rgroup"><span data-lang="ru">Накопленное</span><span data-lang="en">Accumulated</span></div>
+  <a href="#v=library" data-nav="library"><span class="ric">📚</span><span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></a>
+  <a href="#v=results" data-nav="results"><span class="ric">📊</span><span data-lang="ru">Результаты</span><span data-lang="en">Results</span></a>
+  <a href="#v=logs" data-nav="logs"><span class="ric">📜</span><span data-lang="ru">Логи</span><span data-lang="en">Logs</span></a>
+
+  <div class="rgroup"><span data-lang="ru">Прочее</span><span data-lang="en">Other</span></div>
+  <a href="#v=tools" data-nav="tools"><span class="ric">🧰</span><span data-lang="ru">Инструменты</span><span data-lang="en">Tools</span></a>
+  <a href="#v=settings" data-nav="settings"><span class="ric">⚙</span><span data-lang="ru">Настройки</span><span data-lang="en">Settings</span></a>
+
+  <div class="railfoot">
+    <span id="rail-conn"><span class="dot"></span><span class="ctxt"><span data-lang="ru">не подключено</span><span data-lang="en">not connected</span></span></span>
+    <span id="rail-ver"></span>
+  </div>
+</nav>
 <main class="wrap">
 
-  <p class="sub" style="margin-top:18px">
+  <p class="sub" style="margin-top:18px" data-view="tools">
     <span data-lang="ru">Введите размер сайта, железо и бюджет — ниже сразу появятся: внятная
       рекомендация (что использовать, как глубоко копать, сколько прогонов влезает), сравнение
       стоимости по моделям, проверка VRAM и подбор модели. Всё считается у вас в браузере, без
@@ -247,7 +307,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </p>
 
   <!-- ============================ SHARED INPUTS ============================ -->
-  <section class="card" id="inputs">
+  <section class="card" id="inputs" data-view="tools">
     <h2><span class="n">▸</span><span data-lang="ru">Ваши параметры</span><span data-lang="en">Your inputs</span></h2>
     <div class="grid g3">
       <div>
@@ -344,13 +404,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ RECOMMENDATION ============================ -->
-  <section class="card" id="rec">
+  <section class="card" id="rec" data-view="tools">
     <h2><span class="n">1</span><span data-lang="ru">Рекомендация — что использовать</span><span data-lang="en">Recommendation — what to use</span></h2>
     <div id="rec-out" class="rec" aria-live="polite"></div>
   </section>
 
   <!-- ============================ COST ============================ -->
-  <section class="card" id="cost">
+  <section class="card" id="cost" data-view="tools">
     <h2><span class="n">2</span><span data-lang="ru">Стоимость прогона по моделям</span><span data-lang="en">Cost per run across models</span></h2>
     <p class="sub">
       <span data-lang="ru">Токены и $/прогон для вашей задачи по популярным моделям (облако + локально) + сколько
@@ -392,7 +452,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ VRAM ============================ -->
-  <section class="card" id="vram-section">
+  <section class="card" id="vram-section" data-view="tools">
     <h2><span class="n">3</span>VRAM / <span data-lang="ru">железо</span><span data-lang="en">hardware</span></h2>
     <p class="sub">
       <span data-lang="ru">Влезает ли модель в вашу видеопамять. Формула §5: <span class="mono">VRAM ≈ параметры × байт(quant) + ~1.5 ГБ</span> (KV-cache мал при batch=1).</span>
@@ -437,7 +497,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ MODEL SELECTOR ============================ -->
-  <section class="card" id="models">
+  <section class="card" id="models" data-view="tools">
     <h2><span class="n">4</span><span data-lang="ru">Подбор локальной модели по железу</span><span data-lang="en">Local model picker by hardware</span></h2>
     <p class="sub">
       <span data-lang="ru">Что брать на ваш тир VRAM (§3.3). Имена/размеры — из LOCAL_MODELS §3: <span class="v-ok">✅</span> проверено · <span class="v-warn">⚠</span> verify-before-use.</span>
@@ -455,7 +515,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ LEGEND ============================ -->
-  <section class="card" id="legend">
+  <section class="card" id="legend" data-view="tools">
     <h2><span class="n">5</span><span data-lang="ru">Легенда — что значат поля</span><span data-lang="en">Legend — what the fields mean</span></h2>
     <dl class="legend">
       <dt>P</dt><dd><span data-lang="ru">Страниц приложения, которые тестируем.</span><span data-lang="en">App pages under test.</span></dd>
@@ -475,7 +535,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ DOCS ============================ -->
-  <section class="card" id="docs">
+  <section class="card" id="docs" data-view="tools">
     <h2><span class="n">6</span><span data-lang="ru">Документация</span><span data-lang="en">Documentation</span></h2>
     <div class="links">
       <a href="https://github.com/AlexGromer/sentinel/blob/main/README.md">README — <span data-lang="ru">обзор + быстрый старт</span><span data-lang="en">overview + quick start</span></a>
@@ -490,7 +550,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ CO-PILOT: SETTINGS | TESTS (M14, ADR-055) ============================ -->
-  <section class="card" id="copilot">
+  <section class="card" id="copilot" data-view="__never">
     <h2><span data-lang="ru">Co-pilot — суверенный vanilla UI</span><span data-lang="en">Co-pilot — sovereign vanilla UI</span></h2>
     <p class="sub">
       <span data-lang="ru">Единый air-gapped co-pilot (ADR-055): <b>Settings</b> — подключение и конфигуратор прогона; <b>Tests</b> — библиотека сценариев/тестов, история прогонов, беседы и живой AG-UI-таймлайн с авто-HITL.</span>
@@ -504,8 +564,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
   <div id="panel-settings" role="tabpanel" aria-labelledby="tab-btn-settings">
   <!-- ============================ CONNECT ============================ -->
-  <section class="card" id="connect">
-    <h2><span class="n">7</span><span data-lang="ru">Подключение к control-API</span><span data-lang="en">Control-API connection</span></h2>
+  <section class="card" id="connect" data-view="settings">
+    <h2><span class="ric">⚙</span><span data-lang="ru">Подключение</span><span data-lang="en">Connection</span></h2>
     <p class="sub">
       <span data-lang="ru">Укажи URL и токен локального control-API — тогда конфигуратор (#8) и консоль (#9, вкладка «Тесты») смогут запускать прогоны напрямую. Токен хранится только в памяти вкладки, никогда в <code>localStorage</code> или URL.</span>
       <span data-lang="en">Enter your local control-API URL and bearer token — then the builder (#8) and the console (#9, "Tests" tab) can launch runs directly. The token is kept only in this tab's memory, never in <code>localStorage</code> or the URL.</span>
@@ -531,8 +591,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ BUILD ============================ -->
-  <section class="card" id="build">
-    <h2><span class="n">8</span><span data-lang="ru">Конфигуратор RunConfig</span><span data-lang="en">RunConfig builder</span></h2>
+  <section class="card" id="build" data-view="run">
+    <h2><span class="ric">▶</span><span data-lang="ru">Новый прогон</span><span data-lang="en">New run</span></h2>
     <p class="sub">
       <span data-lang="ru">Сборка <code>run.yaml</code> / env / команды из проверенной поверхности конфигурации (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Скачай файлы или нажми «▶ Запустить» для прямого вызова control-API (нужно подключение выше).</span>
       <span data-lang="en">Build a valid <code>run.yaml</code> / env block / launch command from the verified config surface (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Download the files or press «▶ Run» to call the control-API directly (connection above required).</span>
@@ -678,16 +738,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
   </div><!-- /panel-settings -->
 
-  <div id="panel-tests" role="tabpanel" aria-labelledby="tab-btn-tests" style="display:none">
+  <div id="panel-tests" role="tabpanel" aria-labelledby="tab-btn-tests">
   <!-- ============================ CHAT / TESTS ============================ -->
-  <section class="card" id="chat">
-    <h2><span class="n">9</span><span data-lang="ru">Тесты — авторинг, библиотека, live-таймлайн</span><span data-lang="en">Tests — authoring, library, live timeline</span></h2>
-    <p class="sub">
-      <span data-lang="ru">Опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> (мульти-тёрн-память server-side по <code>conversation_id</code>, ADR-048: turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта) → готовый <code>scenario.json</code> можно скачать. «Новый разговор» начинает свежий контекст; режим <code>explore</code> остаётся one-shot. Также: любой OpenAI-совместимый клиент можно направить на <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot). Ниже — библиотека сценариев/тестов, история прогонов, беседы и живой AG-UI-таймлайн (<b>Live</b>, включая баннер «нужен человек»).</span>
-      <span data-lang="en">Describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> (server-side multi-turn memory keyed by <code>conversation_id</code>, ADR-048: turn-1 explores+authors, later turns refine over the same site map) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context; the <code>explore</code> mode stays one-shot. Also: any OpenAI-compatible client can point at <code>&lt;URL&gt;/v1/chat/completions</code> (M12 shim, one-shot). Below — the scenario/test library, run history, conversations and the live AG-UI timeline (<b>Live</b>, incl. the "human needed" banner).</span>
-    </p>
-
-    <div class="subtabbar" role="tablist" aria-label="Tests sub-views">
+  <!-- ADR-066: this card used to BE the "Tests" section, with its own heading over seven unrelated
+       sub-views. It is now a transparent container for five separate views (Chat, Live, Library,
+       Results, Logs), so its heading and blurb are gone: a title saying "Tests — authoring, library,
+       live timeline" would be wrong above four of the five. The element itself stays, because every
+       subpanel inside it is addressed by id from code that must keep working. -->
+  <section class="card" id="chat" style="background:transparent;border:0;padding:0">
+    <div class="subtabbar" role="tablist" aria-label="Tests sub-views" hidden>
       <button type="button" class="subtab-btn" data-subtab="author" role="tab" aria-selected="true">💬 <span data-lang="ru">Авторинг</span><span data-lang="en">Author</span></button>
       <button type="button" class="subtab-btn" data-subtab="live" role="tab" aria-selected="false">📡 <span data-lang="ru">Live</span><span data-lang="en">Live</span></button>
       <button type="button" class="subtab-btn" data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
@@ -699,7 +758,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
-    <div class="subpanel on" data-subpanel="author">
+    <div class="subpanel" data-subpanel="author" data-view="chat">
       <div class="grid g2">
         <div>
           <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
@@ -730,7 +789,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Live AG-UI timeline (M14 W2/§2): WS /v1/stream?run_id=, hitl_needed + takeover/return ---- -->
-    <div class="subpanel" data-subpanel="live">
+    <div class="subpanel" data-subpanel="live" data-view="live">
       <p class="sub">
         <span data-lang="ru">Живой таймлайн событий прогона (WS <code>/v1/stream?run_id=</code>). Запусти прогон во вкладке «Авторинг» (run_id подставится сюда автоматически) или впиши его вручную.</span>
         <span data-lang="en">Live per-run event timeline (WS <code>/v1/stream?run_id=</code>). Launch a run in the "Author" tab (its run_id is auto-filled here) or enter one manually.</span>
@@ -746,7 +805,12 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Library: scenarios + tests (promote/rename/delete/search) ---- -->
-    <div class="subpanel" data-subpanel="library">
+    <div class="subtabbar" data-innerbar="library" data-view="library" role="tablist" aria-label="Library sections">
+      <button type="button" class="subtab-btn" data-sub="library" role="tab" aria-selected="true">📚 <span data-lang="ru">Сценарии и тесты</span><span data-lang="en">Scenarios &amp; tests</span></button>
+      <button type="button" class="subtab-btn" data-sub="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-sub="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Conversations</span></button>
+    </div>
+    <div class="subpanel" data-subpanel="library" data-view="library">
       <div class="ctl-row">
         <input id="lib-search" type="text" placeholder="search / поиск" style="max-width:16rem">
         <button type="button" class="btn" id="lib-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
@@ -758,7 +822,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Run history: list + launcher ▶/🔁/📌 (reuses from_run handlers) ---- -->
-    <div class="subpanel" data-subpanel="runs">
+    <div class="subpanel" data-subpanel="runs" data-view="library">
       <div class="ctl-row">
         <button type="button" class="btn" id="runs-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
       </div>
@@ -766,7 +830,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Chats: conversation management (rename/delete/search) ---- -->
-    <div class="subpanel" data-subpanel="chats">
+    <div class="subpanel" data-subpanel="chats" data-view="library">
       <div class="ctl-row">
         <input id="chats-search" type="text" placeholder="search / поиск" style="max-width:16rem">
         <button type="button" class="btn" id="chats-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
@@ -775,7 +839,11 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <!-- ---- Results: per-run outcomes + native SVG charts (M15, ADR-051) ---- -->
-    <div class="subpanel" data-subpanel="results">
+    <div class="subtabbar" data-innerbar="results" data-view="results" role="tablist" aria-label="Results sections">
+      <button type="button" class="subtab-btn" data-sub="results" role="tab" aria-selected="true">📊 <span data-lang="ru">Вердикты</span><span data-lang="en">Verdicts</span></button>
+      <button type="button" class="subtab-btn" data-sub="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+    </div>
+    <div class="subpanel" data-subpanel="results" data-view="results">
       <div class="ctl-row">
         <button type="button" class="btn" id="results-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
         <span class="hint"><span data-lang="ru">verdict · покрытие · длительность на прогон (<code>GET /v1/results</code>)</span><span data-lang="en">verdict · coverage · duration per run (<code>GET /v1/results</code>)</span></span>
@@ -784,7 +852,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <div id="results-list"></div>
     </div>
     <!-- ---- Metrics: trend sparklines over recent runs (M15, ADR-051) ---- -->
-    <div class="subpanel" data-subpanel="metrics">
+    <div class="subpanel" data-subpanel="metrics" data-view="results">
       <div class="ctl-row">
         <button type="button" class="btn" id="metrics-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
         <span class="hint"><span data-lang="ru">тренды по последним прогонам (<code>GET /v1/trends</code>)</span><span data-lang="en">trends over recent runs (<code>GET /v1/trends</code>)</span></span>
@@ -795,7 +863,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <!-- ADR-065: Logs. TWO streams, deliberately separate — the run narrative (Live) is a story with
          no levels, these are levelled diagnostics you filter. Codes are resolved to the reader's
          language from /v1/events-catalog, so no Russian text travels on the wire. -->
-    <div class="subpanel" data-subpanel="logs">
+    <div class="subpanel" data-subpanel="logs" data-view="logs">
       <div class="grid g2">
         <div>
           <label for="lg-run"><span data-lang="ru">Прогон</span><span data-lang="en">Run</span></label>
@@ -849,6 +917,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </p>
   </footer>
 </main>
+</div><!-- /shell -->
 
 <script>
 /* =========================================================================
@@ -990,19 +1059,14 @@ function mdRender(raw){
 }
 
 /* ---- M14: Settings|Tests top-level tab switcher (persisted, air-gapped — localStorage only) ---- */
+/* ADR-066: kept as a shim so any legacy caller lands on a real view instead of toggling containers
+   the router owns. "tests" was a bucket of seven unrelated things; its closest single meaning is the
+   run narrative, so that is where it points. */
 function setTopTab(name){
-  var tests = name === 'tests';
-  $('panel-settings').style.display = tests ? 'none' : '';
-  $('panel-tests').style.display = tests ? '' : 'none';
-  $('tab-btn-settings').setAttribute('aria-selected', tests ? 'false' : 'true');
-  $('tab-btn-tests').setAttribute('aria-selected', tests ? 'true' : 'false');
-  try { localStorage.setItem('sentinel_tab', name); } catch (e) {}
+  if (typeof setView === 'function') setView(name === 'tests' ? 'live' : 'settings');
 }
-function initTopTab(){
-  var t = 'settings';
-  try { t = localStorage.getItem('sentinel_tab') || 'settings'; } catch (e) {}
-  setTopTab(t === 'tests' ? 'tests' : 'settings');
-}
+
+
 
 /* effective tokens + cost for a cloud model given the workload total + state. */
 function modelCost(m, total, st){
@@ -1328,7 +1392,9 @@ function applyHw(){
 }
 function init(){
   initLang();
-  initTopTab();   // M14: restore last Settings|Tests tab (localStorage, air-gapped)
+  /* ADR-066: the Settings|Tests pair was replaced by the rail; initTopTab() would fight the view
+     router over the same containers, so it is no longer called. setTopTab is kept for the few
+     legacy anchor handlers below, which now delegate to the router. */
   buildPriceEditors();
   applyTask('small');
   applyHw();
@@ -1347,13 +1413,16 @@ function init(){
     .forEach(function(id){ var el = $(id); if (el){ el.addEventListener('input', renderAll); el.addEventListener('change', renderAll); } });
   $('price-edit').addEventListener('input', renderAll);
   // M14: top tab buttons + nav anchors into #connect/#build (Settings) and #chat (Tests) also flip the tab
-  $('tab-btn-settings').addEventListener('click', function(){ setTopTab('settings'); });
-  $('tab-btn-tests').addEventListener('click', function(){ setTopTab('tests'); });
-  document.querySelectorAll('.nav a[href="#connect"], .nav a[href="#build"]').forEach(function(a){
-    a.addEventListener('click', function(){ setTopTab('settings'); });
-  });
-  document.querySelectorAll('.nav a[href="#chat"]').forEach(function(a){
-    a.addEventListener('click', function(){ setTopTab('tests'); });
+  /* The old tabbar lives in a section the router never shows (ADR-066); the listeners are dropped
+     rather than left pointing at removed behaviour. */
+  /* The header anchor bar is hidden (ADR-066) but a deep link may still arrive: send each anchor to
+     the view that now contains its section, resolved from the DOM rather than a hand-kept map. */
+  document.querySelectorAll('.nav a[href^="#"]').forEach(function(a){
+    a.addEventListener('click', function(){
+      var el = document.querySelector(a.getAttribute('href'));
+      var host = el && el.closest('[data-view]');
+      if (host && typeof setView === 'function') setView(host.getAttribute('data-view').split(' ')[0]);
+    });
   });
   renderAll();
   loadPricesJson();   // best-effort override; never blocks initial render
@@ -1997,29 +2066,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   ge('metrics-refresh').addEventListener('click', tLoadMetrics);
 
   /* ---- sub-tab switcher (Author is the default; persisted like the top tab) ---- */
-  function tSubTab(name){
-    document.querySelectorAll('.subpanel[data-subpanel]').forEach(function(p){
-      p.classList.toggle('on', p.getAttribute('data-subpanel')===name);
-    });
-    document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
-      b.setAttribute('aria-selected', b.getAttribute('data-subtab')===name ? 'true' : 'false');
-    });
-    try { localStorage.setItem('sentinel_subtab', name); } catch (e) {}
-    if (name==='library' && !tLibLoaded)  tLoadLibrary();
-    if (name==='runs'    && !tRunsLoaded) tLoadRuns();
-    if (name==='chats'   && !tChatsLoaded) tLoadChats();
-    if (name==='results' && !tResultsLoaded) tLoadResults();
-    if (name==='metrics' && !tMetricsLoaded) tLoadMetrics();
-    if (name==='logs'    && !lgLoaded)      lgInit();
-  }
-  document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
-    b.addEventListener('click', function(){ tSubTab(b.getAttribute('data-subtab')); });
-  });
-  (function initSubTab(){
-    var s='author';
-    try { s = localStorage.getItem('sentinel_subtab') || 'author'; } catch (e) {}
-    tSubTab(s);
-  })();
+  /* ADR-066: tSubTab and its initialiser were replaced by setView/setInnerSub. */
+
+
 
   /* ---- Library: scenarios + tests (GET /v1/scenarios, /v1/tests; POST /v1/tests/promote; DELETE) ---- */
   var tLibLoaded=false, tLibScenarios=[], tLibTests=[];
@@ -2164,10 +2213,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
   ge('runs-refresh').addEventListener('click', tLoadRuns);
 
-  /* shared launcher for Library/Runs rows: reuses chRunFlow (Author tab) so run/replay/baseline stay
-     ONE code path — switches to Author so the run log + artifact downloads show where they've always lived. */
+  /* shared launcher for Library/Runs rows: reuses chRunFlow so run/replay/baseline stay ONE code path
+     — switches to the Chat view (ADR-066), which is where the run log and artifact downloads live. */
   function tRunFromRunId(runId, mode){
-    tSubTab('author');
+    setView('chat');
     var label = mode==='baseline'
       ? '📌 '+bi('Эталон','Baseline')+' <code>from_run='+esc(runId)+'</code>'
       : '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(runId)+'</code>';
@@ -2209,8 +2258,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   ge('chats-search').addEventListener('input', tRenderChats);
   ge('chats-refresh').addEventListener('click', tLoadChats);
   function tResumeChat(convId){
-    chConvId = convId; chTurnN = 0;   // reuses the Author section's own conversation_id state (M9.10, ADR-048)
-    tSubTab('author');
+    chConvId = convId; chTurnN = 0;   // reuses the Chat view's own conversation_id state (M9.10, ADR-048)
+    setView('chat');
     addBubble('sys', '— '+bi('возобновлён разговор','resumed conversation')+' <code>'+esc(convId)+'</code> —');
   }
   async function tDeleteChat(convId){
@@ -2328,6 +2377,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         }
       }
       ge('cap-check').click();                          /* reuse the existing status + unlock path */
+      /* The rail's connection dot cannot learn from a `change` event here: these fields were filled
+         programmatically. The health payload is already in hand, so report it directly (ADR-066). */
+      if (typeof vwSetConn === 'function') vwSetConn(true, j.version);
     } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
   })();
 
@@ -2588,6 +2640,139 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var b=document.getElementById(id);
     if (b) b.addEventListener('click', function(){ if (lgLoaded){ lgRefreshOptionLabels(); lgRender(); } });
   });
+
+
+  /* ================= ADR-066 — view router ===============================================
+     One rail, one active view. Implemented by TOGGLING existing nodes rather than moving them: every
+     section and subpanel kept its id and its markup, so all the behaviour written against those ids
+     — run launching, replay, the library, the charts, the logs — is untouched by the restructure.
+     That was the whole point: a 2700-line page cannot be safely re-laid-out by hand, but it can be
+     re-grouped by attribute.
+
+     Two views hold more than one panel (Library, Results), so visibility is two-stage: the view must
+     match, AND — for a panel that names a `data-subpanel` inside a grouped view — the inner tab must
+     match too.
+     ===================================================================================== */
+  var VIEWS = ['chat','run','live','library','results','logs','tools','settings'];
+  var GROUPED = { library: ['library','runs','chats'], results: ['results','metrics'] };
+  var vwActive = 'chat';
+  var vwSub = { library: 'library', results: 'results' };
+
+  function vwLoaders(view, sub){
+    /* Data is fetched on first reveal, exactly as the old subtab switcher did. */
+    if (view==='library' && sub==='library' && !tLibLoaded)  tLoadLibrary();
+    if (view==='library' && sub==='runs'    && !tRunsLoaded) tLoadRuns();
+    if (view==='library' && sub==='chats'   && !tChatsLoaded) tLoadChats();
+    if (view==='results' && sub==='results' && !tResultsLoaded) tLoadResults();
+    if (view==='results' && sub==='metrics' && !tMetricsLoaded) tLoadMetrics();
+    if (view==='logs'    && !lgLoaded)      lgInit();
+  }
+
+  function setView(v, opts){
+    if (VIEWS.indexOf(v) < 0) v = 'chat';
+    vwActive = v;
+    var sub = vwSub[v] || null;
+    document.querySelectorAll('[data-view]').forEach(function(el){
+      var owns = el.getAttribute('data-view').split(' ').indexOf(v) >= 0;
+      var panel = el.getAttribute('data-subpanel');
+      /* A grouped view shows only the panel its inner tab selects; an ungrouped one shows all of its
+         members. `display` is set inline because `.subpanel{display:none}` would otherwise win. */
+      var show = owns && (!panel || !GROUPED[v] || panel === sub);
+      el.style.display = show ? 'block' : 'none';
+    });
+    document.querySelectorAll('.rail a[data-nav]').forEach(function(a){
+      if (a.getAttribute('data-nav') === v) a.setAttribute('aria-current','page');
+      else a.removeAttribute('aria-current');
+    });
+    document.querySelectorAll('[data-innerbar] .subtab-btn[data-sub]').forEach(function(b){
+      b.setAttribute('aria-selected', b.getAttribute('data-sub') === sub ? 'true' : 'false');
+    });
+    try { localStorage.setItem('sentinel_view', v); } catch(e){}
+    if (!(opts && opts.silent)) {
+      /* The hash is the shareable address of a view, and replaceState keeps the Back button from
+         filling up with view switches nobody wanted to undo. */
+      try { history.replaceState(null, '', '#v=' + v); } catch(e){}
+    }
+    vwLoaders(v, sub);
+  }
+
+  function setInnerSub(view, sub){
+    if (!GROUPED[view] || GROUPED[view].indexOf(sub) < 0) return;
+    vwSub[view] = sub;
+    setView(view);
+  }
+
+  document.querySelectorAll('.rail a[data-nav]').forEach(function(a){
+    a.addEventListener('click', function(ev){ ev.preventDefault(); setView(a.getAttribute('data-nav')); });
+  });
+  document.querySelectorAll('[data-innerbar]').forEach(function(bar){
+    var view = bar.getAttribute('data-innerbar');
+    bar.querySelectorAll('.subtab-btn[data-sub]').forEach(function(b){
+      b.addEventListener('click', function(){ setInnerSub(view, b.getAttribute('data-sub')); });
+    });
+  });
+
+  /* Connection state in the rail foot: the one place that says whether anything will work at all.
+     Probed on demand rather than polled — a wrong green dot is worse than no dot. */
+  function vwSetConn(ok, version){
+    var el = ge('rail-conn'); if (!el) return;
+    var dot = el.querySelector('.dot');
+    if (dot) dot.className = 'dot ' + (ok ? 'ok' : 'no');
+    /* The words have to agree with the dot: a green dot next to "not connected" is worse than either
+       signal alone, because the reader cannot tell which one is stale. */
+    var txt = el.querySelector('.ctxt');
+    if (txt) txt.innerHTML = ok
+      ? '<span data-lang="ru">подключено</span><span data-lang="en">connected</span>'
+      : '<span data-lang="ru">нет связи</span><span data-lang="en">no connection</span>';
+    var ver = ge('rail-ver');
+    if (ver && version) ver.textContent = 'v' + version;
+  }
+  async function vwProbeConn(){
+    var el = ge('rail-conn'); if (!el) return;
+    var dot = el.querySelector('.dot');
+    if (!capiBase()){ dot.className='dot'; return; }
+    try {
+      var r = await fetch(capiBase()+'/healthz');
+      var j = await r.json().catch(function(){ return {}; });
+      vwSetConn(r.ok, j.version);
+    } catch(e){ vwSetConn(false); }
+  }
+  ['capi','capitok'].forEach(function(id){
+    var el = ge(id); if (el) el.addEventListener('change', vwProbeConn);
+  });
+
+  /* Precedence: an ADDRESS the user typed or was sent always beats a view this browser happened to
+     remember. Getting that backwards made #connect and #v=logs both land on whatever was open last —
+     which is exactly the kind of link that gets pasted into a bug report. */
+  function viewFromLocation(){
+    var m = /[#&]v=([a-z]+)/.exec(location.hash || '');
+    if (m && VIEWS.indexOf(m[1]) >= 0) return m[1];
+    /* A deep link to an old anchor (#connect, #build, #cost…) resolves to the view that now contains
+       that section, read from the DOM rather than a hand-kept map that would rot. */
+    if (location.hash && location.hash.length > 1){
+      var el = null;
+      try { el = document.querySelector(location.hash); } catch(e){ el = null; }
+      var host = el && el.closest('[data-view]');
+      if (host){
+        var v = host.getAttribute('data-view').split(' ')[0];
+        if (VIEWS.indexOf(v) >= 0) return v;
+      }
+    }
+    return '';
+  }
+  /* A hash-only change is a SAME-DOCUMENT navigation: the page does not reload, so nothing would
+     re-read the address without this. It is also what makes an edited or Back-button hash work. */
+  window.addEventListener('hashchange', function(){
+    var v = viewFromLocation();
+    if (v && v !== vwActive) setView(v, {silent:true});
+  });
+
+  (function initView(){
+    var v = viewFromLocation();
+    if (!v) { try { v = localStorage.getItem('sentinel_view') || ''; } catch(e){} }
+    setView(VIEWS.indexOf(v) >= 0 ? v : 'chat', {silent:true});
+    vwProbeConn();
+  })();
 
 })(); /* end m12 */
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// DOM gate for the hub's Logs view (ADR-065) — a real headless Chromium against a real control-API
-// serving the real page, driving a real run.
+// DOM gate for the hub (ADR-065 Logs view + ADR-066 navigation) — a real headless Chromium against a
+// real control-API serving the real page, driving a real run.
 //
 // It exists because the claims this feature makes are all about what a person SEES, and none of them
 // can be checked from Go or Python: that the run narrative never leaks into the levelled diagnostics,
@@ -31,10 +31,18 @@ const results = [];
 // never reaches the awaiting check() — it escapes as an unhandled rejection instead. (Same lesson the
 // wizard gate records.)
 const pageErrors = [];
-async function check(name, fn) {
+// `allowConsole` names console output that is CORRECT for the scenario, so it cannot be silently
+// blanket-ignored. The one real case: a reload without ?bootstrap= leaves the tab with no token, by
+// design (ADR-032/064 — the nonce is one-time and the token never touches storage), so a token-gated
+// read answering 403 is the product behaving properly.
+async function check(name, fn, opts) {
   pageErrors.length = 0;
   try {
     await fn();
+    const allow = opts && opts.allowConsole;
+    const left = allow ? pageErrors.filter((e) => !allow.test(e)) : pageErrors;
+    pageErrors.length = 0;
+    pageErrors.push(...left);
     if (pageErrors.length) throw new Error(`uncaught page error(s): ${pageErrors.join(' | ')}`);
     results.push({ name, ok: true });
     console.log(`  ok   ${name}`);
@@ -111,10 +119,7 @@ try {
 
   await page.goto(`http://127.0.0.1:${PORT}/?bootstrap=${nonce}`, { waitUntil: 'load' });
   await page.waitForTimeout(400);
-  await page.click('#tab-btn-tests');
-  await page.click('.subtab-btn[data-subtab="logs"]');
-  // The view fetches the catalogue, the run list and the logs; wait for rows rather than a fixed sleep.
-  await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
+  // ADR-066: navigation is the rail; the Logs checks below reach it through the router.
 
   const rows = () => page.locator('#lg-list .lgrow:not(.child)');
   const setLevels = async (on) => {
@@ -125,11 +130,114 @@ try {
     await page.waitForTimeout(250);
   };
 
-  console.log(`\nhub-dom-check — Logs view (ADR-065), port ${PORT}\n`);
+  console.log(`\nhub-dom-check — hub navigation (ADR-066) + Logs view (ADR-065), port ${PORT}\n`);
 
-  await check('bootstrap: the tab is usable without pasting a token', async () => {
+  /* ---------------------------------------------------------------- ADR-066: navigation */
+  const VIEWS = ['chat', 'run', 'live', 'library', 'results', 'logs', 'tools', 'settings'];
+
+  await check('nav: every rail item reveals its own view and nothing else', async () => {
+    for (const v of VIEWS) {
+      await page.click(`.rail a[data-nav="${v}"]`);
+      await page.waitForTimeout(200);
+      const shown = await page.locator(`[data-view~="${v}"]:visible`).count();
+      ok(shown > 0, `view ${v} revealed nothing`);
+      const cur = await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav');
+      eq(cur, v, `the rail did not mark ${v} as current`);
+      // Nothing from another view may be on screen at the same time.
+      for (const other of VIEWS.filter((x) => x !== v)) {
+        const leaked = await page.locator(`[data-view="${other}"]:visible`).count();
+        eq(leaked, 0, `view ${v} is showing ${leaked} section(s) belonging to ${other}`);
+      }
+    }
+  });
+
+  await check('nav: the product\'s main action is not buried under Settings', async () => {
+    // The defect this redesign exists to fix: launching a run lived under a tab called "Settings",
+    // next to four calculators.
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForTimeout(200);
+    ok(!(await page.locator('#build').isVisible()), 'the run builder is still inside Settings');
+    ok(await page.locator('#capitok').isVisible(), 'Settings must hold the connection fields');
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    ok(await page.locator('#b-run').isVisible(), 'the run button is not on its own view');
+    ok(!(await page.locator('#rec-out').isVisible()), 'a calculator is showing next to the run form');
+  });
+
+  await check('nav: ONE token field for the whole app', async () => {
+    const fields = await page.locator('input[id="capitok"]').count();
+    eq(fields, 1, 'more than one token field exists — the second would need pasting again');
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForTimeout(200);
+    const val = await page.locator('#capitok').inputValue();
+    ok(val.length > 0, 'the single token field is empty after bootstrap');
+  });
+
+  await check('nav: grouped views switch inner sections without leaking siblings', async () => {
+    await page.click('.rail a[data-nav="library"]');
+    await page.waitForTimeout(300);
+    eq(await page.locator('[data-innerbar="library"] .subtab-btn').count(), 3, 'library inner tabs');
+    await page.click('[data-innerbar="library"] .subtab-btn[data-sub="runs"]');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#runs-list').isVisible(), 'the Runs section did not appear');
+    ok(!(await page.locator('[data-subpanel="library"]').isVisible()),
+      'Scenarios stayed visible alongside Runs');
+    await page.click('[data-innerbar="library"] .subtab-btn[data-sub="library"]');
+    await page.waitForTimeout(250);
+  });
+
+  await check('nav: an address beats a remembered view', async () => {
+    // localStorage now holds a view from the clicking above. An explicit link must win over it —
+    // getting this backwards sent every deep link to whatever was open last, which is precisely the
+    // kind of link that gets pasted into a bug report.
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/#v=logs`, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'logs',
+      '#v=logs did not open the Logs view');
+
+    // A legacy anchor must resolve to the view that now contains that section, not 404 into the default.
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/#connect`, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'settings',
+      'the legacy #connect anchor did not resolve to Settings');
+
+    // A hash-only change is a SAME-DOCUMENT navigation: without a hashchange listener nothing rereads it.
+    await page.evaluate(() => { location.hash = '#v=tools'; });
+    await page.waitForTimeout(300);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'tools',
+      'editing the hash did not switch the view');
+  }, { allowConsole: /403 \(Forbidden\)/ });
+
+  await check('nav: the standalone chat page redirects into the app instead of duplicating it', async () => {
+    await page.goto(`http://127.0.0.1:${PORT}/chat/`, { waitUntil: 'load' });
+    await page.waitForTimeout(700);
+    ok(/#v=chat$/.test(page.url()), `/chat/ did not land on the Chat view, got ${page.url()}`);
+    const fields = await page.locator('input[id="capitok"]').count();
+    eq(fields, 1, 'the chat page still carries its own token field');
+  });
+
+  /* Back to a clean load for the Logs checks. The bootstrap nonce was already spent by the first load,
+     and the token is deliberately never persisted, so this reload pastes it the way a Mode-2 operator
+     does — which is also the documented fallback when the one-time link has expired. */
+  await page.goto('about:blank');
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+  await page.waitForTimeout(400);
+  // The fields live in Settings, and only the active view is on screen — which is the point of the
+  // rail, so the gate has to navigate like a person rather than reach into a hidden input.
+  await page.click('.rail a[data-nav="settings"]');
+  await page.waitForTimeout(200);
+  await page.fill('#capi', `http://127.0.0.1:${PORT}`);
+  await page.fill('#capitok', token);
+  await page.click('.rail a[data-nav="logs"]');
+  await page.click('#lg-reload');
+  await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
+
+  /* ---------------------------------------------------------------- ADR-065: Logs view */
+  await check('logs: the view loads and starts with DEBUG off', async () => {
     const tok = await page.locator('#capitok').inputValue();
-    ok(tok.length > 0, 'the bootstrap exchange left #capitok empty, so every token-gated read fails');
+    ok(tok.length > 0, 'no token in the field, so every token-gated read fails');
     const err = await page.locator('#lg-err').isVisible();
     ok(!err, `the error box is visible: ${await page.locator('#lg-err').innerText()}`);
     // Asserted HERE, before any later check touches the boxes: a tester must not be handed the
