@@ -156,6 +156,38 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   margin:.45rem 0;background:var(--bg2)}
 .libitem-row{display:flex;gap:.5rem;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .libmeta{color:var(--mut);font-size:.78rem}
+/* ---- ADR-065 Logs view. Level is encoded by FORM as well as colour (error filled, debug dashed):
+   the hub accent (--acc) and the error hue are near-identical, so hue alone would not separate them. */
+.lgbar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.4rem 0}
+/* A Logs view is for reading LINES: the controls must not push them below the fold, so the
+   selects inside the toolbar size to their content instead of inheriting width:100%. */
+.lgbar select{width:auto;min-width:7rem;padding:.24rem .4rem;font-size:.82rem}
+.lgbar input[type=search]{padding:.28rem .5rem;font-size:.84rem}
+.lgbar .btn{padding:.24rem .6rem;font-size:.82rem}
+.lgchk{white-space:nowrap}
+.lglabel{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.lgchk{display:inline-flex;align-items:center;gap:.3rem;font-size:.8rem;color:var(--mut);cursor:pointer}
+.lvl{font-family:ui-monospace,monospace;font-size:.66rem;letter-spacing:.06em;border-radius:2px;
+  padding:.18rem .34rem;display:inline-block;white-space:nowrap}
+.lvl-error{background:var(--no);color:var(--bg);border:1px solid var(--no)}
+.lvl-warn{color:var(--warn);border:1px solid var(--warn)}
+.lvl-info{color:var(--mut);border:1px solid var(--line)}
+.lvl-debug{color:var(--mut);border:1px dashed var(--line);opacity:.75}
+.lgrow{display:grid;grid-template-columns:auto auto auto 1fr;gap:.5rem;align-items:baseline;
+  padding:.4rem .5rem;border-bottom:1px solid var(--line);font-size:.84rem}
+.lgrow:last-child{border-bottom:0}
+.lgrow.deg{background:rgba(255,176,0,.07);box-shadow:inset 3px 0 0 var(--warn)}
+.lgrow.child{padding-left:1.6rem;opacity:.72;font-size:.78rem}
+.lgts{font-family:ui-monospace,monospace;color:var(--mut);font-size:.74rem;white-space:nowrap}
+.lgcat{color:var(--mut);font-size:.76rem;white-space:nowrap}
+.lgmsg{overflow-wrap:anywhere}
+.lgn{font-family:ui-monospace,monospace;font-size:.72rem;color:var(--warn);
+  border:1px solid var(--warn);border-radius:2px;padding:.1rem .3rem;margin-left:.4rem;white-space:nowrap}
+.lgcode{font-family:ui-monospace,monospace;font-size:.7rem;color:var(--mut);margin-left:.4rem}
+.lgverdict{border-left:2px solid var(--warn);background:var(--bg3);padding:.4rem .6rem;
+  margin:.3rem 0 .5rem;border-radius:0 3px 3px 0;font-size:.82rem}
+.lgerr{border:1px solid var(--no);border-radius:3px;padding:.5rem .7rem;color:var(--no);font-size:.84rem}
+.lgexp{cursor:pointer;color:var(--acc2);font-size:.74rem;margin-left:.4rem;user-select:none}
 .pass{color:var(--ok);font-weight:700}
 .fail{color:var(--no);font-weight:700}
 .timeline{display:flex;flex-direction:column;gap:.3rem;max-height:26rem;overflow:auto;
@@ -663,6 +695,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <button type="button" class="subtab-btn" data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
       <button type="button" class="subtab-btn" data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
       <button type="button" class="subtab-btn" data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+      <button type="button" class="subtab-btn" data-subtab="logs" role="tab" aria-selected="false">📜 <span data-lang="ru">Логи</span><span data-lang="en">Logs</span></button>
     </div>
 
     <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
@@ -757,6 +790,54 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <span class="hint"><span data-lang="ru">тренды по последним прогонам (<code>GET /v1/trends</code>)</span><span data-lang="en">trends over recent runs (<code>GET /v1/trends</code>)</span></span>
       </div>
       <div id="metrics-trends"></div>
+    </div>
+
+    <!-- ADR-065: Logs. TWO streams, deliberately separate — the run narrative (Live) is a story with
+         no levels, these are levelled diagnostics you filter. Codes are resolved to the reader's
+         language from /v1/events-catalog, so no Russian text travels on the wire. -->
+    <div class="subpanel" data-subpanel="logs">
+      <div class="grid g2">
+        <div>
+          <label for="lg-run"><span data-lang="ru">Прогон</span><span data-lang="en">Run</span></label>
+          <select id="lg-run"></select>
+        </div>
+        <div>
+          <label for="lg-sort"><span data-lang="ru">Порядок</span><span data-lang="en">Order</span></label>
+          <!-- labels are filled by lgRefreshOptionLabels(): an <option> cannot host <span data-lang> -->
+          <select id="lg-sort">
+            <option value="asc" selected></option>
+            <option value="desc"></option>
+            <option value="lvl"></option>
+          </select>
+        </div>
+      </div>
+      <div id="lg-degr" style="display:none"></div>
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Уровни</span><span data-lang="en">Levels</span></span>
+        <label class="lgchk"><input type="checkbox" id="lg-error" checked> <span class="lvl lvl-error">ERROR</span></label>
+        <label class="lgchk"><input type="checkbox" id="lg-warn" checked> <span class="lvl lvl-warn">WARN</span></label>
+        <label class="lgchk"><input type="checkbox" id="lg-info" checked> <span class="lvl lvl-info">INFO</span></label>
+        <label class="lgchk"><input type="checkbox" id="lg-debug"> <span class="lvl lvl-debug">DEBUG</span></label>
+      </div>
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Категория</span><span data-lang="en">Category</span></span>
+        <select id="lg-cat"></select>
+        <span class="lglabel"><span data-lang="ru">Модуль</span><span data-lang="en">Module</span></span>
+        <select id="lg-mod"></select>
+        <label class="lgchk" title="only paths where the run kept going but quality dropped">
+          <input type="checkbox" id="lg-degronly"> <span data-lang="ru">только деградации</span><span data-lang="en">degradations only</span>
+        </label>
+      </div>
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Поиск</span><span data-lang="en">Search</span></span>
+        <input id="lg-q" type="search" placeholder="budget | fallback" style="flex:1;min-width:12rem">
+        <label class="lgchk" title="treat the search as a regular expression"><input type="checkbox" id="lg-re"> <code>.*</code></label>
+        <label class="lgchk" title="match case"><input type="checkbox" id="lg-case"> <code>Aa</code></label>
+        <button type="button" class="btn" id="lg-reload">&#8635; <span data-lang="ru">Обновить</span><span data-lang="en">Reload</span></button>
+        <span id="lg-count" class="libmeta"></span>
+      </div>
+      <div id="lg-err" class="lgerr" style="display:none"></div>
+      <div id="lg-list"></div>
     </div>
   </section>
   </div><!-- /panel-tests -->
@@ -1929,6 +2010,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (name==='chats'   && !tChatsLoaded) tLoadChats();
     if (name==='results' && !tResultsLoaded) tLoadResults();
     if (name==='metrics' && !tMetricsLoaded) tLoadMetrics();
+    if (name==='logs'    && !lgLoaded)      lgInit();
   }
   document.querySelectorAll('.subtab-btn[data-subtab]').forEach(function(b){
     b.addEventListener('click', function(){ tSubTab(b.getAttribute('data-subtab')); });
@@ -2248,6 +2330,264 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       ge('cap-check').click();                          /* reuse the existing status + unlock path */
     } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
   })();
+
+
+  /* ================= ADR-065 — Logs view =================================================
+     Renders stream B (levelled diagnostics) from GET /v1/runs/{id}/logs. Stream A — the run
+     narrative — is the Live tab and deliberately has no levels here: filtering a story by severity
+     destroys it.
+
+     Russian never travels on the wire. The server sends a stable `code`; this resolves it against
+     /v1/events-catalog, which is the same file brain emits from, so a message cannot say one thing
+     in the log and another in the UI. An unknown code falls back to the server's English `msg`,
+     which is also exactly what a stale UI against a newer server should do.
+     ===================================================================================== */
+  var lgLoaded=false, lgCatalog=null, lgRecords=[], lgDegradations=[], lgRunId='';
+
+  var LG_SORT_LABEL = {
+    asc:  { ru: '↑ по времени',   en: '↑ by time' },
+    desc: { ru: '↓ новые сверху',  en: '↓ newest first' },
+    lvl:  { ru: '△ сначала важное', en: '△ most severe first' }
+  };
+  /* <option> cannot host <span data-lang> (same constraint the wizard documents), so labels are
+     rebuilt whenever the language changes. */
+  function lgRefreshOptionLabels(){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var sel = ge('lg-sort'); if (!sel) return;
+    Array.prototype.forEach.call(sel.options, function(o){
+      if (LG_SORT_LABEL[o.value]) o.textContent = LG_SORT_LABEL[o.value][l];
+    });
+    lgFillVocabSelects();
+  }
+
+  /* The catalogue holds TEMPLATES ("Run {run_id} started: mode {mode}") while the wire carries the
+     English one already RENDERED with this run's values. To show Russian with real values, the values
+     are recovered by matching the English template against the rendered English text, then substituted
+     into the Russian template. Both templates come from the same catalogue entry, so the match is
+     reliable; if it fails for any reason the server's rendered English is shown instead — correct
+     English beats Russian with visible {holes}. */
+  function lgFields(tpl, rendered){
+    var names = [], re = '';
+    var i = 0;
+    while (i < tpl.length){
+      var open = tpl.indexOf('{', i);
+      if (open < 0){ re += lgReEsc(tpl.slice(i)); break; }
+      var close = tpl.indexOf('}', open);
+      if (close < 0){ re += lgReEsc(tpl.slice(i)); break; }
+      re += lgReEsc(tpl.slice(i, open));
+      names.push(tpl.slice(open + 1, close));
+      re += '([\\s\\S]*?)';
+      i = close + 1;
+    }
+    if (!names.length) return {};
+    var m = new RegExp('^' + re + '$').exec(rendered);
+    if (!m) return null;
+    var out = {};
+    names.forEach(function(n, k){ out[n] = m[k + 1]; });
+    return out;
+  }
+  function lgReEsc(x){ return x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  function lgText(rec){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var e = lgCatalog && lgCatalog.events && lgCatalog.events[rec.code];
+    if (!e || !e[l]) return rec.msg || rec.code || '';
+    if (l === 'en') return rec.msg || e.en; /* already rendered by the server */
+    var vals = e.en ? lgFields(e.en, rec.msg || '') : {};
+    if (vals === null) return rec.msg || e.en || '';
+    return e.ru.replace(/\{(\w+)\}/g, function(whole, name){
+      return (name in vals) ? vals[name] : whole;
+    });
+  }
+  function lgLevelLabel(lvl){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var t = lgCatalog && lgCatalog.level_labels && lgCatalog.level_labels[lvl];
+    return t ? t[l] : lvl;
+  }
+  function lgCatLabel(cat){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var t = lgCatalog && lgCatalog.category_labels && lgCatalog.category_labels[cat];
+    return t ? t[l] : cat;
+  }
+
+  function lgFillVocabSelects(){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var cats = (lgCatalog && lgCatalog.categories) || [];
+    var sel = ge('lg-cat');
+    if (sel){
+      var keep = sel.value;
+      sel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
+        cats.map(function(c){ return '<option value="'+esc(c)+'">'+esc(lgCatLabel(c))+'</option>'; }).join('');
+      sel.value = keep;
+    }
+    /* Modules come from the RECORDS, not the catalogue: only the ones this run actually produced are
+       worth offering, and a module list that offers empty choices reads as broken. */
+    var mods = {}; lgRecords.forEach(function(r){ if (r.mod) mods[r.mod]=1; });
+    var msel = ge('lg-mod');
+    if (msel){
+      var keepm = msel.value;
+      msel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
+        Object.keys(mods).sort().map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join('');
+      msel.value = keepm;
+    }
+  }
+
+  async function lgInit(){
+    lgLoaded = true;
+    if (!lgCatalog){
+      /* Unauthenticated, like /healthz — it is the shipped message list, not run data. */
+      try { var rc = await fetch(capiBase()+'/v1/events-catalog'); lgCatalog = await rc.json(); }
+      catch(e){ lgCatalog = null; }
+    }
+    lgRefreshOptionLabels();
+    await lgLoadRunList();
+    await lgLoad();
+  }
+
+  async function lgLoadRunList(){
+    var sel = ge('lg-run'); if (!sel) return;
+    var runs = [];
+    try { var r = await fetch(capiBase()+'/v1/runs',{headers:authHdr()}); var j = await r.json(); runs = j.runs||[]; }
+    catch(e){ runs = []; }
+    sel.innerHTML = runs.map(function(x){
+      var id = x.id || x.run_id || '';
+      /* Only the parts that exist: a run with no recorded mode must not render "id ·  · running". */
+      var parts = [id].concat([x.mode, x.state].filter(Boolean));
+      return '<option value="'+esc(id)+'">'+esc(parts.join(' · '))+'</option>';
+    }).join('');
+    if (lgRunId) sel.value = lgRunId;
+    lgRunId = sel.value || (runs[0] && (runs[0].id||runs[0].run_id)) || '';
+  }
+
+  async function lgLoad(){
+    var list = ge('lg-list'); if (!list) return;
+    if (!lgRunId){
+      list.innerHTML = '<p class="hint">'+bi('прогонов пока нет — запусти проверку','no runs yet — start a check')+'</p>';
+      ge('lg-count').textContent=''; return;
+    }
+    list.innerHTML = '<p class="hint">'+bi('загрузка…','loading…')+'</p>';
+    ge('lg-err').style.display='none';
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(lgRunId)+'/logs?limit=5000',{headers:authHdr()});
+      var j = await r.json();
+      if (!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      lgRecords = j.records || [];
+      lgDegradations = j.degradations || [];
+      /* recorded=false is NOT "no logs matched" — it means nothing was ever written. Saying so
+         explicitly is the whole reason the endpoint distinguishes them. */
+      if (j.recorded === false){
+        list.innerHTML = '<p class="hint">'+bi(
+          'для этого прогона логи не записывались (он старше этой возможности или ещё не начал писать)',
+          'no logs were recorded for this run (it predates this feature, or has not started writing)')+'</p>';
+        ge('lg-count').textContent=''; ge('lg-degr').style.display='none';
+        return;
+      }
+    } catch(e){
+      ge('lg-err').style.display='';
+      ge('lg-err').textContent = (document.body.classList.contains('lang-en')
+        ? 'Could not load the logs: ' : 'Не удалось загрузить логи: ') + (e.message||e);
+      list.innerHTML=''; return;
+    }
+    lgFillVocabSelects();
+    lgRender();
+  }
+
+  function lgMatches(rec){
+    if (!ge('lg-'+rec.lvl) || !ge('lg-'+rec.lvl).checked) return false;
+    var c = ge('lg-cat').value; if (c && rec.cat !== c) return false;
+    var m = ge('lg-mod').value; if (m && rec.mod !== m) return false;
+    if (ge('lg-degronly').checked && !rec.degrades) return false;
+    var q = ge('lg-q').value.trim();
+    if (q){
+      var hay = (lgText(rec)||'') + ' ' + (rec.msg||'') + ' ' + (rec.code||'');
+      if (ge('lg-re').checked){
+        var re; try { re = new RegExp(q, ge('lg-case').checked ? '' : 'i'); }
+        catch(e){ return true; } /* an in-progress regex must not blank the view mid-typing */
+        if (!re.test(hay)) return false;
+      } else if (ge('lg-case').checked ? hay.indexOf(q)<0 : hay.toLowerCase().indexOf(q.toLowerCase())<0){
+        return false;
+      }
+    }
+    return true;
+  }
+
+  var LG_RANK = {error:0, warn:1, info:2, debug:3};
+  function lgRender(){
+    var list = ge('lg-list'); if (!list) return;
+    /* A child frame is shown only with its parent, so filtering never leaves an orphan "at …" line. */
+    var parents = lgRecords.filter(function(r){ return !r.parent; });
+    var shown = parents.filter(lgMatches);
+    var order = ge('lg-sort').value;
+    if (order === 'desc') shown = shown.slice().reverse();
+    else if (order === 'lvl') shown = shown.slice().sort(function(a,b){
+      return (LG_RANK[a.lvl]-LG_RANK[b.lvl]) || (a.seq-b.seq);
+    });
+
+    var degr = ge('lg-degr');
+    if (lgDegradations.length && lgCatalog){
+      var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+      degr.style.display='';
+      degr.className='lgverdict';
+      degr.innerHTML = '<b>'+bi('Прогон прошёл с потерей качества','The run completed with degraded quality')+'</b><br>'+
+        lgDegradations.map(function(code){
+          var e = lgCatalog.events[code];
+          return esc((e && e[l+'_verdict']) || code);
+        }).join('<br>');
+    } else { degr.style.display='none'; }
+
+    ge('lg-count').textContent = shown.length + ' / ' + parents.length;
+    if (!shown.length){
+      list.innerHTML = '<p class="hint">'+bi('под фильтры ничего не подошло','nothing matched the filters')+'</p>';
+      return;
+    }
+    var byParent = {};
+    lgRecords.forEach(function(r){ if (r.parent){ (byParent[r.parent]=byParent[r.parent]||[]).push(r); } });
+
+    list.innerHTML = shown.map(function(r){
+      var kids = byParent[r.seq] || [];
+      var head =
+        '<div class="lgrow'+(r.degrades?' deg':'')+'">'+
+          '<span class="lgts">'+esc((r.ts||'').slice(11,19))+'</span>'+
+          '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(lgLevelLabel(r.lvl))+'</span>'+
+          '<span class="lgcat">'+esc(lgCatLabel(r.cat))+'</span>'+
+          '<span class="lgmsg">'+esc(lgText(r))+
+            (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
+            '<span class="lgcode">'+esc(r.code||'')+'</span>'+
+            (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
+          '</span>'+
+        '</div>' +
+        kids.map(function(k){
+          return '<div class="lgrow child" data-child="'+r.seq+'" style="display:none">'+
+            '<span class="lgts"></span><span></span><span></span>'+
+            '<span class="lgmsg">'+esc(k.raw||k.msg||'')+'</span></div>';
+        }).join('');
+      return head;
+    }).join('');
+
+    list.querySelectorAll('.lgexp').forEach(function(el){
+      el.addEventListener('click', function(){
+        var seq = el.getAttribute('data-exp');
+        var open = false;
+        list.querySelectorAll('[data-child="'+seq+'"]').forEach(function(c){
+          open = c.style.display === 'none';
+          c.style.display = open ? '' : 'none';
+        });
+        el.textContent = (open ? '▾ ' : '▸ ') + el.textContent.replace(/^[▸▾]\s*/,'');
+      });
+    });
+  }
+
+  ['lg-error','lg-warn','lg-info','lg-debug','lg-cat','lg-mod','lg-degronly','lg-re','lg-case','lg-sort']
+    .forEach(function(id){ var el=ge(id); if (el) el.addEventListener('change', lgRender); });
+  (function(){ var q=ge('lg-q'); if (q) q.addEventListener('input', lgRender); })();
+  (function(){ var b=ge('lg-reload'); if (b) b.addEventListener('click', function(){ lgLoad(); }); })();
+  (function(){ var r=ge('lg-run'); if (r) r.addEventListener('change', function(){ lgRunId=r.value; lgLoad(); }); })();
+  /* Language switches re-render: option labels cannot be CSS-toggled, and the message texts
+     themselves are resolved per language from the catalogue. */
+  ['lang-ru','lang-en'].forEach(function(id){
+    var b=document.getElementById(id);
+    if (b) b.addEventListener('click', function(){ if (lgLoaded){ lgRefreshOptionLabels(); lgRender(); } });
+  });
 
 })(); /* end m12 */
 

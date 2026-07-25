@@ -443,7 +443,7 @@ func (s *server) spawnRun(req runRequest) *run {
 	cmd.Dir = s.repo
 	// ADR-063: layer the LLM connection into the spawn env — process env > per-run > persisted config.
 	// os.Environ() (operator-controlled) still wins; resolveRunEnv only fills LLM_* it does not already set.
-	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.getPersistedLLM())
+	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.mergedPersistedEnv())
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
