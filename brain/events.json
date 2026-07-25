@@ -761,6 +761,26 @@
         "graph"
       ]
     },
+    "plan.element_blacklisted": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "plan",
+      "ru": "Элемент «{intent}» не поддался (попыток подряд: {attempts}) — дальше он не предлагается",
+      "en": "Element \"{intent}\" would not act {attempts} times running — it is no longer proposed",
+      "modules": [
+        "graph"
+      ]
+    },
+    "plan.unactionable_elements": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "plan",
+      "ru": "Разведка закончилась на {coverage}%: элементов, до которых не удалось добраться — {blocked} (выключены или не поддались)",
+      "en": "Exploration stopped at {coverage}%: {blocked} element(s) could not be reached (disabled, or they would not act)",
+      "modules": [
+        "graph"
+      ]
+    },
     "heal.explore_stub": {
       "lvl": "debug",
       "cat": "heal",

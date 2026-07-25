@@ -46,13 +46,22 @@ def _parse_agui_lines(text: str) -> list:
 
 
 class FailNTimesEx:
-    """A minimal fake pw-executor: one page, one clickable 'Boom' button. The first `fails` click
-    attempts raise (act() fails -> verify() routes to heal()); every click after that succeeds. No
-    links, so the run converges (no_candidates) the moment the button is finally exercised."""
+    """A minimal fake pw-executor: one page, `buttons` clickable 'Boom' buttons. The first `fails`
+    click attempts raise (act() fails -> verify() routes to heal()); every click after that succeeds.
+    No links, so the run converges (no_candidates) once the buttons are exhausted.
+
+    WHY `buttons` EXISTS. It used to be a single button, and a test could produce N consecutive misses
+    by letting that one button fail N times — explore retried it forever. It no longer does: an
+    element that fails `_EXPLORE_FAIL_LIMIT` times is dropped from the candidate set, which is the
+    whole point of the M9-LIVE loop fix. So a run that needs N consecutive misses now needs enough
+    DISTINCT elements to spend them on, and a test that needs "fails, then succeeds" needs a second
+    element for the success to happen on. The claims the tests make are unchanged; only the shape of
+    the page that can exercise them is."""
     URL = "file:///s/fail.html"
 
-    def __init__(self, fails: int):
+    def __init__(self, fails: int, buttons: int = 1):
         self.fails, self.clicks, self.n = fails, 0, 0
+        self.buttons = buttons
 
     def call(self, m: str, **p) -> dict:
         self.n += 1
@@ -63,8 +72,9 @@ class FailNTimesEx:
         if m == "browser.snapshot":
             return {"ariaSnapshot": "page", "nodeCount": 1}
         if m == "browser.interactives":
-            return {"elements": [{"tag": "button", "role": "button", "name": "Boom",
-                                  "testid": "boom", "text": "Boom"}]}
+            return {"elements": [{"tag": "button", "role": "button", "name": f"Boom{i}",
+                                  "testid": f"boom{i}", "text": f"Boom{i}"}
+                                 for i in range(self.buttons)]}
         if m == "browser.links":
             return {"links": []}
         if m == "browser.click":
@@ -130,7 +140,9 @@ def test_agui_emit_envelope_shape_and_seq():
 def test_heal_failure_counter_increments_and_resets_on_success():
     os.environ.pop("SENTINEL_AUTO_HITL_THRESHOLD", None)   # OFF (default) for this test
     budget.reset(plan_limit=10**6, heal_limit=10**6)
-    ex = FailNTimesEx(fails=2)
+    # Two buttons: the first spends both failures and is dropped, the second is where the success
+    # that resets the streak happens. One button could no longer express "fails twice, then works".
+    ex = FailNTimesEx(fails=2, buttons=2)
     app, cfg = _build(ex)
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -183,7 +195,10 @@ def test_auto_hitl_threshold_arms_takeover_and_emits_hitl_needed():
 def test_threshold_zero_never_arms_regression():
     os.environ.pop("SENTINEL_AUTO_HITL_THRESHOLD", None)
     budget.reset(plan_limit=10**6, heal_limit=10**6)
-    ex = FailNTimesEx(fails=10)          # never succeeds within the run
+    # Never succeeds within the run. Six buttons because five consecutive misses now need at least
+    # three elements to spend them on (_EXPLORE_FAIL_LIMIT attempts each) — the run must still reach
+    # max_steps rather than running out of candidates first, or the "5 misses" claim goes vacuous.
+    ex = FailNTimesEx(fails=10, buttons=6)
     app, cfg = _build(ex, max_steps=5)   # converges via max_steps, still 5 consecutive misses
     buf = io.StringIO()
     with redirect_stdout(buf):

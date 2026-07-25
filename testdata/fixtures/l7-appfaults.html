@@ -13,6 +13,12 @@
   console.warn('cart: price index is stale, recomputing');
   // A failing request the page makes on its own — reaches us as app.request_failed / app.http_error.
   fetch('/definitely-missing-endpoint').catch(function(){ /* swallowed by the app, visible to us */ });
+  // A burst of the SAME error, which is what a real app in a broken render loop does. It is the log
+  // view's collapsing case (one row carrying ×N), and it belongs HERE rather than in the tool's own
+  // output: collapsing used to be exercised by explore retrying one control forever, and ADR-070
+  // deliberately removed that loop, so the property lost its only source. An application repeating
+  // itself is the honest source anyway — the tool repeating itself was a bug.
+  for (var i = 0; i < 8; i++) console.error('render: cannot read property "sku" of undefined');
   document.getElementById('add').addEventListener('click', function () {
     console.error('cart: add() called with no line items');
     document.getElementById('out').textContent = 'added';

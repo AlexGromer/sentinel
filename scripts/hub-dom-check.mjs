@@ -114,10 +114,12 @@ try {
     return (await started.json()).run_id;
   };
 
-  // A real run against a fixture that is KNOWN to loop on a disabled control — that loop is the
-  // signal the collapsing exists to make visible, so the gate needs it.
+  // A real run against a fixture whose controls refuse to be clicked — several steps, several heal
+  // misses, a real narrative to split from real diagnostics. It used to be the source of the repeat
+  // the collapsing check needed, because explore retried one control until max_steps; ADR-070 gave
+  // that retry a budget, so the repeat now comes from the application instead (see l7 below).
   await spawnRun(FIXTURE);
-  // Long enough for the browser to launch, a few steps to run, and the heal stub to repeat.
+  // Long enough for the browser to launch and a few steps to run.
   await new Promise((r) => setTimeout(r, 25000));
 
   // A SECOND run, against the fixture that actually misbehaves. The audience check below needs a run
@@ -144,6 +146,19 @@ try {
       if (on.includes(l)) await el.check(); else await el.uncheck();
     }
     await page.waitForTimeout(250);
+  };
+  // Two runs exist, and every check other than the two below reads the first one. Restoring by
+  // `{index: 0}` would assume an order /v1/runs does not promise, so the previous selection is read
+  // back and restored by VALUE — a check must not leave the view pointing somewhere its neighbours
+  // did not expect.
+  const withRun = async (id, fn) => {
+    const before = await page.locator('#lg-run').inputValue();
+    await page.selectOption('#lg-run', id);
+    await page.waitForTimeout(1500);
+    try { await fn(); } finally {
+      await page.selectOption('#lg-run', before);
+      await page.waitForTimeout(1200);
+    }
   };
 
   console.log(`\nhub-dom-check — hub navigation (ADR-066) + Logs view (ADR-065), port ${PORT}\n`);
@@ -271,17 +286,35 @@ try {
       'a raw narrative event is being rendered as a diagnostic');
   });
 
+  // The repeat is sourced from the APPLICATION (l7 emits the same console error 8 times in a row),
+  // not from the tool. It used to come from explore retrying one control until max_steps — ADR-070
+  // deliberately removed that loop, and with it the only thing this check had to collapse. Sourcing
+  // the repeat from the page under test is the honest version anyway: an app stuck in a broken render
+  // loop is the real case for collapsing, whereas the tool repeating itself was a defect.
   await check('a repeated line reads as ONE row carrying a count', async () => {
+   await withRun(faultRun, async () => {
     await setLevels(['error', 'warn', 'info', 'debug']);
     const badges = page.locator('#lg-list .lgn');
     ok(await badges.count() > 0,
-      'no ×N badge: the loop this fixture produces is being rendered as N separate rows');
+      'no ×N badge: the burst l7 produces is being rendered as N separate rows');
     const label = await badges.first().innerText();
     const n = parseInt(label.replace(/[^0-9]/g, ''), 10);
     ok(n >= 2, `a count badge must mean 2 or more, got ${label}`);
-    // The collapsed row must still be ONE row, not N.
-    const stub = page.locator('#lg-list .lgrow:not(.child)', { hasText: 'разведк' });
-    ok(await stub.count() <= 2, `the collapsed record appears ${await stub.count()} times`);
+
+    // The collapsed record must be ONE row, not N. Anchored on the burst's own text so the assertion
+    // names what it is about, instead of a phrase that happened to be adjacent to it.
+    const burst = page.locator('#lg-list .lgrow:not(.child)', { hasText: 'sku' });
+    eq(await burst.count(), 1, 'the 8-line burst must render as exactly one row');
+
+    // And the general invariant behind it, which no fixture change can quietly make vacuous: if
+    // consecutive duplicates are collapsed, no two ADJACENT rows can read identically.
+    const texts = await page.locator('#lg-list .lgrow:not(.child) .lgmsg').allInnerTexts();
+    ok(texts.length > 3, `too few rows to say anything about adjacency: ${texts.length}`);
+    for (let i = 1; i < texts.length; i++) {
+      ok(texts[i].trim() !== texts[i - 1].trim(),
+        `rows ${i - 1} and ${i} read identically — consecutive duplicates were not collapsed: ${texts[i].slice(0, 60)}`);
+    }
+   });
   });
 
   await check('level checkboxes narrow the view', async () => {
@@ -526,8 +559,7 @@ try {
   // and every set identity below would hold over empty sets. Mutation-proven — with the expansion torn
   // out, `src == business` matched 0 and `application || testing` matched 0, and 0 == 0 passed.
   await check('an audience filters to the sources it contains, not to its own name', async () => {
-    await page.selectOption('#lg-run', faultRun);
-    await page.waitForTimeout(1500);
+   await withRun(faultRun, async () => {
     await setLevels(['error', 'warn', 'info', 'debug']);
     await page.click('#lg-expr-clear');
     await page.waitForTimeout(250);
@@ -570,8 +602,7 @@ try {
 
     await page.click('#lg-expr-clear');
     await page.waitForTimeout(200);
-    await page.selectOption('#lg-run', { index: 0 });
-    await page.waitForTimeout(1200);
+   });
   });
 
   await check('a run with no logs says so instead of looking empty', async () => {

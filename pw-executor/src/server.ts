@@ -441,6 +441,13 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
             testid: e.getAttribute('data-testid'),
             text: (e.textContent || '').trim().slice(0, 200),
             tag: e.tagName.toLowerCase(),
+            // M9-LIVE: whether the control can be actuated AT THIS MOMENT. Reported, not filtered —
+            // perception describes the page, the brain decides what to do about it. Both spellings
+            // count: `disabled` is only valid on form controls, so a `<div role=button>` can only say
+            // so through `aria-disabled`, and a tester's app uses whichever its framework emits.
+            disabled:
+              (e as HTMLButtonElement).disabled === true ||
+              e.getAttribute('aria-disabled') === 'true',
           })),
       );
       return { elements };
