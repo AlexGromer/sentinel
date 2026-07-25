@@ -19,7 +19,7 @@
    export LLM_BASE_URL=http://localhost:11434/v1   # нативный agentctl на хосте; ИЗ compose-сети → http://ollama:11434/v1
    export LLM_API_KEY=noauth                       # опционально: Ollama ключ игнорирует, а brain и так дефолтит пустой ключ в "noauth" (brain/llm.py) — экспорт лишь делает это явным
    export LLM_MODEL_PLANNER=qwen3:14b
-   export LLM_MODEL_HEAL=qwen2.5-vl:7b
+   export LLM_MODEL_HEAL=qwen2.5vl:7b
    # export LLM_VISION=1      # только если heal-модель действительно vision-capable
    # export LLM_STRUCTURED=1  # opt-in strict-JSON; если эндпоинт не умеет json_schema — планер молча
    #                          # деградирует в heuristic, heal → детерминированные L1–L6. Проверь по логу.

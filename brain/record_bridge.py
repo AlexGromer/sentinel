@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sys
 
+from .eventlog import log
 from .scenario import VALID_VERBS, ground_scenario
 from .state import canonical_plan_hash, normalize_url, semantic_id
 
@@ -41,8 +42,6 @@ _STRATEGY_BY_KEY = {"testid": "testid", "role": "role_name", "label": "label",
                     "text": "text", "css": "css", "xpath": "xpath"}
 
 
-def log(*a: object) -> None:
-    print("[record-bridge]", *a, file=sys.stderr, flush=True)
 
 
 def _infer_strategy(loc: dict) -> str:
@@ -142,7 +141,7 @@ def events_to_steps(events: list, start_id: int = 1):
         ref = {"ref": sid, "verb": verb,
                "intent": f"{verb} {role} '{name}'".strip() if (role or name) else f"{verb} {_loc_label(primary)}"}
         if not _attach_value(ref, verb, ev):            # e.g. press with no key -> drop before registering
-            log(f"dropping {verb} event with no usable value/key")
+            log("record.event_no_value", verb=verb)
             continue
         bucket = site_map.setdefault(page, [])          # register the element only once the event is known-good
         if not any(e["semantic_id"] == sid for e in bucket):
@@ -178,7 +177,7 @@ def load_events(path: str) -> list:
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
-                log("skipping unparseable event line")
+                log("record.line_unparseable")
     return events
 
 
@@ -188,7 +187,7 @@ def write_scenario(events_path: str, out_path: str, session: str = "", target_ur
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(scenario, f, indent=2)
     if unmatched:
-        log(f"{len(unmatched)} event(s) did not ground (dropped, never fabricated)")
+        log("record.unmatched_dropped", count=len(unmatched))
     return scenario, unmatched
 
 

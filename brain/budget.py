@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 
-from .executor import log
+from .eventlog import log
 
 
 def _limit(env: str, default: int) -> int:
@@ -85,4 +85,5 @@ def reset(**kwargs) -> None:
     """Start a fresh tracker for a run (or a test); kwargs override the env-derived limits."""
     global _tracker
     _tracker = BudgetTracker(**kwargs)
-    log(f"budget: reset (plan={_tracker.plan_limit} heal={_tracker.heal_limit} total={_tracker.total_limit})")
+    log("run.budget_reset", plan=_tracker.plan_limit, heal=_tracker.heal_limit,
+        total=_tracker.total_limit)

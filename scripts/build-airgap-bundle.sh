@@ -10,7 +10,7 @@
 # E2E), plus: docker (+ buildx), gh (authenticated), cosign v2+, curl, network access, AND a browser
 # or device-code path for the interactive keyless signature of the bundle manifest (see step 8).
 #
-# Env overrides: MODEL (default qwen2.5-vl:7b — docs/LOCAL_MODELS.md §3.2, the ✅-verified Ollama VLM),
+# Env overrides: MODEL (default qwen2.5vl:7b — docs/LOCAL_MODELS.md §3.2, the ✅-verified Ollama VLM),
 #                OLLAMA_IMAGE (default ollama/ollama:latest — the exact tag pulled is PINNED into .env),
 #                IMAGE (default ghcr.io/alexgromer/sentinel).
 set -euo pipefail
@@ -18,7 +18,7 @@ set -euo pipefail
 TAG="${1:?usage: build-airgap-bundle.sh <vTAG> [outdir]}"
 OUTDIR="${2:-sentinel-airgap-${TAG}}"
 IMAGE="${IMAGE:-ghcr.io/alexgromer/sentinel}"
-MODEL="${MODEL:-qwen2.5-vl:7b}"
+MODEL="${MODEL:-qwen2.5vl:7b}"
 OLLAMA_IMAGE="${OLLAMA_IMAGE:-ollama/ollama:latest}"
 COSIGN_ISSUER="${COSIGN_ISSUER:-https://token.actions.githubusercontent.com}"
 COSIGN_RELEASE_ID_RE="${COSIGN_RELEASE_ID_RE:-https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*}"
