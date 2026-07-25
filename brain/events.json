@@ -1254,5 +1254,23 @@
         "test"
       ]
     }
+  },
+  "$comment_audiences": "The AUDIENCE axis — one level coarser than `source`, and the first question a tester actually asks: is this about the business logic under test, or about the tool doing the testing? `source` answers WHOSE log a record is; `audience` answers WHOSE PROBLEM it describes. The application's own faults and the outcomes of the steps exercising it are both statements about the tested system, so they share an audience even though they come from different emitters. Audiences must partition `sources` exactly — a source in two audiences, or in none, would make the coarse filter lie about coverage.",
+  "audiences": {
+    "business": {
+      "ru": "бизнес-логика",
+      "en": "business logic",
+      "sources": [
+        "application",
+        "testing"
+      ]
+    },
+    "tool": {
+      "ru": "инструмент",
+      "en": "the tool",
+      "sources": [
+        "tool"
+      ]
+    }
   }
 }
