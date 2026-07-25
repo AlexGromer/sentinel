@@ -39,7 +39,9 @@
     "heal",
     "hitl",
     "record",
-    "system"
+    "system",
+    "app",
+    "test"
   ],
   "category_labels": {
     "run": {
@@ -73,6 +75,14 @@
     "system": {
       "ru": "система",
       "en": "system"
+    },
+    "app": {
+      "ru": "приложение",
+      "en": "application"
+    },
+    "test": {
+      "ru": "тестирование",
+      "en": "testing"
     }
   },
   "level_labels": {
@@ -994,9 +1004,158 @@
       "modules": [
         "__main__"
       ]
+    },
+    "app.js_error": {
+      "lvl": "error",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Страница проверяемого сайта бросила ошибку: {msg}",
+      "en": "The page under test threw an error: {msg}"
+    },
+    "app.console_error": {
+      "lvl": "error",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Консоль сайта: {msg}",
+      "en": "Site console: {msg}"
+    },
+    "app.console_warn": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Предупреждение в консоли сайта: {msg}",
+      "en": "Site console warning: {msg}"
+    },
+    "app.request_failed": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Запрос сайта не удался: {method} {url} — {reason}",
+      "en": "A site request failed: {method} {url} — {reason}"
+    },
+    "app.http_error": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сайт ответил {status} на {method} {url}",
+      "en": "The site answered {status} to {method} {url}"
+    },
+    "app.dialog": {
+      "lvl": "info",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сайт открыл диалог ({kind}): {msg}",
+      "en": "The site opened a dialog ({kind}): {msg}"
+    },
+    "app.log_capped": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сообщений от сайта слишком много — дальше не записываю (предел {cap})",
+      "en": "Too many messages from the site — capturing stops here (cap {cap})"
+    },
+    "test.step_passed": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — выполнен",
+      "en": "Step {step} ({type}) — passed",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_healed": {
+      "lvl": "warn",
+      "cat": "test",
+      "phase": "heal",
+      "ru": "Шаг {step} ({type}) — элемент нашёлся заново способом «{strategy}» (уверенность {confidence})",
+      "en": "Step {step} ({type}) — the element was re-located by \"{strategy}\" (confidence {confidence})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_failed": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — НЕ ВЫПОЛНЕН. Это и есть ошибочный шаг",
+      "en": "Step {step} ({type}) — FAILED. This is the step that went wrong",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_regression": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — расхождение с эталоном: {what}",
+      "en": "Step {step} ({type}) — differs from the baseline: {what}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_quarantined": {
+      "lvl": "warn",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — на карантине, повторно падал ранее",
+      "en": "Step {step} ({type}) — quarantined, it has failed repeatedly before",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.summary": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "{kind}: шагов {steps}, починено {healed}, не выполнено {failed}, расхождений {regressions}",
+      "en": "{kind}: {steps} steps, {healed} healed, {failed} failed, {regressions} regressions",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.aborted": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Прогон прерван: {reason}",
+      "en": "Run aborted: {reason}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.explore_complete": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Разведка закончена: шагов {steps}, покрытие {coverage}",
+      "en": "Explore finished: {steps} steps, coverage {coverage}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.scenario_authored": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "scenario",
+      "ru": "Сценарий собран: привязано шагов {grounded}, не привязано {unmatched}",
+      "en": "Scenario authored: {grounded} steps grounded, {unmatched} unmatched",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.chat_turn_complete": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Ход беседы завершён ({conversation}): шагов {steps}",
+      "en": "Chat turn complete ({conversation}): {steps} steps",
+      "modules": [
+        "__main__"
+      ]
     }
   },
-  "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins.",
+  "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
   "foreign_patterns": [
     {
       "code": "browser.launched",
@@ -1032,6 +1191,14 @@
       "en": "Browser: {raw}"
     },
     {
+      "code": "system.console_table",
+      "match": "^(=+$|\\s*#\\s*\\d+\\s|(EXPLORE|REPLAY|BASELINE|SCENARIO|CHAT TURN|ABORT)\\b)",
+      "lvl": "debug",
+      "cat": "system",
+      "ru": "Консольная сводка: {raw}",
+      "en": "Console summary: {raw}"
+    },
+    {
       "code": "system.agentctl",
       "match": "^\\[agentctl\\]",
       "lvl": "info",
@@ -1056,5 +1223,36 @@
       "ru": "{raw}",
       "en": "{raw}"
     }
-  ]
+  ],
+  "$comment_sources": "The SOURCE axis — whose log a record is. Distinct from `cat`: a tester asks \"is this MY app misbehaving or the tool?\" before asking which subsystem. Derived from `cat`, so a record never has to carry it: run/plan/heal/hitl/llm/record/system -> tool, browser -> tool, app -> application, test -> testing.",
+  "sources": {
+    "tool": {
+      "ru": "инструмент",
+      "en": "the tool",
+      "cats": [
+        "run",
+        "plan",
+        "heal",
+        "hitl",
+        "llm",
+        "record",
+        "system",
+        "browser"
+      ]
+    },
+    "application": {
+      "ru": "приложение",
+      "en": "the application",
+      "cats": [
+        "app"
+      ]
+    },
+    "testing": {
+      "ru": "тестирование",
+      "en": "testing",
+      "cats": [
+        "test"
+      ]
+    }
+  }
 }

@@ -73,6 +73,13 @@ type run struct {
 
 	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
 	sink   *logSink   // M9-LIVE: on-disk log artifacts under the run's dir (not serialized)
+	// pid of the spawned agentctl, which leads the run's process group (see procgroup_*.go). Zero once
+	// the run has finished. Needed because a cancel has to reach the whole tree, not just the top.
+	pid int
+	// canceled records that a human asked to stop. The waiting goroutine reads it to decide the terminal
+	// state: a killed process otherwise reports exit -1, which would read as a crash rather than a
+	// deliberate stop — and "did I stop it, or did it break?" is exactly what the operator needs to know.
+	canceled bool
 }
 
 const maxStreamLines = 1000
@@ -451,22 +458,53 @@ func (s *server) spawnRun(req runRequest) *run {
 	lw := &lineWriter{rs: rec.stream, sink: rec.sink}
 	cmd.Stdout = lw
 	cmd.Stderr = lw
+	setProcGroup(cmd) // M9-LIVE: own process group, so a cancel reaches brain + executor + Chromium
 
 	go func() {
-		err := cmd.Run()
+		if err := cmd.Start(); err != nil {
+			// A run that never started still has to FINISH properly: emit run.finished, release SSE
+			// subscribers and close the log files, or the UI waits forever on a run that will never speak.
+			s.mu.Lock()
+			rec.State, rec.Error = "failed", err.Error()
+			rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+			finishedAt := rec.FinishedAt
+			s.mu.Unlock()
+			if s.store != nil {
+				s.store.upsertRun(rec)
+			}
+			lw.flush()
+			rec.sink.close()
+			rec.stream.append(aguiLine("run.finished", rec.ID, finishedAt,
+				map[string]any{"exit_code": -1, "state": "failed"}))
+			rec.stream.finish()
+			return
+		}
+		s.mu.Lock()
+		rec.pid = cmd.Process.Pid // published before the wait, so a cancel arriving immediately can act
+		s.mu.Unlock()
+		err := cmd.Wait()
 		s.mu.Lock()
 		rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-		if err == nil {
+		rec.pid = 0
+		switch {
+		case rec.canceled:
+			// A deliberate stop is NOT a failure and must not be reported as one: the process was
+			// signalled, so it exits -1, which would otherwise read identically to a crash.
+			rec.State, rec.ExitCode = "canceled", -1
+		case err == nil:
 			rec.State, rec.ExitCode = "done", 0
-		} else if ee, ok := err.(*exec.ExitError); ok {
-			rec.State, rec.ExitCode = "done", ee.ExitCode() // structured exit (0/1/2/3) is a valid outcome
-		} else {
-			rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
+		default:
+			if ee, ok := err.(*exec.ExitError); ok {
+				rec.State, rec.ExitCode = "done", ee.ExitCode() // structured exit (0/1/2/3) is a valid outcome
+			} else {
+				rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
+			}
 		}
 		// Snapshot the terminal state for the AG-UI event under the lock; append outside it (below).
 		// A "failed" run never set ExitCode (zero value 0), which would read as a clean exit — emit -1
 		// so the UI's run.finished branch does not mistake a spawn failure for success. `state` is carried
-		// alongside so exit_code:-1 is unambiguous: a signal-killed run is state=done/exit_code=-1
+		// alongside so exit_code:-1 is unambiguous: a CANCELED run is state=canceled/exit_code=-1, a
+		// signal-killed run is state=done/exit_code=-1
 		// (os.ProcessState.ExitCode() returns -1 for a signalled process), a failed-spawn is
 		// state=failed/exit_code=-1 — same as /v1/runs pairs state with exit_code.
 		exitForEvent := rec.ExitCode
@@ -934,6 +972,32 @@ func (s *server) readArtifact(rec *run, name string) (string, bool) {
 // these domains have no in-memory fallback — a gateway error degrades to an empty list / 404-ish
 // response, never a 503 (M14_CONTRACT.md §3).
 
+// storeMarker reports whether a persistence store is wired, for the list endpoints to carry.
+//
+// Without it, every list answers an empty 200 in the standalone tier — and an empty 200 means BOTH
+// "nothing has been saved yet" and "this deployment cannot save anything". Alex read that as "the library
+// does not load", which is the correct reading of an interface that says nothing. `/v1/config` already
+// answers 501 in the same situation; a list cannot, because an empty list IS a valid answer when a store
+// exists. So the fact travels alongside the data and the UI can say which case it is looking at.
+func (s *server) storeMarker() map[string]any {
+	if s.store != nil {
+		return map[string]any{"store": true}
+	}
+	return map[string]any{
+		"store": false,
+		"store_reason": "this deployment has no store-gateway, so nothing is persisted — start it with " +
+			"`docker compose --profile store up -d store-gateway` and set CONTROL_API_STORE_ADDR",
+	}
+}
+
+// withStore merges the store marker into a response body.
+func (s *server) withStore(body map[string]any) map[string]any {
+	for k, v := range s.storeMarker() {
+		body[k] = v
+	}
+	return body
+}
+
 func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 	if !s.authed(r) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
@@ -946,7 +1010,7 @@ func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 			scenarios, total = sl.Scenarios, sl.Total
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scenarios": scenarios, "total": total})
+	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"scenarios": scenarios, "total": total}))
 }
 
 func (s *server) handleGetScenario(w http.ResponseWriter, r *http.Request) {
@@ -989,7 +1053,7 @@ func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
 			tests, total = tl.Tests, tl.Total
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tests": tests, "total": total})
+	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"tests": tests, "total": total}))
 }
 
 func (s *server) handleGetTest(w http.ResponseWriter, r *http.Request) {
@@ -1067,7 +1131,7 @@ func (s *server) handleListChats(w http.ResponseWriter, r *http.Request) {
 			chats, total = cl.Chats, cl.Total
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"chats": chats, "total": total})
+	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"chats": chats, "total": total}))
 }
 
 func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
@@ -1361,7 +1425,7 @@ func (s *server) handleListResults(w http.ResponseWriter, r *http.Request) {
 			results, total = rl.Results, rl.Total
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": results, "total": total})
+	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"results": results, "total": total}))
 }
 
 func (s *server) handleGetResult(w http.ResponseWriter, r *http.Request) {
@@ -1397,7 +1461,7 @@ func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
 			points = tr.Points
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metric": metric, "points": points})
+	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"metric": metric, "points": points}))
 }
 
 func (s *server) mux() http.Handler {
@@ -1414,6 +1478,7 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
 	m.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)      // M9-LIVE: structured diagnostics
+	m.HandleFunc("POST /v1/runs/{id}/cancel", s.handleCancelRun) // M9-LIVE: stop a running run
 	m.HandleFunc("GET /v1/events-catalog", s.handleEventsCatalog) // M9-LIVE: bilingual message list
 	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
 	m.HandleFunc("GET /v1/stream", s.handleStream)

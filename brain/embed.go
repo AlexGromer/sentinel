@@ -60,14 +60,20 @@ func (f *Foreign) Matches(line string) bool { return f.re != nil && f.re.MatchSt
 type catalogue struct {
 	Events     map[string]Event `json:"events"`
 	Foreign    []*Foreign       `json:"foreign_patterns"`
-	Categories []string         `json:"categories"`
-	Levels     []string         `json:"levels"`
+	Categories []string            `json:"categories"`
+	Levels     []string            `json:"levels"`
+	Sources    map[string]srcEntry `json:"sources"`
+}
+
+type srcEntry struct {
+	Cats []string `json:"cats"`
 }
 
 var (
 	once   sync.Once
 	parsed catalogue
 	byMod  map[string]string // code -> the single emitting module, when unambiguous
+	bySrc  map[string]string // category -> source ("tool" / "application" / "testing")
 )
 
 func load() {
@@ -83,13 +89,22 @@ func load() {
 				f.re = re
 			}
 		}
+		// The SOURCE axis is derived from the category, so a record never carries it redundantly and the
+		// two can never disagree. The catalogue gate proves the partition is total and non-overlapping.
+		bySrc = map[string]string{}
+		for src, meta := range parsed.Sources {
+			for _, c := range meta.Cats {
+				bySrc[c] = src
+			}
+		}
 		byMod = make(map[string]string, len(parsed.Events))
 		for code, e := range parsed.Events {
 			// A code emitted from exactly one module gets a `mod` on its records. Two modules mean
 			// the line itself cannot say which one it came from, so the field is left empty rather
 			// than guessed — an unfilterable field beats a wrong one.
 			if len(e.Modules) == 1 {
-				byMod[code] = "brain." + strings.TrimPrefix(e.Modules[0], "__")
+				// `__main__` reads as `brain.main`: trimming only the prefix left `brain.main__`.
+				byMod[code] = "brain." + strings.Trim(e.Modules[0], "_")
 			}
 		}
 	})
@@ -119,6 +134,16 @@ func Categories() []string {
 func Levels() []string {
 	load()
 	return parsed.Levels
+}
+
+// SourceOf maps a category to its source — whose log this is: the tool, the application under test, or
+// the testing itself. A tester asks that before asking which subsystem.
+func SourceOf(cat string) string {
+	load()
+	if s, ok := bySrc[cat]; ok {
+		return s
+	}
+	return "tool"
 }
 
 // ForeignRules returns the ordered classification rules for third-party output.

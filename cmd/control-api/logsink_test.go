@@ -279,3 +279,79 @@ func atoiOrZero(s string) int {
 	}
 	return n
 }
+
+// ADR-067: the source axis and the step correlation. Both are what let a tester ask "which step went
+// wrong, and was it my application or the tool?" — the question the Logs view exists to answer.
+func TestSinkTagsSourceAndStep(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{
+		`[info|run] run.config: Run abc started: mode explore`,
+		`@@AGUI {"type":"step.progress","run_id":"abc","seq":4,"data":{"n":4,"total":40,"desc":"click cart"}}`,
+		`[error|app] app.js_error: The page under test threw an error: TypeError: cart.total is undefined`,
+		`[error|test] test.step_failed: Step 4 (click) — FAILED. This is the step that went wrong`,
+		`@@AGUI {"type":"step.progress","run_id":"abc","seq":5,"data":{"n":5,"total":40,"desc":"pay"}}`,
+		`[warn|app] app.http_error: The site answered 500 to POST /api/pay`,
+	})
+	if len(recs) != 4 {
+		t.Fatalf("want 4 diagnostics (the frames are narrative), got %d: %+v", len(recs), recs)
+	}
+	// A record before any step frame belongs to no step rather than to a guessed one.
+	if recs[0].Step != 0 {
+		t.Fatalf("a record preceding every step frame must carry no step, got %d", recs[0].Step)
+	}
+	if recs[0].Src != "tool" {
+		t.Fatalf("run.config is the tool's own log, got src=%q", recs[0].Src)
+	}
+	for i, want := range []struct {
+		src  string
+		step int
+	}{{"tool", 0}, {"application", 4}, {"testing", 4}, {"application", 5}} {
+		if recs[i].Src != want.src || recs[i].Step != want.step {
+			t.Fatalf("record %d (%s): src=%q step=%d, want src=%q step=%d",
+				i, recs[i].Code, recs[i].Src, recs[i].Step, want.src, want.step)
+		}
+	}
+}
+
+// A step frame we cannot parse must leave the previous number in place: a slightly stale step is far
+// more useful than none, and clearing it would silently drop the correlation for the rest of the run.
+func TestSinkKeepsStepOnUnparseableFrame(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{
+		`@@AGUI {"type":"step.progress","run_id":"abc","seq":2,"data":{"n":7,"total":40}}`,
+		`@@AGUI {"type":"step.progress","run_id":"abc","seq":3,"data":{"n":`,
+		`[error|app] app.js_error: The page under test threw an error: boom`,
+	})
+	if len(recs) != 1 || recs[0].Step != 7 {
+		t.Fatalf("want the last good step (7) preserved, got %+v", recs)
+	}
+}
+
+// A summary must not inherit the last step: it is a fact about the run, and "Explore finished … step 3"
+// invites reading it as a fact about step 3.
+func TestSinkDoesNotStampStepOnSummary(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{
+		`@@AGUI {"type":"step.progress","run_id":"abc","seq":2,"data":{"n":3,"total":3}}`,
+		`[error|app] app.js_error: The page under test threw an error: boom`,
+		`[info|test] test.explore_complete: Explore finished: 3 steps, coverage 1.00`,
+	})
+	if len(recs) != 2 {
+		t.Fatalf("want 2 records, got %+v", recs)
+	}
+	if recs[0].Step != 3 {
+		t.Fatalf("an in-step record must carry the step, got %d", recs[0].Step)
+	}
+	if recs[1].Step != 0 {
+		t.Fatalf("a report-phase summary must carry no step, got %d", recs[1].Step)
+	}
+}
+
+// `__main__` must read as `brain.main`, not `brain.main__` — trimming only the prefix left the
+// trailing underscores on screen in the technical register.
+func TestSinkModuleNameIsReadable(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{`[info|run] run.config: Run abc started: mode explore`})
+	if len(recs) != 1 {
+		t.Fatalf("want one record, got %+v", recs)
+	}
+	if recs[0].Mod != "brain.main" {
+		t.Fatalf("module should read as brain.main, got %q", recs[0].Mod)
+	}
+}

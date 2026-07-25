@@ -52,6 +52,7 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe)
     if is_describe:
         with open(out / "reconcile-report.json", "w") as f:
             json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
+    log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
           + (" + reconcile-report.json" if is_describe else ""))
     if is_describe and unmatched:
@@ -148,6 +149,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         cov, ph = final.get("coverage_achieved", 0.0), final.get("plan_hash", "")
         scenario_steps = final.get("scenario_steps", [])
         scenario_unmatched = final.get("scenario_unmatched", [])
+        log("test.explore_complete", steps=len(steps), coverage=f"{cov:.2f}")
         print("=" * 60)
         print(f"EXPLORE COMPLETE — {len(steps)} steps, coverage={cov:.2f}, plan_hash={ph[:16]}")
         for s in steps:
@@ -301,6 +303,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 scenario_unmatched = final.get("scenario_unmatched", [])
                 eff_target = target or final.get("target_url", "")
                 _project_chat(conversation_id, eff_target, final)  # M13: browsable chats projection (best-effort)
+                log("test.chat_turn_complete", conversation=conversation_id, steps=len(scenario_steps))
                 print("=" * 60)
                 print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
@@ -364,22 +367,40 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         except Exception:
             pass
         code = report.get("exit_code", 1)
-        print("=" * 60)
-        if report.get("reason"):
-            print(f"ABORT — {report['reason']}")
         head = "BASELINE" if baseline else "REPLAY"
+        if report.get("reason"):
+            log("test.aborted", reason=report["reason"])
+        log("test.summary", kind=head, steps=len(report["steps"]), healed=report.get("healed", 0),
+            failed=report.get("failed", 0), regressions=len(report.get("regressions", [])))
+        # One event per step, so "which step went wrong" is a filterable record rather than a line of
+        # prose. The human console keeps its compact table too — a CLI operator should not have to read
+        # structured records to see the outcome at a glance.
+        print("=" * 60)
         print(f"{head} COMPLETE — {len(report['steps'])} steps, healed={report.get('healed', 0)}, "
               f"failed={report.get('failed', 0)}, regressions={len(report.get('regressions', []))}, "
               f"exit={code}")
         for r in report["steps"]:
+            sid, stype, outcome = r["step_id"], r["type"], r["outcome"]
+            if r.get("regression"):
+                log("test.step_regression", step=sid, type=stype, what=",".join(r["regression"]))
+            elif outcome == "healed":
+                log("test.step_healed", step=sid, type=stype,
+                    strategy=(r.get("heal") or {}).get("strategy"),
+                    confidence=(r.get("heal") or {}).get("confidence"))
+            elif outcome in ("failed", "fail", "error"):
+                log("test.step_failed", step=sid, type=stype)
+            else:
+                log("test.step_passed", step=sid, type=stype)
+            if r.get("quarantined"):
+                log("test.step_quarantined", step=sid, type=stype)
             extra = ""
-            if r["outcome"] == "healed":
-                extra = f" via {r['heal'].get('strategy')} (conf {r['heal'].get('confidence')})"
+            if outcome == "healed":
+                extra = f" via {(r.get('heal') or {}).get('strategy')} (conf {(r.get('heal') or {}).get('confidence')})"
             if r.get("regression"):
                 extra += f"  [GOLDEN REGRESSION: {','.join(r['regression'])}]"
             if r.get("quarantined"):
                 extra += "  [quarantined]"
-            print(f"  #{r['step_id']:>2} {r['type']:<9} {r['outcome']}{extra}")
+            print(f"  #{sid:>2} {stype:<9} {outcome}{extra}")
         print("=" * 60)
         return code
     finally:

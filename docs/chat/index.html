@@ -3,346 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentinel — chat / authoring console</title>
+<title>Sentinel — чат перенесён в приложение / the chat moved into the app</title>
+<!-- ADR-066. This page used to be a second, standalone copy of the authoring conversation. That was the
+     real defect behind two complaints at once: the hub had no link to it (the nav item labelled
+     "Console" switched a tab on the hub itself), and it kept its OWN token field, so a bearer had to be
+     pasted twice — the one-time bootstrap nonce can only ever be redeemed by one tab.
+
+     The fix was not to add a link. It was to stop having two copies: the conversation is now the Chat
+     view of the app, reached from the rail, reading the single token in Settings. This page remains only
+     so the documented URL keeps working — DISTRIBUTION and QUICKSTART point at it, and a bookmark
+     should not 404.
+
+     The redirect is relative so it works from file:// as well as http(s) — these pages are meant to be
+     usable air-gapped — and a manual link is kept for the case where scripting is unavailable. -->
+<link rel="icon" href="data:,">
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --acc:#2563eb; --ok:#15803d; --warn:#b8860b; --no:#b91c1c; --br:#d4d4d8; --card:#f6f6f7; }
-  @media (prefers-color-scheme: dark){ :root{ --bg:#0d1117; --fg:#e6edf3; --mut:#9aa7b4; --acc:#5b9dff; --ok:#3fb950; --warn:#d29922; --no:#f85149; --br:#30363d; --card:#161b22; } }
-  *{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:1rem;max-width:880px;margin:0 auto}
-  header{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}
-  h1{font-size:1.25rem;margin:.2rem 0} h2{font-size:.95rem;margin:1rem 0 .3rem;color:var(--mut)} .sub{color:var(--mut);margin:.2rem 0 1rem;font-size:.92rem}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:.8rem} @media(max-width:640px){.grid{grid-template-columns:1fr}}
-  fieldset{border:1px solid var(--br);border-radius:8px;padding:.8rem;margin:0 0 1rem} legend{color:var(--mut);padding:0 .4rem;font-size:.85rem}
-  label{display:block;margin:.5rem 0 .15rem;font-size:.9rem} input,select,textarea{width:100%;padding:.4rem;border:1px solid var(--br);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
-  textarea{resize:vertical;min-height:3rem} .row{display:flex;align-items:center;gap:.5rem;margin-top:.5rem;flex-wrap:wrap}
-  button{font:inherit;padding:.4rem .8rem;border:1px solid var(--acc);border-radius:6px;background:var(--bg);color:var(--acc);cursor:pointer}
-  button:disabled{opacity:.5;cursor:not-allowed} button.primary{background:var(--acc);color:#fff}
-  .mut{color:var(--mut)} .warn{color:var(--warn)} a{color:var(--acc)} code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
-  .toggle{display:inline-flex;border:1px solid var(--br);border-radius:6px;overflow:hidden}
-  .toggle button{border:0;border-radius:0;background:var(--bg);color:var(--mut);padding:.2rem .55rem}
-  .toggle button[aria-pressed="true"]{background:var(--acc);color:#fff}
-  body.lang-ru [data-lang="en"]{display:none !important} body.lang-en [data-lang="ru"]{display:none !important}
-  .chat{display:flex;flex-direction:column;gap:.5rem;margin:1rem 0;min-height:2rem}
-  .msg{max-width:88%;padding:.5rem .7rem;border-radius:10px;border:1px solid var(--br);white-space:pre-wrap;word-break:break-word}
-  .msg.user{align-self:flex-end;background:var(--acc);color:#fff;border-color:transparent}
-  .msg.sys{align-self:flex-start;background:var(--card)}
-  .msg.log{align-self:flex-start;background:transparent;border:0;color:var(--mut);font:12px/1.4 ui-monospace,monospace;padding:.05rem .7rem;max-width:100%}
-  .msg .meta{font-size:.7rem;opacity:.8;margin-bottom:.2rem}
-  .verdict{font-weight:600} .ok{color:var(--ok)} .no{color:var(--no)}
-  pre{margin:.3rem 0 0;white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,monospace;max-height:14rem;overflow:auto;background:var(--bg);border:1px solid var(--br);border-radius:6px;padding:.5rem}
-  .dlrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
-  details{margin-top:1rem;font-size:.85rem;color:var(--mut)}
+  :root{--bg:#0b0b10;--bg2:#13131c;--line:#2a2a38;--tx:#e8e8ee;--mut:#9aa0b0;--acc:#ff2d55}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--tx);
+    font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,sans-serif;padding:24px}
+  .card{max-width:34rem;background:var(--bg2);border:1px solid var(--line);border-radius:8px;
+    padding:1.6rem 1.8rem}
+  h1{font-size:1.15rem;margin:0 0 .7rem;letter-spacing:-.01em}
+  p{margin:0 0 .8rem;color:var(--mut)}
+  b{color:var(--tx)}
+  a{color:#ff6b88}
+  a.go{display:inline-block;margin-top:.5rem;padding:.5rem .9rem;border-radius:5px;
+    background:var(--acc);color:#0b0b10;font-weight:700;text-decoration:none}
+  a.go:hover{filter:brightness(1.08)}
+  .en{color:var(--mut);font-size:.9rem;border-top:1px solid var(--line);margin-top:1.1rem;
+    padding-top:.9rem}
 </style>
 </head>
-<body class="lang-ru">
-
-<header>
-  <h1>Sentinel — <span data-lang="ru">чат-консоль авторинга</span><span data-lang="en">chat-authoring console</span></h1>
-  <span class="toggle" role="group" aria-label="Language / Язык">
-    <button type="button" id="lang-ru" aria-pressed="true"  onclick="setLang('ru')">RU</button>
-    <button type="button" id="lang-en" aria-pressed="false" onclick="setLang('en')">EN</button>
-  </span>
-</header>
-
-<p class="sub">
-  <span data-lang="ru">Статический клиент (vanilla JS, без сервера и сети — работает offline / air-gapped). «Чат» здесь — <strong>консоль авторинга поверх локального control-API с мульти-тёрн-памятью</strong> (ADR-048): опиши тест словами → агент исследует, авторит сценарий и запускает прогон → <strong>уточняй следующими сообщениями</strong> — контекст разговора хранится server-side по <code>conversation_id</code> (turn-1 исследует+авторит, дальнейшие тёрны рефайнят над той же картой сайта без повторного обхода) → готовый <code>scenario.json</code> можно скачать. Кнопка «Новый разговор» начинает свежий контекст. (Режим <code>explore</code> остаётся one-shot.)</span>
-  <span data-lang="en">Static client (vanilla JS, no server, no network — works offline / air-gapped). "Chat" here is an <strong>authoring console over a local control-API with multi-turn memory</strong> (ADR-048): describe a test in words → the agent explores, authors a scenario and runs it → <strong>refine with follow-up messages</strong> — the conversation context is kept server-side by <code>conversation_id</code> (turn-1 explores+authors, later turns refine over the same site map without re-crawling) → download the resulting <code>scenario.json</code>. "New conversation" starts a fresh context. (The <code>explore</code> mode stays one-shot.)</span>
-</p>
-
-<fieldset><legend><span data-lang="ru">Подключение</span><span data-lang="en">Connection</span></legend>
-  <div class="grid">
-    <div><label>control-API URL</label><input id="capi" placeholder="http://localhost:8090"></div>
-    <div><label>Bearer token (CONTROL_API_TOKEN)</label><input id="capitok" type="password" placeholder="нужен для запуска / required to run"></div>
-  </div>
-  <div class="row">
-    <button id="check" type="button"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
-    <span id="capistatus" class="mut"></span>
-  </div>
-  <p class="mut" style="font-size:.82rem">
-    <span data-lang="ru">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (исключение mixed-content); control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла (<code>docker compose --profile control-api up</code>) ограничения нет. Токен хранится только в этой вкладке (в памяти), никогда — в URL/конфиге.</span>
-    <span data-lang="en">From GitHub Pages, live mode only works against <code>http://localhost</code> (mixed-content exemption); the control-API must emit CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). From the bundle (<code>docker compose --profile control-api up</code>) there is no such limit. The token is kept only in this tab (in memory), never in the URL/config.</span>
-  </p>
-</fieldset>
-
-<fieldset><legend><span data-lang="ru">Сообщение</span><span data-lang="en">Message</span></legend>
-  <div class="grid">
-    <div>
-      <label><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
-      <select id="mode">
-        <option value="describe" selected>describe — <span>описание потока → сценарий</span></option>
-        <option value="goal">goal — <span>цель словами → сценарий</span></option>
-        <option value="explore">explore — <span>авто-исследование + покрытие</span></option>
-      </select>
+<body>
+  <div class="card">
+    <h1>Чат теперь внутри приложения</h1>
+    <p>Беседа больше не отдельная страница: она стала видом <b>💬 Чат</b> в левом меню приложения.
+      Токен доступа задаётся один раз в <b>⚙ Настройках</b> — вставлять его второй раз не нужно.</p>
+    <p>Если переход не сработал автоматически:</p>
+    <a class="go" href="../#v=chat">Открыть чат →</a>
+    <div class="en">
+      <b>The chat moved into the app.</b> The conversation is no longer a separate page — it is the
+      <b>💬 Chat</b> view in the app's rail, and the access token is set once in <b>⚙ Settings</b>.
+      This URL is kept so existing links and bookmarks still work (ADR-066).
+      <a href="../#v=chat">Open the chat →</a>
     </div>
-    <div><label>Target URL</label><input id="target" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html"></div>
   </div>
-  <label id="textLabel"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
-  <textarea id="text" placeholder="открыть форму регистрации, заполнить email и пароль, отправить"></textarea>
-  <div class="row">
-    <button id="send" type="button" class="primary" disabled>▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span></button>
-    <button id="rerun" type="button" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
-    <button id="baseline" type="button" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
-    <button id="newconv" type="button" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
-    <span class="mut" style="font-size:.82rem"><span data-lang="ru">сначала «Проверить» подключение</span><span data-lang="en">check the connection first</span></span>
-  </div>
-</fieldset>
-
-<h2><span data-lang="ru">Диалог</span><span data-lang="en">Transcript</span></h2>
-<div id="chat" class="chat"></div>
-
-<details><summary><span data-lang="ru">Соответствие коду / коды выхода</span><span data-lang="en">Code map / exit codes</span></summary>
-<p><span data-lang="ru">Эндпоинты: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). Стрим читается через <code>fetch()</code>+reader (EventSource не умеет слать <code>Authorization</code>); при сбое — fallback на 2с-опрос <code>/v1/runs/{id}</code>. Коды выхода: <strong>0</strong> pass · <strong>1</strong> тест нашёл проблему · <strong>2</strong> визуальная/golden-регрессия · <strong>3</strong> целостность/конфигурация — plan_hash/golden или плохой вызов (нужен человек). Источник: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span>
-<span data-lang="en">Endpoints: <code>GET /healthz</code> · <code>POST /v1/runs</code> (202) · <code>GET /v1/runs/{id}/events</code> (SSE, token) · <code>GET /v1/runs/{id}/artifact?name=</code> (token). The stream is read via <code>fetch()</code>+reader (EventSource cannot send <code>Authorization</code>); on failure it falls back to 2 s polling of <code>/v1/runs/{id}</code>. Exit codes: <strong>0</strong> pass · <strong>1</strong> the test found a problem · <strong>2</strong> visual/golden regression · <strong>3</strong> integrity/config — plan_hash/golden or bad invocation (needs a human). Source: <code>cmd/control-api</code> (ADR-040), <code>cmd/agentctl/main.go:10</code>.</span></p></details>
-
 <script>
-const $ = id => document.getElementById(id);
-
-// --- bilingual (data-lang spans toggled via body class; choice persisted) ---
-function setLang(l){
-  document.body.classList.remove('lang-ru','lang-en');
-  document.body.classList.add('lang-' + l);
-  document.documentElement.lang = l;
-  try { localStorage.setItem('sentinel_lang', l); } catch(e){}
-  $('lang-ru').setAttribute('aria-pressed', l==='ru' ? 'true':'false');
-  $('lang-en').setAttribute('aria-pressed', l==='en' ? 'true':'false');
-}
-function initLang(){ let l='ru'; try { l = localStorage.getItem('sentinel_lang') || 'ru'; } catch(e){} setLang(l==='en'?'en':'ru'); }
-// bilingual snippet for dynamically-built bubbles (toggles live with the language switch)
-const bi = (ru,en) => '<span data-lang="ru">'+ru+'</span><span data-lang="en">'+en+'</span>';
-// HTML-escape — covers body AND attribute context (escapes & < > " ').
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-const capiBase = () => $("capi").value.trim().replace(/\/+$/,"");
-const tokVal   = () => $("capitok").value.trim();
-const authHdr  = () => { const t = tokVal(); return t ? { Authorization: "Bearer " + t } : {}; };
-
-// --- transcript bubbles ---
-function addMsg(kind, html, meta){
-  const el = document.createElement("div");
-  el.className = "msg " + kind;
-  if (meta) el.innerHTML = '<div class="meta">'+meta+'</div>' + html;
-  else el.innerHTML = html;
-  $("chat").appendChild(el);
-  el.scrollIntoView({block:"end"});
-  return el;
-}
-function addLog(line){ const el = document.createElement("div"); el.className="msg log"; el.textContent = line; $("chat").appendChild(el); el.scrollIntoView({block:"end"}); }
-
-// --- mode → label/placeholder ---
-function syncMode(){
-  const m = $("mode").value;
-  $("text").disabled = (m === "explore");
-  $("text").placeholder = m === "goal" ? "залогиниться и открыть биллинг"
-    : m === "describe" ? "открыть форму регистрации, заполнить email и пароль, отправить"
-    : "(explore — текст не нужен / no text needed)";
-}
-$("mode").addEventListener("change", syncMode);
-
-// --- connection check (GET /healthz, no auth) ---
-$("check").addEventListener("click", async () => {
-  const base = capiBase();
-  if (!base) { $("capistatus").textContent = "укажите URL / set URL"; return; }
-  $("capistatus").textContent = "…";
-  try {
-    const r = await fetch(base + "/healthz");
-    if (!r.ok) { $("capistatus").textContent = "✗ HTTP " + r.status; $("send").disabled = true; return; }
-    const j = await r.json();
-    $("capistatus").textContent = "✓ ok v" + (j.version || "?") + " (runs=" + (j.runs ?? 0) + ")";
-    $("send").disabled = false;
-  } catch(e){ $("capistatus").innerHTML = "✗ " + bi("недоступен (CORS/выключен)","unreachable (CORS/off)") + ": " + esc(e.message); $("send").disabled = true; }
-});
-
-// --- run drivers: POST /v1/runs → stream events → verdict + artifacts ---
-let busy = false;
-let lastRunId = null; // last COMPLETED run — enables 🔁 Re-run / 📌 baseline (they target it via from_run, ADR-047)
-// M9.10 (ADR-048): multi-turn authoring. A stable conversation_id minted on the first goal/describe send
-// and resent each turn → the brain resumes the thread (turn-1 explores+authors, turn-N refines over the
-// persisted site map). In-memory only (never URL/storage). "New conversation" clears it. explore stays one-shot.
-let conversationId = null, turnN = 0;
-function newConversationId(){
-  try { if (window.crypto && crypto.randomUUID) return "conv-" + crypto.randomUUID(); } catch(e){}
-  return "conv-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);  // charset [a-z0-9-], << 128
-}
-
-// enable/disable the three run controls; re-run/baseline also require a completed run to exist
-function setControls(disabled){
-  $("send").disabled = disabled;
-  $("rerun").disabled = disabled || !lastRunId;
-  $("baseline").disabled = disabled || !lastRunId;
-}
-function finishTurn(){ busy = false; setControls(false); }
-
-// Shared run driver so ▶ Run, 🔁 Re-run and 📌 baseline behave identically (one POST → stream → verdict).
-async function runFlow(body, userSummary){
-  if (busy) return;
-  const base = capiBase();
-  if (!base) { addMsg("sys", bi("Укажи control-API URL и проверь подключение.","Set the control-API URL and check the connection.")); return; }
-  addMsg("user", userSummary);
-  busy = true; setControls(true);
-  let id;
-  try {
-    const r = await fetch(base + "/v1/runs", { method:"POST", headers:{ "Content-Type":"application/json", ...authHdr() }, body: JSON.stringify(body) });
-    const j = await r.json().catch(()=>({}));
-    if (r.status !== 202) { addMsg("sys", bi("✗ запуск отклонён","✗ run rejected") + " — HTTP " + r.status + ": " + esc(j.error || JSON.stringify(j))); finishTurn(); return; }
-    id = j.run_id;
-    addMsg("sys", bi("Запущен","Started") + " <code>run_id=" + esc(id) + "</code>", esc(j.artifact_dir||""));
-  } catch(e){ addMsg("sys", "✗ " + esc(e.message)); finishTurn(); return; }
-
-  let lastState = null;
-  try {
-    await streamEvents(base, id, { onState: s => { lastState = s; }, onLog: l => addLog(l), onDone: () => {} });
-  } catch(e){
-    addMsg("sys", bi("стрим недоступен — опрашиваю статус","stream unavailable — polling status") + " (" + esc(e.message) + ")");
-    lastState = await pollStatus(base, id);
-  }
-  await finalize(base, id, lastState);
-  if (lastState) lastRunId = id; // remember only a CONFIRMED-complete run
-  finishTurn();
-}
-
-// ▶ authoring run (describe / goal / explore)
-$("send").addEventListener("click", () => {
-  const target = $("target").value.trim(), mode = $("mode").value, text = $("text").value.trim();
-  if (!target) { addMsg("sys", bi("Укажи target URL.","Set a target URL.")); return; }
-  if (mode !== "explore" && !text) { addMsg("sys", bi("Опиши тест словами.","Describe the test in words.")); return; }
-  const body = { target, mode, planner: mode === "goal" ? "goal" : "heuristic", goal: mode === "goal" ? text : "", describe: mode === "describe" ? text : "" };
-  // M9.10: goal/describe are a multi-turn conversation — attach a stable conversation_id (server resumes
-  // the thread). explore has no goal/describe so the brain's chat-mode can't use it → keep it one-shot.
-  let turnLabel = "";
-  if (mode !== "explore") {
-    if (!conversationId) conversationId = newConversationId();
-    body.conversation_id = conversationId;
-    turnLabel = bi("тёрн ", "turn ") + (++turnN) + " · ";
-  }
-  const convMeta = (mode !== "explore") ? " · <code>" + esc(conversationId) + "</code>" : "";
-  const summary = turnLabel + esc(mode) + (text ? " — " + esc(text) : "") + '<div class="meta" style="margin-top:.2rem">' + esc(target) + convMeta + '</div>';
-  runFlow(body, summary);
-});
-
-// 🆕 start a fresh multi-turn context (next goal/describe send mints a new conversation_id)
-$("newconv").addEventListener("click", () => {
-  conversationId = null; turnN = 0;
-  addMsg("sys", "— " + bi("новый разговор","new conversation") + " —");
-});
-
-// 🔁 replay the last run's frozen plan · 📌 update its golden baseline (both via from_run, ADR-047)
-$("rerun").addEventListener("click", () => {
-  if (!lastRunId) return;
-  runFlow({ mode:"replay", from_run: lastRunId }, "🔁 " + bi("Перепрогон","Re-run") + ' <code>from_run=' + esc(lastRunId) + '</code>');
-});
-$("baseline").addEventListener("click", () => {
-  if (!lastRunId) return;
-  runFlow({ mode:"baseline", from_run: lastRunId }, "📌 " + bi("Зафиксировать эталон","Update baseline") + ' <code>from_run=' + esc(lastRunId) + '</code>');
-});
-
-// Read text/event-stream via fetch()+reader so we can send the bearer header (EventSource cannot).
-async function streamEvents(base, id, h){
-  const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id) + "/events", { headers: authHdr() });
-  if (!r.ok || !r.body) throw new Error("SSE HTTP " + r.status);
-  const reader = r.body.getReader(), dec = new TextDecoder();
-  let buf = "";
-  for (;;){
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream:true });
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) >= 0){
-      const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
-      let ev = "message", data = "";
-      for (const line of frame.split("\n")){
-        if (line.startsWith("event:")) ev = line.slice(6).trim();
-        else if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      let p = {}; try { p = JSON.parse(data || "{}"); } catch(e){}
-      if (ev === "state") h.onState(p);
-      else if (ev === "log") h.onLog(p.line || "");
-      else if (ev === "done") { h.onDone(); return; }
-    }
-  }
-  h.onDone();
-}
-
-// Fallback: poll GET /v1/runs/{id} until terminal (mirrors setup-WebUI).
-function pollStatus(base, id){
-  return new Promise(resolve => {
-    let n = 0;
-    const t = setInterval(async () => {
-      if (++n > 150){ clearInterval(t); resolve(null); return; }
-      try {
-        const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id), { headers: authHdr() });
-        const j = await r.json();
-        if (j.state && j.state !== "running"){ clearInterval(t); resolve(j); }
-      } catch(e){ /* transient */ }
-    }, 2000);
-  });
-}
-
-// Render the verdict from the exit code and offer the authored scenario for download.
-async function finalize(base, id, st){
-  if (!st){ addMsg("sys", bi("Статус неизвестен (таймаут).","Status unknown (timeout).")); return; }
-  const code = st.exit_code, state = st.state;
-  let v;
-  if (state === "failed") v = '<span class="verdict no">✖ ' + bi("прогон не запущен","run did not start") + (st.error ? " — " + esc(st.error) : "") + '</span>';
-  else if (code === 0)    v = '<span class="verdict ok">✓ ' + bi("пройдено (exit 0)","pass (exit 0)") + '</span>';
-  else if (code === 1)    v = '<span class="verdict warn">⚠ ' + bi("тест нашёл проблему (exit 1)","the test found a problem (exit 1)") + '</span>';
-  else if (code === 2)    v = '<span class="verdict warn">⚠ ' + bi("визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌","visual/golden regression (exit 2) — you can update the baseline 📌") + '</span>';
-  else if (code === 3)    v = '<span class="verdict no">✖ ' + bi("целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)","integrity/config (plan_hash/golden) — needs a human (exit 3)") + '</span>';
-  else                    v = '<span class="verdict">exit ' + esc(code) + '</span>';
-  addMsg("sys", v);
-
-  // Show + offer the authored scenario, the report, and (for replay/baseline) the heal/baseline report.
-  for (const name of ["scenario.json", "report.json", "heal-report.json", "baseline-report.json"]){
-    const content = await fetchArtifact(base, id, name);
-    if (!content) continue;
-    const preview = content.length > 4000 ? content.slice(0, 4000) + "\n… (" + content.length + " bytes)" : content;
-    const el = addMsg("sys", '<strong>' + esc(name) + '</strong><pre>' + esc(preview) + '</pre><div class="dlrow"></div>');
-    const btn = document.createElement("button");
-    btn.innerHTML = "⬇ " + esc(name);
-    btn.addEventListener("click", () => download(name, content));
-    el.querySelector(".dlrow").appendChild(btn);
-  }
-}
-
-async function fetchArtifact(base, id, name){
-  try {
-    const r = await fetch(base + "/v1/runs/" + encodeURIComponent(id) + "/artifact?name=" + encodeURIComponent(name), { headers: authHdr() });
-    if (!r.ok) return null;
-    return await r.text();
-  } catch(e){ return null; }
-}
-
-function download(filename, content){
-  const blob = new Blob([content], { type:"application/json;charset=utf-8" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 0);
-}
-
-initLang();
-syncMode();
-
-/* ADR-064 Mode 3: same-origin auto-connect + one-time token bootstrap. See docs/index.html for the
-   full rationale. Fails silently on Pages / file:// / a Mode-2 split deploy; the token stays in tab
-   memory only. */
-(async function adr064Bootstrap(){
-  try {
-    if (location.protocol !== "http:" && location.protocol !== "https:") return;
-    const origin = location.origin.replace(/\/+$/,"");
-    const r = await fetch(origin + "/healthz", {cache:"no-store"});
-    if (!r.ok) return;
-    const j = await r.json();
-    if (!j || j.status !== "ok") return;
-    if (!$("capi").value.trim()) $("capi").value = origin;
-    const m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
-    if (m) {
-      try {
-        const t = await fetch(origin + "/v1/ui-token?nonce=" + m[1], {cache:"no-store"});
-        if (t.ok) { const b = await t.json(); if (b && b.token) $("capitok").value = b.token; }
-      } finally {
-        history.replaceState({}, "", location.pathname + location.hash);
-      }
-    }
-    $("check").click();   // reuse the existing liveness path (status + enable Send)
-  } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
-})();
+  /* replace(), not assign(): Back should return the reader to wherever they came from rather than
+     bouncing them through this page again. */
+  try { location.replace('../#v=chat'); } catch (e) { /* the manual link above is the fallback */ }
 </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// DOM gate for the hub's Logs view (ADR-065) — a real headless Chromium against a real control-API
-// serving the real page, driving a real run.
+// DOM gate for the hub (ADR-065 Logs view + ADR-066 navigation) — a real headless Chromium against a
+// real control-API serving the real page, driving a real run.
 //
 // It exists because the claims this feature makes are all about what a person SEES, and none of them
 // can be checked from Go or Python: that the run narrative never leaks into the levelled diagnostics,
@@ -31,10 +31,18 @@ const results = [];
 // never reaches the awaiting check() — it escapes as an unhandled rejection instead. (Same lesson the
 // wizard gate records.)
 const pageErrors = [];
-async function check(name, fn) {
+// `allowConsole` names console output that is CORRECT for the scenario, so it cannot be silently
+// blanket-ignored. The one real case: a reload without ?bootstrap= leaves the tab with no token, by
+// design (ADR-032/064 — the nonce is one-time and the token never touches storage), so a token-gated
+// read answering 403 is the product behaving properly.
+async function check(name, fn, opts) {
   pageErrors.length = 0;
   try {
     await fn();
+    const allow = opts && opts.allowConsole;
+    const left = allow ? pageErrors.filter((e) => !allow.test(e)) : pageErrors;
+    pageErrors.length = 0;
+    pageErrors.push(...left);
     if (pageErrors.length) throw new Error(`uncaught page error(s): ${pageErrors.join(' | ')}`);
     results.push({ name, ok: true });
     console.log(`  ok   ${name}`);
@@ -111,10 +119,7 @@ try {
 
   await page.goto(`http://127.0.0.1:${PORT}/?bootstrap=${nonce}`, { waitUntil: 'load' });
   await page.waitForTimeout(400);
-  await page.click('#tab-btn-tests');
-  await page.click('.subtab-btn[data-subtab="logs"]');
-  // The view fetches the catalogue, the run list and the logs; wait for rows rather than a fixed sleep.
-  await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
+  // ADR-066: navigation is the rail; the Logs checks below reach it through the router.
 
   const rows = () => page.locator('#lg-list .lgrow:not(.child)');
   const setLevels = async (on) => {
@@ -125,11 +130,114 @@ try {
     await page.waitForTimeout(250);
   };
 
-  console.log(`\nhub-dom-check — Logs view (ADR-065), port ${PORT}\n`);
+  console.log(`\nhub-dom-check — hub navigation (ADR-066) + Logs view (ADR-065), port ${PORT}\n`);
 
-  await check('bootstrap: the tab is usable without pasting a token', async () => {
+  /* ---------------------------------------------------------------- ADR-066: navigation */
+  const VIEWS = ['chat', 'run', 'live', 'library', 'results', 'logs', 'tools', 'settings'];
+
+  await check('nav: every rail item reveals its own view and nothing else', async () => {
+    for (const v of VIEWS) {
+      await page.click(`.rail a[data-nav="${v}"]`);
+      await page.waitForTimeout(200);
+      const shown = await page.locator(`[data-view~="${v}"]:visible`).count();
+      ok(shown > 0, `view ${v} revealed nothing`);
+      const cur = await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav');
+      eq(cur, v, `the rail did not mark ${v} as current`);
+      // Nothing from another view may be on screen at the same time.
+      for (const other of VIEWS.filter((x) => x !== v)) {
+        const leaked = await page.locator(`[data-view="${other}"]:visible`).count();
+        eq(leaked, 0, `view ${v} is showing ${leaked} section(s) belonging to ${other}`);
+      }
+    }
+  });
+
+  await check('nav: the product\'s main action is not buried under Settings', async () => {
+    // The defect this redesign exists to fix: launching a run lived under a tab called "Settings",
+    // next to four calculators.
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForTimeout(200);
+    ok(!(await page.locator('#build').isVisible()), 'the run builder is still inside Settings');
+    ok(await page.locator('#capitok').isVisible(), 'Settings must hold the connection fields');
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    ok(await page.locator('#b-run').isVisible(), 'the run button is not on its own view');
+    ok(!(await page.locator('#rec-out').isVisible()), 'a calculator is showing next to the run form');
+  });
+
+  await check('nav: ONE token field for the whole app', async () => {
+    const fields = await page.locator('input[id="capitok"]').count();
+    eq(fields, 1, 'more than one token field exists — the second would need pasting again');
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForTimeout(200);
+    const val = await page.locator('#capitok').inputValue();
+    ok(val.length > 0, 'the single token field is empty after bootstrap');
+  });
+
+  await check('nav: grouped views switch inner sections without leaking siblings', async () => {
+    await page.click('.rail a[data-nav="library"]');
+    await page.waitForTimeout(300);
+    eq(await page.locator('[data-innerbar="library"] .subtab-btn').count(), 3, 'library inner tabs');
+    await page.click('[data-innerbar="library"] .subtab-btn[data-sub="runs"]');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#runs-list').isVisible(), 'the Runs section did not appear');
+    ok(!(await page.locator('[data-subpanel="library"]').isVisible()),
+      'Scenarios stayed visible alongside Runs');
+    await page.click('[data-innerbar="library"] .subtab-btn[data-sub="library"]');
+    await page.waitForTimeout(250);
+  });
+
+  await check('nav: an address beats a remembered view', async () => {
+    // localStorage now holds a view from the clicking above. An explicit link must win over it —
+    // getting this backwards sent every deep link to whatever was open last, which is precisely the
+    // kind of link that gets pasted into a bug report.
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/#v=logs`, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'logs',
+      '#v=logs did not open the Logs view');
+
+    // A legacy anchor must resolve to the view that now contains that section, not 404 into the default.
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/#connect`, { waitUntil: 'load' });
+    await page.waitForTimeout(600);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'settings',
+      'the legacy #connect anchor did not resolve to Settings');
+
+    // A hash-only change is a SAME-DOCUMENT navigation: without a hashchange listener nothing rereads it.
+    await page.evaluate(() => { location.hash = '#v=tools'; });
+    await page.waitForTimeout(300);
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'tools',
+      'editing the hash did not switch the view');
+  }, { allowConsole: /403 \(Forbidden\)/ });
+
+  await check('nav: the standalone chat page redirects into the app instead of duplicating it', async () => {
+    await page.goto(`http://127.0.0.1:${PORT}/chat/`, { waitUntil: 'load' });
+    await page.waitForTimeout(700);
+    ok(/#v=chat$/.test(page.url()), `/chat/ did not land on the Chat view, got ${page.url()}`);
+    const fields = await page.locator('input[id="capitok"]').count();
+    eq(fields, 1, 'the chat page still carries its own token field');
+  });
+
+  /* Back to a clean load for the Logs checks. The bootstrap nonce was already spent by the first load,
+     and the token is deliberately never persisted, so this reload pastes it the way a Mode-2 operator
+     does — which is also the documented fallback when the one-time link has expired. */
+  await page.goto('about:blank');
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+  await page.waitForTimeout(400);
+  // The fields live in Settings, and only the active view is on screen — which is the point of the
+  // rail, so the gate has to navigate like a person rather than reach into a hidden input.
+  await page.click('.rail a[data-nav="settings"]');
+  await page.waitForTimeout(200);
+  await page.fill('#capi', `http://127.0.0.1:${PORT}`);
+  await page.fill('#capitok', token);
+  await page.click('.rail a[data-nav="logs"]');
+  await page.click('#lg-reload');
+  await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
+
+  /* ---------------------------------------------------------------- ADR-065: Logs view */
+  await check('logs: the view loads and starts with DEBUG off', async () => {
     const tok = await page.locator('#capitok').inputValue();
-    ok(tok.length > 0, 'the bootstrap exchange left #capitok empty, so every token-gated read fails');
+    ok(tok.length > 0, 'no token in the field, so every token-gated read fails');
     const err = await page.locator('#lg-err').isVisible();
     ok(!err, `the error box is visible: ${await page.locator('#lg-err').innerText()}`);
     // Asserted HERE, before any later check touches the boxes: a tester must not be handed the
@@ -243,6 +351,146 @@ try {
     ok(some > 0 && some < all, `filtering by category browser gave ${some} of ${all}`);
     await page.selectOption('#lg-cat', '');
     await page.waitForTimeout(250);
+  });
+
+  /* ---------------------------------------------------------------- ADR-067/068: source, register, language */
+  await check('filter language: the grammar means what it says', async () => {
+    // Evaluated INSIDE the shipped page, so this tests the parser that actually runs — not a copy.
+    const bad = await page.evaluate(() => {
+      const R = (o) => Object.assign({ lvl:'info', cat:'run', src:'tool', mod:'brain.x', code:'a.b',
+        msg:'hello world', step:0, n:1, ts:'2026-07-25T10:00:00Z' }, o);
+      const cases = [
+        ['', R({}), true],
+        ['lvl >= warn', R({lvl:'warn'}), true],
+        ['lvl >= warn', R({lvl:'info'}), false],
+        ['src == application', R({src:'application'}), true],
+        ['src == application', R({src:'tool'}), false],
+        ['step == 4', R({step:4}), true],
+        ['step > 2', R({step:3}), true],
+        ['cat in {llm, plan}', R({cat:'plan'}), true],
+        ['cat in {llm, plan}', R({cat:'heal'}), false],
+        ['msg ~ /wor.d/', R({}), true],
+        ['msg contains WORLD', R({}), true],
+        ['!(cat == run)', R({}), false],
+        ['lvl >= warn && src == application', R({lvl:'error', src:'tool'}), false],
+        ['cat == run || cat == heal', R({}), true],
+        ['lvl in {}', R({}), false],
+      ];
+      const out = [];
+      for (const [expr, rec, want] of cases) {
+        const c = lgCompile(expr);
+        if (!c.ok) { out.push(`${expr} -> parse error: ${c.msg}`); continue; }
+        if (c.pred(rec) !== want) out.push(`${expr} -> got ${!want}, want ${want}`);
+      }
+      // Malformed input must be REFUSED, with a message. Silently accepting it would filter wrongly.
+      for (const expr of ['nosuch == 1', 'cat ==', '(cat == run', 'msg ~ /[/', 'lvl >= loud',
+                          'step == abc', 'cat == run xyz']) {
+        const c = lgCompile(expr);
+        if (c.ok) out.push(`${expr} -> accepted, should be refused`);
+        else if (!c.msg || !c.en) out.push(`${expr} -> refused without a bilingual message`);
+      }
+      return out;
+    });
+    ok(bad.length === 0, `grammar failures:\n       ${bad.join('\n       ')}`);
+  });
+
+  await check('filter language: an invalid expression warns without blanking the view', async () => {
+    const before = await rows().count();
+    await page.fill('#lg-expr', 'lvl >= warn && (');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#lg-expr.bad').count() === 1, 'an invalid expression must show as invalid');
+    ok(await page.locator('#lg-exprmsg.bad').count() === 1, 'and must say what is wrong');
+    ok(await rows().count() > 0, 'an invalid expression blanked the view instead of holding the last good filter');
+    await page.fill('#lg-expr', '');
+    await page.waitForTimeout(250);
+    eq(await rows().count(), before, 'clearing the expression did not restore the view');
+  });
+
+  await check('controls WRITE the expression rather than filtering separately', async () => {
+    // The promise this design makes: whatever a click did is visible as text you can read and paste.
+    // Levels are restored first: an earlier check leaves them narrowed, and this fixture emits no
+    // warnings at all, so inheriting that state would blank the view for reasons unrelated to the claim.
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    await page.uncheck('#lg-debug');
+    await page.uncheck('#lg-info');
+    await page.waitForTimeout(250);
+    const expr = await page.locator('#lg-expr').inputValue();
+    ok(/lvl\s*>=\s*warn/.test(expr),
+      `unchecking INFO/DEBUG should read as a threshold, got: ${expr}`);
+    await page.selectOption('#lg-src', 'application');
+    await page.waitForTimeout(250);
+    const expr2 = await page.locator('#lg-expr').inputValue();
+    ok(/src\s*==\s*application/.test(expr2), `the source dropdown did not write a clause: ${expr2}`);
+    ok(/&&/.test(expr2), `clauses must combine with &&: ${expr2}`);
+
+    // The clause must FILTER, not merely describe. Shown by discrimination rather than by "more rows":
+    // this fixture behaves, so it emits nothing from the application, and a level threshold may already
+    // have left nothing to count — an earlier version of this check asserted "more" and failed for that
+    // reason rather than for a defect.
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.selectOption('#lg-src', '');
+    await page.waitForTimeout(250);
+    const all = await rows().count();
+    ok(all > 0, 'no rows with every level on — the fixture produced nothing');
+    await page.selectOption('#lg-src', 'tool');
+    await page.waitForTimeout(250);
+    const tool = await rows().count();
+    await page.selectOption('#lg-src', 'application');
+    await page.waitForTimeout(250);
+    const app = await rows().count();
+    ok(tool > 0, 'filtering to the tool hid the tool\'s own diagnostics');
+    ok(app < tool, `src must discriminate: tool=${tool}, application=${app}, all=${all}`);
+    await page.selectOption('#lg-src', '');
+    await page.waitForTimeout(250);
+    eq(await rows().count(), all, 'clearing the source did not restore the view');
+  });
+
+  await check('hand-editing the expression says so instead of letting controls lie', async () => {
+    await page.fill('#lg-expr', 'cat == browser');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#lg-custom').isVisible(),
+      'a hand-written expression must be announced — otherwise the dropdowns claim to describe it');
+    ok(await page.locator('#lg-src').isDisabled(), 'controls that cannot describe the filter must be disabled');
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(250);
+    ok(!(await page.locator('#lg-custom').isVisible()), 'clearing must hand control back');
+    ok(!(await page.locator('#lg-src').isDisabled()), 'clearing must re-enable the controls');
+  });
+
+  await check('clicking a cell filters by it', async () => {
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    const cell = page.locator('#lg-list .lgclick[data-f="cat"]').first();
+    const val = await cell.getAttribute('data-v');
+    await cell.click();
+    await page.waitForTimeout(250);
+    const expr = await page.locator('#lg-expr').inputValue();
+    ok(expr.indexOf('cat == ' + val) >= 0, `clicking a category cell should add it: got ${expr}`);
+    const shown = await rows().count();
+    ok(shown > 0, 'clicking a cell filtered everything away');
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+  });
+
+  await check('the register toggle changes how a row reads, not which rows there are', async () => {
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    const n1 = await rows().count();
+    const human = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    await page.click('#lg-reg-tech');
+    await page.waitForTimeout(300);
+    const n2 = await rows().count();
+    const tech = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    eq(n2, n1, 'switching register changed the number of rows');
+    ok(human !== tech, 'the technical register reads identically to the human one');
+    ok(/\d{4}-\d{2}-\d{2}T/.test(tech), `the technical register must show a full timestamp: ${tech}`);
+    ok(/[a-z]+\.[a-z_]+/.test(tech), 'the technical register must show the event code');
+    await page.click('#lg-reg-human');
+    await page.waitForTimeout(300);
   });
 
   await check('a run with no logs says so instead of looking empty', async () => {

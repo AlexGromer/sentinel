@@ -30,8 +30,8 @@ const (
 
 // handleRunLogs serves a run's structured diagnostics.
 //
-// Filters (all optional, AND-combined): lvl (minimum level), cat, mod, code, q (substring of the
-// message), after (seq exclusive), limit. Server-side filtering exists so a long run stays usable on
+// Filters (all optional, AND-combined): lvl (minimum level), src (tool/application/testing), cat, mod,
+// code, step, q (substring of the message), after (seq exclusive), limit. Server-side filtering exists so a long run stays usable on
 // a slow link; the UI still filters client-side for instant feedback within a loaded page.
 func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 	if !s.authed(r) {
@@ -65,6 +65,9 @@ func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	minRank := logRank(q.Get("lvl"))
 	wantCat, wantMod, wantCode := q.Get("cat"), q.Get("mod"), q.Get("code")
+	// ADR-067: `src` is the coarse axis a tester reaches for first (is it my app or the tool?), `step`
+	// narrows to one step of the run — together they answer "what went wrong, and where".
+	wantSrc, wantStep := q.Get("src"), q.Get("step")
 	needle := strings.ToLower(q.Get("q"))
 	after, _ := strconv.Atoi(q.Get("after"))
 	limit := logsDefaultLimit
@@ -100,6 +103,8 @@ func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 			(wantCat != "" && rec.Cat != wantCat) ||
 			(wantMod != "" && rec.Mod != wantMod) ||
 			(wantCode != "" && rec.Code != wantCode) ||
+			(wantSrc != "" && rec.Src != wantSrc) ||
+			(wantStep != "" && strconv.Itoa(rec.Step) != wantStep) ||
 			(needle != "" && !strings.Contains(strings.ToLower(rec.Msg), needle)) {
 			continue
 		}
