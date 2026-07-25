@@ -24,6 +24,9 @@ const { chromium } = require('playwright');
 
 const PORT = Number(process.env.HUB_GATE_PORT || 18744);
 const FIXTURE = `file://${REPO}/testdata/fixtures/l2.html`;
+// The fixture that BREAKS on purpose (ADR-067): JS exceptions, 404s, console errors. Needed because
+// every claim about the application channel is unfalsifiable against a fixture that behaves.
+const FAULT_FIXTURE = `file://${REPO}/testdata/fixtures/l7-appfaults.html`;
 
 /* ------------------------------------------------------------------ tiny harness */
 const results = [];
@@ -101,16 +104,29 @@ try {
   if (!fs.existsSync(tokenPath)) throw new Error(`control-api did not persist a token at ${tokenPath}`);
   const token = fs.readFileSync(tokenPath, 'utf8').trim();
 
+  const spawnRun = async (target) => {
+    const started = await fetch(`http://127.0.0.1:${PORT}/v1/runs`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    if (started.status !== 202) throw new Error(`POST /v1/runs (${target}) -> ${started.status}`);
+    return (await started.json()).run_id;
+  };
+
   // A real run against a fixture that is KNOWN to loop on a disabled control — that loop is the
   // signal the collapsing exists to make visible, so the gate needs it.
-  const started = await fetch(`http://127.0.0.1:${PORT}/v1/runs`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target: FIXTURE }),
-  });
-  if (started.status !== 202) throw new Error(`POST /v1/runs -> ${started.status}`);
+  await spawnRun(FIXTURE);
   // Long enough for the browser to launch, a few steps to run, and the heal stub to repeat.
   await new Promise((r) => setTimeout(r, 25000));
+
+  // A SECOND run, against the fixture that actually misbehaves. The audience check below needs a run
+  // carrying application-side records, and l2 has none — it behaves, so `src == application` matches
+  // nothing there. Two mutation runs proved that mattered: with the audience expansion removed
+  // entirely, `src == business` and `src == application || src == testing` both matched zero rows on
+  // l2 and the check passed on 0 == 0. A set identity over two empty sets asserts nothing.
+  const faultRun = await spawnRun(FAULT_FIXTURE);
+  await new Promise((r) => setTimeout(r, 22000));
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1180, height: 1400 } });
@@ -475,22 +491,87 @@ try {
     await page.waitForTimeout(200);
   });
 
-  await check('the register toggle changes how a row reads, not which rows there are', async () => {
+  // ADR-068 rev.2: «подробно» is a level of DETAIL, not a second register. The old check asserted that
+  // the two registers read DIFFERENTLY, which a pair of unrelated wordings satisfies trivially. Detail
+  // has to be additive instead: same rows, same order, the plain sentence still there, plus the
+  // machine identity. That is a strictly stronger claim and it is what a reader relies on.
+  await check('«подробно» adds the machine identity without changing which rows there are', async () => {
     await setLevels(['error', 'warn', 'info', 'debug']);
     await page.click('#lg-expr-clear');
     await page.waitForTimeout(200);
     const n1 = await rows().count();
-    const human = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
-    await page.click('#lg-reg-tech');
+    const plain = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    await page.check('#lg-detail');
     await page.waitForTimeout(300);
     const n2 = await rows().count();
-    const tech = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
-    eq(n2, n1, 'switching register changed the number of rows');
-    ok(human !== tech, 'the technical register reads identically to the human one');
-    ok(/\d{4}-\d{2}-\d{2}T/.test(tech), `the technical register must show a full timestamp: ${tech}`);
-    ok(/[a-z]+\.[a-z_]+/.test(tech), 'the technical register must show the event code');
-    await page.click('#lg-reg-human');
+    const detailed = await page.locator('#lg-list .lgrow:not(.child)').first().innerText();
+    eq(n2, n1, 'turning on detail changed the number of rows');
+    ok(/\d{4}-\d{2}-\d{2}T/.test(detailed), `detail must show the full timestamp: ${detailed}`);
+    ok(/[a-z]+\.[a-z_]+/.test(detailed), 'detail must show the event code');
+    ok(/\bsrc=/.test(detailed), 'detail must name the source the row came from');
+    // Additive, not a swap: the sentence the reader was already reading has to survive. Compared on
+    // the message text alone — the timestamp and the level chip legitimately change form.
+    const sentence = plain.split('\n').pop().trim().replace(/\s*×\d+\s*$/, '');
+    const core = sentence.replace(/^(шаг|step)\s+\d+\s*/, '').slice(0, 40);
+    ok(core.length > 3 && detailed.indexOf(core) >= 0,
+      `detail dropped the plain sentence: looked for "${core}" in "${detailed}"`);
+    await page.uncheck('#lg-detail');
     await page.waitForTimeout(300);
+  });
+
+  // The coarse axis a tester picks first. An audience is not a source — it stands for the set of them,
+  // so it must filter to the UNION and never to nothing, which is what a plain string compare would do.
+  //
+  // Run against l7-appfaults, NOT the default l2: l2 behaves, so it emits nothing from the application
+  // and every set identity below would hold over empty sets. Mutation-proven — with the expansion torn
+  // out, `src == business` matched 0 and `application || testing` matched 0, and 0 == 0 passed.
+  await check('an audience filters to the sources it contains, not to its own name', async () => {
+    await page.selectOption('#lg-run', faultRun);
+    await page.waitForTimeout(1500);
+    await setLevels(['error', 'warn', 'info', 'debug']);
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(250);
+    const all = await rows().count();
+    ok(all > 0, 'no rows with every level on — the misbehaving fixture produced nothing');
+
+    // The dropdown must offer the groups, and the group heading itself must be selectable.
+    const groups = await page.locator('#lg-src optgroup').count();
+    ok(groups >= 2, `expected the audience optgroups, got ${groups}`);
+    await page.selectOption('#lg-src', 'tool');
+    await page.waitForTimeout(250);
+    ok(await rows().count() > 0, 'the tool audience hid the tool\'s own diagnostics');
+
+    // Set equality, established through the expression rather than through the control: business must
+    // select exactly what application ∪ testing does, and `in {business}` must agree with `== business`.
+    const countFor = async (expr) => {
+      await page.fill('#lg-expr', expr);
+      await page.waitForTimeout(250);
+      ok(!((await page.locator('#lg-expr').getAttribute('class')) || '').includes('bad'),
+        `expression rejected by the parser: ${expr}`);
+      return rows().count();
+    };
+    // NON-VACUITY FIRST. Every identity below is trivially true over empty sets, so the check has to
+    // establish that the sets are non-empty before it may claim they are equal.
+    const application = await countFor('src == application');
+    ok(application > 0,
+      'l7-appfaults produced no application-side records — the audience identities below would be ' +
+      'vacuous, so this is a gate failure, not a fixture quirk');
+
+    const business = await countFor('src == business');
+    const union = await countFor('src == application || src == testing');
+    const inForm = await countFor('src in {business}');
+    const negated = await countFor('src != business');
+    ok(business > 0, `business must be non-empty for the identities to mean anything: ${business}`);
+    ok(business >= application, `business must contain application: business=${business}, application=${application}`);
+    eq(business, union, 'src == business must equal application ∪ testing');
+    eq(inForm, business, '`in {business}` and `== business` must agree');
+    eq(business + negated, all, 'an audience and its negation must partition the records');
+    ok(business < all, `business must exclude the tool's own logs: business=${business}, all=${all}`);
+
+    await page.click('#lg-expr-clear');
+    await page.waitForTimeout(200);
+    await page.selectOption('#lg-run', { index: 0 });
+    await page.waitForTimeout(1200);
   });
 
   await check('a run with no logs says so instead of looking empty', async () => {

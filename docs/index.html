@@ -233,7 +233,6 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 #lg-expr.bad{border-color:var(--no);box-shadow:0 0 0 1px rgba(255,77,109,.25)}
 .lgexprmsg{font-size:.74rem;color:var(--mut);min-height:1rem;font-family:ui-monospace,monospace}
 .lgexprmsg.bad{color:var(--no)}
-.lgreg button{font-size:.78rem;padding:.22rem .5rem}
 .lgpill{font-size:.74rem;padding:.2rem .5rem;border:1px solid var(--line);border-radius:999px;
   background:var(--bg3);color:var(--tx);cursor:pointer}
 .lgpill:hover{border-color:var(--acc2)}
@@ -914,18 +913,18 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <label class="lgchk"><input type="checkbox" id="lg-info" checked> <span class="lvl lvl-info">INFO</span></label>
         <label class="lgchk"><input type="checkbox" id="lg-debug"> <span class="lvl lvl-debug">DEBUG</span></label>
       </div>
-      <!-- ADR-067: SOURCE is the coarse axis a tester reaches for first — is my application
-           misbehaving, or the tool? Only then does the subsystem matter. -->
+      <!-- ADR-067/068: the coarse axis a tester reaches for first is not "which subsystem" but
+           "whose problem is this — the business logic under test, or the tool testing it?". The
+           AUDIENCE groups sit above the sources they contain (brain/events.json `audiences`), so the
+           first choice is the one actually being made and the finer sources stay reachable under it. -->
       <div class="lgbar">
-        <span class="lglabel"><span data-lang="ru">Источник</span><span data-lang="en">Source</span></span>
+        <span class="lglabel"><span data-lang="ru">Логи</span><span data-lang="en">Logs</span></span>
         <select id="lg-src"></select>
         <span class="lglabel"><span data-lang="ru">Шаг</span><span data-lang="en">Step</span></span>
         <select id="lg-step"></select>
-        <span class="lglabel"><span data-lang="ru">Вид</span><span data-lang="en">Register</span></span>
-        <span class="toggle lgreg" role="group">
-          <button type="button" id="lg-reg-human" aria-pressed="true"><span data-lang="ru">по-человечески</span><span data-lang="en">plain</span></button>
-          <button type="button" id="lg-reg-tech" aria-pressed="false"><span data-lang="ru">технически</span><span data-lang="en">technical</span></button>
-        </span>
+        <label class="lgchk" title="add the timestamp, event code and module to every row">
+          <input type="checkbox" id="lg-detail"> <span data-lang="ru">подробно</span><span data-lang="en">detailed</span>
+        </label>
       </div>
       <div class="lgbar">
         <span class="lglabel"><span data-lang="ru">Категория</span><span data-lang="en">Category</span></span>
@@ -2518,7 +2517,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
        comparison := FIELD OP VALUE | FIELD 'in' '{' VALUE (',' VALUE)* '}'
      ===================================================================================== */
   var LG_FIELDS = {
-    lvl:  {kind:'level'},  src: {kind:'text'},  cat: {kind:'text'},
+    lvl:  {kind:'level'},  src: {kind:'src'},   cat: {kind:'text'},
     mod:  {kind:'text'},   code:{kind:'text'},  msg: {kind:'text'},
     step: {kind:'num'},    n:   {kind:'num'},   ts:  {kind:'text'}
   };
@@ -2596,6 +2595,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         if (!peek()) fail('незакрытая {', 'unterminated {');
         i++;
         var low = set.map(function(x){ return x.toLowerCase(); });
+        /* `src` values may name an audience, so a set of them is the union of what each stands for —
+           otherwise `src in {business}` and `src == business` would disagree, which is exactly the
+           kind of inconsistency that makes a filter language untrustworthy. */
+        if (field === 'src'){
+          var flat = {};
+          low.forEach(function(x){ lgSrcSet(x).forEach(function(s){ flat[String(s).toLowerCase()] = 1; }); });
+          low = Object.keys(flat);
+        }
         return function(r){ return low.indexOf(String(lgFieldVal(r, field) ?? '').toLowerCase()) >= 0; };
       }
       if (!nxt || nxt.t !== 'op') fail('ожидался оператор (== != >= <= > < ~ contains in)',
@@ -2621,12 +2628,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     } catch(e){ return {ok:false, msg:e.msg||String(e), en:e.en||e.msg||String(e), at:e.at||0}; }
   }
 
-  /* The value a field takes on a record. `msg` deliberately resolves to the text CURRENTLY DISPLAYED,
-     so searching finds what the reader can see — in the human register that is the Russian phrase, in
-     the technical one the server's English. Searching for what is on screen is the only behaviour that
-     never surprises. */
+  /* The value a field takes on a record. `msg` resolves to the text CURRENTLY DISPLAYED, so searching
+     finds what the reader can see — the phrase in the reader's language, which for EN is the server's
+     own rendered English anyway. Searching for what is on screen is the only behaviour that never
+     surprises. To find an event by its server-side identity instead of its wording, filter on `code`:
+     it is exact, stable across both languages, and «подробно» prints it on every row. (Before the
+     detail checkbox this was the `msg`-follows-the-register rule; one register means one answer.) */
   function lgFieldVal(r, f){
-    if (f === 'msg') return lgRegister === 'tech' ? (r.msg || '') : lgText(r);
+    if (f === 'msg') return lgText(r);
     if (f === 'n')   return r.n || 1;
     return r[f];
   }
@@ -2649,6 +2658,23 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var num = Number(val.v);
       if (!isFinite(num)) throw {msg:'ожидалось число', en:'expected a number', at:val.at};
       return function(r){ return lgCmp(Number(lgFieldVal(r, field)) || 0, num, op); };
+    }
+    if (kind === 'src'){
+      /* `src` takes a source name OR an audience name, and the two are written identically. An
+         audience stands for the sources it contains, so `src == business` is exactly
+         `src in {application, testing}` without the reader having to know the membership. Only
+         equality is expanded: >/< on a set has no meaning, so those keep the plain text comparison
+         and stay lexicographic like every other text field. */
+      var sname = String(val.v).toLowerCase();
+      if (op === '==' || op === '!='){
+        var set = lgSrcSet(sname).map(function(x){ return String(x).toLowerCase(); });
+        return function(r){
+          var got = String(lgFieldVal(r, field) ?? '').toLowerCase();
+          var hit = set.indexOf(got) >= 0;
+          return op === '==' ? hit : !hit;
+        };
+      }
+      return function(r){ return lgCmp(String(lgFieldVal(r, field) ?? '').toLowerCase(), sname, op); };
     }
     var sv = String(val.v).toLowerCase();
     return function(r){
@@ -2677,7 +2703,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
 
   var lgLoaded=false, lgCatalog=null, lgRecords=[], lgDegradations=[], lgRunId='';
-  var lgRegister='human';                 /* ADR-067: the register the rows are read in */
+  var lgDetail=false;                     /* ADR-068 rev.2: a level of detail, not a second register */
   var lgPred=function(){ return true; };  /* ADR-068: compiled from the expression field */
 
   var LG_SORT_LABEL = {
@@ -2746,6 +2772,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var t = lgCatalog && lgCatalog.sources && lgCatalog.sources[src];
     return t ? t[l] : src;
   }
+  function lgAudLabel(aud){
+    if (!aud) return '';
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var t = lgCatalog && lgCatalog.audiences && lgCatalog.audiences[aud];
+    return t ? t[l] : aud;
+  }
+  /* The sources an audience name stands for. An unknown name resolves to itself, which is what makes
+     `src == application` and `src == business` the same syntax: one names a source, the other a set
+     of them, and the predicate does not have to know which the reader meant. */
+  function lgSrcSet(name){
+    var a = lgCatalog && lgCatalog.audiences && lgCatalog.audiences[name];
+    return (a && a.sources && a.sources.length) ? a.sources.slice() : [name];
+  }
   function lgCatLabel(cat){
     var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
     var t = lgCatalog && lgCatalog.category_labels && lgCatalog.category_labels[cat];
@@ -2762,13 +2801,35 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         cats.map(function(c){ return '<option value="'+esc(c)+'">'+esc(lgCatLabel(c))+'</option>'; }).join('');
       sel.value = keep;
     }
-    /* Source comes from the catalogue (a closed axis), step from the records. */
+    /* Sources and audiences both come from the catalogue (closed axes), step from the records. The
+       select is grouped rather than flat: an audience and the sources it contains are not siblings,
+       and listing them side by side would offer "бизнес-логика" and "приложение" as if choosing
+       between them were a real choice. An <optgroup> says which contains which without a word. */
     var ssel = ge('lg-src');
     if (ssel){
       var keeps = ssel.value;
-      var srcs = (lgCatalog && lgCatalog.sources) ? Object.keys(lgCatalog.sources) : [];
-      ssel.innerHTML = '<option value="">' + (l==='en'?'all':'все') + '</option>' +
-        srcs.map(function(x){ return '<option value="'+esc(x)+'">'+esc(lgSrcLabel(x))+'</option>'; }).join('');
+      var auds = (lgCatalog && lgCatalog.audiences) || {};
+      var html = '<option value="">' + (l==='en'?'all':'все') + '</option>';
+      var grouped = {};
+      Object.keys(auds).forEach(function(a){
+        html += '<optgroup label="'+esc(lgAudLabel(a))+'">';
+        /* The group's own entry first: picking the heading itself is the coarse choice the group
+           exists for, and it must be selectable, not just a caption. */
+        html += '<option value="'+esc(a)+'">'+(l==='en'?'all':'всё')+'</option>';
+        (auds[a].sources || []).forEach(function(s){
+          grouped[s] = 1;
+          /* A single-source audience would otherwise print the same label twice ("инструмент" under
+             "инструмент"), which reads as a duplicate rather than a hierarchy. */
+          if ((auds[a].sources || []).length > 1) html += '<option value="'+esc(s)+'">'+esc(lgSrcLabel(s))+'</option>';
+        });
+        html += '</optgroup>';
+      });
+      /* A source the catalogue forgot to place in an audience must still be reachable — the gate
+         forbids that state, but the UI should degrade to visible rather than to silently missing. */
+      Object.keys((lgCatalog && lgCatalog.sources) || {}).forEach(function(s){
+        if (!grouped[s]) html += '<option value="'+esc(s)+'">'+esc(lgSrcLabel(s))+'</option>';
+      });
+      ssel.innerHTML = html;
       ssel.value = keeps;
     }
     var stepsel = ge('lg-step');
@@ -3018,6 +3079,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var en = document.body.classList.contains('lang-en');
     var rows = [
       ['lvl >= warn', en ? 'warnings and errors' : 'предупреждения и ошибки'],
+      ['src == business', en ? 'the application and its test outcomes' : 'приложение и исходы его тестов'],
       ['src == application', en ? 'only the tested application' : 'только проверяемое приложение'],
       ['step == 4', en ? 'everything that happened during step 4' : 'всё, что случилось на шаге 4'],
       ['cat in {llm, plan}', en ? 'either category' : 'любая из категорий'],
@@ -3071,41 +3133,36 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     list.innerHTML = shown.map(function(r){
       var kids = byParent[r.seq] || [];
-      /* Two registers of the SAME record. Human: the catalogue phrase in the reader's language, with the
-         step and the source named in words. Technical: precise timestamp, code, module and the server's
-         own English — what you paste into an issue. Same rows, same order, same filters, so switching
-         never loses your place. */
-      var body;
-      if (lgRegister === 'tech'){
-        body =
-          '<span class="lgts">'+esc(r.ts||'')+'</span>'+
-          '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(r.lvl)+'</span>'+
-          '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+esc(r.cat)+'</span>'+
-          '<span class="lgmsg lgtech">'+
-            '<span class="lgclick" data-f="code" data-v="'+esc(r.code||'')+'">'+esc(r.code||'')+'</span>'+
-            (r.mod ? ' <span class="k">mod=</span><span class="lgclick" data-f="mod" data-v="'+esc(r.mod)+'">'+esc(r.mod)+'</span>' : '')+
-            (r.step ? ' <span class="k">step=</span><span class="lgclick" data-f="step" data-v="'+r.step+'">'+r.step+'</span>' : '')+
-            ' <span class="k">src=</span><span class="lgclick" data-f="src" data-v="'+esc(r.src||'')+'">'+esc(r.src||'')+'</span>'+
-            (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
-            '<br>'+esc(r.msg||'')+
-            (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
-          '</span>';
-      } else {
-        /* No source chip on the row: `src` is DERIVED from `cat`, so printing both says the same thing
-           twice ("приложение приложение"). It stays a filter axis, where being coarse is the point. */
-        body =
-          '<span class="lgts">'+esc((r.ts||'').slice(11,19))+'</span>'+
-          '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(lgLevelLabel(r.lvl))+'</span>'+
-          '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+esc(lgCatLabel(r.cat))+'</span>'+
-          '<span class="lgmsg">'+
-            (r.step ? '<span class="lgstep lgclick" data-f="step" data-v="'+r.step+'">'+
-                       bi('шаг ','step ')+r.step+'</span> ' : '')+
-            esc(lgText(r))+
-            (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
-            '<span class="lgcode">'+esc(r.code||'')+'</span>'+
-            (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
-          '</span>';
-      }
+      /* ONE register, two levels of detail. The row always reads as a sentence in the reader's
+         language; «подробно» adds the machine identity above it — full timestamp, event code, module
+         and source — which is what gets pasted into an issue. This replaced a human/technical pair
+         that showed the SAME record twice in two wordings: a second language for one event is a
+         dimension nobody asked for, and it made `msg` mean two different strings depending on a
+         toggle. Detail is additive, so the row never moves and nothing is ever hidden by it.
+         No source chip on the compact row: `src` is DERIVED from `cat`, so printing both says the
+         same thing twice ("приложение приложение"). It stays a filter axis, where coarse is the point. */
+      var body =
+        (lgDetail
+          ? '<span class="lgts">'+esc(r.ts||'')+'</span>'
+          : '<span class="lgts">'+esc((r.ts||'').slice(11,19))+'</span>')+
+        '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(lgDetail ? r.lvl : lgLevelLabel(r.lvl))+'</span>'+
+        '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+
+          esc(lgDetail ? r.cat : lgCatLabel(r.cat))+'</span>'+
+        '<span class="lgmsg">'+
+          (lgDetail
+            ? '<span class="lgtech">'+
+                '<span class="lgclick" data-f="code" data-v="'+esc(r.code||'')+'">'+esc(r.code||'')+'</span>'+
+                (r.mod ? ' <span class="k">mod=</span><span class="lgclick" data-f="mod" data-v="'+esc(r.mod)+'">'+esc(r.mod)+'</span>' : '')+
+                ' <span class="k">src=</span><span class="lgclick" data-f="src" data-v="'+esc(r.src||'')+'">'+esc(r.src||'')+'</span>'+
+              '</span><br>'
+            : '')+
+          (r.step ? '<span class="lgstep lgclick" data-f="step" data-v="'+r.step+'">'+
+                     bi('шаг ','step ')+r.step+'</span> ' : '')+
+          esc(lgText(r))+
+          (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
+          (lgDetail ? '' : '<span class="lgcode">'+esc(r.code||'')+'</span>')+
+          (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
+        '</span>';
       return '<div class="lgrow'+(r.degrades?' deg':'')+'">'+body+'</div>' +
         kids.map(function(k){
           return '<div class="lgrow child" data-child="'+r.seq+'" style="display:none">'+
@@ -3153,19 +3210,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var list = lgSavedList();
       if (list.indexOf(v) < 0){ list.unshift(v); lgSavedWrite(list); lgRenderSaved(); }
     });
-    var h = ge('lg-reg-human'), t = ge('lg-reg-tech');
-    function setReg(which){
-      lgRegister = which;
-      if (h) h.setAttribute('aria-pressed', which==='human' ? 'true':'false');
-      if (t) t.setAttribute('aria-pressed', which==='tech'  ? 'true':'false');
-      try { localStorage.setItem('sentinel_log_register', which); } catch(e){}
+    var d = ge('lg-detail');
+    if (d) d.addEventListener('change', function(){
+      lgDetail = !!d.checked;
+      try { localStorage.setItem('sentinel_log_detail', lgDetail ? '1' : '0'); } catch(e){}
       lgRender();
-    }
-    if (h) h.addEventListener('click', function(){ setReg('human'); });
-    if (t) t.addEventListener('click', function(){ setReg('tech'); });
+    });
     try {
-      var saved = localStorage.getItem('sentinel_log_register');
-      if (saved === 'tech') setReg('tech');
+      if (d && localStorage.getItem('sentinel_log_detail') === '1'){ d.checked = true; lgDetail = true; }
     } catch(e){}
   })();
   (function(){ var q=ge('lg-q'); if (q) q.addEventListener('input', lgRender); })();

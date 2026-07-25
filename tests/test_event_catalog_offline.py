@@ -137,7 +137,7 @@ def main() -> int:
             if not entry.get(lang):
                 fail(f"{code}: missing `{lang}` text (RU/EN parity is mandatory)")
     for table in ("category_labels", "level_labels", "phases", "modes", "exit_codes",
-                  "narrative", "heal_strategies", "heal_outcomes", "sources"):
+                  "narrative", "heal_strategies", "heal_outcomes", "sources", "audiences"):
         for key, val in cat[table].items():
             for lang in ("ru", "en"):
                 if not val.get(lang):
@@ -202,6 +202,27 @@ def main() -> int:
     for c in sorted(cats - set(seen_cats)):
         fail(f"category {c!r} belongs to no source — it would vanish under any source filter")
 
+    # And the audience axis must partition the SOURCES exactly, for the same reason one level up: the
+    # coarse choice a tester makes first ("my application, or the tool?") has to cover every record
+    # exactly once, or the top-level filter quietly hides a whole source.
+    seen_srcs: dict[str, str] = {}
+    for aud, meta in cat["audiences"].items():
+        for s in meta["sources"]:
+            if s not in cat["sources"]:
+                fail(f"audiences.{aud} lists source {s!r}, which is not in `sources`")
+            if s in seen_srcs:
+                fail(f"source {s!r} belongs to two audiences: {seen_srcs[s]} and {aud}")
+            seen_srcs[s] = aud
+    for s in sorted(set(cat["sources"]) - set(seen_srcs)):
+        fail(f"source {s!r} belongs to no audience — it would vanish under any audience filter")
+    # An audience name that collides with a category or level name would make `src == <name>` in the
+    # filter language ambiguous to a reader, since all three share the value space of one field.
+    for aud in cat["audiences"]:
+        if aud in cats and aud not in cat["sources"]:
+            fail(f"audience {aud!r} collides with a category name — `src == {aud}` would read two ways")
+        if aud in levels:
+            fail(f"audience {aud!r} collides with a level name")
+
     # Phases must match the graph's real nodes — a renamed node would otherwise leave the
     # narrative naming a phase that never occurs.
     graph_src = (REPO / "brain" / "graph.py").read_text()
@@ -247,7 +268,8 @@ def main() -> int:
     print(f"event catalogue OK: {len(events)} codes — "
           f"{len(brain_entries)} from {len({m for ms in real.values() for m in ms})} brain modules, "
           f"{len(foreign_entries)} from {len(EMITTERS)} foreign emitter(s); "
-          f"{len(degrading)} silent degradations, {len(cat['sources'])} sources, "
+          f"{len(degrading)} silent degradations, {len(cat['sources'])} sources in "
+          f"{len(cat['audiences'])} audiences, "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
           f"{len(patterns)} foreign patterns; RU/EN complete")
     return 0
