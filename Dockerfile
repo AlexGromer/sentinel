@@ -17,6 +17,11 @@ COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json do
 COPY docs/setup/ docs/setup/
 COPY docs/chat/ docs/chat/
 COPY docs/calculators/ docs/calculators/
+# M9-LIVE: control-api also embeds the event catalogue (`package eventcatalog`, brain/embed.go) to
+# classify log lines and to serve the bilingual message list. Same shape as the webui embed above and
+# the same reason for naming the files individually: `COPY brain/ brain/` would rebuild every Go
+# binary on any Python edit. The 2026-07-23 airgap-CI failure was exactly this omission for webui.
+COPY brain/embed.go brain/events.json brain/
 RUN CGO_ENABLED=0 go build -o /out/agentctl ./cmd/agentctl \
  && CGO_ENABLED=0 go build -o /out/store-gateway ./cmd/store-gateway \
  && CGO_ENABLED=0 go build -o /out/control-api ./cmd/control-api
