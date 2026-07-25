@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from .executor import log
+from .eventlog import log
 
 # Control verbs returned by report()/poll().
 CONTINUE = "continue"
@@ -61,12 +61,12 @@ class _GrpcRunControl:
                 completion_tokens=int(completion_tokens or 0), status=status))
             verb = self._verb(c)
             if verb == ABORT:
-                log(f"runcontrol: orchestrator signalled abort -> {c.reason}")
+                log("system.orchestrator_abort_signal", reason=c.reason)
             elif verb == TAKEOVER:
-                log(f"runcontrol: orchestrator signalled takeover -> {c.reason}")
+                log("system.orchestrator_takeover_signal", reason=c.reason)
             return verb
         except Exception as e:  # telemetry must never break the run
-            log("runcontrol report error (continuing):", e)
+            log("system.runcontrol_report_error", error=e)
             return CONTINUE
 
     def poll(self, run_id, node="checkpoint") -> str:
@@ -89,5 +89,5 @@ def make_client():
     try:
         return _GrpcRunControl(addr)
     except Exception as e:
-        log("runcontrol unavailable -> no-op:", e)
+        log("system.runcontrol_unavailable", error=e)
         return _Noop()

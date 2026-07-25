@@ -20,7 +20,8 @@ import sys
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from .executor import log, make_executor
+from .eventlog import log
+from .executor import make_executor
 from .llm import reset_sampling_session, set_sampling_session
 
 
@@ -105,6 +106,6 @@ def build_app(out, run_id: str) -> FastMCP:
 
 def run_mcp_server(out, run_id: str) -> int:
     """Entrypoint for RUN_MODE=mcp-server: serve the brain tools over MCP stdio (host drives, host samples)."""
-    log(f"mcp-server: serving brain tools (explore/heal/replay/report) over MCP stdio; run_id={run_id}")
+    log("run.mcp_serving", run_id=run_id)
     build_app(out, run_id).run("stdio")
     return 0

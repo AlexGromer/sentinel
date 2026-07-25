@@ -4,10 +4,19 @@
 This is what makes "every human-facing message is catalogued" a CHECKED property rather than a
 claim. It runs in both directions, because either direction alone rots:
 
-  forward  — every log() call site in brain/ is claimed by exactly one catalogue entry.
-             Without this, a new log line silently reverts to raw English jargon in the UI.
-  backward — every catalogue entry points at call sites that still exist.
+  forward  — every code a brain module actually emits exists in the catalogue, and the entry lists
+             that module. Without this, a new log line silently reverts to raw English in the UI.
+  backward — every catalogue entry names modules that still emit it.
              Without this, deleted code leaves phantom entries and the count lies.
+
+ANCHORING IS PER MODULE, NOT PER LINE. The first version of this gate pinned `sites` to
+`<module>:<line>`, and the very first real conversion invalidated all 64 entries at once — removing
+four local logger definitions shifted every line number below them. A gate that fails on unrelated
+edits above a log call is a gate someone switches off within a week. Module anchoring is also the
+stronger check: it reads the code literals out of the source rather than counting call sites, so the
+backward direction verifies a module really does emit what the catalogue claims, instead of
+confirming a line number still holds some log call or other. To find the exact line, grep the code
+string — unlike a line number, that never goes stale.
 
 It also enforces the invariants the two streams depend on:
   * bilingual — `ru` AND `en` on every entry (the product ships RU/EN in parity);
@@ -33,10 +42,11 @@ CATALOG = REPO / "brain" / "events.json"
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
                "record_bridge", "replay", "server", "budget"]
 
-# A log emission is a statement STARTING with the helper call. An occurrence inside a longer
-# expression (e.g. a comment or a nested call) is not an emission point and must not be counted,
-# or the forward direction would demand catalogue entries for lines that print nothing.
-LOG_CALL = re.compile(r"^_?log(_unparsed)?\(")
+# An emission is `log("<code>"` with a literal first argument. A non-literal call (a code built at
+# runtime) is deliberately unmatched and reported separately: the catalogue cannot vouch for a code it
+# cannot see, so building one dynamically has to be a conscious, visible choice.
+LOG_CALL = re.compile(r"\blog\(\s*\"([a-z][\w.]*)\"")
+LOG_DYNAMIC = re.compile(r"\blog\(\s*(?![\"#])[A-Za-z_]")
 
 failures: list[str] = []
 
@@ -45,17 +55,22 @@ def fail(msg: str) -> None:
     failures.append(msg)
 
 
-def actual_sites() -> set[str]:
-    """Every `<module>:<line>` in brain/ that emits a diagnostic."""
-    found = set()
+def emitted_codes() -> dict[str, set[str]]:
+    """code -> the set of brain modules that emit it, read from the source."""
+    found: dict[str, set[str]] = {}
     for mod in LOG_MODULES:
         path = REPO / "brain" / f"{mod}.py"
         if not path.exists():
             fail(f"LOG_MODULES lists {mod}, but brain/{mod}.py does not exist")
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            if LOG_CALL.match(line.strip()):
-                found.add(f"{mod}:{lineno}")
+        src = path.read_text()
+        for code in LOG_CALL.findall(src):
+            found.setdefault(code, set()).add(mod)
+        for line in src.splitlines():
+            stripped = line.strip()
+            if LOG_DYNAMIC.search(stripped) and not stripped.startswith(("#", "def ", "*")):
+                fail(f"brain/{mod}.py builds a log code at runtime — the catalogue cannot vouch for "
+                     f"a code it cannot see: {stripped[:90]}")
     return found
 
 
@@ -64,19 +79,19 @@ def main() -> int:
     events = cat["events"]
 
     # --- both directions of coverage -----------------------------------------------------------
-    claimed: dict[str, str] = {}
-    for code, entry in events.items():
-        for site in entry["sites"]:
-            if site in claimed:
-                fail(f"call site {site} is claimed twice: {claimed[site]} and {code}")
-            claimed[site] = code
+    real = emitted_codes()
 
-    real = actual_sites()
-    for site in sorted(real - set(claimed)):
-        fail(f"UNCATALOGUED: brain/{site.replace(':', '.py:')} logs, but no catalogue entry claims "
-             f"it — it would render as raw English in the UI")
-    for site in sorted(set(claimed) - real):
-        fail(f"PHANTOM: catalogue entry {claimed[site]} points at {site}, which no longer logs")
+    for code in sorted(set(real) - set(events)):
+        fail(f"UNCATALOGUED: brain/{'/'.join(sorted(real[code]))}.py emits {code!r}, which is not in "
+             f"the catalogue — it would render as a bare code in the UI")
+    for code in sorted(set(events) - set(real)):
+        fail(f"PHANTOM: catalogue entry {code!r} is emitted by nothing — dead entry, or the code was "
+             f"renamed in the source only")
+    for code in sorted(set(events) & set(real)):
+        declared, actual = set(events[code]["modules"]), real[code]
+        if declared != actual:
+            fail(f"{code}: `modules` disagrees with the source — declared {sorted(declared)}, "
+                 f"actually emitted from {sorted(actual)}")
 
     # --- bilingual, on every entry and every label table ----------------------------------------
     for code, entry in events.items():
@@ -156,7 +171,8 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
         return 1
 
-    print(f"event catalogue OK: {len(events)} codes cover {len(real)} log call sites "
+    print(f"event catalogue OK: {len(events)} codes emitted from "
+          f"{len({m for ms in real.values() for m in ms})} brain modules "
           f"({len(degrading)} marked as silent degradations), "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
           f"{len(patterns)} foreign patterns; RU/EN complete")
