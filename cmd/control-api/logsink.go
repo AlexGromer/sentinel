@@ -71,6 +71,9 @@ type logRecord struct {
 	TS       string `json:"ts"`
 	Lvl      string `json:"lvl"`
 	Cat      string `json:"cat"`
+	// Src is the source axis (tool / application / testing), derived from Cat so the two cannot
+	// disagree. It answers "is my app misbehaving or the tool?" before any subsystem question.
+	Src      string `json:"src,omitempty"`
 	Mod      string `json:"mod,omitempty"`
 	Code     string `json:"code"`
 	Msg      string `json:"msg"`
@@ -86,6 +89,8 @@ type logRecord struct {
 	// Raw carries the original line for an unclassified record, so run.jsonl stays self-describing
 	// and a person grepping it is never left without the source text.
 	Raw string `json:"raw,omitempty"`
+	// Step is the run step this record happened during, correlated at the boundary (see logSink.step).
+	Step int `json:"step,omitempty"`
 }
 
 type logSink struct {
@@ -103,6 +108,11 @@ type logSink struct {
 	// stackParent is the seq of the last error a stack frame may attach to, or 0 when the last line
 	// was not an error. Frames arrive back-to-back with their error, so this needs no timer.
 	stackParent int
+	// step is the last step number seen on an AG-UI step.progress frame. Both streams share ONE ordered
+	// pipe, so a diagnostic that arrives after step N's frame happened during step N — which is how a
+	// record learns which step it belongs to without any protocol change. It is what turns "the site
+	// threw an error" into "step 4 threw an error".
+	step int
 	degraded    []string // codes with degrades:true, in order, for the verdict
 }
 
@@ -149,6 +159,7 @@ func (s *logSink) write(line string) {
 	// without knowing about our stdout convention.
 	if frame, ok := strings.CutPrefix(line, agUIPrefix); ok {
 		s.writeLine(s.events, frame)
+		s.noteStep(frame)
 		return
 	}
 
@@ -159,7 +170,29 @@ func (s *logSink) write(line string) {
 	if rec.Degrades {
 		s.degraded = append(s.degraded, rec.Code)
 	}
+	rec.Src = eventcatalog.SourceOf(rec.Cat)
+	// A summary belongs to the run, not to whichever step happened to be last. Stamping it would be
+	// temporally true and semantically noise — "Explore finished … step 3" invites reading the summary
+	// as a fact about step 3.
+	if rec.Step == 0 && rec.Phase != "report" {
+		rec.Step = s.step
+	}
 	s.emit(rec)
+}
+
+// noteStep remembers the step number from a step.progress frame. Parsed narrowly and failure-tolerantly:
+// a frame we cannot read must leave the previous step in place rather than clear it, since a missing
+// number is worse than a slightly stale one.
+func (s *logSink) noteStep(frame string) {
+	if !strings.Contains(frame, `"step.progress"`) {
+		return
+	}
+	var env struct {
+		Data struct{ N int `json:"n"` } `json:"data"`
+	}
+	if json.Unmarshal([]byte(frame), &env) == nil && env.Data.N > 0 {
+		s.step = env.Data.N
+	}
 }
 
 // classify turns a line into a record: parsed directly when it came from our own emitter, matched

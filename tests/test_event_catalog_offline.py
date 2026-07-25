@@ -42,6 +42,12 @@ CATALOG = REPO / "brain" / "events.json"
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
                "record_bridge", "replay", "server", "budget"]
 
+# Not every human-facing message comes from the brain. An entry may name an `emitter` instead of
+# brain modules — the tested application's own console reaches us through the Playwright executor
+# (ADR-067), which is TypeScript. Such an entry is still held to the same two-way rule: the code must
+# actually appear in the named source, or the catalogue is claiming a message nothing sends.
+EMITTERS = {"pw-executor": "pw-executor/src/server.ts"}
+
 # An emission is `log("<code>"` with a literal first argument. A non-literal call (a code built at
 # runtime) is deliberately unmatched and reported separately: the catalogue cannot vouch for a code it
 # cannot see, so building one dynamically has to be a conscious, visible choice.
@@ -53,6 +59,20 @@ failures: list[str] = []
 
 def fail(msg: str) -> None:
     failures.append(msg)
+
+
+def emitter_codes() -> dict[str, set[str]]:
+    """code -> the set of non-brain emitters that reference it, read from their source."""
+    found: dict[str, set[str]] = {}
+    for name, rel in EMITTERS.items():
+        path = REPO / rel
+        if not path.exists():
+            fail(f"EMITTERS names {name} -> {rel}, which does not exist")
+            continue
+        src = path.read_text()
+        for code in re.findall(r"['\"]((?:app|test|ui)\.[\w.]+)['\"]", src):
+            found.setdefault(code, set()).add(name)
+    return found
 
 
 def emitted_codes() -> dict[str, set[str]]:
@@ -79,19 +99,37 @@ def main() -> int:
     events = cat["events"]
 
     # --- both directions of coverage -----------------------------------------------------------
-    real = emitted_codes()
+    # Entries split by WHO emits them: brain modules (`modules`) or a foreign source (`emitter`).
+    brain_entries = {c: e for c, e in events.items() if "emitter" not in e}
+    foreign_entries = {c: e for c, e in events.items() if "emitter" in e}
 
-    for code in sorted(set(real) - set(events)):
+    real = emitted_codes()
+    for code in sorted(set(real) - set(brain_entries)):
         fail(f"UNCATALOGUED: brain/{'/'.join(sorted(real[code]))}.py emits {code!r}, which is not in "
              f"the catalogue — it would render as a bare code in the UI")
-    for code in sorted(set(events) - set(real)):
+    for code in sorted(set(brain_entries) - set(real)):
         fail(f"PHANTOM: catalogue entry {code!r} is emitted by nothing — dead entry, or the code was "
              f"renamed in the source only")
-    for code in sorted(set(events) & set(real)):
+    for code in sorted(set(brain_entries) & set(real)):
         declared, actual = set(events[code]["modules"]), real[code]
         if declared != actual:
             fail(f"{code}: `modules` disagrees with the source — declared {sorted(declared)}, "
                  f"actually emitted from {sorted(actual)}")
+
+    # The same two-way rule for a foreign emitter: the code must be present in the source it names.
+    foreign_real = emitter_codes()
+    for code, entry in sorted(foreign_entries.items()):
+        emitter = entry["emitter"]
+        if emitter not in EMITTERS:
+            fail(f"{code}: unknown emitter {emitter!r} (known: {', '.join(sorted(EMITTERS))})")
+        elif emitter not in foreign_real.get(code, set()):
+            fail(f"PHANTOM: {code!r} claims emitter {emitter!r}, but {EMITTERS[emitter]} never "
+                 f"mentions that code")
+        if "modules" in entry:
+            fail(f"{code}: an entry with an `emitter` must not also declare brain `modules`")
+    for code in sorted(set(foreign_real) - set(events)):
+        fail(f"UNCATALOGUED: {'/'.join(sorted(foreign_real[code]))} emits {code!r}, which is not in "
+             f"the catalogue")
 
     # --- bilingual, on every entry and every label table ----------------------------------------
     for code, entry in events.items():
@@ -99,7 +137,7 @@ def main() -> int:
             if not entry.get(lang):
                 fail(f"{code}: missing `{lang}` text (RU/EN parity is mandatory)")
     for table in ("category_labels", "level_labels", "phases", "modes", "exit_codes",
-                  "narrative", "heal_strategies", "heal_outcomes"):
+                  "narrative", "heal_strategies", "heal_outcomes", "sources"):
         for key, val in cat[table].items():
             for lang in ("ru", "en"):
                 if not val.get(lang):
@@ -128,6 +166,41 @@ def main() -> int:
             fail(f"{code}: phase {entry['phase']!r} is not in `phases`")
         if "exit" in entry and str(entry["exit"]) not in exits:
             fail(f"{code}: exit code {entry['exit']!r} is not in `exit_codes`")
+
+    # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
+    # matching that template against the rendered string. If the two drift, the UI silently falls back
+    # to English — a degradation with no error, which is the failure mode this milestone is about.
+    exec_src = (REPO / EMITTERS["pw-executor"]).read_text()
+    block = re.search(r"const APP_MESSAGES: Record<string, string> = \{(.*?)\n\};", exec_src, re.S)
+    if not block:
+        fail("pw-executor no longer declares APP_MESSAGES — the template equality check went vacuous")
+    else:
+        declared = dict(re.findall(r"'([\w.]+)':\s*'((?:[^'\\]|\\.)*)'", block.group(1)))
+        for code, entry in foreign_entries.items():
+            if entry["emitter"] != "pw-executor":
+                continue
+            if code not in declared:
+                fail(f"{code}: APP_MESSAGES has no template, so the emitter cannot render it")
+            elif declared[code] != entry["en"]:
+                fail(f"{code}: the emitter's English text differs from the catalogue —\n"
+                     f"       emitter:   {declared[code]!r}\n"
+                     f"       catalogue: {entry['en']!r}")
+        for code in declared:
+            if code not in events:
+                fail(f"APP_MESSAGES declares {code!r}, which is not in the catalogue")
+
+    # The source axis must partition the categories exactly: a category in two sources would make the
+    # dropdown ambiguous, and one in none would be invisible under every source filter.
+    seen_cats: dict[str, str] = {}
+    for src, meta in cat["sources"].items():
+        for c in meta["cats"]:
+            if c not in cats:
+                fail(f"sources.{src} lists category {c!r}, which is not in `categories`")
+            if c in seen_cats:
+                fail(f"category {c!r} belongs to two sources: {seen_cats[c]} and {src}")
+            seen_cats[c] = src
+    for c in sorted(cats - set(seen_cats)):
+        fail(f"category {c!r} belongs to no source — it would vanish under any source filter")
 
     # Phases must match the graph's real nodes — a renamed node would otherwise leave the
     # narrative naming a phase that never occurs.
@@ -171,9 +244,10 @@ def main() -> int:
             print(f"  - {f}", file=sys.stderr)
         return 1
 
-    print(f"event catalogue OK: {len(events)} codes emitted from "
-          f"{len({m for ms in real.values() for m in ms})} brain modules "
-          f"({len(degrading)} marked as silent degradations), "
+    print(f"event catalogue OK: {len(events)} codes — "
+          f"{len(brain_entries)} from {len({m for ms in real.values() for m in ms})} brain modules, "
+          f"{len(foreign_entries)} from {len(EMITTERS)} foreign emitter(s); "
+          f"{len(degrading)} silent degradations, {len(cat['sources'])} sources, "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
           f"{len(patterns)} foreign patterns; RU/EN complete")
     return 0
