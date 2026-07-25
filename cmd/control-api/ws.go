@@ -217,6 +217,13 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// absent allowlist stays permissive (dev), still gated by the bearer subprotocol above.
 	if origin := r.Header.Get("Origin"); origin != "" {
 		switch {
+		case sameOriginRequest(r):
+			// ADR-064 Mode 3: this server handed the page to the browser, so the handshake is same-origin
+			// by construction and cannot be CSWSH — that attack needs a page on a DIFFERENT site riding
+			// ambient credentials. Checked FIRST: in a container the bind is 0.0.0.0 (publicBind) with an
+			// intentionally empty allowlist, which used to 403 the UI's own socket and surface as close
+			// 1006. sameOriginRequest compares the browser-set (unforgeable) Origin host against r.Host
+			// and demands Sec-Fetch-Site same-origin/none/absent, so a cross-site page never reaches here.
 		case len(s.corsAllow) > 0:
 			if !s.corsAllow[origin] {
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": "origin not allowed"})

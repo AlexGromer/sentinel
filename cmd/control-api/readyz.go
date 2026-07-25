@@ -278,6 +278,13 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	// ADR-065: the logging section names a closed vocabulary of levels and categories, so a typo is
+	// refused HERE with the offending path rather than silently ignored at spawn time — a level that
+	// looks saved but never applies is the same silent-degradation shape this milestone is closing.
+	if err := validateLoggingSection(body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
 	if err := s.store.putConfig(setupConfigKey, string(body)); err != nil {
 		if isInvalidArgument(err) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})

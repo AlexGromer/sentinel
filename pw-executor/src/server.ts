@@ -25,6 +25,81 @@ import {
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
+/* ------------------------------------------------------------------ ADR-067: application log channel
+ * The tested SITE's own console, exceptions and failed requests. Until now nobody collected them, so a
+ * tester watching a step fail could not tell whether the tool mis-clicked or the application threw —
+ * which is the first question they actually have.
+ *
+ * These are emitted in the SAME wire format brain uses (`[lvl|cat] code: message`), so the boundary
+ * parses them with no new code and the event catalogue governs their level, category and Russian text.
+ *
+ * The English strings below must stay identical to the catalogue's `en` templates: the UI recovers the
+ * placeholder values by matching that template against this rendered text. A drift would silently
+ * degrade the UI to English, so tests/test_event_catalog_offline.py compares the two.
+ */
+const APP_MESSAGES: Record<string, string> = {
+  'app.js_error': 'The page under test threw an error: {msg}',
+  'app.console_error': 'Site console: {msg}',
+  'app.console_warn': 'Site console warning: {msg}',
+  'app.request_failed': 'A site request failed: {method} {url} — {reason}',
+  'app.http_error': 'The site answered {status} to {method} {url}',
+  'app.dialog': 'The site opened a dialog ({kind}): {msg}',
+  'app.log_capped': 'Too many messages from the site — capturing stops here (cap {cap})',
+};
+
+/* A hostile or merely chatty page can emit thousands of console lines. The cap bounds the artifact
+ * without hiding that it was reached — app.log_capped says so once, so a truncated capture can never be
+ * mistaken for a quiet application. */
+const APP_LOG_CAP = Number(process.env.PW_APP_LOG_CAP ?? 500);
+let appLogCount = 0;
+
+function appLog(lvl: 'debug' | 'info' | 'warn' | 'error', code: string, fields: Record<string, unknown>): void {
+  if (appLogCount > APP_LOG_CAP) return;
+  appLogCount += 1;
+  if (appLogCount > APP_LOG_CAP) {
+    console.error(`[warn|app] app.log_capped: ${render(APP_MESSAGES['app.log_capped'], { cap: APP_LOG_CAP })}`);
+    return;
+  }
+  const tpl = APP_MESSAGES[code];
+  if (tpl === undefined) return; // an uncatalogued code would render as a bare code in the UI
+  console.error(`[${lvl}|app] ${code}: ${render(tpl, fields)}`);
+}
+
+/** Fills {placeholders} and flattens newlines — the protocol is line-oriented, and a stack trace in a
+ *  console message would otherwise split one event into unparseable fragments. */
+function render(tpl: string, fields: Record<string, unknown>): string {
+  const filled = tpl.replace(/\{(\w+)\}/g, (whole, k: string) =>
+    k in fields ? String(fields[k] ?? '') : whole);
+  return filled.split(/\s*\r?\n\s*/).join(' ⏎ ').trim();
+}
+
+/** Attaches the application-log capture to one page. Called for the initial page AND every popup/new
+ *  tab, because a failure that only happens in a second tab is exactly the kind that goes unnoticed. */
+function attachAppCapture(p: Page): void {
+  p.on('pageerror', (err) => appLog('error', 'app.js_error', { msg: err.message }));
+  p.on('console', (m) => {
+    const t = m.type();
+    if (t === 'error') appLog('error', 'app.console_error', { msg: m.text() });
+    else if (t === 'warning') appLog('warn', 'app.console_warn', { msg: m.text() });
+    // info/log/debug from a page are ignored on purpose: they are the application's own chatter, not a
+    // signal, and they would bury the two levels that matter.
+  });
+  p.on('requestfailed', (r) => appLog('warn', 'app.request_failed', {
+    method: r.method(), url: r.url(), reason: r.failure()?.errorText ?? 'unknown',
+  }));
+  p.on('response', (r) => {
+    const st = r.status();
+    // 4xx/5xx only. A redirect is not a fault, and 3xx is how normal navigation works.
+    if (st >= 400) appLog('warn', 'app.http_error', { status: st, method: r.request().method(), url: r.url() });
+  });
+  p.on('dialog', async (d) => {
+    appLog('info', 'app.dialog', { kind: d.type(), msg: d.message() });
+    // Playwright auto-dismisses when no handler is attached; having attached one, we must dismiss
+    // ourselves or the page hangs forever on an alert.
+    try { await d.dismiss(); } catch { /* already handled elsewhere */ }
+  });
+}
+
 interface RpcRequest {
   jsonrpc: string;
   id: number | string;
@@ -163,11 +238,13 @@ async function ensureBrowser(): Promise<void> {
   page = existing.length ? existing[0] : await context.newPage();
   page.setDefaultTimeout(5000); // bound browser.expect's pollUntil inner waits to the intended 5s budget
   pages = existing.length ? [...existing] : [page];
+  pages.forEach(attachAppCapture); // ADR-067: the site's own console/errors/failed requests
   // The 'page' event fires only for pages created AFTER this handler is attached.
   context.on('page', (p) => {
     if (!pages.includes(p)) {
       p.setDefaultTimeout(5000);
       pages.push(p);
+      attachAppCapture(p); // ADR-067
       log('new browser tab/page tracked: index', pages.length - 1);
     }
   });

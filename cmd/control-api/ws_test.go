@@ -393,6 +393,74 @@ func TestStreamLocalBindPermitsOriginWithoutAllowlist(t *testing.T) {
 	}
 }
 
+// ADR-064 Mode 3 regression: control-API serves the UI from its own port, the container binds 0.0.0.0
+// (publicBind) and the allowlist is intentionally empty. The browser then sends its own origin, which
+// the pre-fix gate rejected with 403 — the page saw the socket close with 1006 and the live timeline
+// stayed dead. A non-403 proves the handshake reached the hijack (a ResponseRecorder cannot satisfy it,
+// hence 500 streaming-unsupported).
+func TestStreamPublicBindPermitsSameOrigin(t *testing.T) {
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: true, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "http://"+r.Host) // httptest default host — the page this server served
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("same-origin handshake must not be refused on a public bind (Mode 3); got 403: %s", rec.Body.String())
+	}
+}
+
+// The same-origin branch must not become a bypass: a cross-site page carries a different Origin host,
+// so it stays refused on a public bind even though the new branch runs first.
+func TestStreamPublicBindStillRejectsCrossSiteOrigin(t *testing.T) {
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: true, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "https://evil.example")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site origin on a public bind: got %d want 403", rec.Code)
+	}
+}
+
+// A Mode-3 deployment may also allowlist an extra origin (e.g. a second front-end). The allowlist must
+// not lock out the server's own UI — which it did while the allowlist branch ran before same-origin.
+func TestStreamSameOriginPermittedAlongsideAllowlist(t *testing.T) {
+	s := &server{token: "secret-tok", corsAllow: map[string]bool{"https://other.example": true},
+		publicBind: true, runs: map[string]*run{}}
+	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+	r.Header.Set("Origin", "http://"+r.Host) // NOT in the allowlist, but same-origin
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, r)
+	if rec.Code == http.StatusForbidden {
+		t.Fatalf("same-origin must pass even when an allowlist is configured; got 403: %s", rec.Body.String())
+	}
+}
+
+// Sec-Fetch-Site is absent on some clients; the host comparison alone must still separate the two cases.
+func TestStreamOriginHostDecidesWithoutFetchMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin string
+		wantForbid   bool
+	}{
+		{"same host", "http://example.com", false},
+		{"other host", "http://evil.example", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &server{token: "secret-tok", corsAllow: map[string]bool{}, publicBind: true, runs: map[string]*run{}}
+			r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")
+			r.Header.Set("Origin", tc.origin) // no Sec-Fetch-Site at all
+			rec := httptest.NewRecorder()
+			s.mux().ServeHTTP(rec, r)
+			if got := rec.Code == http.StatusForbidden; got != tc.wantForbid {
+				t.Fatalf("origin %s: forbidden=%v want %v (code %d)", tc.origin, got, tc.wantForbid, rec.Code)
+			}
+		})
+	}
+}
+
 func TestStreamBadSessionRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r := wsUpgradeReq(http.MethodGet, "sentinel.recorder.v1, bearer.secret-tok")

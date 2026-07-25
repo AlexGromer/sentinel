@@ -15,18 +15,16 @@ Coverage = exercised buttons / seen buttons. Nodes are closures over the injecte
 """
 import json
 import os
-import sys
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
 from . import agui, runcontrol
 from .otel import span
+from .eventlog import log
 from .state import RunState, normalize_url, semantic_id, canonical_plan_hash
 
 
-def log(*a: object) -> None:
-    print("[brain]", *a, file=sys.stderr, flush=True)
 
 
 def _agui(event_type: str, run_id: str, **data) -> None:
@@ -37,7 +35,7 @@ def _agui(event_type: str, run_id: str, **data) -> None:
     try:
         agui.emit(event_type, run_id, **data)
     except Exception as e:
-        log("agui emit failed:", e)
+        log("system.agui_emit_failed", error=e)
 
 
 def _tool_args_summary(p: dict) -> str:
@@ -245,7 +243,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                   "prompt_tokens": tok.get("prompt"), "completion_tokens": tok.get("completion")})
         if rc.report(state.get("run_id", ""), "plan", tok.get("prompt"),
                      tok.get("completion")) == runcontrol.ABORT:
-            log("plan: orchestrator budget abort -> converging")
+            log("plan.orchestrator_abort")
             return {"exploration_complete": True}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + [planned],
                 "_pending": planned}
@@ -311,7 +309,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         M14 (ADR-055): still the auto-HITL failure signal — every entry means the prior act+verify
         failed and this stub cannot recover it, so it always counts as a miss. The reset lives in
         verify() above, on the next successful action."""
-        log("heal node: explore-mode stub (real healing is in replay)")
+        log("heal.explore_stub")
         rid = state.get("run_id", "")
         n = state.get("consecutive_heal_failures", 0) + 1
         _agui("heal", rid, step=state.get("current_step", 0), strategy="stub", ok=False)
@@ -338,15 +336,15 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         rid = state.get("run_id", "")
         verb = rc.poll(rid, "checkpoint")
         if verb == runcontrol.ABORT:
-            log("checkpoint: orchestrator abort -> converging (abort > takeover)")
+            log("hitl.abort_over_takeover")
             return {"exploration_complete": True, "_takeover_armed": False}
         if verb == runcontrol.TAKEOVER:
-            log("checkpoint: operator takeover pending -> arming pause")
+            log("hitl.takeover_arming")
             return {"_takeover_armed": True}
         threshold = int(os.environ.get("SENTINEL_AUTO_HITL_THRESHOLD", "0"))
         n = state.get("consecutive_heal_failures", 0)
         if threshold > 0 and n >= threshold:
-            log(f"checkpoint: auto-HITL threshold reached ({n} >= {threshold}) -> arming pause")
+            log("hitl.auto_threshold_reached", n=n, threshold=threshold)
             _agui("hitl_needed", rid, reason="consecutive_heal_failures", count=n)
             return {"_takeover_armed": True}
         return {}
@@ -359,7 +357,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         is UNCONDITIONAL — the decision was latched by checkpoint, so this node re-runs cleanly on resume.
         Edge back to checkpoint re-polls (handles a not-yet-propagated Return) before the run continues."""
         payload = interrupt({"reason": "operator_takeover", "run_id": state.get("run_id", "")})
-        log(f"takeover: resumed from operator takeover -> {payload!r}")
+        log("hitl.takeover_resumed", payload=repr(payload))
         return {"_takeover_armed": False,
                 "takeover_returns": list(state.get("takeover_returns", [])) + [payload]}
 

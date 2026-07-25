@@ -45,9 +45,9 @@ services:
       # --- Local model via the bundled `ollama` service (uncomment to enable LLM heal) -----------
       # LLM_BACKEND: openai
       # LLM_BASE_URL: http://ollama:11434/v1
-      # LLM_MODEL: qwen2.5-vl:7b     # the model preloaded into the bundle (docs/LOCAL_MODELS.md §3)
+      # LLM_MODEL: qwen2.5vl:7b     # the model preloaded into the bundle (docs/LOCAL_MODELS.md §3)
       # LLM_API_KEY: noauth          # Ollama ignores the key; the SDK requires a non-empty value
-      # LLM_VISION: "1"              # qwen2.5-vl is vision-capable (set-of-marks heal re-grounding)
+      # LLM_VISION: "1"              # qwen2.5vl is vision-capable (set-of-marks heal re-grounding)
 
   # Zero-external-dependency demo: deterministic explore against a bundled file:// fixture. Needs NO
   # network at all, so it runs FULLY isolated (`network_mode: none`) — a strictly stronger guarantee
