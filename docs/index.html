@@ -806,6 +806,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
           ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
         </button>
+        <button type="button" class="btn" id="ch-stop" style="display:none" title="stop the running run">■ <span data-lang="ru">Остановить</span><span data-lang="en">Stop</span></button>
         <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
         <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
         <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
@@ -1931,7 +1932,36 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('ch-rerun').disabled=disabled||!chLastRunId;
     ge('ch-baseline').disabled=disabled||!chLastRunId;
   }
-  function chFinish(){ chBusy=false; chSetControls(false); }
+  var chRunningId = '';   /* the run the Stop button acts on; empty when nothing is in flight */
+  function chFinish(){
+    chBusy=false; chSetControls(false);
+    chRunningId='';
+    var b=ge('ch-stop'); if (b){ b.style.display='none'; b.disabled=false; }
+  }
+
+  /* M9-LIVE: stopping a run. There was no way to do it — a goal-mode run against a real site walks for
+     minutes, and a stuck one walks until agentctl's timeout, so the only recourse was killing the
+     container and losing every other run's artifacts with it. */
+  async function chStopRun(){
+    if (!chRunningId) return;
+    var b=ge('ch-stop'); if (b) b.disabled=true;    /* one click; the request itself waits for the exit */
+    addBubble('sys', bi('Останавливаю прогон…','Stopping the run…'));
+    try {
+      var hdr={}; var ah=authHdr(); if (ah.Authorization) hdr.Authorization=ah.Authorization;
+      var r=await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(chRunningId)+'/cancel',
+                        {method:'POST', headers:hdr});
+      var j={}; try { j=await r.json(); } catch(e){}
+      if (!r.ok){ addBubble('sys','✗ '+bi('не удалось остановить','could not stop')+': '+esc(j.error||('HTTP '+r.status))); if (b) b.disabled=false; return; }
+      if (j.canceled === false){
+        addBubble('sys', bi('Прогон уже закончился сам','The run had already finished')+
+          (j.state ? ' — <code>'+esc(j.state)+'</code>' : ''));
+      } else {
+        addBubble('sys', bi('Прогон остановлен','The run was stopped')+
+          (j.forced ? ' ('+bi('пришлось принудительно','forced')+')' : ''));
+      }
+    } catch(e){ addBubble('sys','✗ '+esc(e.message)); if (b) b.disabled=false; }
+  }
+  (function(){ var b=ge('ch-stop'); if (b) b.addEventListener('click', chStopRun); })();
 
   /* shared chat run driver — ▶ Send / 🔁 Re-run / 📌 baseline (ADR-047 from_run) */
   async function chRunFlow(body, sumHtml, sumMeta){
@@ -1952,6 +1982,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         chFinish(); return;
       }
       id2=j2.run_id;
+      chRunningId=id2;
+      var stopBtn=ge('ch-stop'); if (stopBtn) stopBtn.style.display='';
       addBubble('sys',bi('Запущен','Started')+' <code>run_id='+esc(id2)+'</code>',esc(j2.artifact_dir||''));
       tFillLiveRunId(id2);   // M14: hand the fresh run_id to the Live AG-UI timeline (no auto-connect)
     } catch(e3){ addBubble('sys','✗ '+esc(e3.message)); chFinish(); return; }
@@ -2060,8 +2092,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     tResultsLoaded=true;
     ge('results-charts').innerHTML='';
     ge('results-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
-    try { var r=await fetch(capiBase()+'/v1/results',{headers:authHdr()}); var j=await r.json(); tResults=j.results||[]; }
+    var noStoreR=false;
+    try { var r=await fetch(capiBase()+'/v1/results',{headers:authHdr()}); var j=await r.json();
+          tResults=j.results||[]; noStoreR=(j.store===false); }
     catch(e){ tResults=[]; }
+    if (!tResults.length && tStoreBanner('results-list', {store: !noStoreR ? true : false})) { ge('results-charts').innerHTML=''; return; }
     tRenderResults();
   }
   function tRenderResults(){
@@ -2293,6 +2328,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var r=await fetch(capiBase()+'/v1/chats',{headers:authHdr()});
       var j=await r.json();
       tChats=j.chats||[];
+      if (j.store===false && !tChats.length && tStoreBanner('chats-list', j)) return;
     } catch(e){ tChats=[]; }
     tRenderChats();
   }
@@ -2754,6 +2790,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         Object.keys(mods).sort().map(function(m){ return '<option value="'+esc(m)+'">'+esc(m)+'</option>'; }).join('');
       msel.value = keepm;
     }
+  }
+
+  /* M9-LIVE: the list endpoints now say whether a store exists (main.go storeMarker). An empty list with
+     no store means "this deployment saves nothing", which is a different thing from "nothing saved yet" —
+     and the two looked identical, which is why the library read as broken. */
+  function tStoreBanner(hostId, body){
+    var host = ge(hostId); if (!host) return false;
+    if (body && body.store === false){
+      host.innerHTML = '<div class="lgverdict"><b>'+
+        bi('Это развёртывание ничего не сохраняет','This deployment does not persist anything')+'</b><br>'+
+        bi('Библиотека, прогоны, беседы и результаты хранятся в store-gateway, а он не подключён. '+
+           'Поднять: <code>docker compose --profile store up -d store-gateway</code> и задать '+
+           '<code>CONTROL_API_STORE_ADDR</code>.',
+           'The library, runs, conversations and results live in the store-gateway, which is not wired. '+
+           'Start it: <code>docker compose --profile store up -d store-gateway</code> and set '+
+           '<code>CONTROL_API_STORE_ADDR</code>.')+'</div>';
+      return true;
+    }
+    return false;
   }
 
   async function lgInit(){
