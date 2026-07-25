@@ -20,7 +20,7 @@ import json
 import os
 from typing import Optional, Protocol
 
-from .executor import log
+from .eventlog import log
 from .llm import complete_structured
 from .sanitize import safe_json, safe_text
 
@@ -50,8 +50,8 @@ def _log_unparsed(where: str, result) -> None:
     fr = getattr(result, "finish_reason", None)
     hint = (" — finish_reason=length: the model hit max_tokens mid-output (raise LLM_MAX_TOKENS_* or "
             "use a non-reasoning model)") if fr == "length" else f" (finish_reason={fr})"
-    log(f"{where}: no parseable structured output{hint}; raw[:300]:",
-        repr(getattr(result, "text", ""))[:300])
+    log("plan.output_unparseable", where=where, hint=hint,
+        raw=repr(getattr(result, "text", ""))[:300])
 
 # JSON schemas for the structured-output planners (ADR-057). Rich-guiding: they encode the real
 # artifact contract (verb enum, required ref/index, step shape) so a capable backend emits conformant
@@ -126,7 +126,7 @@ class LLMPlanner:
             return self._fallback.propose(state, candidates)
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("LLMPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            log("plan.budget_exhausted_heuristic", planner="LLMPlanner")
             return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"),
@@ -158,7 +158,7 @@ class LLMPlanner:
                         "reason": f"llm picked #{idx}", "tokens": tokens}
             return {"action": None, "done": True, "reason": "llm index OOB", "tokens": tokens}
         except Exception as e:
-            log("LLMPlanner error -> heuristic:", e)
+            log("plan.llm_error_heuristic", planner="LLMPlanner", error=e)
             return self._fallback.propose(state, candidates)
 
 
@@ -187,7 +187,7 @@ class GoalPlanner:
             return self._fallback.propose(state, candidates)   # no goal/backend -> deterministic explore
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("GoalPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            log("plan.budget_exhausted_heuristic", planner="GoalPlanner")
             return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"), "name": c.get("name"),
@@ -221,7 +221,7 @@ class GoalPlanner:
                         "reason": f"goal -> #{idx}", "tokens": tokens}   # GROUNDED: a real candidate only
             return {"action": None, "done": True, "reason": "goal: index OOB", "tokens": tokens}
         except Exception as e:
-            log("GoalPlanner error -> heuristic:", e)
+            log("plan.llm_error_heuristic", planner="GoalPlanner", error=e)
             return self._fallback.propose(state, candidates)
 
     def build_scenario(self, flat_map: list, goal: str = None, history: list = None) -> dict:
@@ -237,7 +237,7 @@ class GoalPlanner:
             return {"refs": [], "tokens": None}
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("GoalPlanner.build_scenario: plan budget exceeded -> empty scenario")
+            log("plan.scenario_budget_empty")
             return {"refs": [], "tokens": None}
         try:
             menu = [{"ref": e["semantic_id"], "page": e.get("page"), "role": e.get("role"),
@@ -267,7 +267,7 @@ class GoalPlanner:
             return {"refs": refs,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
         except Exception as e:
-            log("GoalPlanner.build_scenario error -> empty:", e)
+            log("plan.scenario_error_empty", error=e)
             return {"refs": [], "tokens": None}
 
 
@@ -294,7 +294,7 @@ class DescribePlanner:
             return {"draft": [], "tokens": None}
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("DescribePlanner: plan budget exceeded -> empty draft")
+            log("plan.describe_budget_empty")
             return {"draft": [], "tokens": None}
         try:
             convo = ""
@@ -322,7 +322,7 @@ class DescribePlanner:
             return {"draft": draft,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
         except Exception as e:
-            log("DescribePlanner error -> empty:", e)
+            log("plan.describe_error_empty", error=e)
             return {"draft": [], "tokens": None}
 
 
