@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>L7 — an application that misbehaves</title></head>
+<body>
+<!-- ADR-067 fixture. Every fault here is one the tool must NOT be blamed for: the page itself throws,
+     warns, requests something missing and returns an error status. It exists so the application log
+     channel is exercised by a real browser rather than asserted from a unit test. -->
+<h1>Broken checkout</h1>
+<button id="add">Add to cart</button>
+<button id="pay">Pay</button>
+<p id="out">idle</p>
+<script>
+  console.warn('cart: price index is stale, recomputing');
+  // A failing request the page makes on its own — reaches us as app.request_failed / app.http_error.
+  fetch('/definitely-missing-endpoint').catch(function(){ /* swallowed by the app, visible to us */ });
+  document.getElementById('add').addEventListener('click', function () {
+    console.error('cart: add() called with no line items');
+    document.getElementById('out').textContent = 'added';
+    // An uncaught exception thrown from a handler — reaches us as app.js_error.
+    throw new TypeError('cart.total is undefined');
+  });
+  document.getElementById('pay').addEventListener('click', function () {
+    document.getElementById('out').textContent = 'paying';
+    throw new Error('payment gateway not configured');
+  });
+</script>
+</body>
+</html>

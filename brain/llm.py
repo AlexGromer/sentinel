@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from .executor import log
+from .eventlog import log
 
 
 @dataclass
@@ -41,6 +41,10 @@ class LLMResult:
     completion_tokens: int = 0
     model: Optional[str] = None
     data: Optional[dict] = None
+    # Why the completion stopped: "stop" = the model finished on its own; "length" = it hit max_tokens
+    # mid-thought (for a reasoning model, often BEFORE any answer content). None when the backend does
+    # not report it. The planner uses this to tell "model gave no JSON" apart from "budget too small".
+    finish_reason: Optional[str] = None
 
 
 class LLMBackend(Protocol):
@@ -149,7 +153,8 @@ class OpenAICompatBackend:
         u = getattr(resp, "usage", None)
         pt = int(getattr(u, "prompt_tokens", 0) or 0) if u else 0
         ct = int(getattr(u, "completion_tokens", 0) or 0) if u else 0
-        return LLMResult(text, pt, ct, model=getattr(resp, "model", None))
+        return LLMResult(text, pt, ct, model=getattr(resp, "model", None),
+                         finish_reason=getattr(choice, "finish_reason", None))
 
     def complete(self, prompt: str, *, max_tokens: int, temperature: float) -> LLMResult:
         resp = self._client.chat.completions.create(
@@ -246,7 +251,7 @@ def make_backend(role: str) -> Optional[LLMBackend]:
     sampling = _sampling_ctx.get()
     if sampling is not None or provider == "sampling":
         if sampling is None:
-            log(f"make_backend[{role}]: sampling requested but no MCP session -> fallback")
+            log("llm.sampling_no_session", role=role)
             return None
         loop, session = sampling
         return SamplingBackend(loop, session)
@@ -256,26 +261,26 @@ def make_backend(role: str) -> Optional[LLMBackend]:
         if provider == "anthropic":
             key = _env(role, "API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
             if not key:
-                log(f"make_backend[{role}]: no Anthropic key -> offline fallback")
+                log("llm.no_anthropic_key", role=role)
                 return None
             return AnthropicBackend(model, api_key=key)
         if provider == "openai":
             if not model:
-                log(f"make_backend[{role}]: openai provider needs LLM_MODEL -> fallback")
+                log("llm.openai_model_missing", role=role)
                 return None
             key = _env(role, "API_KEY") or os.environ.get("OPENAI_API_KEY")
             if not key and not base_url:
-                log(f"make_backend[{role}]: openai needs a key or base_url -> fallback")
+                log("llm.openai_endpoint_missing", role=role)
                 return None
             supports_vision = (_env(role, "VISION") or "") == "1"
             supports_structured = (_env(role, "STRUCTURED") or "") == "1"
             return OpenAICompatBackend(model, base_url=base_url, api_key=key,
                                        supports_vision=supports_vision,
                                        supports_structured=supports_structured)
-        log(f"make_backend[{role}]: unknown LLM_BACKEND={provider!r} -> fallback")
+        log("llm.backend_unknown", provider=provider)
         return None
     except Exception as e:  # missing SDK / bad config -> fallback, never crash a run
-        log(f"make_backend[{role}]: {provider} unavailable -> fallback:", e)
+        log("llm.provider_unavailable", provider=provider, error=e)
         return None
 
 
@@ -315,25 +320,114 @@ def extract_json(text: str) -> dict:
     return json.loads(s[start:s.rfind("}") + 1])
 
 
-def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
-                        temperature: float) -> LLMResult:
-    """Obtain a JSON object from `backend`, preferring native structured output.
+def _int_env(key: str, default: int) -> int:
+    try:
+        v = int(os.environ.get(key, ""))
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
 
-    When the backend advertises `supports_structured`, use `complete_json` (Anthropic tool_use /
-    OpenAI json_schema) — the reply is a guaranteed object, no text-slicing. Otherwise (MCP sampling,
-    local models with structured OFF) fall back to `complete` + `extract_json`. The returned
-    NEVER raises on an unparseable reply: it returns the `LLMResult` with `.data=None` so the CALLER
-    can still charge `budget.tracker().add(role, result)` with the tokens the model already spent
-    (ADR-021 over-budget guard) and THEN degrade to the heuristic / an empty result on `data is None`.
-    Only a backend (network/SDK) error propagates — and there no tokens were produced to book."""
+
+# Adaptive structured-output budget (M9-LIVE, 2026-07-23). A reasoning model can spend a tight
+# max_tokens entirely on THINK tokens and stop before emitting any answer (finish_reason="length",
+# empty content), which the caller reads as "no JSON" and silently degrades. Rather than fail, retry
+# the SAME call with a doubled ceiling until the model produces content or we hit the hard cap — then
+# remember the working ceiling PER MODEL so the next run starts there and pays the escalation once.
+# Bounded and budget-aware: escalates ONLY on finish_reason="length", never past _TOKEN_HARD_MAX, and
+# stops when the role's ADR-021 plan budget is exhausted. Disable with LLM_ADAPTIVE_TOKENS=0.
+_TOKEN_HARD_MAX = _int_env("LLM_MAX_TOKENS_HARD", 16384)
+_ADAPTIVE = os.environ.get("LLM_ADAPTIVE_TOKENS", "1").strip().lower() not in ("0", "false", "no", "off")
+_BUDGET_FILE = os.environ.get("SENTINEL_LLM_BUDGET_FILE") or os.path.join("state", "llm-budget.json")
+_learned_cache: Optional[dict] = None
+
+
+def _learned_budgets() -> dict:
+    """Per-model learned ceilings {model: max_tokens}, loaded once (best-effort)."""
+    global _learned_cache
+    if _learned_cache is None:
+        try:
+            with open(_BUDGET_FILE) as f:
+                loaded = json.load(f)
+            _learned_cache = {k: int(v) for k, v in loaded.items() if isinstance(v, (int, float))}
+        except Exception:
+            _learned_cache = {}
+    return _learned_cache
+
+
+def _remember_budget(model: Optional[str], tokens: int) -> None:
+    """Persist a newly-learned working ceiling for `model` (best-effort, atomic, never raises)."""
+    if not model:
+        return
+    store = _learned_budgets()
+    if store.get(model, 0) >= tokens:
+        return
+    store[model] = tokens
+    try:
+        d = os.path.dirname(_BUDGET_FILE)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = _BUDGET_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(store, f)
+        os.replace(tmp, _BUDGET_FILE)
+    except Exception:
+        pass
+
+
+def _one_structured(backend, prompt: str, schema: dict, max_tokens: int, temperature: float) -> LLMResult:
     if getattr(backend, "supports_structured", False):
-        r = backend.complete_json(prompt, schema=schema, max_tokens=max_tokens,
-                                  temperature=temperature)
+        r = backend.complete_json(prompt, schema=schema, max_tokens=max_tokens, temperature=temperature)
     else:
         r = backend.complete(prompt, max_tokens=max_tokens, temperature=temperature)
     if r.data is None:  # fallback path, or a native reply with no structured payload -> salvage
         try:
             r.data = extract_json(r.text)
         except Exception:
-            r.data = None  # caller charges budget, then degrades on `data is None`
+            r.data = None
+    return r
+
+
+def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
+                        temperature: float, role: Optional[str] = None) -> LLMResult:
+    """Obtain a JSON object from `backend`, preferring native structured output, self-calibrating the
+    token ceiling for reasoning models.
+
+    When the backend advertises `supports_structured`, use `complete_json` (Anthropic tool_use /
+    OpenAI json_schema) — the reply is a guaranteed object, no text-slicing. Otherwise (MCP sampling,
+    local models with structured OFF) fall back to `complete` + `extract_json`. NEVER raises on an
+    unparseable reply: returns the `LLMResult` with `.data=None` so the CALLER can still charge
+    `budget.tracker().add(role, result)` with the tokens the model spent (ADR-021) and THEN degrade.
+
+    If the reply is truncated (finish_reason="length" with no parseable payload), retry with a doubled
+    ceiling up to _TOKEN_HARD_MAX and remember the working value per model (see the module note above).
+    `role` (e.g. "plan") makes the retries respect that budget and is optional; without it the loop is
+    still bounded by _TOKEN_HARD_MAX. The returned result's token counts are SUMMED across attempts so
+    the caller charges the true total. Only a backend (network/SDK) error propagates."""
+    model = getattr(backend, "model", None)
+    cap = max_tokens
+    if _ADAPTIVE:
+        cap = min(max(cap, _learned_budgets().get(model, 0)), _TOKEN_HARD_MAX)
+    total_pt = total_ct = 0
+    attempt = 0
+    while True:
+        r = _one_structured(backend, prompt, schema, cap, temperature)
+        total_pt += r.prompt_tokens or 0
+        total_ct += r.completion_tokens or 0
+        if r.data is not None:
+            if cap > max_tokens:  # succeeded only after escalation -> teach the next run
+                _remember_budget(model, cap)
+            break
+        # Only a length-truncation is worth retrying; a genuine bad reply won't improve with room.
+        if not _ADAPTIVE or r.finish_reason != "length" or cap >= _TOKEN_HARD_MAX:
+            break
+        if role is not None:
+            from . import budget
+            if budget.tracker().exceeded(role):
+                log("llm.budget_ceiling_reached", role=role, cap=cap)
+                break
+        new_cap = min(cap * 2, _TOKEN_HARD_MAX)
+        log("llm.output_truncated_retry", cap=cap, new_cap=new_cap)
+        cap = new_cap
+        attempt += 1
+    r.prompt_tokens, r.completion_tokens = total_pt, total_ct  # true total across attempts (ADR-021)
     return r

@@ -20,14 +20,9 @@ import json
 import os
 
 from . import agui
+from .eventlog import log
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
-
-
-def _log(*a):
-    # local logger stand-in (replay.py has no `log` import; emission failures are non-fatal anyway)
-    import sys
-    print("[replay]", *a, file=sys.stderr, flush=True)
 
 
 def _emit(event_type: str, run_id: str, **data) -> None:
@@ -40,7 +35,7 @@ def _emit(event_type: str, run_id: str, **data) -> None:
     try:
         agui.emit(event_type, run_id, **data)
     except Exception as e:
-        _log("agui emit failed:", e)
+        log("system.agui_emit_failed", error=e)
 
 
 def _a11y_hash(aria: str) -> str:
@@ -149,7 +144,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     except ValueError:
         # A malformed operator env must not crash the whole replay before a single step runs (this parse
         # sits at the top of the function, unlike graph-mode's mid-run checkpoint) — treat garbage as off.
-        _log("bad SENTINEL_AUTO_HITL_THRESHOLD; treating as 0 (auto-HITL off)")
+        log("hitl.threshold_invalid")
         hitl_threshold = 0
     total = len(steps)
 

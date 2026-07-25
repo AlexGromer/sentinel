@@ -42,7 +42,7 @@ func TestParseRunLLM(t *testing.T) {
 		}
 	}
 	// valid
-	c, err := parseRunLLM(json.RawMessage(`{"backend":"openai","base_url":"http://h:11434/v1","model_planner":"qwen3:14b","model_heal":"qwen2.5-vl:7b","vision":true}`))
+	c, err := parseRunLLM(json.RawMessage(`{"backend":"openai","base_url":"http://h:11434/v1","model_planner":"qwen3:14b","model_heal":"qwen2.5vl:7b","vision":true}`))
 	if err != nil || c == nil {
 		t.Fatalf("valid parseRunLLM err=%v c=%v", err, c)
 	}
@@ -69,7 +69,7 @@ func TestResolveRunEnvPrecedence(t *testing.T) {
 	// process env sets BACKEND; per-run sets base_url+planner; persisted sets heal.
 	base := []string{"PATH=/x", "LLM_BACKEND=anthropic"}
 	perRun := &llmRunConfig{Backend: "openai", BaseURL: "http://h:11434/v1", ModelPlanner: "qwen3:14b"}
-	persisted := map[string]string{"LLM_BACKEND": "openai", "LLM_MODEL_HEAL": "qwen2.5-vl:7b"}
+	persisted := map[string]string{"LLM_BACKEND": "openai", "LLM_MODEL_HEAL": "qwen2.5vl:7b"}
 	env := resolveRunEnv(base, perRun, persisted)
 
 	if got := envValue(env, "LLM_BACKEND"); got != "anthropic" {
@@ -81,7 +81,7 @@ func TestResolveRunEnvPrecedence(t *testing.T) {
 	if got := envValue(env, "LLM_MODEL_PLANNER"); got != "qwen3:14b" {
 		t.Errorf("LLM_MODEL_PLANNER = %q, want per-run value", got)
 	}
-	if got := envValue(env, "LLM_MODEL_HEAL"); got != "qwen2.5-vl:7b" {
+	if got := envValue(env, "LLM_MODEL_HEAL"); got != "qwen2.5vl:7b" {
 		t.Errorf("LLM_MODEL_HEAL = %q, want persisted value", got)
 	}
 	// effective backend is anthropic (env), so no noauth default is added
@@ -142,11 +142,11 @@ func TestResolveRunEnvEmptyEnvIsOverridable(t *testing.T) {
 
 func TestPersistedLLMEnv(t *testing.T) {
 	var cfg map[string]any
-	_ = json.Unmarshal([]byte(`{"llm":{"backend":"openai","base_url":"http://h:11434/v1","model":{"planner":"qwen3:14b","heal":"qwen2.5-vl:7b"},"vision":true}}`), &cfg)
+	_ = json.Unmarshal([]byte(`{"llm":{"backend":"openai","base_url":"http://h:11434/v1","model":{"planner":"qwen3:14b","heal":"qwen2.5vl:7b"},"vision":true}}`), &cfg)
 	got := persistedLLMEnv(cfg)
 	want := map[string]string{
 		"LLM_BACKEND": "openai", "LLM_BASE_URL": "http://h:11434/v1",
-		"LLM_MODEL_PLANNER": "qwen3:14b", "LLM_MODEL_HEAL": "qwen2.5-vl:7b", "LLM_VISION": "1",
+		"LLM_MODEL_PLANNER": "qwen3:14b", "LLM_MODEL_HEAL": "qwen2.5vl:7b", "LLM_VISION": "1",
 	}
 	for k, v := range want {
 		if got[k] != v {

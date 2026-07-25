@@ -17,11 +17,41 @@ See ../docs/M1_CONTRACT.md.
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional, Protocol
 
-from .executor import log
+from .eventlog import log
 from .llm import complete_structured
 from .sanitize import safe_json, safe_text
+
+
+def _tok_budget(env_key: str, default: int) -> int:
+    """A positive int override from the environment, else `default`."""
+    try:
+        v = int(os.environ.get(env_key, ""))
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+# max_tokens is a CEILING, not a target. A non-reasoning model (Claude, GPT) emits its small JSON and
+# stops (finish_reason="stop"), so a generous ceiling costs it nothing. A reasoning model (qwen3, R1,
+# o-series) emits THINK tokens first and, under a tight ceiling, hits the cap before any answer content
+# (finish_reason="length", empty content) — which the caller then reads as "no JSON" and silently
+# degrades. The old 200/800 caps assumed non-reasoning models; M9-LIVE (2026-07-23) saw qwen3:14b
+# starve 4 of 6 fixtures at 800. Ceilings below are reasoning-aware; env-tunable for exotic models.
+_PICK_TOKENS = _tok_budget("LLM_MAX_TOKENS_PICK", 1024)       # per-action index pick (small output)
+_SCENARIO_TOKENS = _tok_budget("LLM_MAX_TOKENS_SCENARIO", 3072)  # whole-scenario / draft authoring
+
+
+def _log_unparsed(where: str, result) -> None:
+    """A structured call returned nothing parseable — never let that pass silently (it presents as an
+    empty scenario / a heuristic fallback with no reason). Name the likely cause from finish_reason."""
+    fr = getattr(result, "finish_reason", None)
+    hint = (" — finish_reason=length: the model hit max_tokens mid-output (raise LLM_MAX_TOKENS_* or "
+            "use a non-reasoning model)") if fr == "length" else f" (finish_reason={fr})"
+    log("plan.output_unparseable", where=where, hint=hint,
+        raw=repr(getattr(result, "text", ""))[:300])
 
 # JSON schemas for the structured-output planners (ADR-057). Rich-guiding: they encode the real
 # artifact contract (verb enum, required ref/index, step shape) so a capable backend emits conformant
@@ -96,7 +126,7 @@ class LLMPlanner:
             return self._fallback.propose(state, candidates)
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("LLMPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            log("plan.budget_exhausted_heuristic", planner="LLMPlanner")
             return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"),
@@ -113,11 +143,12 @@ class LLMPlanner:
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_PICK,
-                                         max_tokens=200, temperature=0)
+                                         max_tokens=_PICK_TOKENS, temperature=0, role="plan")
             budget.tracker().add("plan", result)
             tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
             j = result.data
             if j is None:  # no parseable structured output -> deterministic explore (budget charged)
+                _log_unparsed(f"{type(self).__name__}.propose", result)
                 return self._fallback.propose(state, candidates)
             if j.get("done"):
                 return {"action": None, "done": True, "reason": "llm: done", "tokens": tokens}
@@ -127,7 +158,7 @@ class LLMPlanner:
                         "reason": f"llm picked #{idx}", "tokens": tokens}
             return {"action": None, "done": True, "reason": "llm index OOB", "tokens": tokens}
         except Exception as e:
-            log("LLMPlanner error -> heuristic:", e)
+            log("plan.llm_error_heuristic", planner="LLMPlanner", error=e)
             return self._fallback.propose(state, candidates)
 
 
@@ -156,7 +187,7 @@ class GoalPlanner:
             return self._fallback.propose(state, candidates)   # no goal/backend -> deterministic explore
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("GoalPlanner: plan token budget exceeded -> heuristic (M8, ADR-021)")
+            log("plan.budget_exhausted_heuristic", planner="GoalPlanner")
             return self._fallback.propose(state, candidates)
         try:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"), "name": c.get("name"),
@@ -174,11 +205,12 @@ class GoalPlanner:
                 '{"done": true, "reason": "<why the goal is met or unreachable>"}.'
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_PICK,
-                                         max_tokens=200, temperature=0)
+                                         max_tokens=_PICK_TOKENS, temperature=0, role="plan")
             budget.tracker().add("plan", result)
             tokens = {"prompt": result.prompt_tokens, "completion": result.completion_tokens}
             j = result.data
             if j is None:  # no parseable structured output -> deterministic explore (budget charged)
+                _log_unparsed(f"{type(self).__name__}.propose", result)
                 return self._fallback.propose(state, candidates)
             if j.get("done"):
                 return {"action": None, "done": True,
@@ -189,7 +221,7 @@ class GoalPlanner:
                         "reason": f"goal -> #{idx}", "tokens": tokens}   # GROUNDED: a real candidate only
             return {"action": None, "done": True, "reason": "goal: index OOB", "tokens": tokens}
         except Exception as e:
-            log("GoalPlanner error -> heuristic:", e)
+            log("plan.llm_error_heuristic", planner="GoalPlanner", error=e)
             return self._fallback.propose(state, candidates)
 
     def build_scenario(self, flat_map: list, goal: str = None, history: list = None) -> dict:
@@ -205,7 +237,7 @@ class GoalPlanner:
             return {"refs": [], "tokens": None}
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("GoalPlanner.build_scenario: plan budget exceeded -> empty scenario")
+            log("plan.scenario_budget_empty")
             return {"refs": [], "tokens": None}
         try:
             menu = [{"ref": e["semantic_id"], "page": e.get("page"), "role": e.get("role"),
@@ -225,16 +257,17 @@ class GoalPlanner:
                 "Use only refs present in elements; omit anything not present."
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_STEPS,
-                                         max_tokens=800, temperature=0)
+                                         max_tokens=_SCENARIO_TOKENS, temperature=0, role="plan")
             budget.tracker().add("plan", result)
             j = result.data
             if j is None:  # no parseable structured output -> author nothing (budget charged)
+                _log_unparsed("GoalPlanner.build_scenario", result)
                 return {"refs": [], "tokens": None}
             refs = [r for r in (j.get("steps") or j.get("refs") or []) if isinstance(r, dict) and r.get("ref")]
             return {"refs": refs,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
         except Exception as e:
-            log("GoalPlanner.build_scenario error -> empty:", e)
+            log("plan.scenario_error_empty", error=e)
             return {"refs": [], "tokens": None}
 
 
@@ -261,7 +294,7 @@ class DescribePlanner:
             return {"draft": [], "tokens": None}
         from . import budget
         if budget.tracker().exceeded("plan"):
-            log("DescribePlanner: plan budget exceeded -> empty draft")
+            log("plan.describe_budget_empty")
             return {"draft": [], "tokens": None}
         try:
             convo = ""
@@ -279,16 +312,17 @@ class DescribePlanner:
                 '"text": "<opt>"}, "value": "<opt>"}]}.'
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_DRAFT,
-                                         max_tokens=800, temperature=0)
+                                         max_tokens=_SCENARIO_TOKENS, temperature=0, role="plan")
             budget.tracker().add("plan", result)
             j = result.data
             if j is None:  # no parseable structured output -> empty draft (budget charged)
+                _log_unparsed("DescribePlanner", result)
                 return {"draft": [], "tokens": None}
             draft = [d for d in (j.get("steps") or j.get("draft") or []) if isinstance(d, dict)]
             return {"draft": draft,
                     "tokens": {"prompt": result.prompt_tokens, "completion": result.completion_tokens}}
         except Exception as e:
-            log("DescribePlanner error -> empty:", e)
+            log("plan.describe_error_empty", error=e)
             return {"draft": [], "tokens": None}
 
 

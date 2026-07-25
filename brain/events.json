@@ -1,0 +1,1258 @@
+{
+  "$comment": [
+    "EVENT CATALOGUE — the single source of truth for every human-facing message Sentinel emits.",
+    "",
+    "Two DISTINCT streams are served from this one file (they are not the same thing):",
+    "  A. RUN NARRATIVE — what is happening / what happened. Ordered, complete, NO levels.",
+    "     Sourced from the AG-UI event types; rendered in the Live view and on a run's result.",
+    "     Keys: `phases`, `exit_codes`, and the `narrative` block.",
+    "  B. DIAGNOSTICS (logs) — why something broke. Filterable, levelled, unordered.",
+    "     Sourced from brain's log() call sites; rendered in the Logs view.",
+    "     Keys: the `events` block.",
+    "Filtering a narrative by level would destroy the story, so stream A has no `lvl` at all.",
+    "",
+    "The ONE legitimate crossing between the streams is `degrades: true`: such an event arises",
+    "as a diagnostic (B) but MUST surface in the narrative and on the verdict (A) via",
+    "`verdict_hint`. Those are the paths where a run keeps going, exits 0 and looks successful",
+    "while the LLM never participated or the scenario came out empty — the failure mode that",
+    "cost two M9-LIVE sessions before it was named.",
+    "",
+    "COMPLETENESS IS MACHINE-CHECKED, not asserted: tests/test_event_catalog_offline.py fails",
+    "if any brain log() site references a code absent here, or if any code here is unused.",
+    "Bilingual is enforced the same way — `ru` and `en` are both required on every entry.",
+    "",
+    "JSON, not YAML: the browser reads this natively with no dependency, which the",
+    "self-contained/air-gapped page invariant requires (precedent: docs/backend-presets.json)."
+  ],
+  "version": 1,
+  "levels": [
+    "debug",
+    "info",
+    "warn",
+    "error"
+  ],
+  "categories": [
+    "run",
+    "browser",
+    "llm",
+    "plan",
+    "heal",
+    "hitl",
+    "record",
+    "system",
+    "app",
+    "test"
+  ],
+  "category_labels": {
+    "run": {
+      "ru": "прогон",
+      "en": "run"
+    },
+    "browser": {
+      "ru": "браузер",
+      "en": "browser"
+    },
+    "llm": {
+      "ru": "ИИ",
+      "en": "AI"
+    },
+    "plan": {
+      "ru": "план",
+      "en": "plan"
+    },
+    "heal": {
+      "ru": "починка",
+      "en": "healing"
+    },
+    "hitl": {
+      "ru": "человек",
+      "en": "operator"
+    },
+    "record": {
+      "ru": "запись",
+      "en": "recording"
+    },
+    "system": {
+      "ru": "система",
+      "en": "system"
+    },
+    "app": {
+      "ru": "приложение",
+      "en": "application"
+    },
+    "test": {
+      "ru": "тестирование",
+      "en": "testing"
+    }
+  },
+  "level_labels": {
+    "debug": {
+      "ru": "отладка",
+      "en": "debug"
+    },
+    "info": {
+      "ru": "информация",
+      "en": "info"
+    },
+    "warn": {
+      "ru": "предупреждение",
+      "en": "warning"
+    },
+    "error": {
+      "ru": "ошибка",
+      "en": "error"
+    }
+  },
+  "$comment_phases": "Stream A. Graph nodes (brain/graph.py:455) named for a human. No levels — a phase is a position in the story, not a severity.",
+  "phases": {
+    "perceive": {
+      "icon": "🔍",
+      "ru": "Изучение страницы",
+      "en": "Reading the page",
+      "ru_hint": "снимок дерева страницы и доступных элементов",
+      "en_hint": "snapshot of the page tree and available elements"
+    },
+    "ground": {
+      "icon": "🎯",
+      "ru": "Поиск элементов",
+      "en": "Locating elements",
+      "ru_hint": "привязка шагов к реально найденным элементам",
+      "en_hint": "binding steps to elements actually found"
+    },
+    "plan": {
+      "icon": "🧠",
+      "ru": "Составление плана",
+      "en": "Planning",
+      "ru_hint": "выбор следующего шага",
+      "en_hint": "choosing the next step"
+    },
+    "act": {
+      "icon": "⚙",
+      "ru": "Действие",
+      "en": "Acting",
+      "ru_hint": "клик, ввод, переход",
+      "en_hint": "click, type, navigate"
+    },
+    "verify": {
+      "icon": "✓",
+      "ru": "Проверка",
+      "en": "Verifying",
+      "ru_hint": "получилось ли действие",
+      "en_hint": "did the action take effect"
+    },
+    "heal": {
+      "icon": "🔧",
+      "ru": "Починка",
+      "en": "Healing",
+      "ru_hint": "элемент не нашёлся — ищем заново",
+      "en_hint": "the element was not found — re-locating it"
+    },
+    "checkpoint": {
+      "icon": "💾",
+      "ru": "Контрольная точка",
+      "en": "Checkpoint",
+      "ru_hint": "состояние сохранено, можно продолжить после перерыва",
+      "en_hint": "state saved; the run can resume after an interruption"
+    },
+    "takeover": {
+      "icon": "🙋",
+      "ru": "Передача человеку",
+      "en": "Operator takeover",
+      "ru_hint": "прогон ждёт действий оператора",
+      "en_hint": "the run is waiting for the operator"
+    },
+    "scenario": {
+      "icon": "📝",
+      "ru": "Сборка сценария",
+      "en": "Authoring the scenario",
+      "ru_hint": "из изученного собирается воспроизводимый тест",
+      "en_hint": "turning what was explored into a replayable test"
+    },
+    "report": {
+      "icon": "📊",
+      "ru": "Итог",
+      "en": "Report",
+      "ru_hint": "вердикт и артефакты",
+      "en_hint": "verdict and artifacts"
+    }
+  },
+  "$comment_modes": "Stream A. Run modes as an operator picks them in the UI.",
+  "modes": {
+    "explore": {
+      "ru": "разведка",
+      "en": "explore"
+    },
+    "goal": {
+      "ru": "по цели",
+      "en": "by goal"
+    },
+    "describe": {
+      "ru": "по описанию потока",
+      "en": "by flow description"
+    },
+    "chat": {
+      "ru": "беседа",
+      "en": "chat"
+    },
+    "replay": {
+      "ru": "перепрогон",
+      "en": "replay"
+    },
+    "baseline": {
+      "ru": "обновление эталона",
+      "en": "baseline update"
+    }
+  },
+  "$comment_exit": "Stream A. The verdict contract (cmd/agentctl/main.go:11). `-1` covers both a signalled process and a spawn failure — control-api pairs it with `state` to disambiguate.",
+  "exit_codes": {
+    "0": {
+      "icon": "✓",
+      "severity": "pass",
+      "ru": "Пройдено",
+      "en": "Passed",
+      "ru_hint": "проверка прошла без замечаний",
+      "en_hint": "the check completed with no findings"
+    },
+    "1": {
+      "icon": "⚠",
+      "severity": "finding",
+      "ru": "Тест нашёл проблему",
+      "en": "The test found a problem",
+      "ru_hint": "шаг не выполнился — это результат работы, а не поломка инструмента",
+      "en_hint": "a step did not succeed — this is a result, not a tool failure"
+    },
+    "2": {
+      "icon": "🖼",
+      "severity": "regression",
+      "ru": "Расхождение с эталоном",
+      "en": "Golden/visual regression",
+      "ru_hint": "страница отличается от сохранённого эталона",
+      "en_hint": "the page differs from the saved baseline"
+    },
+    "3": {
+      "icon": "✖",
+      "severity": "integrity",
+      "ru": "Проблема целостности или настройки",
+      "en": "Integrity or configuration problem",
+      "ru_hint": "нужен человек: план или настройки не сходятся",
+      "en_hint": "needs a human: the plan or the configuration does not add up"
+    },
+    "-1": {
+      "icon": "⛔",
+      "severity": "not_started",
+      "ru": "Не запустился",
+      "en": "Did not start",
+      "ru_hint": "процесс не удалось запустить или он был прерван сигналом",
+      "en_hint": "the process could not be spawned, or was killed by a signal"
+    }
+  },
+  "$comment_narrative": "Stream A. Templates for the AG-UI event types (brain/agui.py + cmd/control-api). `{}` placeholders are filled from the event's `data`.",
+  "narrative": {
+    "run.started": {
+      "icon": "▶",
+      "ru": "Запуск: {mode}, цель — {target}",
+      "en": "Started: {mode}, target — {target}"
+    },
+    "run.finished": {
+      "icon": "■",
+      "ru": "Прогон завершён",
+      "en": "Run finished"
+    },
+    "state.transition": {
+      "icon": "→",
+      "ru": "{phase}",
+      "en": "{phase}"
+    },
+    "tool.call": {
+      "icon": "⚙",
+      "ru": "{args_summary}",
+      "en": "{args_summary}"
+    },
+    "step.progress": {
+      "icon": "•",
+      "ru": "Шаг {n} из {total}: {desc}",
+      "en": "Step {n} of {total}: {desc}"
+    },
+    "heal": {
+      "icon": "🔧",
+      "ru": "Починка шага {step}: способ «{strategy}»",
+      "en": "Healing step {step}: strategy \"{strategy}\""
+    },
+    "verdict": {
+      "icon": "🏁",
+      "ru": "Итог: {verdict}",
+      "en": "Verdict: {verdict}"
+    },
+    "hitl_needed": {
+      "icon": "🙋",
+      "ru": "Нужно участие человека",
+      "en": "Operator input needed"
+    }
+  },
+  "$comment_heal": "Stream A. Healing strategies with their confidence priors (brain/healing.py:26). Thresholds: auto-accept at 0.85, flag for review at 0.60.",
+  "heal_strategies": {
+    "testid": {
+      "prior": 0.95,
+      "ru": "по тестовому идентификатору",
+      "en": "by test id"
+    },
+    "role_name": {
+      "prior": 0.9,
+      "ru": "по роли и названию",
+      "en": "by role and name"
+    },
+    "label": {
+      "prior": 0.88,
+      "ru": "по подписи поля",
+      "en": "by field label"
+    },
+    "text_role": {
+      "prior": 0.8,
+      "ru": "по тексту и роли",
+      "en": "by text and role"
+    },
+    "css": {
+      "prior": 0.65,
+      "ru": "по CSS-селектору",
+      "en": "by CSS selector"
+    },
+    "xpath": {
+      "prior": 0.45,
+      "ru": "по XPath",
+      "en": "by XPath"
+    },
+    "visual": {
+      "prior": 0.8,
+      "ru": "по скриншоту",
+      "en": "by screenshot"
+    },
+    "stub": {
+      "prior": 0.0,
+      "ru": "заглушка (разведка)",
+      "en": "stub (explore)"
+    }
+  },
+  "heal_outcomes": {
+    "cache_hit": {
+      "ru": "взято из памяти прошлых починок",
+      "en": "reused from the healing cache"
+    },
+    "auto_healed": {
+      "ru": "починено автоматически",
+      "en": "healed automatically"
+    },
+    "flagged": {
+      "ru": "починено, но требует взгляда человека",
+      "en": "healed, but flagged for review"
+    }
+  },
+  "$comment_events": "Stream B — DIAGNOSTICS. One entry per distinct brain log() message. 65 codes cover 72 call sites (two messages are emitted from two places each, and four sites share the _log_unparsed helper). `degrades: true` marks a path where the run continues and exits 0 while quality silently collapsed.",
+  "events": {
+    "run.config": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Прогон {run_id} начат: режим {mode}",
+      "en": "Run {run_id} started: mode {mode}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.explore_config": {
+      "lvl": "info",
+      "cat": "run",
+      "phase": "plan",
+      "ru": "Разведка: план строит {planner}, цель — {target}",
+      "en": "Explore: planner {planner}, target — {target}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.replay_config": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "{kind}: план {plan}, цель — {target}",
+      "en": "{kind}: plan {plan}, target — {target}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.store_mode": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Хранилище: {store}",
+      "en": "Store: {store}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.config_applied": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Применён файл настроек прогона: {path}",
+      "en": "Run-config file applied: {path}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.chat_cold": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Беседа {conversation_id} начата с нуля: изучаю {target} и собираю сценарий",
+      "en": "Conversation {conversation_id} cold start: exploring {target} and authoring",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.chat_resume": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Беседа {conversation_id} продолжена: уточняю по сохранённой карте сайта, браузер не нужен",
+      "en": "Conversation {conversation_id} resumed: refining over the saved site map, no browser",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.chat_reverify": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Беседа: включена перепроверка — изучаю сайт заново вместо уточнения по памяти",
+      "en": "Chat: re-verification on — re-exploring the site instead of a warm refine",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.mcp_serving": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Инструменты прогона доступны внешнему хосту (прогон {run_id})",
+      "en": "Run tools exposed to an external host (run {run_id})",
+      "modules": [
+        "server"
+      ]
+    },
+    "run.budget_reset": {
+      "lvl": "debug",
+      "cat": "run",
+      "ru": "Счётчики расхода сброшены: план {plan}, починка {heal}, всего {total}",
+      "en": "Spend counters reset: plan {plan}, heal {heal}, total {total}",
+      "modules": [
+        "budget"
+      ]
+    },
+    "fatal.goal_describe_conflict": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 3,
+      "ru": "Заданы одновременно цель и описание потока — нужно выбрать одно",
+      "en": "A goal and a flow description were both given — pick one",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.chat_no_intent": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 3,
+      "ru": "Для беседы нужна цель или описание потока — не указано ни то, ни другое",
+      "en": "Chat mode needs a goal or a flow description — neither was given",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.chat_no_target": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 2,
+      "ru": "Новая беседа начинается с адреса страницы — он не указан",
+      "en": "A new conversation starts from a page address — none was given",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.chat_no_conversation_id": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 2,
+      "ru": "Для беседы нужен её идентификатор — он не передан",
+      "en": "Chat mode requires a conversation id — it was not passed",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.target_unset": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 2,
+      "ru": "Не указан адрес проверяемой страницы — запускать нечего",
+      "en": "No target page address — there is nothing to run",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.plan_missing": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 3,
+      "ru": "Файл плана не найден: {path}",
+      "en": "Plan file not found: {path}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.plan_missing_export": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 3,
+      "ru": "Нечего выгружать — файл плана не найден: {path}",
+      "en": "Nothing to export — plan file not found: {path}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.plan_unparseable": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 3,
+      "ru": "Файл плана повреждён и не читается — нужен человек",
+      "en": "The plan file is corrupt and cannot be read — needs a human",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.heal_report_missing": {
+      "lvl": "error",
+      "cat": "heal",
+      "exit": 3,
+      "ru": "Отчёт о починке не найден в {dir} — перепрогон не состоялся",
+      "en": "No healing report in {dir} — the replay did not happen",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.force_replay_in_ci": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 3,
+      "ru": "Принудительный перепрогон запрещён в автоматическом режиме",
+      "en": "Forced replay is not allowed in CI mode",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.secret_would_leak_to_trace": {
+      "lvl": "error",
+      "cat": "system",
+      "exit": 3,
+      "ru": "Прогон остановлен: план вводит секрет, а запись трассы включена — секрет попал бы в файл трассы",
+      "en": "Stopped: the plan fills a secret while trace recording is on — the secret would land in the trace file",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.run_config_invalid": {
+      "lvl": "error",
+      "cat": "run",
+      "exit": 3,
+      "ru": "Файл настроек прогона {path} не читается: {error}",
+      "en": "Run-config file {path} is invalid: {error}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.executor_cmd_unset": {
+      "lvl": "error",
+      "cat": "browser",
+      "exit": 3,
+      "ru": "Не задана команда запуска браузера — прогон невозможен",
+      "en": "The browser launch command is unset — the run cannot proceed",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "llm.no_anthropic_key": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Ключ к ИИ не задан ({role}) — работаю без ИИ, по простым правилам",
+      "en": "No AI key ({role}) — running without AI, on simple rules",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: план строился простыми правилами",
+      "en_verdict": "the run completed WITHOUT AI: the plan came from simple rules",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.openai_endpoint_missing": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Для ИИ ({role}) не задан ни адрес, ни ключ — работаю без ИИ",
+      "en": "AI ({role}) has neither an address nor a key — running without AI",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: подключение не настроено",
+      "en_verdict": "the run completed WITHOUT AI: the connection is not configured",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.openai_model_missing": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Не выбрана модель ИИ ({role}) — работаю без ИИ",
+      "en": "No AI model selected ({role}) — running without AI",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: модель не выбрана",
+      "en_verdict": "the run completed WITHOUT AI: no model was selected",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.backend_unknown": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Неизвестный вид подключения к ИИ ({provider}) — работаю без ИИ",
+      "en": "Unknown AI connection type ({provider}) — running without AI",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: вид подключения не распознан",
+      "en_verdict": "the run completed WITHOUT AI: the connection type was not recognised",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.provider_unavailable": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "ИИ недоступен ({provider}): {error} — работаю без ИИ",
+      "en": "AI unavailable ({provider}): {error} — running without AI",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: модель не ответила (проверь адрес и имя модели)",
+      "en_verdict": "the run completed WITHOUT AI: the model did not answer (check the address and model name)",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.sampling_no_session": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Запрошен ИИ через внешний хост ({role}), но соединения нет — работаю без ИИ",
+      "en": "AI via the external host was requested ({role}) but there is no session — running without AI",
+      "ru_verdict": "прогон прошёл БЕЗ ИИ: внешний хост не подключён",
+      "en_verdict": "the run completed WITHOUT AI: the external host is not connected",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.budget_ceiling_reached": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Ответ ИИ не поместился в предел {cap} токенов, а бюджет исчерпан — беру что есть",
+      "en": "The AI answer did not fit into {cap} tokens and the budget is spent — using what came back",
+      "ru_verdict": "ответ ИИ оборван по лимиту — часть шагов может отсутствовать",
+      "en_verdict": "the AI answer was cut off by the limit — some steps may be missing",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.output_truncated_retry": {
+      "lvl": "info",
+      "cat": "llm",
+      "ru": "Ответ ИИ не поместился в {cap} токенов — повторяю с пределом {new_cap}",
+      "en": "The AI answer did not fit into {cap} tokens — retrying at {new_cap}",
+      "modules": [
+        "llm"
+      ]
+    },
+    "plan.output_unparseable": {
+      "$note": "Emitted at planner:53 (the _log_unparsed helper) and reached from four distinct situations, which the `where` argument distinguishes: LLMPlanner.propose, GoalPlanner.propose, GoalPlanner.build_scenario, DescribePlanner. All five lines are listed so the coverage gate's arithmetic is exact.",
+      "lvl": "warn",
+      "cat": "plan",
+      "degrades": true,
+      "ru": "ИИ ответил не по форме ({where}){hint} — ответ отброшен. Начало ответа: {raw}",
+      "en": "The AI answered off-format ({where}){hint} — discarded. Reply starts: {raw}",
+      "ru_verdict": "часть ответов ИИ была отброшена как нечитаемая",
+      "en_verdict": "some AI answers were discarded as unreadable",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.budget_exhausted_heuristic": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "plan",
+      "degrades": true,
+      "ru": "Лимит расхода на планирование исчерпан ({planner}) — дальше простые правила, без ИИ",
+      "en": "The planning budget is spent ({planner}) — continuing on simple rules, without AI",
+      "ru_verdict": "план достроен БЕЗ ИИ: кончился лимит расхода",
+      "en_verdict": "the plan was finished WITHOUT AI: the spend limit ran out",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.llm_error_heuristic": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "plan",
+      "degrades": true,
+      "ru": "ИИ не смог составить план ({planner}): {error} — перехожу на простые правила",
+      "en": "The AI could not plan ({planner}): {error} — falling back to simple rules",
+      "ru_verdict": "план построен простыми правилами: ИИ выдал ошибку",
+      "en_verdict": "the plan came from simple rules: the AI errored",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.scenario_budget_empty": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "scenario",
+      "degrades": true,
+      "ru": "Лимит расхода исчерпан на сборке сценария — сценарий вышел пустым",
+      "en": "The budget ran out while authoring — the scenario came out empty",
+      "ru_verdict": "сценарий ПУСТ: кончился лимит расхода",
+      "en_verdict": "the scenario is EMPTY: the spend limit ran out",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.scenario_error_empty": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "scenario",
+      "degrades": true,
+      "ru": "Сборка сценария не удалась: {error} — сценарий вышел пустым",
+      "en": "Authoring failed: {error} — the scenario came out empty",
+      "ru_verdict": "сценарий ПУСТ: сборка завершилась ошибкой",
+      "en_verdict": "the scenario is EMPTY: authoring errored",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.describe_budget_empty": {
+      "lvl": "warn",
+      "cat": "plan",
+      "degrades": true,
+      "ru": "Лимит расхода исчерпан при разборе описания — черновик вышел пустым",
+      "en": "The budget ran out while reading the description — the draft came out empty",
+      "ru_verdict": "черновик по описанию ПУСТ: кончился лимит расхода",
+      "en_verdict": "the draft from the description is EMPTY: the spend limit ran out",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.describe_error_empty": {
+      "lvl": "warn",
+      "cat": "plan",
+      "degrades": true,
+      "ru": "Разбор описания не удался: {error} — черновик вышел пустым",
+      "en": "Reading the description failed: {error} — the draft came out empty",
+      "ru_verdict": "черновик по описанию ПУСТ: разбор завершился ошибкой",
+      "en_verdict": "the draft from the description is EMPTY: reading errored",
+      "modules": [
+        "planner"
+      ]
+    },
+    "plan.orchestrator_abort": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "plan",
+      "ru": "Расход достиг предела — прогон сворачивается к итогу",
+      "en": "The spend limit was reached — the run is converging to a verdict",
+      "modules": [
+        "graph"
+      ]
+    },
+    "heal.explore_stub": {
+      "lvl": "debug",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "На этапе разведки починка не применяется — это нормально",
+      "en": "Healing does not apply during explore — this is expected",
+      "modules": [
+        "graph"
+      ]
+    },
+    "heal.no_llm_backend": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "degrades": true,
+      "ru": "ИИ для починки недоступен — только быстрые способы поиска элемента",
+      "en": "No AI for healing — deterministic strategies only",
+      "ru_verdict": "починка работала БЕЗ ИИ: только быстрые способы",
+      "en_verdict": "healing ran WITHOUT AI: deterministic strategies only",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.budget_exhausted": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "degrades": true,
+      "ru": "Лимит расхода на починку исчерпан — дальше только быстрые способы, без ИИ",
+      "en": "The healing budget is spent — deterministic strategies only from here",
+      "ru_verdict": "починка была слабее обычного: кончился лимит расхода",
+      "en_verdict": "healing was weaker than usual: the spend limit ran out",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.probe_error": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Не удалось проверить доступность ИИ для починки: {error}",
+      "en": "Could not probe AI availability for healing: {error}",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.llm_reground_error": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "ИИ не смог найти элемент заново: {error}",
+      "en": "The AI could not re-locate the element: {error}",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.visual_reground_error": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Поиск элемента по скриншоту не удался: {error}",
+      "en": "Locating the element by screenshot failed: {error}",
+      "modules": [
+        "healing"
+      ]
+    },
+    "hitl.takeover_paused": {
+      "lvl": "info",
+      "cat": "hitl",
+      "phase": "takeover",
+      "ru": "Прогон приостановлен и ждёт действий человека",
+      "en": "The run is paused and waiting for the operator",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "hitl.takeover_timeout": {
+      "lvl": "warn",
+      "cat": "hitl",
+      "phase": "takeover",
+      "ru": "Человек не вернулся в отведённое время — продолжаю сам",
+      "en": "The operator did not return in time — continuing anyway",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "hitl.takeover_arming": {
+      "lvl": "info",
+      "cat": "hitl",
+      "phase": "checkpoint",
+      "ru": "Запрошено участие человека — готовлю паузу",
+      "en": "Operator input requested — arming the pause",
+      "modules": [
+        "graph"
+      ]
+    },
+    "hitl.takeover_resumed": {
+      "lvl": "info",
+      "cat": "hitl",
+      "phase": "takeover",
+      "ru": "Человек вернул управление — продолжаю",
+      "en": "The operator handed control back — continuing",
+      "modules": [
+        "graph"
+      ]
+    },
+    "hitl.auto_threshold_reached": {
+      "lvl": "warn",
+      "cat": "hitl",
+      "phase": "checkpoint",
+      "ru": "{n} неудач подряд (предел {threshold}) — останавливаюсь и жду человека",
+      "en": "{n} consecutive failures (limit {threshold}) — pausing for the operator",
+      "modules": [
+        "graph"
+      ]
+    },
+    "hitl.abort_over_takeover": {
+      "lvl": "warn",
+      "cat": "hitl",
+      "phase": "checkpoint",
+      "ru": "Остановка расхода важнее ожидания человека — сворачиваюсь к итогу",
+      "en": "The spend abort outranks the pending takeover — converging to a verdict",
+      "modules": [
+        "graph"
+      ]
+    },
+    "hitl.threshold_invalid": {
+      "lvl": "warn",
+      "cat": "hitl",
+      "ru": "Предел неудач задан неверно — автопауза выключена",
+      "en": "The failure limit is malformed — the auto-pause is off",
+      "modules": [
+        "replay"
+      ]
+    },
+    "record.event_no_value": {
+      "lvl": "warn",
+      "cat": "record",
+      "ru": "Записанное действие «{verb}» отброшено: нет пригодного значения",
+      "en": "Recorded action \"{verb}\" dropped: no usable value",
+      "modules": [
+        "record_bridge"
+      ]
+    },
+    "record.line_unparseable": {
+      "lvl": "warn",
+      "cat": "record",
+      "ru": "Строка записи не читается — пропущена",
+      "en": "A recorded line is unreadable — skipped",
+      "modules": [
+        "record_bridge"
+      ]
+    },
+    "record.unmatched_dropped": {
+      "lvl": "warn",
+      "cat": "record",
+      "ru": "{count} записанных действий не удалось привязать к элементам — отброшены, ничего не выдумано",
+      "en": "{count} recorded actions could not be bound to elements — dropped, nothing fabricated",
+      "modules": [
+        "record_bridge"
+      ]
+    },
+    "system.agui_emit_failed": {
+      "lvl": "warn",
+      "cat": "system",
+      "ru": "Не удалось отправить событие в живой таймлайн: {error}",
+      "en": "Could not emit an event to the live timeline: {error}",
+      "modules": [
+        "graph",
+        "replay"
+      ]
+    },
+    "system.orchestrator_abort_signal": {
+      "lvl": "warn",
+      "cat": "system",
+      "ru": "Получен сигнал остановки: {reason}",
+      "en": "Abort signalled: {reason}",
+      "modules": [
+        "runcontrol"
+      ]
+    },
+    "system.orchestrator_takeover_signal": {
+      "lvl": "info",
+      "cat": "system",
+      "ru": "Получен запрос на участие человека: {reason}",
+      "en": "Takeover signalled: {reason}",
+      "modules": [
+        "runcontrol"
+      ]
+    },
+    "system.runcontrol_report_error": {
+      "lvl": "warn",
+      "cat": "system",
+      "ru": "Не удалось доложить о расходе (продолжаю): {error}",
+      "en": "Could not report spend (continuing): {error}",
+      "modules": [
+        "runcontrol"
+      ]
+    },
+    "system.runcontrol_unavailable": {
+      "lvl": "info",
+      "cat": "system",
+      "ru": "Служба контроля расхода недоступна — работаю без неё: {error}",
+      "en": "The spend-control service is unavailable — proceeding without it: {error}",
+      "modules": [
+        "runcontrol"
+      ]
+    },
+    "system.storage_state_saved": {
+      "lvl": "info",
+      "cat": "browser",
+      "ru": "Состояние входа сохранено: {path}",
+      "en": "Login state saved: {path}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.storage_state_error": {
+      "lvl": "warn",
+      "cat": "browser",
+      "ru": "Не удалось сохранить состояние входа: {error}",
+      "en": "Could not save the login state: {error}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.metrics_pushed": {
+      "lvl": "info",
+      "cat": "system",
+      "ru": "Метрики отправлены: {gateway}",
+      "en": "Metrics pushed: {gateway}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.metrics_push_error": {
+      "lvl": "warn",
+      "cat": "system",
+      "ru": "Не удалось отправить метрики: {error}",
+      "en": "Could not push metrics: {error}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "app.js_error": {
+      "lvl": "error",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Страница проверяемого сайта бросила ошибку: {msg}",
+      "en": "The page under test threw an error: {msg}"
+    },
+    "app.console_error": {
+      "lvl": "error",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Консоль сайта: {msg}",
+      "en": "Site console: {msg}"
+    },
+    "app.console_warn": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Предупреждение в консоли сайта: {msg}",
+      "en": "Site console warning: {msg}"
+    },
+    "app.request_failed": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Запрос сайта не удался: {method} {url} — {reason}",
+      "en": "A site request failed: {method} {url} — {reason}"
+    },
+    "app.http_error": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сайт ответил {status} на {method} {url}",
+      "en": "The site answered {status} to {method} {url}"
+    },
+    "app.dialog": {
+      "lvl": "info",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сайт открыл диалог ({kind}): {msg}",
+      "en": "The site opened a dialog ({kind}): {msg}"
+    },
+    "app.log_capped": {
+      "lvl": "warn",
+      "cat": "app",
+      "emitter": "pw-executor",
+      "ru": "Сообщений от сайта слишком много — дальше не записываю (предел {cap})",
+      "en": "Too many messages from the site — capturing stops here (cap {cap})"
+    },
+    "test.step_passed": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — выполнен",
+      "en": "Step {step} ({type}) — passed",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_healed": {
+      "lvl": "warn",
+      "cat": "test",
+      "phase": "heal",
+      "ru": "Шаг {step} ({type}) — элемент нашёлся заново способом «{strategy}» (уверенность {confidence})",
+      "en": "Step {step} ({type}) — the element was re-located by \"{strategy}\" (confidence {confidence})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_failed": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — НЕ ВЫПОЛНЕН. Это и есть ошибочный шаг",
+      "en": "Step {step} ({type}) — FAILED. This is the step that went wrong",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_regression": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — расхождение с эталоном: {what}",
+      "en": "Step {step} ({type}) — differs from the baseline: {what}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_quarantined": {
+      "lvl": "warn",
+      "cat": "test",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) — на карантине, повторно падал ранее",
+      "en": "Step {step} ({type}) — quarantined, it has failed repeatedly before",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.summary": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "{kind}: шагов {steps}, починено {healed}, не выполнено {failed}, расхождений {regressions}",
+      "en": "{kind}: {steps} steps, {healed} healed, {failed} failed, {regressions} regressions",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.aborted": {
+      "lvl": "error",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Прогон прерван: {reason}",
+      "en": "Run aborted: {reason}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.explore_complete": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Разведка закончена: шагов {steps}, покрытие {coverage}",
+      "en": "Explore finished: {steps} steps, coverage {coverage}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.scenario_authored": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "scenario",
+      "ru": "Сценарий собран: привязано шагов {grounded}, не привязано {unmatched}",
+      "en": "Scenario authored: {grounded} steps grounded, {unmatched} unmatched",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.chat_turn_complete": {
+      "lvl": "info",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Ход беседы завершён ({conversation}): шагов {steps}",
+      "en": "Chat turn complete ({conversation}): {steps} steps",
+      "modules": [
+        "__main__"
+      ]
+    }
+  },
+  "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
+  "foreign_patterns": [
+    {
+      "code": "browser.launched",
+      "match": "^\\[pw-executor\\] browser launched",
+      "lvl": "info",
+      "cat": "browser",
+      "ru": "Браузер запущен",
+      "en": "Browser launched"
+    },
+    {
+      "code": "browser.tracing",
+      "match": "^\\[pw-executor\\] tracing started",
+      "lvl": "info",
+      "cat": "browser",
+      "ru": "Запись трассы включена",
+      "en": "Trace recording on"
+    },
+    {
+      "code": "browser.pipe_closed",
+      "match": "(Error: write EPIPE|Unhandled 'error' event)",
+      "lvl": "error",
+      "cat": "browser",
+      "collapse_stack": true,
+      "ru": "Браузер отключился при остановке прогона",
+      "en": "The browser disconnected while the run was stopping"
+    },
+    {
+      "code": "browser.other",
+      "match": "^\\[pw-executor\\]",
+      "lvl": "info",
+      "cat": "browser",
+      "ru": "Браузер: {raw}",
+      "en": "Browser: {raw}"
+    },
+    {
+      "code": "system.console_table",
+      "match": "^(=+$|\\s*#\\s*\\d+\\s|(EXPLORE|REPLAY|BASELINE|SCENARIO|CHAT TURN|ABORT)\\b)",
+      "lvl": "debug",
+      "cat": "system",
+      "ru": "Консольная сводка: {raw}",
+      "en": "Console summary: {raw}"
+    },
+    {
+      "code": "system.agentctl",
+      "match": "^\\[agentctl\\]",
+      "lvl": "info",
+      "cat": "system",
+      "ru": "{raw}",
+      "en": "{raw}"
+    },
+    {
+      "code": "system.node_trace",
+      "match": "^\\s+at [A-Za-z_$]",
+      "lvl": "debug",
+      "cat": "system",
+      "attach_to_previous": true,
+      "ru": "{raw}",
+      "en": "{raw}"
+    },
+    {
+      "code": "system.unclassified",
+      "match": ".",
+      "lvl": "info",
+      "cat": "system",
+      "ru": "{raw}",
+      "en": "{raw}"
+    }
+  ],
+  "$comment_sources": "The SOURCE axis — whose log a record is. Distinct from `cat`: a tester asks \"is this MY app misbehaving or the tool?\" before asking which subsystem. Derived from `cat`, so a record never has to carry it: run/plan/heal/hitl/llm/record/system -> tool, browser -> tool, app -> application, test -> testing.",
+  "sources": {
+    "tool": {
+      "ru": "инструмент",
+      "en": "the tool",
+      "cats": [
+        "run",
+        "plan",
+        "heal",
+        "hitl",
+        "llm",
+        "record",
+        "system",
+        "browser"
+      ]
+    },
+    "application": {
+      "ru": "приложение",
+      "en": "the application",
+      "cats": [
+        "app"
+      ]
+    },
+    "testing": {
+      "ru": "тестирование",
+      "en": "testing",
+      "cats": [
+        "test"
+      ]
+    }
+  }
+}
