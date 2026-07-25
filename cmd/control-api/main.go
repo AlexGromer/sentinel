@@ -72,6 +72,7 @@ type run struct {
 	Error          string `json:"error,omitempty"`
 
 	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
+	sink   *logSink   // M9-LIVE: on-disk log artifacts under the run's dir (not serialized)
 }
 
 const maxStreamLines = 1000
@@ -145,9 +146,15 @@ func (rs *runStream) finish() {
 }
 
 // lineWriter adapts an io.Writer (cmd.Stdout/Stderr) into rs.append, splitting on newlines.
+//
+// M9-LIVE: it fans each completed line to TWO consumers — the in-memory ring buffer (live SSE/WS,
+// unchanged, still carrying the @@AGUI frames the timeline needs) and the on-disk sink (logsink.go),
+// which is where the narrative/diagnostics split happens. Additive on purpose: the live path is not
+// touched, so the split cannot regress the timeline.
 type lineWriter struct {
-	rs  *runStream
-	buf []byte
+	rs   *runStream
+	sink *logSink
+	buf  []byte
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -157,7 +164,9 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		w.rs.append(strings.TrimRight(string(w.buf[:i]), "\r"))
+		line := strings.TrimRight(string(w.buf[:i]), "\r")
+		w.rs.append(line)
+		w.sink.write(line) // nil-safe: a run whose log files could not be opened still runs
 		w.buf = w.buf[i+1:]
 	}
 	return len(p), nil
@@ -166,7 +175,9 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 // flush emits any trailing partial line (call after the command exits, when writes have stopped).
 func (w *lineWriter) flush() {
 	if len(w.buf) > 0 {
-		w.rs.append(strings.TrimRight(string(w.buf), "\r\n"))
+		line := strings.TrimRight(string(w.buf), "\r\n")
+		w.rs.append(line)
+		w.sink.write(line)
 		w.buf = nil
 	}
 }
@@ -436,7 +447,8 @@ func (s *server) spawnRun(req runRequest) *run {
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
-	lw := &lineWriter{rs: rec.stream}
+	rec.sink = newLogSink(artDir) // M9-LIVE: runs/<id>/logs/{run.jsonl,run.log,events.jsonl}
+	lw := &lineWriter{rs: rec.stream, sink: rec.sink}
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 
@@ -470,6 +482,7 @@ func (s *server) spawnRun(req runRequest) *run {
 		s.persistScenario(rec) // M14 wave W3: wire the scenarios domain to a real caller (no-op if no scenario.json)
 		s.persistResult(rec)   // M15 (ADR-051): wire the results + metrics domains (no-op if no store/artifacts)
 		lw.flush()             // emit any trailing partial line (all brain output precedes run.finished)
+		rec.sink.close()       // flush the record held back for repeat-collapsing, then close the files
 		// M14 tail 1: the control-API injects run.finished — the one AG-UI event only it can know (the
 		// process exit). Must precede finish(): append() no-ops once the stream is done. WS subscribers
 		// get a typed run.finished frame (wsAGUIFrame); SSE gets the raw line inside a log event.
@@ -1400,6 +1413,8 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
+	m.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)      // M9-LIVE: structured diagnostics
+	m.HandleFunc("GET /v1/events-catalog", s.handleEventsCatalog) // M9-LIVE: bilingual message list
 	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
 	m.HandleFunc("GET /v1/stream", s.handleStream)
 	// M14 wave W3: scenarios/tests/chats HTTP surface (library + conversation management)
