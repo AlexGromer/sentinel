@@ -184,3 +184,70 @@ func TestIsUnder(t *testing.T) {
 		}
 	}
 }
+
+// GAP-SEC-005 / ADR-081. Logs retention mirrors traces, with one deliberate difference: both knobs
+// default to OFF. A trace is a bulky by-product; the logs ARE the diagnosis, and an upgrade that
+// silently deleted a user's evidence would be a worse failure than the gap it closed.
+func TestSweepLogsIsOffByDefault(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"a", "b", "c"} {
+		if err := os.MkdirAll(filepath.Join(root, id, "logs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, id, "logs", "run.jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SENTINEL_LOG_KEEP", "")
+	t.Setenv("SENTINEL_LOG_TTL_HOURS", "")
+	sweepLogs(root)
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := os.Stat(filepath.Join(root, id, "logs", "run.jsonl")); err != nil {
+			t.Fatalf("logs deleted with both knobs unset: %s (%v)", id, err)
+		}
+	}
+}
+
+func TestSweepLogsKeepsNewestAndSpearsTheAuditTrail(t *testing.T) {
+	root := t.TempDir()
+	ids := []string{"oldest", "middle", "newest"}
+	for i, id := range ids {
+		lg := filepath.Join(root, id, "logs")
+		if err := os.MkdirAll(lg, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lg, "run.jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Artefacts that must SURVIVE the sweep: a swept run stays auditable and replayable.
+		for _, keepMe := range []string{"plan.json", "heal-report.json", "executed-plan.json"} {
+			if err := os.WriteFile(filepath.Join(root, id, keepMe), []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mod := time.Now().Add(time.Duration(i-len(ids)) * time.Hour)
+		if err := os.Chtimes(lg, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SENTINEL_LOG_KEEP", "1")
+	t.Setenv("SENTINEL_LOG_TTL_HOURS", "0")
+	sweepLogs(root)
+
+	if _, err := os.Stat(filepath.Join(root, "newest", "logs", "run.jsonl")); err != nil {
+		t.Fatalf("the newest logs were swept: %v", err)
+	}
+	for _, gone := range []string{"oldest", "middle"} {
+		if _, err := os.Stat(filepath.Join(root, gone, "logs")); !os.IsNotExist(err) {
+			t.Fatalf("%s logs survived a keep=1 sweep (err=%v)", gone, err)
+		}
+	}
+	// The control that makes the sweep safe to enable: only logs/ goes.
+	for _, id := range ids {
+		for _, keepMe := range []string{"plan.json", "heal-report.json", "executed-plan.json"} {
+			if _, err := os.Stat(filepath.Join(root, id, keepMe)); err != nil {
+				t.Fatalf("the sweep removed %s from %s — a swept run must stay auditable: %v", keepMe, id, err)
+			}
+		}
+	}
+}

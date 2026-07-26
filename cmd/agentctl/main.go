@@ -88,6 +88,7 @@ func mkArtifactDir(repo, runID, override string) string {
 	if isUnder(dir, runsRoot) {
 		_ = os.Chmod(runsRoot, 0o700)
 		sweepTraces(runsRoot)
+		sweepLogs(runsRoot)
 	}
 	return dir
 }
@@ -156,6 +157,55 @@ func sweepTraces(runsRoot string) {
 		tooOld := ttlHours > 0 && now.Sub(tr.mod) > time.Duration(ttlHours)*time.Hour
 		if tooMany || tooOld {
 			_ = os.Remove(tr.path)
+		}
+	}
+}
+
+// sweepLogs enforces retention on runs/<id>/logs/ (GAP-SEC-005, ADR-081). Same shape as sweepTraces:
+// keep the newest SENTINEL_LOG_KEEP runs' logs, drop anything older than SENTINEL_LOG_TTL_HOURS.
+//
+// BOTH DEFAULT TO OFF, unlike traces, and that is the deliberate half of this. A trace is a bulky
+// by-product; the logs ARE the diagnosis, and deleting someone's evidence by default — on an upgrade
+// they did not ask for — would be a worse failure than the gap being closed. Redaction at write time
+// (cmd/control-api/redact.go) is what removes the credentials; retention is disk hygiene the operator
+// opts into, not the containment measure. Saying which is which matters: a TTL that quietly ran would
+// look like security while doing nothing about the secret already written.
+//
+// Only the logs/ directory is removed — plan.json, reports and the executed plan stay, so a swept run
+// remains auditable and replayable. Best-effort throughout: retention must never fail a run.
+func sweepLogs(runsRoot string) {
+	keep := envInt("SENTINEL_LOG_KEEP", 0)          // 0 = off (not "keep none")
+	ttlHours := envInt("SENTINEL_LOG_TTL_HOURS", 0) // 0 = off
+	if keep <= 0 && ttlHours <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil {
+		return
+	}
+	type logDir struct {
+		path string
+		mod  time.Time
+	}
+	var dirs []logDir
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(runsRoot, e.Name(), "logs")
+		info, err := os.Stat(p)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, logDir{p, info.ModTime()})
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mod.After(dirs[j].mod) }) // newest first
+	now := time.Now()
+	for i, d := range dirs {
+		tooMany := keep > 0 && i >= keep
+		tooOld := ttlHours > 0 && now.Sub(d.mod) > time.Duration(ttlHours)*time.Hour
+		if tooMany || tooOld {
+			_ = os.RemoveAll(d.path)
 		}
 	}
 }
