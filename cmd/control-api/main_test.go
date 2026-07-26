@@ -14,9 +14,36 @@ import (
 	"time"
 )
 
+// testRepoRoot holds one throwaway directory per newTestServer(), all under a single parent removed at
+// the end of the run.
+//
+// The package used to build every test server with repo="." — the package DIRECTORY — so anything the
+// server wrote under <repo>/state or <repo>/runs landed in the source tree. That stayed invisible while
+// /v1/config answered 501 without touching disk. ADR-075 gave the standalone tier a real file, and a
+// test promptly wrote cmd/control-api/state/config.json into the working tree, where a LATER test read
+// it back and asserted on it: /readyz reported the config check "ok" because of a file an earlier test
+// had left behind. A test whose result depends on what an earlier test left in the source tree is not
+// measuring the code, so the isolation is per server, not per package.
+var testRepoRoot string
+
+func TestMain(m *testing.M) {
+	d, err := os.MkdirTemp("", "control-api-test-repo-")
+	if err != nil {
+		panic(err)
+	}
+	testRepoRoot = d
+	code := m.Run()
+	_ = os.RemoveAll(d)
+	os.Exit(code)
+}
+
 func newTestServer() *server {
+	d, err := os.MkdirTemp(testRepoRoot, "srv-")
+	if err != nil {
+		panic(err) // TestMain guarantees the parent exists; nothing useful can run without a repo
+	}
 	return &server{
-		repo:      ".",
+		repo:      d,
 		agentctl:  "/nonexistent/agentctl",
 		token:     "secret-tok",
 		corsAllow: map[string]bool{"https://alexgromer.github.io": true},

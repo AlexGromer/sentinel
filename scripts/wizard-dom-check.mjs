@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -95,10 +96,13 @@ async function startStoreGateway(dir) {
   throw new Error('store-gateway did not create its socket within 5s');
 }
 
-async function startControlAPI(port, corsOrigin, storeAddr) {
+// cwd defaults to the repo (where runs/ and state/ already live). The standalone-tier check passes a
+// temp dir instead: ADR-075 makes a save land in <cwd>/state/config.json, and a gate must not write the
+// developer's — or CI's — repository.
+async function startControlAPI(port, corsOrigin, storeAddr, cwd) {
   const bin = path.join(REPO, 'bin', 'control-api');
   const proc = spawn(bin, [], {
-    cwd: REPO,
+    cwd: cwd || REPO,
     env: { ...process.env, CONTROL_API_ADDR: `127.0.0.1:${port}`, CONTROL_API_TOKEN: TOKEN,
            CONTROL_API_CORS_ORIGINS: corsOrigin, CONTROL_API_STORE_ADDR: storeAddr || '',
            LLM_BASE_URL: '' },
@@ -497,7 +501,7 @@ try {
     await page.fill('#capi', capiURL);
     await page.fill('#capitok', TOKEN);
     await page.click('#savecfg');
-    await page.waitForFunction(() => /сохранён|saved on the server/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
+    await page.waitForFunction(() => /сохранён|saved to/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
 
     const after = await readyz(null);
     eq(after.code, 200, '/readyz after saving the config');
@@ -523,13 +527,76 @@ try {
     await page.click('button[data-next="params"]');
     await page.click('button[data-next="review"]');
     await page.click('#savecfg');
-    await page.waitForFunction(() => /сохранён|saved on the server/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
+    await page.waitForFunction(() => /сохранён|saved to/.test(document.getElementById('capistatus').textContent), null, { timeout: 10000 });
 
     const dead = await readyz(TOKEN);
     eq(dead.code, 503, '/readyz with an unreachable llm base_url');
     eq(dead.body.checks.llm.status, 'error', 'llm check');
     eq(dead.body.checks.config.status, 'ok', 'config is still stored');
     await ctx.close();
+  });
+
+  // ADR-075. The defect: with no store-gateway, PUT /v1/config answered 501 whose text claimed "this
+  // deployment keeps its config in a file (standalone tier)" while no file was written anywhere, and the
+  // wizard relayed that as a soft refusal. The claim now is that the save REALLY LANDS — so the check
+  // reads the document back off disk, not just the status line, and then proves the config reaches a run
+  // by asking the server for the env layer it feeds (ADR-063 layer 3, which was dead in this tier).
+  await check('config: with no store-gateway the wizard still saves — to a file that really exists', async () => {
+    const cwd = fs.mkdtempSync(path.join(tmpdir(), 'sentinel-filetier-'));
+    const port = 18790 + Math.floor(Math.random() * 60);
+    const proc = await startControlAPI(port, base, '', cwd);   // storeAddr '' = the standalone tier
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      const cfgPath = path.join(cwd, 'state', 'config.json');
+      ok(!fs.existsSync(cfgPath), 'the temp deployment already had a config before the wizard saved one');
+
+      const { ctx, page } = await freshPage(browser, base);
+      try {
+        await page.selectOption('#preset', 'ollama');
+        await page.fill('#baseurl', 'http://127.0.0.1:1/v1');
+        await page.click('button[data-next="model"]');
+        await page.fill('#m-planner', 'qwen3:14b');
+        await page.click('button[data-next="params"]');
+        await page.fill('#target', 'https://app.example');
+        await page.click('button[data-next="review"]');
+        await page.fill('#capi', url);
+        await page.fill('#capitok', TOKEN);
+        await page.click('#savecfg');
+        await page.waitForFunction(
+          () => /сохранён|saved to/.test(document.getElementById('capistatus').textContent),
+          null, { timeout: 10000 });
+
+        // The status line must name the MEDIUM. "Saved" alone was the old lie's shape.
+        const status = await page.locator('#capistatus').textContent();
+        ok(/файл|file/i.test(status), `the status line does not say where it saved: ${status}`);
+      } finally { await ctx.close(); }
+
+      // On disk, not merely reported.
+      ok(fs.existsSync(cfgPath), `nothing was written to ${cfgPath} — the 501 lie has become a 200 lie`);
+      const onDisk = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      // The file embeds the document as real JSON (the store column escapes it as a string) — a config
+      // file is meant to be readable by whoever runs the deployment.
+      const doc = onDisk.value_json;
+      ok(doc && typeof doc === 'object', `value_json is not an embedded document: ${typeof doc}`);
+      eq(doc.llm.backend, 'openai', 'stored backend');
+      eq(doc.llm.model.planner, 'qwen3:14b', 'stored planner model');
+      ok(!JSON.stringify(doc).match(/api_key|apikey/i), 'a secret-shaped field reached the file');
+
+      // Read back over HTTP, and the tier is named there too.
+      const got = await (await fetch(`${url}/v1/config`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+      eq(got.tier, 'file', 'GET /v1/config tier');
+      eq(got.config.run.target, 'https://app.example', 'round-tripped target');
+
+      // ADR-063 layer 3 in this tier: readiness now probes the llm base_url that only the FILE knows
+      // about. Port 1 refuses instantly, so an `error` here proves the server read the saved document —
+      // a `skipped` would mean it never saw it.
+      const rz = await (await fetch(`${url}/readyz`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
+      eq(rz.checks.config.status, 'ok', 'config check in the file tier');
+      eq(rz.checks.llm.status, 'error', 'the llm probe never used the base_url from the saved file');
+    } finally {
+      proc.kill('SIGKILL');
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   /* 9 — ADR-064 mode 3: one process, one port, same-origin, self-bootstrapping token */

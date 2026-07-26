@@ -233,10 +233,25 @@ func persistedLLMEnv(cfg map[string]any) map[string]string {
 	return out
 }
 
-// getPersistedLLM reads the persisted config's `llm` (service tier, store-gateway only) as LLM_* env vars,
-// the lowest-precedence layer for resolveRunEnv. Returns nil in the standalone tier (s.store == nil) or on
-// any read/parse error — a run must never fail because the stored config is unavailable (fail-open).
+// getPersistedLLM reads the persisted config's `llm` as LLM_* env vars, the lowest-precedence layer for
+// resolveRunEnv. Returns nil on any read/parse error — a run must never fail because the stored config is
+// unavailable (fail-open).
+//
+// ADR-075: it now serves BOTH tiers. Before, the standalone tier returned nil unconditionally, so a
+// configuration saved through the wizard could never reach a run there — which made ADR-063's "persisted
+// config is layer 3" true only where a store-gateway happened to be wired.
 func (s *server) getPersistedLLM() map[string]string {
+	if s.configTier() == tierFile {
+		doc, ok, err := s.readConfigFile()
+		if err != nil || !ok {
+			return nil
+		}
+		var fdoc map[string]any
+		if json.Unmarshal(doc.ValueJson, &fdoc) != nil {
+			return nil
+		}
+		return persistedLLMEnv(fdoc)
+	}
 	if s.store == nil {
 		return nil
 	}

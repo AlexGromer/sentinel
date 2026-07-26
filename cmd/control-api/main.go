@@ -190,14 +190,19 @@ func (w *lineWriter) flush() {
 }
 
 type server struct {
-	repo       string
-	agentctl   string
-	token      string
-	corsAllow  map[string]bool
-	orchAddr   string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
-	store      *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
-	publicBind bool         // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
-	ui         *uiServer    // ADR-064 Mode 3: serves the browser UI from this port (nil/disabled = Modes 1-2)
+	repo      string
+	agentctl  string
+	token     string
+	corsAllow map[string]bool
+	orchAddr  string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
+	store     *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
+	// storeAddr is CONTROL_API_STORE_ADDR as configured, kept even when the dial failed. It is what
+	// separates "the operator chose the standalone tier" from "the operator chose a store and it is
+	// down" — two situations a nil `store` alone cannot tell apart, and which the config domain must
+	// answer differently (ADR-075, cmd/control-api/configfile.go).
+	storeAddr  string
+	publicBind bool      // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
+	ui         *uiServer // ADR-064 Mode 3: serves the browser UI from this port (nil/disabled = Modes 1-2)
 	mu         sync.RWMutex
 	runs       map[string]*run
 
@@ -590,6 +595,27 @@ type resultArtifact struct {
 	Regressions []json.RawMessage `json:"regressions"`
 	Tokens      *tokensBlock      `json:"tokens"` // M15.1
 	Models      map[string]string `json:"models"` // M15.1: {heal: <model id>}
+	// ADR-076. Verdict is the run's OWN word for how it ended (brain/replay.py), which since ADR-071/072
+	// distinguishes pass_with_drift / pass_with_app_faults / problem_drift / problem_app_faults from the
+	// plain four. Drift/AppFaults are the counts behind those words.
+	Verdict   string          `json:"verdict"`
+	Drift     *driftBlock     `json:"drift"`
+	AppFaults *appFaultsBlock `json:"app_faults"`
+}
+
+// driftBlock mirrors report["drift"] (brain/replay.py, ADR-071): how many locators were repaired from
+// the plan's own alternatives (rebind) versus re-derived from the page as it is now (reground).
+type driftBlock struct {
+	Rebind   int64             `json:"rebind"`
+	Reground int64             `json:"reground"`
+	Elements []json.RawMessage `json:"elements"`
+}
+
+// appFaultsBlock mirrors report["app_faults"] (brain/replay.py, ADR-072): what the APPLICATION under
+// test did wrong, as tallied by the executor. `errors` is the gateable subset.
+type appFaultsBlock struct {
+	Total  int64 `json:"total"`
+	Errors int64 `json:"errors"`
 }
 
 // planCoverage mirrors the plan.json coverage field written by the explore report node (brain/graph.py).
@@ -623,6 +649,33 @@ func costUSD(model string, promptTok, completionTok float64) float64 {
 		return 0
 	}
 	return (promptTok*p[0] + completionTok*p[1]) / 1e6
+}
+
+// refinedVerdicts is the closed set of states a run may report BEYOND the four the exit code can carry
+// (brain/replay.py, ADR-071/072). An exit code cannot express them: 0 is 0 whether the interface drifted
+// under the test or not, and 1 is 1 whether a step failed or a threshold reddened the build.
+//
+// It is a whitelist rather than a pass-through because `verdict` is a free string in the artifact and in
+// the proto, and an artifact is a file on disk: accepting whatever it says would let a stray value into
+// the Results domain that no reader knows how to render. An unknown word falls back to the exit code —
+// the same choice the Logs view makes for an unknown event code (ADR-065).
+var refinedVerdicts = map[string]bool{
+	"pass_with_drift": true, "pass_with_app_faults": true,
+	"problem_drift": true, "problem_app_faults": true,
+}
+
+// resultVerdict is what the Results domain records. The run's own word wins when it is one of the
+// refined states; otherwise the exit code decides.
+//
+// ADR-076. Until now the two were derived independently — brain wrote pass_with_drift into
+// heal-report.json while verdictEnum(0) wrote "pass" into the store, so the Results domain and the hub
+// saw only the coarse four and the whole point of ADR-071/072 (that a clean pass and a pass that needed
+// repairs stopped being the same news) died at the process boundary.
+func resultVerdict(artifactVerdict string, exit int) string {
+	if refinedVerdicts[artifactVerdict] {
+		return artifactVerdict
+	}
+	return verdictEnum(exit)
 }
 
 // verdictEnum maps the structured exit code to ResultRecord.verdict (proto: pass|problem|regression|integrity).
@@ -679,6 +732,8 @@ func (s *server) persistResult(rec *run) {
 	var stepN, regN int64
 	var tok *tokensBlock // M15.1: per-run token totals, from whichever report the run produced
 	costModel := ""
+	var drift *driftBlock         // ADR-076: the counts behind pass_with_drift / problem_drift
+	var appFaults *appFaultsBlock // ADR-076: the counts behind pass_with_app_faults / problem_app_faults
 	// Replay/baseline runs carry a heal-report; authoring/explore runs don't (they carry plan.json).
 	raw, ok := s.readArtifact(rec, "heal-report.json")
 	if !ok {
@@ -698,6 +753,10 @@ func (s *server) persistResult(rec *run) {
 			if art.Tokens != nil { // M15.1: replay heal-LLM tokens + model (for cost)
 				tok, costModel = art.Tokens, art.Models["heal"]
 			}
+			// ADR-076: the run's own verdict outranks the exit-code derivation, and the counts behind it
+			// ride the metrics domain (MetricPoint is name/value, so no schema change is involved).
+			rr.Verdict = resultVerdict(art.Verdict, exit)
+			drift, appFaults = art.Drift, art.AppFaults
 		}
 	}
 	if praw, pok := s.readArtifact(rec, "plan.json"); pok { // authoring/explore: coverage_achieved
@@ -726,6 +785,20 @@ func (s *server) persistResult(rec *run) {
 		{"pass", pass}, {"coverage", rr.Coverage}, {"healed", float64(rr.Healed)},
 		{"failed", float64(rr.Failed)}, {"regressions", float64(regN)}, {"steps", float64(stepN)},
 		{"duration_ms", float64(rr.DurationMs)},
+	}
+	// ADR-076. Emitted only when the run actually produced the block, so a series never gains a zero
+	// point from a mode that cannot report it: explore/goal runs carry no heal-report, and a run with no
+	// drift at all is not the same fact as a run that was never able to have any.
+	if drift != nil {
+		pts = append(pts,
+			metricKV{"drift_total", float64(drift.Rebind + drift.Reground)},
+			metricKV{"drift_rebind", float64(drift.Rebind)},
+			metricKV{"drift_reground", float64(drift.Reground)})
+	}
+	if appFaults != nil {
+		pts = append(pts,
+			metricKV{"app_faults_total", float64(appFaults.Total)},
+			metricKV{"app_faults_errors", float64(appFaults.Errors)})
 	}
 	if tok != nil { // M15.1: exact token counts + best-effort cost (local/unknown model -> 0)
 		pts = append(pts,
@@ -977,9 +1050,11 @@ func (s *server) readArtifact(rec *run, name string) (string, bool) {
 //
 // Without it, every list answers an empty 200 in the standalone tier — and an empty 200 means BOTH
 // "nothing has been saved yet" and "this deployment cannot save anything". Alex read that as "the library
-// does not load", which is the correct reading of an interface that says nothing. `/v1/config` already
-// answers 501 in the same situation; a list cannot, because an empty list IS a valid answer when a store
+// does not load", which is the correct reading of an interface that says nothing. A list cannot answer
+// with a status code the way a single document can, because an empty list IS a valid answer when a store
 // exists. So the fact travels alongside the data and the UI can say which case it is looking at.
+// (`/v1/config` used to answer 501 here; ADR-075 gave the standalone tier a real file, so it now serves
+// the request and names the tier it served it from.)
 func (s *server) storeMarker() map[string]any {
 	if s.store != nil {
 		return map[string]any{"store": true}
@@ -1478,8 +1553,8 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
-	m.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)      // M9-LIVE: structured diagnostics
-	m.HandleFunc("POST /v1/runs/{id}/cancel", s.handleCancelRun) // M9-LIVE: stop a running run
+	m.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)       // M9-LIVE: structured diagnostics
+	m.HandleFunc("POST /v1/runs/{id}/cancel", s.handleCancelRun)  // M9-LIVE: stop a running run
 	m.HandleFunc("GET /v1/events-catalog", s.handleEventsCatalog) // M9-LIVE: bilingual message list
 	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
 	m.HandleFunc("GET /v1/stream", s.handleStream)
@@ -1567,15 +1642,19 @@ func main() {
 	// M13 (ADR-050): connect to a persistent store-gateway if configured; else runs stay in-memory
 	// (standalone/offline path, unchanged). Fail-open — an unreachable gateway only warns.
 	if sa := os.Getenv("CONTROL_API_STORE_ADDR"); sa != "" {
+		s.storeAddr = sa // remembered even on failure — see server.storeAddr / configTier (ADR-075)
 		if sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN")); err != nil {
 			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q unreachable: %v (runs stay in-memory, lost on restart)\n", sa, err)
 		} else {
 			s.store = sc
 			defer sc.close()
 			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
-			go s.loadStartupConfig() // M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe
 		}
 	}
+	// M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe. ADR-075 moved it out of the
+	// store branch — the standalone tier has a config to report too, and the configured-but-down case has
+	// a warning worth printing at the moment the operator is still looking at the terminal.
+	go s.loadStartupConfig()
 	for _, w := range tokWarnings {
 		fmt.Fprintf(os.Stderr, "control-api: WARNING — %s\n", w)
 	}
