@@ -82,6 +82,18 @@ def _html(rep: dict) -> str:
             + note + "</p><table><thead><tr><th>#</th><th>class</th><th>element</th>"
             + "<th>strategy (conf.)</th><th>locator: frozen &rarr; used</th></tr></thead><tbody>"
             + "".join(drows) + "</tbody></table>")
+    # ADR-077: what the run LOST. The codes are resolved to the catalogue's verdict sentences, not the
+    # log phrasing — a reader of the report is asking "what does this mean for the result?", which is a
+    # different question from "what happened at that moment", and the catalogue carries both answers.
+    degr_html = ""
+    degr = rep.get("degradations") or []
+    if degr:
+        from .eventlog import verdict_sentence
+        degr_html = ("<h2>Degraded quality</h2><p>This run finished with less than it was meant to have."
+                     "</p><ul>"
+                     + "".join("<li><code>" + html.escape(str(c)) + "</code> — "
+                               + html.escape(verdict_sentence(c)) + "</li>" for c in degr)
+                     + "</ul>")
     css = ("body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}"
            "td,th{border:1px solid #ddd;padding:6px 10px;text-align:left}th{background:#f5f5f5}"
            ".healed{color:#1565c0}.ok{color:#2e7d32}.failed{color:#c62828}"
@@ -99,7 +111,7 @@ def _html(rep: dict) -> str:
         + " · regressions " + str(len(rep.get("regressions", [])))
         + "</p><table><thead><tr><th>#</th><th>type</th><th>outcome</th><th>heal</th>"
         + "<th>regression</th><th>quar.</th></tr></thead><tbody>" + "".join(rows)
-        + "</tbody></table>" + drift_html + "</body></html>")
+        + "</tbody></table>" + degr_html + drift_html + "</body></html>")
 
 
 def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:

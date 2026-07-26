@@ -127,6 +127,16 @@ def to_junit(report: dict, *, suite: str = "sentinel") -> str:
             tag = "system-err" if d.get("kind") == "reground" else "system-out"
             ET.SubElement(tc, tag).text = line
 
+    # ADR-077: degradation belongs to the SUITE for the same reason application faults do — a missing
+    # LLM or a spent budget is a property of the run, not of any one step. It rides `system-out` rather
+    # than a failure: the run PASSED, it just passed with less than it was meant to have. A property is
+    # added too, because that is the field CI dashboards can group on.
+    degr = report.get("degradations") or []
+    if degr:
+        ET.SubElement(props, "property", {"name": "degradations", "value": ",".join(degr)})
+        ET.SubElement(su, "system-out").text = "\n".join(
+            [f"run degraded — {len(degr)} quality loss(es):"] + [f"  {c}" for c in degr])
+
     # Application faults belong to the SUITE: the executor cannot attribute a console error to a step.
     af = report.get("app_faults") or {}
     if af:

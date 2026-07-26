@@ -751,7 +751,7 @@ try {
      from a live replay was tried first and is not dependable here: an explore run on the fault fixture
      does not reliably reach plan freeze inside the gate's window, so there is nothing to replay from,
      and a replay of the well-behaved fixture produces none of the states under test. */
-  await check('the verdict badge distinguishes drift and application faults from a clean pass', async () => {
+  await check('the verdict tells the whole truth: refined state, drift, app faults, degradation, and no replay without a plan', async () => {
     const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-verdict-gate-'));
     const stub = path.join(stubDir, 'agentctl-stub.mjs');
     // Writes the heal-report the hub will fetch, then exits 0 — the shape brain/replay.py produces.
@@ -766,6 +766,11 @@ try {
       "    { step: 2, name: 'Submit', kind: 'reground', strategy: 'css', confidence: 0.7 }] },",
       "  app_faults: { counts: { 'app.js_error': 9, 'app.http_error': 4 }, total: 13, errors: 12 }",
       "}));",
+      // A real degrading line on the run's own stdout: control-api's log sink classifies it against the
+      // embedded catalogue exactly as it would from brain, so the badge below is fed by the real path
+      // rather than by a fixture the page was handed. Deliberately NOT accompanied by plan.json —
+      // this stub is also the "run that died before plan freeze" case the re-run controls must refuse.
+      "console.log('[warn|llm] llm.no_anthropic_key: No AI key (planner)');",
       "console.log('stub run complete');",
     ].join('\n'));
     // A shim so the stub runs under node without control-api needing to know that. It lives in the temp
@@ -829,6 +834,26 @@ try {
       ok(await faults.count() === 1, 'application faults were swallowed because drift named the verdict');
       const ftext = await faults.textContent();
       ok(/13/.test(ftext) && /12/.test(ftext), `fault block lost total/errors: ${ftext}`);
+
+      // ADR-077: degradation that ALREADY HAPPENED, on the verdict. The pre-run guard cannot know about
+      // it; before this the fact lived only in a log file nobody opens when the build is green.
+      const degr = vPage.locator('#b-verdict-degraded');
+      ok(await degr.count() === 1, 'a run that logged a degrading event drew no degradation notice');
+      const dtxt = await degr.textContent();
+      ok(dtxt.length > 0, 'the degradation notice is empty');
+      // The catalogue's verdict SENTENCE, not the code: a reader is asking what it means for the result.
+      ok(!/llm\.no_anthropic_key/.test(dtxt),
+        `the notice shows the raw code instead of the catalogue sentence: ${dtxt}`);
+      ok(/ИИ|AI/.test(dtxt), `the notice does not say what was lost: ${dtxt}`);
+
+      // ADR-047 follow-on: this stub froze no plan, so re-run/baseline must refuse BEFORE the click and
+      // say why — pressing them used to answer `400 from_run: no replayable plan`.
+      ok(await vPage.locator('#b-rerun').isDisabled(), '🔁 is enabled on a run that left no plan');
+      ok(await vPage.locator('#b-baseline').isDisabled(), '📌 is enabled on a run that left no plan');
+      const why = await vPage.locator('#b-noplan').textContent();
+      ok(why && why.trim().length > 0, 'the controls are greyed out with no reason given');
+      ok(/плана|plan/.test(why), `the reason does not mention the missing plan: ${why}`);
+
       ok(vErrors.length === 0, `verdict page error(s): ${vErrors.join(' | ')}`);
       const unexpected404 = notFound.filter((u) => !/\/artifact\?name=/.test(u));
       ok(unexpected404.length === 0, `404 outside the artifact endpoint: ${unexpected404.join(' | ')}`);
@@ -837,6 +862,55 @@ try {
       capi2.kill('SIGKILL');
       fs.rmSync(stubDir, { recursive: true, force: true });
     }
+  });
+
+  // ADR-078. Live runs went out as file:///D:/Projects/... — the operator's HOST path, invisible to the
+  // container — and died with ERR_FILE_NOT_FOUND and exit 1 without saying which problem the test found.
+  // Both target fields are checked: there are two run paths, and fixing one would have left the chat
+  // path crashing exactly as before.
+  await check('a file:// target outside the container warns before the run, on BOTH target fields', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+
+    const warnFor = async (id, box, value) => {
+      await page.fill(id, value);
+      await page.waitForTimeout(120);
+      const el = page.locator(box);
+      return (await el.isVisible()) ? (await el.textContent()) : '';
+    };
+
+    ok(await warnFor('#b-target', '#b-targetwarn', 'file:///D:/Projects/sentinel/testdata/l1.html'),
+      'a Windows host path produced no warning — this is the exact shape that failed live');
+    const win = await page.locator('#b-targetwarn').textContent();
+    ok(/\/app\//.test(win), `the warning does not say what a correct path looks like: ${win}`);
+
+    eq(await warnFor('#b-target', '#b-targetwarn', 'file:///app/testdata/fixtures/l2.html'), '',
+      'the in-container path was warned about — that is the CORRECT form');
+    eq(await warnFor('#b-target', '#b-targetwarn', 'https://app.example'), '',
+      'an http target was warned about');
+    // A non-Windows host path is just as invisible to the container.
+    ok(await warnFor('#b-target', '#b-targetwarn', 'file:///home/alex/site/index.html'),
+      'a POSIX host path produced no warning');
+
+    // The bundled fixtures are offered, and the list is the one that EXISTS on disk.
+    const opts = await page.locator('#fixtures option').evaluateAll((os_) => os_.map((o) => o.value));
+    ok(opts.length > 0, 'no fixture suggestions at all');
+    ok(opts.every((v) => v.startsWith('file:///app/testdata/fixtures/')),
+      `a suggestion is not an in-container path: ${opts.join(' ')}`);
+    ok(opts.some((v) => /l7-appfaults\.html$/.test(v)), 'the fault fixture is missing from the list');
+    ok(!opts.some((v) => /\/l6\.html$/.test(v)), 'the list offers l6.html, which does not exist on disk');
+    eq(await page.locator('#b-target').getAttribute('list'), 'fixtures', 'the target field is not wired to the list');
+
+    // The chat view has its own target field and its own run path.
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(200);
+    eq(await page.locator('#ch-target').getAttribute('list'), 'fixtures', 'the chat target field is not wired to the list');
+    ok(await warnFor('#ch-target', '#ch-targetwarn', 'file:///C:/Users/alex/app.html'),
+      'the chat target field does not warn — fixing only the build form leaves this path crashing');
+    eq(await warnFor('#ch-target', '#ch-targetwarn', 'file:///app/testdata/fixtures/l2.html'), '',
+      'the chat field warned about the correct in-container path');
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(150);
   });
 
   await check('a run with no logs says so instead of looking empty', async () => {

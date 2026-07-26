@@ -302,6 +302,15 @@ scripts/collect-live-run.sh <run_id> --with-trace   # опционально: + 
 
 ## Особенности Windows
 
+> **Проще всего — работать из WSL2.** Все bash-скрипты репозитория (`scripts/offline-verify.sh`, `scripts/collect-live-run.sh`, `scripts/build-airgap-bundle.sh`) рассчитаны на POSIX-оболочку; Git Bash их запускает, но с оговорками ниже. Раздел «Альтернатива: сборка в WSL2» в конце документа — рекомендуемый путь, а не запасной.
+
+- **Git Bash переписывает пути в аргументах Docker.** MSYS видит аргумент, начинающийся со слэша, как путь Windows и разворачивает его: `docker compose run --entrypoint /bin/sh …` уезжает в `exec: "C:/Program Files/Git/usr/bin/sh"` и падает. Два лечения, оба одинаково годятся:
+  ```bash
+  MSYS_NO_PATHCONV=1 docker compose run --rm --entrypoint /bin/sh sentinel
+  docker compose run --rm --entrypoint //bin/sh sentinel     # двойной слэш MSYS не трогает
+  ```
+  Это касается ЛЮБОГО аргумента с ведущим слэшем — `--entrypoint`, `-v`, `--artifact-dir /app/runs/...`. В PowerShell, CMD и WSL проблемы нет.
+
 - `host.docker.internal` - адрес, по которому контейнер обращается к нативному Ollama на Windows-хосте. Если Ollama запущена как сервис compose (профиль ollama), адрес из контейнера равен `http://ollama:11434/v1`.
 - Пути тома: в PowerShell `${PWD}\runs:/app/runs`, в CMD `%cd%\runs:/app/runs`.
 - GPU: нативный Ollama для Windows использует GPU напрямую; проброс GPU в Ollama внутри Docker на Windows сложнее, поэтому берётся нативный.

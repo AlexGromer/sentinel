@@ -189,27 +189,6 @@ func TestSinkTrustsCatalogueOverWire(t *testing.T) {
 	}
 }
 
-// Degradations must be reachable for the verdict badge — a run that exits 0 without the LLM has to be
-// able to say so, which is the one crossing from diagnostics into the narrative.
-func TestSinkExposesDegradationsForVerdict(t *testing.T) {
-	_, _, _, sink := drain(t, []string{
-		`[warn|llm] llm.no_anthropic_key: No AI key (planner)`,
-		`[warn|llm] llm.no_anthropic_key: No AI key (planner)`,
-		`[warn|heal] heal.budget_exhausted: The healing budget is spent`,
-		`[info|run] run.store_mode: Store: local`,
-	})
-	got := sink.degradations()
-	want := []string{"llm.no_anthropic_key", "heal.budget_exhausted"}
-	if len(got) != len(want) {
-		t.Fatalf("degradations must be deduped and ordered by first occurrence: got %v want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("degradations[%d] = %q want %q (full: %v)", i, got[i], want[i], got)
-		}
-	}
-}
-
 // An unrecognised line still becomes a record with a level and a category — the catch-all rule means
 // nothing is ever dropped on the floor, and the raw text travels with it.
 func TestSinkClassifiesUnknownLine(t *testing.T) {
@@ -245,9 +224,6 @@ func TestSinkNilIsSafe(t *testing.T) {
 	var s *logSink
 	s.write("anything") // must not panic
 	s.close()
-	if got := s.degradations(); got != nil {
-		t.Fatalf("a nil sink has no degradations, got %v", got)
-	}
 }
 
 // logEnvMB must fall back rather than silently disable rotation on a malformed value — an explicit 0

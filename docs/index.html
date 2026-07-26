@@ -643,9 +643,28 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <option value="describe">describe — описание потока · flow description</option>
         </select>
       </div>
+        <!-- ADR-078: the bundled fixtures, by their IN-CONTAINER path. Live runs went out as
+             file:///D:/Projects/... — a HOST path the container cannot see — and died with
+             ERR_FILE_NOT_FOUND and exit 1, with nothing said about why. A <datalist> offers the paths
+             that exist without turning the field into a closed <select>: real http(s) targets are the
+             normal case. The list is read from testdata/fixtures/ rather than guessed — there is no
+             l6.html, only l6-newtab.html, and inventing entries here would be the same silent no-op
+             an invented CSS class is. -->
+        <datalist id="fixtures">
+          <option value="file:///app/testdata/fixtures/l1.html">L1 — trivial affordances</option>
+          <option value="file:///app/testdata/fixtures/l2.html">L2 — login form</option>
+          <option value="file:///app/testdata/fixtures/l3.html">L3 — validation form</option>
+          <option value="file:///app/testdata/fixtures/l4.html">L4 — login (step 1 of 3)</option>
+          <option value="file:///app/testdata/fixtures/l4-dashboard.html">L4 — dashboard (step 2 of 3)</option>
+          <option value="file:///app/testdata/fixtures/l4-billing.html">L4 — billing (step 3 of 3)</option>
+          <option value="file:///app/testdata/fixtures/l5.html">L5 — tabs + shadow DOM</option>
+          <option value="file:///app/testdata/fixtures/l6-newtab.html">L6 — new tab / multi-page</option>
+          <option value="file:///app/testdata/fixtures/l7-appfaults.html">L7 — an application that misbehaves</option>
+        </datalist>
       <div>
         <label for="b-target">Target URL</label>
-        <input id="b-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+        <input id="b-target" type="url" list="fixtures" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+        <div id="b-targetwarn" class="warnbox" style="display:none;margin-top:.4rem"></div>
       </div>
     </div>
 
@@ -773,6 +792,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       </button>
       <button type="button" class="btn" id="b-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
       <button type="button" class="btn" id="b-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+      <!-- ADR-047 follow-on: says WHY 🔁/📌 are unavailable, instead of leaving them greyed and silent. -->
+      <span id="b-noplan" class="hint" style="display:none"></span>
       <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7 выше)</span><span data-lang="en">check the connection first (section #7 above)</span></span>
     </div>
     <div id="b-runout" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem">
@@ -817,7 +838,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         </div>
         <div>
           <label for="ch-target">Target URL</label>
-          <input id="ch-target" type="url" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+          <input id="ch-target" type="url" list="fixtures" placeholder="https://app.example  /  file:///app/testdata/fixtures/l2.html">
+          <div id="ch-targetwarn" class="warnbox" style="display:none;margin-top:.4rem"></div>
         </div>
       </div>
       <label for="ch-text"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
@@ -1706,15 +1728,62 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('b-runlog').innerHTML=html;
   }
   var bLastRunId=null;            // last COMPLETED run — enables 🔁/📌 (they target it via from_run)
+  /* ADR-047 follow-on: finishing is not the same as being REPLAYABLE. A run that died before the plan
+     freeze leaves no plan.json/scenario.json, and 🔁/📌 on it answered `400 from_run: no replayable
+     plan` — a machine sentence for something the interface could have said first. `has_plan` comes from
+     GET /v1/runs/{id}, where the server derives it from disk with the very code the replay path uses. */
+  var bLastRunHasPlan=false;
   function bSetControls(disabled){
     ge('b-run').disabled=disabled;
-    ge('b-rerun').disabled=disabled||!bLastRunId;
-    ge('b-baseline').disabled=disabled||!bLastRunId;
+    var noPlan = !bLastRunId || !bLastRunHasPlan;
+    ge('b-rerun').disabled=disabled||noPlan;
+    ge('b-baseline').disabled=disabled||noPlan;
+    /* Disabled without a reason is its own small mystery, so the buttons carry the reason as a tooltip
+       and the note below states it once the run is known to be unreplayable. */
+    var why = bLastRunId && !bLastRunHasPlan
+      ? bi('прогон не оставил плана — он упал до заморозки, переигрывать нечего',
+           'the run left no plan — it died before the freeze, so there is nothing to replay')
+      : '';
+    ge('b-rerun').title = why || 'replay';
+    ge('b-baseline').title = why || 'baseline update';
+    var note = ge('b-noplan');
+    if (note){ note.textContent = why; note.style.display = why ? '' : 'none'; }
   }
   /* Prominent pass/fail badge + a plain-language line + the actionable cause on failure.
      Replaces the old thin one-liner (M9-LIVE: "не видно, что тест прошёл"). */
   /* ADR-076: fetch the run's OWN verdict, which since ADR-071/072 says more than an exit code can.
      Fail-open and quiet — explore/goal runs produce no heal-report at all, and that is not an error. */
+  /* ADR-077: the event catalogue is now needed by TWO views — the Logs list and the verdict badge —
+     so the fetch moved out of lgInit. Memoised because it is a shipped file that cannot change while
+     the page is open, and unauthenticated like /healthz: it is the message list, not run data. */
+  async function loadEventCatalog(){
+    if (lgCatalog) return lgCatalog;
+    try { var rc = await fetch(capiBase()+'/v1/events-catalog'); lgCatalog = await rc.json(); }
+    catch(e){ lgCatalog = null; }
+    return lgCatalog;
+  }
+  /* Which quality the run LOST, if any. Read from the logs endpoint rather than from the report,
+     because the report only exists for replay/baseline — and the commonest degradation of all
+     ("no key -> heuristic planner") happens on the goal/explore runs that have no report at all.
+     The server collects these across the WHOLE log file regardless of paging or filters. */
+  async function bFetchDegradations(base, id){
+    try {
+      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/logs?limit=1',{headers:authHdr()});
+      if (!r.ok) return [];
+      var j=await r.json();
+      return Array.isArray(j.degradations) ? j.degradations : [];
+    } catch(e){ return []; }
+  }
+  /* Fails CLOSED: if the question cannot be answered, the buttons stay off. Guessing "yes" would hand
+     the operator back the 400 this exists to prevent, and 🔁 on nothing is not a loss worth risking. */
+  async function bFetchHasPlan(base, id){
+    try {
+      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id),{headers:authHdr()});
+      if (!r.ok) return false;
+      var j=await r.json();
+      return j.has_plan === true;
+    } catch(e){ return false; }
+  }
   async function bFetchReport(base, id){
     var raw=await fetchArtifact(base,id,'heal-report.json');
     if (!raw) raw=await fetchArtifact(base,id,'baseline-report.json');
@@ -1738,7 +1807,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                            sub:bi('ни один шаг не упал — build покраснел из-за ошибок самого приложения',
                                   'no step failed — the build went red on the application’s own errors')}
   };
-  function renderBuildVerdict(st, cause, report){
+  function renderBuildVerdict(st, cause, report, degradations){
     var code=st.exit_code, state=st.state, icon, col, head;
     if      (state==='failed'){ icon='✖'; col='var(--no)';   head=bi('ПРОГОН НЕ ЗАПУСТИЛСЯ','RUN DID NOT START'); }
     else if (code===0)        { icon='✓'; col='var(--ok)';   head=bi('ПРОЙДЕНО','PASSED'); }
@@ -1765,8 +1834,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if ((state==='failed' || (code!=null && code!==0)) && cause)
       html+='<div style="font-size:.86rem;margin-top:.15rem"><b>'+bi('причина','cause')+':</b> '+cause+'</div>'; // cause is HTML-safe (see bExtractCause)
     html+='</div></div>';
+    html+=bDegradedHtml(degradations);
     html+=bVerdictDetail(report);
     ge('b-verdict').innerHTML=html;
+  }
+  /* ADR-077: degradation that ALREADY HAPPENED, on the verdict. The pre-run guard (bLlmGuard) warns
+     before a run that a planner needing an LLM has none; it cannot know about a key that turned out to
+     be rejected, a budget spent mid-run, or locators re-grounded from the live page. Those are facts the
+     run produced, and until now they existed only in a log file nobody opens when the build is green.
+     The sentence comes from the catalogue's `{ru,en}_verdict` — deliberately NOT the log phrasing: the
+     log says what happened, the verdict says what it means for the result. */
+  function bDegradedHtml(codes){
+    if (!codes || !codes.length) return '';
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    return '<div class="lgverdict" id="b-verdict-degraded" style="margin-top:.5rem"><b>⚠ '
+      + bi('Прогон прошёл с потерей качества','The run completed with degraded quality') + '</b><br>'
+      + codes.map(function(code){
+          var e = lgCatalog && lgCatalog.events && lgCatalog.events[code];
+          return esc((e && e[l+'_verdict']) || code);
+        }).join('<br>') + '</div>';
   }
   /* Drift and application faults are reported SEPARATELY even when only one of them named the verdict:
      they are different news for different people — drift is our maintenance, a fault is their bug — and
@@ -1907,12 +1993,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
         (lastState.error?' · err='+esc(lastState.error):''));
+      await loadEventCatalog();  // ADR-077: the verdict resolves degradation codes to sentences
       renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null),
-                         await bFetchReport(base, id)); // ADR-076: the run's own verdict + its counts
+                         await bFetchReport(base, id),        // ADR-076: the run's own verdict + counts
+                         await bFetchDegradations(base, id)); // ADR-077: what the run lost
       await renderRunPhases(base,id);  // pipeline strip: explore (map) -> LLM authoring
       await renderRunSteps(base,id);   // human-readable step breakdown from scenario.json / plan.json
       await bShowArtifacts(base,id);
       bLastRunId=id;            // remember only a CONFIRMED-complete run (for re-run / baseline)
+      /* An explicit read, because the live path never learns this: `lastState` comes from the SSE state
+         frame, which carries the run record and not the read-time facts. One request at the end of a
+         run is cheaper than teaching the stream a field only these two buttons need. */
+      bLastRunHasPlan = await bFetchHasPlan(base, id);
     }
     bSetControls(false);
   }
@@ -2012,6 +2104,36 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (!railLlmTimer) railLlmTimer = setInterval(railLlm, 30000);
   }
 
+  /* ADR-078: a file:// target that is not a CONTAINER path. Live runs went out as
+     `file:///D:/Projects/sentinel/...` — the operator's own host path, which the container cannot see —
+     and the run died with ERR_FILE_NOT_FOUND and exit 1, saying nothing about which problem the test
+     had found. The post-hoc cause extractor already knew this exact failure (bExtractCause), so the
+     warning reuses that sentence WORD FOR WORD: a warning before and an explanation after that phrase
+     the same fact differently would read as two different problems.
+
+     It warns rather than blocks, and the server does not reject either: a natively-run `agentctl`
+     legitimately targets host paths (README documents `file://$PWD/testdata/m0.html`). What is wrong is
+     not the shape of the path but the mismatch between it and where the run will execute — and only the
+     operator knows that. `targetId`/`boxId` are parameters because there are TWO of these inputs and
+     fixing one would have left the chat path crashing exactly as before. */
+  var B_HOSTPATH_RE = /^file:\/\/\/[A-Za-z]:[\/\\]/;   /* file:///D:/… — the Windows shape, specifically */
+  function bTargetGuard(targetId, boxId){
+    var box = ge(boxId); if (!box) return;
+    var t = bVal(targetId).trim();
+    box.style.display = 'none'; box.innerHTML = '';
+    if (t.indexOf('file://') !== 0) return;                       /* http(s) targets are not our business */
+    if (t.indexOf('file:///app/') === 0) return;                  /* the in-container path: correct */
+    var windows = B_HOSTPATH_RE.test(t);
+    box.style.display = '';
+    box.innerHTML = '<strong>' + bi(
+        'Этот путь, скорее всего, не виден контейнеру.',
+        'The container probably cannot see this path.') + '</strong> ' +
+      bi('целевой файл не найден внутри контейнера — путь file:// должен указывать на /app/… (путь ХОСТА не виден контейнеру)',
+         'target file not found inside the container — a file:// path must point at /app/… (the HOST path is invisible to the container)') +
+      (windows ? ' ' + bi('Похоже на путь Windows-хоста.', 'That looks like a Windows host path.') : '') +
+      ' ' + bi('Встроенные фикстуры подставляются из списка в этом поле; если control-api запущен нативно, а не в контейнере, предупреждение можно игнорировать.',
+               'The bundled fixtures are offered as suggestions in this field; if the control-API runs natively rather than in a container, this warning does not apply.');
+  }
   function bLlmGuard(){
     var box = ge('b-llmwarn'); if (!box) return;
     var planner = bVal('b-planner'), be = bVal('b-backend'),
@@ -2053,6 +2175,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
   ['b-planner','b-backend','b-baseurl','b-modelp'].forEach(function(id){
     var el = ge(id); if (el){ el.addEventListener('change', bLlmGuard); el.addEventListener('input', bLlmGuard); }
+  });
+  /* ADR-078: both target fields, because there are two run paths and only fixing one would have left
+     the chat path dying exactly as before. */
+  [['b-target','b-targetwarn'], ['ch-target','ch-targetwarn']].forEach(function(pair){
+    var el = ge(pair[0]); if (!el) return;
+    var run = function(){ bTargetGuard(pair[0], pair[1]); };
+    el.addEventListener('change', run); el.addEventListener('input', run);
   });
   ge('b-planner').addEventListener('input',function(){ ge('b-planner').dataset.touched='1'; });
   ['b-goal','b-describe','b-target','b-planner','b-coverage','b-maxsteps','b-planbud',
@@ -3096,11 +3225,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
   async function lgInit(){
     lgLoaded = true;
-    if (!lgCatalog){
-      /* Unauthenticated, like /healthz — it is the shipped message list, not run data. */
-      try { var rc = await fetch(capiBase()+'/v1/events-catalog'); lgCatalog = await rc.json(); }
-      catch(e){ lgCatalog = null; }
-    }
+    await loadEventCatalog();
     lgRefreshOptionLabels();
     lgRenderHelp();
     lgRenderSaved();

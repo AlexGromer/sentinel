@@ -20,6 +20,7 @@ import json
 import os
 
 from . import agui
+from . import eventlog
 from .eventlog import log
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
@@ -450,6 +451,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     if drift_total:
         log("heal.drift_summary", total=drift_total, rebind=report["drift"]["rebind"],
             reground=report["drift"]["reground"])
+    # ADR-077: collected LAST, after every log that could mean lost quality (drift_summary above and
+    # app.faults_summary earlier both carry `degrades`). The catalogue has always known which codes mean
+    # degradation and has always carried the sentence to print; until now nothing read it, so a run that
+    # finished without an LLM, on a spent budget, or on re-grounded locators produced a verdict, a report
+    # and a JUnit file that read exactly like a clean one.
+    report["degradations"] = eventlog.degradations()
     _emit("verdict", run_id, verdict=_verdict, exit_code=report["exit_code"],
           healed=report["healed"], failed=failures,
           drift=drift_total, rebind=report["drift"]["rebind"],

@@ -889,7 +889,31 @@ func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": out})
+	views := make([]runView, 0, len(out))
+	for i := range out {
+		views = append(views, s.runView(&out[i]))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": views})
+}
+
+// runView is a run as the UI reads it: the record plus facts that are DERIVED at read time rather than
+// stored. It exists so `has_plan` cannot become a persisted field that drifts out of step with the disk.
+//
+// ADR-047 follow-on: the re-run and baseline controls were always enabled, and pressing them on a run
+// that had died before plan freeze answered `400 from_run: no replayable plan` — a machine sentence for
+// a situation the interface already had everything it needed to prevent. A run only becomes replayable
+// when the freeze wrote an artifact, so the answer lives on disk, not in the record.
+type runView struct {
+	*run
+	HasPlan bool `json:"has_plan"`
+}
+
+// runView derives the read-time facts. hasReplayablePlan calls resolveFromRun itself rather than
+// re-listing replayInputs: two lists of "what counts as a replayable plan" WILL drift, and the failure
+// mode of that drift is an enabled button that 400s — the exact defect being closed.
+func (s *server) runView(rec *run) runView {
+	_, _, err := s.resolveFromRun(rec.ID)
+	return runView{run: rec, HasPlan: err == nil}
 }
 
 func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
@@ -910,7 +934,7 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
 		return
 	}
-	writeJSON(w, http.StatusOK, &snap)
+	writeJSON(w, http.StatusOK, s.runView(&snap))
 }
 
 // artifactWhitelist limits artifact-fetch to known run outputs (no arbitrary file reads).

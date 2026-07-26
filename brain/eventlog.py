@@ -103,6 +103,37 @@ def _emit(lvl: str, cat: str, code: str, msg: str) -> None:
     print(f"[{lvl}|{cat}] {code}: {flat}", file=sys.stderr, flush=True)
 
 
+# Codes that fired during this run and carry `degrades: true` in the catalogue, in order of first
+# occurrence. ADR-077: a run that finished with the LLM absent, the budget spent or the locators
+# re-grounded has LOST QUALITY, and until now that fact lived only in a log file — the verdict, the
+# report and the JUnit all said the same thing they would have said for a clean run. The catalogue
+# already knew which codes mean degradation and already carried the sentence to print; nothing read it.
+#
+# Module-level, like the catalogue itself: one brain process is one run.
+_degraded: "list[str]" = []
+
+
+def degradations() -> "list[str]":
+    """Codes with `degrades: true` that fired this run, deduplicated, in order of first occurrence."""
+    return list(_degraded)
+
+
+def reset_degradations() -> None:
+    """Clear the tally. For tests, which run several 'runs' inside one process."""
+    _degraded.clear()
+
+
+def verdict_sentence(code: str, lang: str = "en") -> str:
+    """The catalogue's plain sentence for a degrading `code`, for the verdict rather than the log.
+
+    `{ru,en}_verdict` exists precisely because the log line and the verdict line answer different
+    questions: the log says what happened at that moment ("No AI key (planner)"), the verdict says what
+    it MEANS for the result ("the run completed WITHOUT AI: the plan came from simple rules"). Falls
+    back to the code so an artifact never renders a blank where a sentence was expected."""
+    entry = _catalog().get(code) or {}
+    return str(entry.get(f"{lang}_verdict") or entry.get("en_verdict") or code)
+
+
 def log(code: str, **fields: object) -> None:
     """Emit the catalogued event `code`, rendering its English text with `fields`."""
     entry = _catalog().get(code)
@@ -110,6 +141,12 @@ def log(code: str, **fields: object) -> None:
         _emit("error", "system", "eventlog.uncatalogued",
               f"code {code!r} is not in the catalogue (fields={fields!r})")
         return
+    # BEFORE the threshold check on purpose. Whether the run degraded is a fact about the RUN; whether
+    # the reader wanted to see warnings is a fact about the log VIEW. Recording after the filter would
+    # mean `SENTINEL_LOG_LEVEL=error` silently produced a cleaner-looking verdict than the same run at
+    # default verbosity — the exact class of silent degradation this is closing.
+    if entry.get("degrades") and code not in _degraded:
+        _degraded.append(code)
     base, per = _levels()
     cat = entry["cat"]
     if _RANK[entry["lvl"]] < per.get(cat, base):
