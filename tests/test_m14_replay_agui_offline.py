@@ -136,9 +136,16 @@ def test_replay_emits_full_timeline():
     heal = next(e for e in ev if e["type"] == "heal")
     assert heal["data"]["ok"] is True and heal["data"]["strategy"], heal
     assert isinstance(heal["data"].get("confidence"), (int, float)), heal
-    # verdict carries the REAL structured exit code
+    # verdict carries the REAL structured exit code. ADR-071: this fixture HEALS a step, so the state is
+    # `pass_with_drift`, not a plain `pass` — the whole point of that ADR is that the two stopped being the
+    # same event. The exit code deliberately stays 0: drift does not redden a build unless asked to.
     verdict = next(e for e in ev if e["type"] == "verdict")
-    assert verdict["data"]["exit_code"] == 0 and verdict["data"]["verdict"] == "pass", verdict
+    assert verdict["data"]["exit_code"] == 0, verdict
+    assert verdict["data"]["verdict"] == "pass_with_drift", verdict
+    # And the frame carries the drift breakdown, so an AG-UI consumer never has to open heal-report.json
+    # to learn WHAT kind of drift it was.
+    assert verdict["data"]["drift"] == 1, verdict
+    assert verdict["data"]["rebind"] == 1 and verdict["data"]["reground"] == 0, verdict
 
 
 def test_baseline_mode_emits_started_and_verdict():

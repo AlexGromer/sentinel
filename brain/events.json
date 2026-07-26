@@ -791,6 +791,42 @@
         "graph"
       ]
     },
+    "heal.drift_rebind": {
+      "lvl": "info",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Интерфейс изменился, но элемент найден заново по другому ключу: «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — это ремонт теста",
+      "en": "The interface changed, but the element was found again by another key: \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this is repairing the test",
+      "modules": [
+        "replay"
+      ]
+    },
+    "heal.drift_reground": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Выбран НОВЫЙ селектор с текущей страницы для «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — этого ключа в замороженном плане не было, тождество элемента не проверено",
+      "en": "A NEW selector was chosen from the current page for \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this key was not in the frozen plan, and element identity is unverified",
+      "modules": [
+        "replay"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но привязка выбрана заново — проверьте, тот ли это элемент",
+      "en_verdict": "passed, but the binding was chosen anew — check it is the same element"
+    },
+    "heal.drift_summary": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "report",
+      "ru": "Прогон прошёл с дрейфом интерфейса: элементов {total} (переприязка {rebind}, новый селектор {reground})",
+      "en": "The run passed with interface drift: {total} element(s) ({rebind} re-bound, {reground} re-grounded)",
+      "modules": [
+        "replay"
+      ],
+      "degrades": true,
+      "ru_verdict": "пройдено с дрейфом интерфейса — тест подстроился, посмотрите, что изменилось",
+      "en_verdict": "passed with interface drift — the test adapted; look at what changed"
+    },
     "heal.no_llm_backend": {
       "lvl": "warn",
       "cat": "heal",

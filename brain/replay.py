@@ -47,9 +47,54 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_int(name: str, default: int) -> int:
+    """Non-negative int from env; a missing, unparseable or negative value falls back to `default`.
+
+    Falling back rather than raising is deliberate: a typo in a CI variable must not turn a passing
+    replay into a crash. `0` is a legitimate explicit value and means "off"."""
+    try:
+        v = int(os.environ.get(name, "").strip())
+    except ValueError:
+        return default
+    return v if v >= 0 else default
+
+
 def _basename(url: str) -> str:
     p = normalize_url(url)
     return p.rsplit("/", 1)[-1] or p
+
+
+def _drift_entry(step: dict, attempted: dict, h: dict, page_path: str) -> dict:
+    """One row of the drift report (ADR-071): what changed, where, and by which CLASS.
+
+    The class is the whole point, because the two kinds are different news and `healed` conflated them:
+
+      rebind   — the healed strategy was FROZEN WITH THE PLAN (`alternatives[]`). Same element, another
+                 key: the testid changed but role+name still finds it. This is repairing the TEST, and it
+                 is what self-healing exists for.
+      reground — the strategy was NOT in the frozen plan, so it was produced at heal time from the page as
+                 it is NOW (`css` from the LLM re-ground, `visual` from set-of-marks). It may well be the
+                 right element — and it may be a different element that merely looks right. Nothing in the
+                 pipeline verifies identity, so this class must be readable at a glance rather than
+                 averaged into a count.
+
+    Deriving the class from membership in `alternatives[]` rather than from a hardcoded strategy list is
+    deliberate: the real question is "was this key frozen with the plan?", and an authored or imported plan
+    may legitimately carry a `css` alternative — in which case using it IS a rebind."""
+    frozen = {a.get("strategy") for a in (step.get("alternatives") or []) if isinstance(a, dict)}
+    strategy = h.get("strategy")
+    return {"step": step.get("step_id"),
+            "semantic_id": step.get("semantic_id"),
+            # The human handle: what the reader recognises on screen. Falls back through the fields a
+            # step actually carries, because `intent` is optional on imported plans.
+            "name": step.get("intent") or step.get("name") or step.get("semantic_id") or "",
+            "page": page_path,
+            "kind": "rebind" if strategy in frozen else "reground",
+            "strategy": strategy,
+            "confidence": h.get("confidence"),
+            "outcome": h.get("outcome"),      # auto_healed | flagged | cache_hit
+            "from": attempted,                # the locator the frozen plan asked for
+            "to": h.get("locator")}           # the locator that actually worked
 
 
 def _write(report: dict, run_dir: str) -> None:
@@ -110,7 +155,11 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     computed = canonical_plan_hash(steps)
     mode = "baseline" if baseline else "replay"
     report = {"plan_id": plan_id, "mode": mode,
-              "steps": [], "regressions": [], "healed": 0, "failed": 0}
+              "steps": [], "regressions": [], "healed": 0, "failed": 0,
+              # ADR-071: UI drift is a FIRST-CLASS outcome, not a counter. `healed` alone said "something
+              # was repaired N times" and left the reader to guess whether the interface moved under the
+              # test or a flake was absorbed. `drift` names what changed, where, and by which class.
+              "drift": {"rebind": 0, "reground": 0, "elements": []}}
     _emit("run.started", run_id, mode=mode, target=new_target, planner="replay")
 
     # --- plan integrity hard-abort (ADR-006) -----------------------------------
@@ -209,6 +258,21 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                         _act(ex, kind, h["locator"], s)   # apply the step's VERB to the healed locator
                         rec["outcome"], rec["locator"] = "healed", h["locator"]
                         rec["heal"] = {k: h.get(k) for k in ("strategy", "confidence", "outcome")}
+                        # ADR-071: record WHAT drifted, WHERE and HOW — not just that a heal happened.
+                        d = _drift_entry(s, primary, h, page_path)
+                        rec["heal"]["kind"] = d["kind"]
+                        rec["heal"]["from"], rec["heal"]["to"] = d["from"], d["to"]
+                        report["drift"][d["kind"]] += 1
+                        report["drift"]["elements"].append(d)
+                        # Two literal calls rather than one with a computed code: the catalogue gate
+                        # cannot vouch for a code it does not see as a literal, and it is right not to —
+                        # a dynamically built code silently reverts to raw English in the UI.
+                        _dargs = {"element": d["name"], "step": d["step"], "strategy": d["strategy"],
+                                  "confidence": round(float(d["confidence"] or 0), 2)}
+                        if d["kind"] == "rebind":
+                            log("heal.drift_rebind", **_dargs)
+                        else:
+                            log("heal.drift_reground", **_dargs)
                         report["healed"] += 1
                         _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
                               confidence=h.get("confidence"), ok=True)
@@ -290,16 +354,47 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         report["steps"].append(rec)
 
     report["failed"] = failures
+    # ADR-071: drift becomes a verdict STATE always, and a red build only when asked.
+    #
+    # Why the state is unconditional: a run that needed five heals is not the same event as a run that
+    # needed none, and until now the two were indistinguishable at the verdict — `exit 0`, both. The
+    # reader has to be able to see "passed, but the interface moved" without opening a report.
+    #
+    # Why the exit code stays 0 by default: healing exists so that a cosmetic DOM change does not stop a
+    # pipeline. Making drift red out of the box would turn every renamed testid into a broken build and
+    # teach teams to switch the feature off — the opposite of the goal.
+    #
+    # Why exit 1 and not a new code when the threshold IS crossed: the code catalogue (0/1/2/3/-1) is a
+    # published contract, and a sixth value would break consumers that switch on it. Of the existing
+    # codes, 1 — "the test found a problem" — is the honest one: the test did find something, namely that
+    # the interface changed. Exit 2 was rejected because its label says "golden/visual regression", and
+    # a re-bound locator is not that; reusing it would make the label lie.
+    drift_total = report["drift"]["rebind"] + report["drift"]["reground"]
+    fail_on = _env_int("SENTINEL_FAIL_ON_HEAL", 0)   # 0 = off; N = fail when drifted elements >= N
+    drift_fails = bool(fail_on) and drift_total >= fail_on
     if baseline:
         report["exit_code"] = 0
     else:
-        report["exit_code"] = 2 if regressions else (1 if failures else 0)
+        report["exit_code"] = 2 if regressions else (1 if (failures or drift_fails) else 0)
+    if drift_fails:
+        report["drift"]["failed_build"] = True
+        report["drift"]["threshold"] = fail_on
     from . import budget  # M15.1: per-run token totals (heal LLM) -> persistResult ingests tokens_* + cost_usd
     report["tokens"] = budget.tracker().summary()
     report["models"] = {"heal": getattr(getattr(heal, "_backend", None), "model", None)}
     # M14 tail 2: the REAL structured exit code (0/1/2/3), unlike graph-mode's best-effort verdict.
     _verdict = {0: "pass", 1: "problem", 2: "regression", 3: "integrity"}.get(report["exit_code"], "problem")
+    # ADR-071: a pass that needed healing is its own state. Reported on the verdict frame, so the co-pilot
+    # timeline and any AG-UI consumer see it without reading heal-report.json.
+    if _verdict == "pass" and drift_total:
+        _verdict = "pass_with_drift"
+    report["verdict"] = _verdict
+    if drift_total:
+        log("heal.drift_summary", total=drift_total, rebind=report["drift"]["rebind"],
+            reground=report["drift"]["reground"])
     _emit("verdict", run_id, verdict=_verdict, exit_code=report["exit_code"],
-          healed=report["healed"], failed=failures)
+          healed=report["healed"], failed=failures,
+          drift=drift_total, rebind=report["drift"]["rebind"],
+          reground=report["drift"]["reground"])
     _write(report, run_dir)
     return report
