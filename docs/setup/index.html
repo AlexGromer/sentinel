@@ -290,6 +290,12 @@ details a{color:var(--acc2)}
     <div><label for="capi">control-API URL</label><input id="capi" data-draft placeholder="http://localhost:8090"></div>
     <div><label for="capitok">Bearer token (CONTROL_API_TOKEN)</label><input id="capitok" type="password" autocomplete="off" placeholder="нужен для запуска"></div>
   </div>
+  <!-- ADR-074: the wizard had no way back to the app, and the app had no link here. Relative so it
+       works on the served origin, on Pages and from file://. -->
+  <p class="mut" style="margin-top:.5rem">
+    <span data-lang="ru">Токен подхватывается из открытой вкладки <a href="../">интерфейса</a> автоматически; если она закрыта — вставь его вручную.</span>
+    <span data-lang="en">The token is picked up automatically from an open <a href="../">app</a> tab; if none is open, paste it by hand.</span>
+  </p>
   <div class="row" style="margin-top:.6rem;flex-wrap:wrap">
     <button type="button" class="act" id="check"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
     <button type="button" class="act" data-primary id="run" disabled>▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span></button>
@@ -933,9 +939,24 @@ async function saveConfig() {
       body: JSON.stringify(buildConfigDoc())
     });
     var j = await r.json().catch(function () { return {}; });
-    if (r.ok) { setCapiStatus(tr('✓ конфиг сохранён на сервере', '✓ config saved on the server')); return; }
-    if (r.status === 501) {
-      setCapiStatus(tr('сервер без store-gateway — конфиг остаётся файлом', 'no store-gateway — the config stays a file'));
+    // ADR-075: the server now names the medium it wrote to. "Saved" alone could not distinguish a store
+    // write from a file write — and before ADR-075 it could not distinguish either from nothing at all,
+    // because a deployment with no store answered 501 and this page reported that as "the config stays a
+    // file" while no file was ever written.
+    if (r.ok) {
+      if (j.tier === 'file') {
+        setCapiStatus(tr('✓ конфиг сохранён в файл на сервере: ' + (j.path || 'state/config.json'),
+                         '✓ config saved to a file on the server: ' + (j.path || 'state/config.json')));
+      } else {
+        setCapiStatus(tr('✓ конфиг сохранён в store-gateway', '✓ config saved to the store-gateway'));
+      }
+      return;
+    }
+    if (r.status === 503) {
+      // Configured store, unreachable at boot. Falling back to a file here would be the silent kind of
+      // failure this milestone exists to remove: the gateway returns and wins the next read.
+      setCapiStatus(tr('✗ store-gateway настроен, но не отвечал при старте — конфиг НЕ сохранён; подними его и перезапусти control-API',
+                       '✗ a store-gateway is configured but did not answer at startup — nothing was saved; start it and restart the control-API'));
       return;
     }
     setCapiStatus('✗ HTTP ' + r.status + (j.error ? ': ' + j.error : ''));
@@ -1075,8 +1096,33 @@ document.querySelectorAll('.dl').forEach(function (b) {
         }
       }
       checkCapi();  /* liveness + pull the LIVE schema, exactly as the button does */
+      adr074TokenRelay();
     } catch (e) { /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
   })();
+
+  /* ADR-074: same-origin token relay. This page is the one the defect was reported on — the startup
+     banner prints a root link, the nonce is single-use, so a wizard opened in a second tab had no token
+     and 💾 soft-refused. It ASKS when its own field is empty and ANSWERS when it is not; nothing is
+     written to storage, so #capitok stays memory-only (ADR-032/061/064). See docs/index.html for the
+     full rationale, including how this relates to ADR-066. */
+  function adr074TokenRelay() {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+    if (typeof BroadcastChannel !== 'function') return;
+    var ch;
+    try { ch = new BroadcastChannel('sentinel-capi'); }
+    catch (e) { return; }   /* opaque origin throws; an uncaught throw would be a console error */
+    function tok() { return ($('capitok').value || '').trim(); }
+    ch.onmessage = function (ev) {
+      var d = ev && ev.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.t === 'need-token') { if (tok()) ch.postMessage({ t: 'token', token: tok() }); return; }
+      if (d.t === 'token' && typeof d.token === 'string' && d.token && !tok()) {
+        $('capitok').value = d.token;
+        checkCapi();
+      }
+    };
+    if (!tok()) ch.postMessage({ t: 'need-token' });
+  }
 })();
 </script>
 </body>

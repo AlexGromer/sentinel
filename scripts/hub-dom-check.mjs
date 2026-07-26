@@ -15,6 +15,7 @@
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -131,7 +132,12 @@ try {
   await new Promise((r) => setTimeout(r, 22000));
 
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1180, height: 1400 } });
+  // An EXPLICIT context, not browser.newPage(): the ADR-074 relay check has to open a second tab beside
+  // this one, and Playwright refuses to add pages to the implicit context browser.newPage() creates.
+  // Two tabs in one context also share the origin partition a BroadcastChannel is scoped to, which is
+  // the very thing under test.
+  const context = await browser.newContext({ viewport: { width: 1180, height: 1400 } });
+  const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`console: ${m.text()}`); });
 
@@ -203,6 +209,54 @@ try {
     const val = await page.locator('#capitok').inputValue();
     ok(val.length > 0, 'the single token field is empty after bootstrap');
   });
+
+  // ADR-074. The wizard is a separate page and the bootstrap nonce can only ever be redeemed once, so a
+  // /setup/ opened second had no token and refused to save. Two claims, and the second needs a control
+  // or it proves nothing: a tab CAN pick the token up from an open sibling, and it CANNOT get one when
+  // no sibling is holding it. Without the negative half, a wizard that somehow acquired a token by any
+  // other route would pass this check while the relay did nothing.
+  await check('the wizard is reachable from the app and inherits the token from an open tab', async () => {
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForTimeout(200);
+    const hubTok = await page.locator('#capitok').inputValue();
+    ok(hubTok.length > 0, 'the hub holds no token, so there is nothing to relay');
+    ok(await page.locator('#connect a[href="./setup/"]:visible').count() === 1,
+      'exactly one visible link to the wizard must sit beside the token it needs');
+
+    // Same browser context = same origin partition, which is what a BroadcastChannel is scoped to.
+    const sibling = await context.newPage();
+    const siblingErrors = [];
+    sibling.on('pageerror', (e) => siblingErrors.push(e.message));
+    sibling.on('console', (m) => { if (m.type() === 'error') siblingErrors.push(`console: ${m.text()}`); });
+    try {
+      await sibling.goto(`http://127.0.0.1:${PORT}/setup/`, { waitUntil: 'load' }); // NO ?bootstrap=
+      ok(!/bootstrap=/.test(sibling.url()), 'the control must not carry a nonce, or it proves nothing');
+      await sibling.waitForFunction(() => {
+        const el = document.getElementById('capitok');
+        return el && el.value.length > 0;
+      }, null, { timeout: 8000 });
+      eq(await sibling.locator('#capitok').inputValue(), hubTok, 'the wizard received a different token');
+      // The relay must not have turned the token into stored state (ADR-032/061/064).
+      const stored = await sibling.evaluate(() => JSON.stringify(localStorage) + '|' + JSON.stringify(sessionStorage));
+      ok(!stored.includes(hubTok), 'the relayed token reached browser storage');
+      ok(siblingErrors.length === 0, `wizard page error(s): ${siblingErrors.join(' | ')}`);
+    } finally {
+      await sibling.close();
+    }
+
+    // The control: a wizard with no sibling holding a token stays empty. A separate context has its own
+    // origin partition, so no channel connects the two.
+    const lone = await browser.newContext();
+    try {
+      const lonePage = await lone.newPage();
+      await lonePage.goto(`http://127.0.0.1:${PORT}/setup/`, { waitUntil: 'load' });
+      await lonePage.waitForTimeout(1500);
+      eq(await lonePage.locator('#capitok').inputValue(), '',
+        'a wizard with no open app tab acquired a token anyway — the positive half above proves nothing');
+    } finally {
+      await lone.close();
+    }
+  }, { allowConsole: /403 \(Forbidden\)/ });
 
   await check('nav: grouped views switch inner sections without leaking siblings', async () => {
     await page.click('.rail a[data-nav="library"]');
@@ -685,6 +739,104 @@ try {
     });
     ok(/\.dot\.ok/.test(defined) && /\.dot\.no/.test(defined),
       `the dot state classes must exist in the stylesheet: ${defined}`);
+  });
+
+  /* ------------------------------------------------- ADR-076: verdict states an exit code cannot carry
+     brain distinguishes pass_with_drift / pass_with_app_faults / problem_drift / problem_app_faults
+     (ADR-071/072); until now the badge read the exit code alone, so a pass that survived only on repairs
+     and a clean pass drew the same green tick.
+
+     Driven through the REAL path — a real POST /v1/runs, a real stream, a real artifact fetch — against
+     a second control-API whose `agentctl` is a stub that writes the report we want to render. Driving it
+     from a live replay was tried first and is not dependable here: an explore run on the fault fixture
+     does not reliably reach plan freeze inside the gate's window, so there is nothing to replay from,
+     and a replay of the well-behaved fixture produces none of the states under test. */
+  await check('the verdict badge distinguishes drift and application faults from a clean pass', async () => {
+    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-verdict-gate-'));
+    const stub = path.join(stubDir, 'agentctl-stub.mjs');
+    // Writes the heal-report the hub will fetch, then exits 0 — the shape brain/replay.py produces.
+    fs.writeFileSync(stub, [
+      "import fs from 'node:fs'; import path from 'node:path';",
+      "const a = process.argv; const dir = a[a.indexOf('--artifact-dir') + 1];",
+      "fs.mkdirSync(dir, { recursive: true });",
+      "fs.writeFileSync(path.join(dir, 'heal-report.json'), JSON.stringify({",
+      "  plan_id: 'gate', mode: 'replay', exit_code: 0, verdict: 'pass_with_drift', healed: 3, failed: 0,",
+      "  drift: { rebind: 2, reground: 1, elements: [",
+      "    { step: 1, name: 'Login', kind: 'rebind', strategy: 'role', confidence: 0.9 },",
+      "    { step: 2, name: 'Submit', kind: 'reground', strategy: 'css', confidence: 0.7 }] },",
+      "  app_faults: { counts: { 'app.js_error': 9, 'app.http_error': 4 }, total: 13, errors: 12 }",
+      "}));",
+      "console.log('stub run complete');",
+    ].join('\n'));
+    // A shim so the stub runs under node without control-api needing to know that. It lives in the temp
+    // dir, not in scripts/ — a gate must leave no files in the repository.
+    const shim = path.join(stubDir, 'agentctl');
+    fs.writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`, { mode: 0o755 });
+
+    const vPort = PORT + 3;
+    const capi2 = spawn(path.join(REPO, 'bin', 'control-api'), [], {
+      cwd: stubDir,   // so runs/ and state/ land in the temp dir
+      env: { ...process.env,
+             CONTROL_API_ADDR: `127.0.0.1:${vPort}`, CONTROL_API_TOKEN: 'verdict-gate-token',
+             CONTROL_API_SERVE_UI: '1', CONTROL_API_UI_DIR: path.join(REPO, 'docs'),
+             CONTROL_API_AGENTCTL: shim,
+             CONTROL_API_CORS_ORIGINS: '', CONTROL_API_STORE_ADDR: '', LLM_BASE_URL: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const vPage = await context.newPage();
+    const vErrors = [];
+    // The hub asks for every artifact a run MIGHT have produced and renders whatever came back; the stub
+    // writes only heal-report.json, so the rest answer 404 and the browser logs each one. That is the
+    // product behaving correctly, not a defect — but it is only allowed to be a 404 on the artifact
+    // endpoint, which the response listener below proves rather than assumes.
+    const notFound = [];
+    vPage.on('response', (r) => { if (r.status() === 404) notFound.push(r.url()); });
+    vPage.on('pageerror', (e) => vErrors.push(e.message));
+    vPage.on('console', (m) => {
+      if (m.type() !== 'error') return;
+      if (/status of 404/.test(m.text())) return;
+      vErrors.push(`console: ${m.text()}`);
+    });
+    try {
+      for (let i = 0; i < 100; i++) {
+        try { if ((await fetch(`http://127.0.0.1:${vPort}/healthz`)).ok) break; } catch { /* not up */ }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      await vPage.goto(`http://127.0.0.1:${vPort}/#v=settings`, { waitUntil: 'load' });
+      await vPage.waitForTimeout(400);
+      await vPage.fill('#capi', `http://127.0.0.1:${vPort}`);
+      await vPage.fill('#capitok', 'verdict-gate-token');
+      await vPage.click('.rail a[data-nav="run"]');
+      await vPage.fill('#b-target', 'file:///app/x.html');
+      await vPage.click('#b-run');
+      await vPage.waitForFunction(
+        () => (document.getElementById('b-verdict').textContent || '').length > 0, null, { timeout: 30000 });
+
+      const head = await vPage.locator('#b-verdict-head').textContent();
+      ok(head.length > 0, 'the verdict badge rendered no headline');
+      ok(/УЕХАЛ|DRIFTED/.test(head),
+        `a pass_with_drift run drew the plain PASSED badge instead: ${head}`);
+      ok(/exit 0/.test(head), `the exit code disappeared from the badge: ${head}`);
+
+      // Drift and faults are reported SEPARATELY even though only drift named the verdict.
+      const drift = vPage.locator('#b-verdict-drift');
+      ok(await drift.count() === 1, 'no drift detail block');
+      const dtext = await drift.textContent();
+      ok(/3/.test(dtext), `drift block does not carry the total: ${dtext}`);
+      ok(/Login/.test(dtext) && /Submit/.test(dtext),
+        `drift block does not expand into the elements that moved: ${dtext}`);
+      const faults = vPage.locator('#b-verdict-faults');
+      ok(await faults.count() === 1, 'application faults were swallowed because drift named the verdict');
+      const ftext = await faults.textContent();
+      ok(/13/.test(ftext) && /12/.test(ftext), `fault block lost total/errors: ${ftext}`);
+      ok(vErrors.length === 0, `verdict page error(s): ${vErrors.join(' | ')}`);
+      const unexpected404 = notFound.filter((u) => !/\/artifact\?name=/.test(u));
+      ok(unexpected404.length === 0, `404 outside the artifact endpoint: ${unexpected404.join(' | ')}`);
+    } finally {
+      await vPage.close();
+      capi2.kill('SIGKILL');
+      fs.rmSync(stubDir, { recursive: true, force: true });
+    }
   });
 
   await check('a run with no logs says so instead of looking empty', async () => {

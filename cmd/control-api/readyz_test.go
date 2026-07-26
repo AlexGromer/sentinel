@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -235,21 +236,32 @@ func TestReadyzLLMProbeDoesNotFollowRedirects(t *testing.T) {
 
 // --- /v1/config ---------------------------------------------------------------------------------
 
-func TestConfigHTTPRequiresTokenAndStore(t *testing.T) {
-	// standalone: no store -> 501, whether or not a token is presented
-	s := newTestServer()
-	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/config", nil, "secret-tok"); rec.Code != http.StatusNotImplemented {
-		t.Errorf("GET /v1/config with no store = %d, want 501", rec.Code)
-	}
-	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(`{}`), "secret-tok"); rec.Code != http.StatusNotImplemented {
-		t.Errorf("PUT /v1/config with no store = %d, want 501", rec.Code)
-	}
-	// unauthenticated -> 403 before anything else
+// The token claim is unchanged and stays literal; the tier claim is not. Until ADR-075 the standalone
+// deployment answered 501 to both verbs — the file tier now serves them (round trip and validation are
+// covered in configfile_test.go). What this test still owns is the ORDER: the token check runs before
+// the tier is even consulted, so an unauthenticated caller can neither read the deployment's shape nor
+// leave a file behind.
+func TestConfigHTTPRequiresTokenBeforeAnyTier(t *testing.T) {
+	s := fileTierServer(t) // temp repo: this must not read or write the developer's real state/
+
 	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(`{}`), ""); rec.Code != http.StatusForbidden {
 		t.Errorf("unauthenticated PUT = %d, want 403", rec.Code)
 	}
 	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/config", nil, ""); rec.Code != http.StatusForbidden {
 		t.Errorf("unauthenticated GET = %d, want 403", rec.Code)
+	}
+	if _, err := os.Stat(s.configFilePath()); !os.IsNotExist(err) {
+		t.Errorf("an unauthenticated PUT reached the file tier and wrote %s (err=%v)", s.configFilePath(), err)
+	}
+
+	// Authenticated, standalone: the file tier answers instead of refusing. A GET with nothing saved is
+	// a genuine 404, not "this deployment cannot" — that distinction is the whole point of the tier.
+	if rec, _ := doJSON(t, s, http.MethodGet, "/v1/config", nil, "secret-tok"); rec.Code != http.StatusNotFound {
+		t.Errorf("GET with nothing saved = %d, want 404", rec.Code)
+	}
+	if rec, body := doJSON(t, s, http.MethodPut, "/v1/config", []byte(`{}`), "secret-tok"); rec.Code != http.StatusOK ||
+		body["tier"] != string(tierFile) {
+		t.Errorf("PUT in the standalone tier = %d tier=%v, want 200/file", rec.Code, body["tier"])
 	}
 }
 

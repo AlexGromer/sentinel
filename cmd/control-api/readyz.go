@@ -137,8 +137,27 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 	var cfg map[string]any
 
 	if s.store == nil {
-		checks["store"] = readyCheck{Status: "skipped", Detail: "CONTROL_API_STORE_ADDR unset (standalone tier)"}
-		checks["config"] = readyCheck{Status: "skipped", Detail: "standalone tier: config is a file (brain/runconfig.py)"}
+		// ADR-075: the standalone tier really does keep the config in a file now, so the probe reads it.
+		// A MISSING file stays "skipped" rather than "error": with no store configured, running purely
+		// from the process env is a legitimate deployment, and flipping /readyz to 503 would call it
+		// broken. The service tier treats `rec == nil` as an error for the opposite reason — pointing at
+		// a gateway is an explicit declaration that a stored config is expected.
+		if s.storeAddr != "" {
+			checks["store"] = readyCheck{Status: "error", Detail: "store-gateway " + s.storeAddr + " did not answer at startup"}
+			checks["config"] = readyCheck{Status: "error", Detail: storeUnavailableMsg}
+		} else {
+			checks["store"] = readyCheck{Status: "skipped", Detail: "CONTROL_API_STORE_ADDR unset (standalone tier)"}
+			doc, ok, ferr := s.readConfigFile()
+			switch {
+			case ferr != nil:
+				checks["config"] = readyCheck{Status: "error", Detail: ferr.Error()}
+			case !ok:
+				checks["config"] = readyCheck{Status: "skipped", Detail: "standalone tier: no config saved yet (the setup wizard writes " + s.configFilePath() + ")"}
+			default:
+				checks["config"] = readyCheck{Status: "ok", Detail: "standalone tier: " + s.configFilePath()}
+				_ = json.Unmarshal(doc.ValueJson, &cfg) // best-effort: only used to find a base_url
+			}
+		}
 	} else if err := s.store.ping(); err != nil {
 		checks["store"] = readyCheck{Status: "error", Detail: err.Error()}
 		checks["config"] = readyCheck{Status: "error", Detail: "store-gateway unreachable"}
@@ -231,9 +250,27 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
 		return
 	}
-	if s.store == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"error": "no store-gateway configured; this deployment keeps its config in a file (standalone tier)"})
+	switch s.configTier() {
+	case tierUnavailable:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": storeUnavailableMsg, "tier": tierUnavailable})
+		return
+	case tierFile: // ADR-075: the standalone tier reads the document the wizard wrote
+		doc, ok, ferr := s.readConfigFile()
+		if ferr != nil { // corrupt/unreadable is NOT "no config" — see readConfigFile
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": ferr.Error(), "tier": tierFile})
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no config stored", "tier": tierFile})
+			return
+		}
+		var parsed any
+		if err := json.Unmarshal(doc.ValueJson, &parsed); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "stored config is not valid JSON", "tier": tierFile})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"key": doc.Key, "updated_at": doc.UpdatedAt, "config": parsed, "tier": tierFile, "path": s.configFilePath()})
 		return
 	}
 	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
@@ -250,7 +287,7 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stored config is not valid JSON"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": rec.Key, "updated_at": rec.UpdatedAt, "config": doc})
+	writeJSON(w, http.StatusOK, map[string]any{"key": rec.Key, "updated_at": rec.UpdatedAt, "config": doc, "tier": tierStore})
 }
 
 func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
@@ -258,9 +295,11 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
 		return
 	}
-	if s.store == nil {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"error": "no store-gateway configured; this deployment keeps its config in a file (standalone tier)"})
+	// ADR-075: the tier decision comes AFTER validation, not before. The old order returned 501 without
+	// ever reading the body, so a malformed document and a perfectly good one were refused identically —
+	// and the refusal named a file tier that did not exist.
+	if s.configTier() == tierUnavailable {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": storeUnavailableMsg, "tier": tierUnavailable})
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxConfigBytes+1))
@@ -285,6 +324,20 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	if s.configTier() == tierFile { // ADR-075 standalone tier
+		if err := s.writeConfigFile(string(body)); err != nil {
+			// A config write that silently vanished would leave the operator believing the wizard had
+			// saved — the same reason storeClient.putConfig is the one store helper that does not swallow
+			// its error (cmd/control-api/store.go).
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": "cannot write the config file: " + err.Error(), "tier": tierFile, "path": s.configFilePath()})
+			return
+		}
+		s.invalidateReadiness()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
+		return
+	}
 	if err := s.store.putConfig(setupConfigKey, string(body)); err != nil {
 		if isInvalidArgument(err) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -294,7 +347,7 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invalidateReadiness() // the "config" check just changed; do not serve a stale 503 for 3 more seconds
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": setupConfigKey})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": setupConfigKey, "tier": tierStore})
 }
 
 // invalidateReadiness drops the memo AND bumps epoch, so a probe that is already in flight (started
@@ -321,7 +374,26 @@ func (s *server) invalidateReadiness() {
 // document live, and the run path reads it per spawn. The REST of the persisted document (run/auth blocks)
 // is still not fed into the run env.
 func (s *server) loadStartupConfig() {
-	if s.store == nil {
+	switch s.configTier() {
+	case tierUnavailable:
+		fmt.Fprintf(os.Stderr, "control-api: WARNING — %s\n", storeUnavailableMsg)
+		return
+	case tierFile: // ADR-075
+		doc, ok, ferr := s.readConfigFile()
+		switch {
+		case ferr != nil:
+			fmt.Fprintf(os.Stderr, "control-api: WARNING — %v\n", ferr)
+		case !ok:
+			fmt.Fprintf(os.Stderr, "control-api: no persisted config yet (standalone tier; the setup wizard writes %s)\n", s.configFilePath())
+		default:
+			var fdoc map[string]any
+			_ = json.Unmarshal(doc.ValueJson, &fdoc)
+			if base := s.effectiveLLMBase(fdoc); base != "" && s.llmBaseURL == "" {
+				fmt.Fprintf(os.Stderr, "control-api: config %q loaded from %s (llm.base_url=%s, updated_at=%s)\n", doc.Key, s.configFilePath(), base, doc.UpdatedAt)
+			} else {
+				fmt.Fprintf(os.Stderr, "control-api: config %q loaded from %s (updated_at=%s)\n", doc.Key, s.configFilePath(), doc.UpdatedAt)
+			}
+		}
 		return
 	}
 	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)

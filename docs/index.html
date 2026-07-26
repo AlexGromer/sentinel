@@ -613,6 +613,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <button type="button" class="btn" id="cap-check"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
       <span id="cap-status" style="font-size:.88rem;color:var(--mut)"></span>
     </div>
+    <!-- ADR-074: the setup wizard had no link from anywhere in the app — it was reachable only by typing
+         its URL, which is also why nobody noticed it could not get a token. It belongs next to the token
+         it needs. The link is relative so it works on the served origin, on Pages and from file://. -->
+    <p class="hint" style="margin-top:.6rem">
+      <span data-lang="ru">Полная настройка прогонов — <a href="./setup/">мастер установки</a>: он читает схему с сервера и сохраняет конфиг туда же. Токен из этой вкладки мастер получит сам, пока она открыта.</span>
+      <span data-lang="en">Full run configuration lives in the <a href="./setup/">setup wizard</a>: it reads the schema from the server and saves the config back to it. It picks up the token from this tab on its own, as long as this tab stays open.</span>
+    </p>
     <p class="hint" style="margin-top:.6rem">
       <span data-lang="ru">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (mixed-content). Control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла (<code>docker compose --profile control-api up</code>, порт 8090) ограничений нет.</span>
       <span data-lang="en">From GitHub Pages live mode only works against <code>http://localhost</code> (mixed-content exemption). The control-API must emit CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). From the bundle (<code>docker compose --profile control-api up</code>, port 8090) there is no such restriction.</span>
@@ -1706,7 +1713,32 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
   /* Prominent pass/fail badge + a plain-language line + the actionable cause on failure.
      Replaces the old thin one-liner (M9-LIVE: "не видно, что тест прошёл"). */
-  function renderBuildVerdict(st, cause){
+  /* ADR-076: fetch the run's OWN verdict, which since ADR-071/072 says more than an exit code can.
+     Fail-open and quiet — explore/goal runs produce no heal-report at all, and that is not an error. */
+  async function bFetchReport(base, id){
+    var raw=await fetchArtifact(base,id,'heal-report.json');
+    if (!raw) raw=await fetchArtifact(base,id,'baseline-report.json');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch(e){ return null; }
+  }
+  /* The four states an exit code cannot carry (brain/replay.py, ADR-071/072). Kept as data next to the
+     coarse table below so the two cannot drift into disagreeing about the same run: `problem_drift` and
+     `problem_app_faults` are both exit 1, and `pass_with_*` are both exit 0. */
+  var B_REFINED={
+    pass_with_drift:      {icon:'✓', col:'var(--warn)', head:bi('ПРОЙДЕНО, НО ИНТЕРФЕЙС УЕХАЛ','PASSED, BUT THE INTERFACE DRIFTED'),
+                           sub:bi('шаги прошли, локаторы пришлось чинить — тест держится на починке, а не на плане',
+                                  'the steps passed but locators had to be repaired — the test is holding on repairs, not on its plan')},
+    pass_with_app_faults: {icon:'✓', col:'var(--warn)', head:bi('ПРОЙДЕНО, НО ПРИЛОЖЕНИЕ СБОИЛО','PASSED, BUT THE APPLICATION FAULTED'),
+                           sub:bi('сценарий отработал, а страница при этом бросала ошибки — это баг приложения, не теста',
+                                  'the scenario ran, but the page was throwing errors — that is an application bug, not a test one')},
+    problem_drift:        {icon:'⚠', col:'var(--warn)', head:bi('ПОРОГ ДРЕЙФА ПРЕВЫШЕН','DRIFT THRESHOLD EXCEEDED'),
+                           sub:bi('ни один шаг не упал — build покраснел из-за количества починок',
+                                  'no step failed — the build went red on the number of repairs')},
+    problem_app_faults:   {icon:'⚠', col:'var(--warn)', head:bi('ПОРОГ СБОЕВ ПРИЛОЖЕНИЯ ПРЕВЫШЕН','APPLICATION-FAULT THRESHOLD EXCEEDED'),
+                           sub:bi('ни один шаг не упал — build покраснел из-за ошибок самого приложения',
+                                  'no step failed — the build went red on the application’s own errors')}
+  };
+  function renderBuildVerdict(st, cause, report){
     var code=st.exit_code, state=st.state, icon, col, head;
     if      (state==='failed'){ icon='✖'; col='var(--no)';   head=bi('ПРОГОН НЕ ЗАПУСТИЛСЯ','RUN DID NOT START'); }
     else if (code===0)        { icon='✓'; col='var(--ok)';   head=bi('ПРОЙДЕНО','PASSED'); }
@@ -1718,16 +1750,54 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
              1:bi('шаг не прошёл или проверка провалилась','a step failed or an assertion did not hold'),
              2:bi('расхождение с golden-эталоном — можно обновить эталон кнопкой 📌','differs from the golden baseline — you can update it with 📌'),
              3:bi('несовпадение plan_hash/golden — нужен человек','plan_hash/golden mismatch — needs a human')}[code];
+    /* The run's own word outranks the exit-code reading — but only when it is one of the four we can
+       render. An unknown state from a newer brain falls back to the coarse badge rather than to a blank
+       one (same rule the Logs view applies to an unknown event code, and the same whitelist the Go side
+       applies before the store, cmd/control-api/main.go::resultVerdict). */
+    var refined = (state!=='failed' && report && B_REFINED[report.verdict]) ? B_REFINED[report.verdict] : null;
+    if (refined){ icon=refined.icon; col=refined.col; head=refined.head; sub=refined.sub; }
     var html='<div style="display:flex;align-items:center;gap:.6rem;padding:.6rem .8rem;border-radius:9px;'
       +'border:1px solid '+col+';background:color-mix(in srgb,'+col+' 12%,transparent)">'
       +'<span style="font-size:1.5rem;line-height:1;color:'+col+'">'+icon+'</span>'
-      +'<div style="min-width:0"><div style="font-weight:750;letter-spacing:.02em;color:'+col+'">'+head
+      +'<div style="min-width:0"><div style="font-weight:750;letter-spacing:.02em;color:'+col+'" id="b-verdict-head">'+head
       +' <span style="opacity:.65;font-weight:600;font-size:.82em">exit '+esc(code==null?'?':code)+'</span></div>';
     if (state!=='failed' && sub) html+='<div style="font-size:.86rem;color:var(--mut)">'+sub+'</div>';
     if ((state==='failed' || (code!=null && code!==0)) && cause)
       html+='<div style="font-size:.86rem;margin-top:.15rem"><b>'+bi('причина','cause')+':</b> '+cause+'</div>'; // cause is HTML-safe (see bExtractCause)
     html+='</div></div>';
+    html+=bVerdictDetail(report);
     ge('b-verdict').innerHTML=html;
+  }
+  /* Drift and application faults are reported SEPARATELY even when only one of them named the verdict:
+     they are different news for different people — drift is our maintenance, a fault is their bug — and
+     a run can carry both while the verdict can only be one word. */
+  function bVerdictDetail(report){
+    if (!report) return '';
+    var out='';
+    var d=report.drift||{}, dn=(d.rebind||0)+(d.reground||0);
+    if (dn){
+      var els=Array.isArray(d.elements)?d.elements:[];
+      out+='<details id="b-verdict-drift"><summary>'
+        +bi('интерфейс уехал: ','interface drift: ')+'<b>'+esc(dn)+'</b> '
+        +bi('элем.','elem.')+' <span style="color:var(--mut)">('+bi('по плану','from the plan')+' '+esc(d.rebind||0)
+        +' · '+bi('заново с живой страницы','re-derived from the live page')+' '+esc(d.reground||0)+')</span></summary>'
+        +'<div style="font-size:.86rem">'+els.map(function(e){
+          return '<div>'+bi('шаг ','step ')+esc(e.step==null?'?':e.step)+' · <b>'+esc(e.name||'')+'</b> · '
+            +(e.kind==='rebind'?bi('ключ из плана','key from the plan'):bi('заново с живой страницы','re-derived from the live page'))
+            +' · '+esc(e.strategy||'')+'</div>';
+        }).join('')+'</div></details>';
+    }
+    var a=report.app_faults||{};
+    if (a.total){
+      var counts=a.counts||{};
+      out+='<details id="b-verdict-faults"><summary>'
+        +bi('приложение сбоило: ','the application faulted: ')+'<b>'+esc(a.total)+'</b> '
+        +bi('событ.','event(s)')+' <span style="color:var(--mut)">('+bi('из них ошибок','errors among them')+' '+esc(a.errors||0)+')</span></summary>'
+        +'<div style="font-size:.86rem">'+Object.keys(counts).map(function(k){
+          return '<div>'+esc(k)+' — <b>'+esc(counts[k])+'</b></div>';
+        }).join('')+(a.capped?'<div style="color:var(--mut)">'+bi('счёт обрезан на ','tally capped at ')+esc(a.cap)+'</div>':'')+'</div></details>';
+    }
+    return out;
   }
   /* Every run starts with a deterministic EXPLORE phase (heuristic walk → UI map); goal/describe then
      hand the complete map to the LLM to AUTHOR a grounded scenario (ADR-028). This strip makes that
@@ -1837,7 +1907,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
         (lastState.error?' · err='+esc(lastState.error):''));
-      renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null));
+      renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null),
+                         await bFetchReport(base, id)); // ADR-076: the run's own verdict + its counts
       await renderRunPhases(base,id);  // pipeline strip: explore (map) -> LLM authoring
       await renderRunSteps(base,id);   // human-readable step breakdown from scenario.json / plan.json
       await bShowArtifacts(base,id);
@@ -2581,8 +2652,54 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       /* The rail's connection dot cannot learn from a `change` event here: these fields were filled
          programmatically. The health payload is already in hand, so report it directly (ADR-066). */
       if (typeof vwSetConn === 'function') vwSetConn(true, j.version);
+      adr074TokenRelay();
     } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
   })();
+
+  /* ---- ADR-074: same-origin token relay, hub <-> /setup/ -----------------------------------------
+     The bootstrap above can only ever serve ONE page. The nonce is single-use by construction
+     (cmd/control-api/ui.go burns it on success) and the startup banner prints a root link only, so the
+     setup wizard — opened second, in another tab — had no way to obtain a token and soft-refused to
+     save. That is what this closes.
+
+     It is a REQUEST/RESPONSE relay, not a broadcast: a page never announces a token it holds; it only
+     answers a page that asks, and a page only asks when its own field is empty. Nothing is written to
+     localStorage or sessionStorage — the token still lives in tab memory alone (ADR-032/061/064), and
+     the channel is a browser object, not storage.
+
+     The answering side stays open for the tab's lifetime on purpose. Closing it after one exchange
+     would mean a wizard opened ten minutes later gets silence, which is precisely the situation being
+     fixed. The asking side simply stops waiting.
+
+     RELATION TO ADR-066, which says «без BroadcastChannel» and lists this mechanism as rejected: that
+     rejection was about keeping TWO COPIES OF THE CHAT alive and syncing a secret through storage. The
+     wizard is not a duplicate of any hub view, and no storage is involved. ADR-074 narrows the clause
+     to its actual reason rather than quietly outrunning it.
+
+     WHAT IT WIDENS, stated plainly: while a tab holding the token is open, any same-origin document can
+     ask for and receive it. On the served origin that origin IS the control-API, which hands the token
+     to its own pages by design; a hostile document there would already mean the API is serving hostile
+     content. On Pages / file:// / a Mode-2 split origin the relay never installs at all. */
+  function adr074TokenRelay(){
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+    if (typeof BroadcastChannel !== 'function') return;   /* older browser: silent no-op, as bootstrap is */
+    var ch;
+    try { ch = new BroadcastChannel('sentinel-capi'); }
+    catch(e){ return; }   /* opaque origin (file://) throws — an uncaught one would be a console error */
+    function tok(){ return (ge('capitok').value||'').trim(); }
+    ch.onmessage = function(ev){
+      var d = ev && ev.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.t === 'need-token'){ if (tok()) ch.postMessage({t:'token', token: tok()}); return; }
+      /* Never overwrite a token already in the field: a value pasted by hand, or redeemed from this
+         page's own nonce, is the one the operator chose. */
+      if (d.t === 'token' && typeof d.token === 'string' && d.token && !tok()){
+        ge('capitok').value = d.token;
+        ge('cap-check').click();
+      }
+    };
+    if (!tok()) ch.postMessage({t:'need-token'});
+  }
 
 
   /* ================= ADR-065 — Logs view =================================================
