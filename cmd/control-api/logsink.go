@@ -45,9 +45,9 @@ import (
 var reCatalogued = regexp.MustCompile(`^\[(debug|info|warn|error)\|([a-z]+)\] ([a-z][A-Za-z0-9_.]*): (.*)$`)
 
 const (
-	agUIPrefix     = "@@AGUI "
-	defaultMaxMB   = 50
-	rotateSuffix   = ".1"
+	agUIPrefix   = "@@AGUI "
+	defaultMaxMB = 50
+	rotateSuffix = ".1"
 )
 
 // logEnvMB reads a positive megabyte count from the environment. A missing, unparseable or negative
@@ -67,10 +67,10 @@ func logEnvMB(name string, def int) int {
 
 // logRecord is one line of run.jsonl. Field names are short because a long run writes many of them.
 type logRecord struct {
-	Seq      int    `json:"seq"`
-	TS       string `json:"ts"`
-	Lvl      string `json:"lvl"`
-	Cat      string `json:"cat"`
+	Seq int    `json:"seq"`
+	TS  string `json:"ts"`
+	Lvl string `json:"lvl"`
+	Cat string `json:"cat"`
 	// Src is the source axis (tool / application / testing), derived from Cat so the two cannot
 	// disagree. It answers "is my app misbehaving or the tool?" before any subsystem question.
 	Src      string `json:"src,omitempty"`
@@ -113,7 +113,6 @@ type logSink struct {
 	// record learns which step it belongs to without any protocol change. It is what turns "the site
 	// threw an error" into "step 4 threw an error".
 	step int
-	degraded    []string // codes with degrades:true, in order, for the verdict
 }
 
 // newLogSink creates runs/control-<id>/logs/ and opens the three files. A sink that cannot be
@@ -167,9 +166,6 @@ func (s *logSink) write(line string) {
 	if rec == nil {
 		return
 	}
-	if rec.Degrades {
-		s.degraded = append(s.degraded, rec.Code)
-	}
 	rec.Src = eventcatalog.SourceOf(rec.Cat)
 	// A summary belongs to the run, not to whichever step happened to be last. Stamping it would be
 	// temporally true and semantically noise — "Explore finished … step 3" invites reading the summary
@@ -188,7 +184,9 @@ func (s *logSink) noteStep(frame string) {
 		return
 	}
 	var env struct {
-		Data struct{ N int `json:"n"` } `json:"data"`
+		Data struct {
+			N int `json:"n"`
+		} `json:"data"`
 	}
 	if json.Unmarshal([]byte(frame), &env) == nil && env.Data.N > 0 {
 		s.step = env.Data.N
@@ -303,24 +301,4 @@ func (s *logSink) close() {
 			_ = f.Close()
 		}
 	}
-}
-
-// degradations returns the codes that ran but silently lost quality, in order of first occurrence.
-// This is the diagnostics-to-narrative crossing: a run that exits 0 with the LLM absent has to be
-// able to say so on its verdict instead of leaving it in a file nobody opens.
-func (s *logSink) degradations() []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	seen := map[string]bool{}
-	out := make([]string, 0, len(s.degraded))
-	for _, c := range s.degraded {
-		if !seen[c] {
-			seen[c] = true
-			out = append(out, c)
-		}
-	}
-	return out
 }

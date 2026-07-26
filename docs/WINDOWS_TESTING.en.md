@@ -302,6 +302,15 @@ For running against the fixtures and the real sites the host address is not need
 
 ## Windows specifics
 
+> **The easiest path is WSL2.** Every bash script in the repository (`scripts/offline-verify.sh`, `scripts/collect-live-run.sh`, `scripts/build-airgap-bundle.sh`) assumes a POSIX shell; Git Bash runs them, with the caveat below. The "Alternative: build in WSL2" section at the end of this document is the recommended route, not the fallback.
+
+- **Git Bash rewrites paths in Docker arguments.** MSYS treats an argument starting with a slash as a Windows path and expands it: `docker compose run --entrypoint /bin/sh …` becomes `exec: "C:/Program Files/Git/usr/bin/sh"` and fails. Two equally good cures:
+  ```bash
+  MSYS_NO_PATHCONV=1 docker compose run --rm --entrypoint /bin/sh sentinel
+  docker compose run --rm --entrypoint //bin/sh sentinel     # a doubled slash is left alone
+  ```
+  This applies to ANY argument with a leading slash — `--entrypoint`, `-v`, `--artifact-dir /app/runs/...`. PowerShell, CMD and WSL are unaffected.
+
 - `host.docker.internal` - the address by which the container reaches the native Ollama on the Windows host. If Ollama runs as a compose service (the ollama profile), the address from the container is `http://ollama:11434/v1`.
 - Volume paths: in PowerShell `${PWD}\runs:/app/runs`, in CMD `%cd%\runs:/app/runs`.
 - GPU: the native Ollama for Windows uses the GPU directly; GPU passthrough into Ollama inside Docker on Windows is harder, so the native one is used.

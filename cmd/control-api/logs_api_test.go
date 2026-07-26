@@ -159,21 +159,30 @@ func TestLogsFilters(t *testing.T) {
 }
 
 // Degradations are gathered from the WHOLE file, never only the page returned — a paged-out or
-// filtered-out degradation would let a run that never used the LLM look clean on its verdict.
+// filtered-out degradation would let a run that never used the LLM look clean on its verdict. They are
+// also DEDUPED and ordered by first occurrence: the verdict renders one sentence per lost quality, and
+// a code that fired on every step would otherwise print the same sentence a dozen times. (That dedup
+// claim used to live on logSink.degradations(), an in-memory twin with no production caller; the
+// assertion moved here, to the surface that actually serves the verdict, rather than being dropped.)
 func TestLogsDegradationsSpanWholeFileNotPage(t *testing.T) {
 	repo := t.TempDir()
 	id := writeRunLogs(t, repo, []string{
 		`{"seq":1,"lvl":"warn","cat":"llm","code":"llm.no_anthropic_key","msg":"No AI key","degrades":true}`,
-		`{"seq":2,"lvl":"info","cat":"run","code":"run.store_mode","msg":"local"}`,
-		`{"seq":3,"lvl":"warn","cat":"heal","code":"heal.budget_exhausted","msg":"spent","degrades":true}`,
+		`{"seq":2,"lvl":"warn","cat":"llm","code":"llm.no_anthropic_key","msg":"No AI key","degrades":true}`,
+		`{"seq":3,"lvl":"info","cat":"run","code":"run.store_mode","msg":"local"}`,
+		`{"seq":4,"lvl":"warn","cat":"heal","code":"heal.budget_exhausted","msg":"spent","degrades":true}`,
+		`{"seq":5,"lvl":"warn","cat":"llm","code":"llm.no_anthropic_key","msg":"No AI key","degrades":true}`,
 	})
-	// A filter that excludes both degradations, and a limit that would page them out anyway.
+	// A filter that excludes every degradation, and a limit that would page them out anyway.
 	env := getLogs(t, repo, id, "?cat=run&limit=1")
 	raw, _ := json.Marshal(env["degradations"])
 	var degs []string
 	_ = json.Unmarshal(raw, &degs)
+	if len(degs) == 0 {
+		t.Fatal("no degradations at all — every assertion below would be vacuous")
+	}
 	if len(degs) != 2 || degs[0] != "llm.no_anthropic_key" || degs[1] != "heal.budget_exhausted" {
-		t.Fatalf("degradations must survive filtering and paging, got %v", degs)
+		t.Fatalf("degradations must survive filtering and paging, deduped and in first-occurrence order, got %v", degs)
 	}
 }
 
