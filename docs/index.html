@@ -315,6 +315,10 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
   <div class="railfoot">
     <span id="rail-conn"><span class="dot"></span><span class="ctxt"><span data-lang="ru">не подключено</span><span data-lang="en">not connected</span></span></span>
+    <!-- M9-LIVE fix: /readyz has probed the LLM endpoint since ADR-062 and nothing ever showed the
+         result, so "is the LLM even connected?" could only be answered by reading llm-transcript.jsonl by
+         hand. The dot lives beside the connection dot because it answers the same class of question. -->
+    <span id="rail-llm" title=""><span class="dot"></span><span class="ctxt">LLM</span></span>
     <span id="rail-ver"></span>
   </div>
 </nav>
@@ -647,8 +651,19 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <textarea id="b-describe" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
     </div>
 
-    <details>
-      <summary><span data-lang="ru">⚙ Бюджеты, auth, модель</span><span data-lang="en">⚙ Budgets, auth, model</span></summary>
+    <!-- M9-LIVE fix: this block used to be labelled "⚙ Бюджеты, auth, модель" and stayed COLLAPSED. The
+         single most consequential choice in the form — WHICH LLM runs the planner — was therefore hidden
+         behind a summary whose first word was "budgets", and an operator who never expanded it launched a
+         goal-mode run with empty model fields. brain then defaulted to Anthropic, found no key, and fell
+         back to the heuristic planner. That is the "main mistake of the milestone": nothing lied, but
+         nothing told the truth either. Fixed three ways, none of which moves a DOM node (ADR-066 keeps
+         this 2700-line page re-groupable by attribute, not re-layoutable by hand): the summary now names
+         the model FIRST, the block auto-opens as soon as a planner needing an LLM is chosen, and a warning
+         appears before submit if that planner has no model behind it. -->
+    <div id="b-llmwarn" class="warnbox" style="display:none"></div>
+
+    <details id="b-adv">
+      <summary><span data-lang="ru">⚙ Модель и LLM · бюджеты · auth</span><span data-lang="en">⚙ Model and LLM · budgets · auth</span></summary>
       <div class="grid g3" style="margin-top:.6rem">
         <div>
           <label for="b-planner">Planner</label>
@@ -1595,6 +1610,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('b-goalWrap').style.display=(m==='goal')?'':'none';
     ge('b-descWrap').style.display=(m==='describe')?'':'none';
     if (m==='goal'&&!ge('b-planner').dataset.touched) ge('b-planner').value='goal';
+    bLlmGuard();
     renderBuild();
   }
 
@@ -1877,6 +1893,95 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   ge('b-backend').addEventListener('change',function(){
     ge('b-urlWrap').style.display=(bVal('b-backend')==='openai')?'':'none';
     renderBuild();
+  });
+  /* M9-LIVE fix — the silent downgrade, made loud BEFORE the run.
+     A planner of `goal` or `llm` needs a model. With the model fields empty the request carries no `llm`
+     block, brain defaults to Anthropic, finds no key, and quietly continues on the heuristic planner —
+     the run still exits 0 and the operator has no way to know the LLM never participated. Live logs
+     showed exactly that (`no Anthropic key -> offline fallback` with planner=goal). Warning here, at the
+     form, is the only place the operator can still act on it. */
+  /* M9-LIVE fix — surface the LLM probe /readyz already performs (ADR-062).
+     Three states, and the distinction between the last two is the point: `skipped` means no endpoint is
+     configured anywhere, so the run WILL be heuristic and that may be intentional; `error` means one is
+     configured and unreachable, which is almost never intentional. Collapsing them into one red dot
+     would recreate the ambiguity this fixes. Never throws: an unreachable control-API is the "connected"
+     dot's job to report, not this one's. */
+  var railLlmTimer = null;
+  async function railLlm(){
+    var host = ge('rail-llm'); if (!host) return;
+    var dot = host.querySelector('.dot'), txt = host.querySelector('.ctxt');
+    try {
+      var r = await fetch(capiBase() + '/readyz', {headers: authHdr()});
+      var j = await r.json();
+      var c = (j.checks || {}).llm || {};
+      var st = c.status || 'unknown';
+      // The page's dot classes are `.ok`/`.no` (see the stylesheet). Inventing `.on`/`.bad` would
+      // have left the dot permanently grey — a silent no-op, which is the failure mode this whole
+      // fix exists to remove.
+      dot.className = 'dot ' + (st === 'ok' ? 'ok' : st === 'skipped' ? '' : 'no');
+      txt.textContent = st === 'ok' ? 'LLM ✓' : st === 'skipped' ? 'LLM —' : 'LLM ✕';
+      host.title =
+        st === 'ok'      ? biPlain('LLM отвечает: ' + (c.detail || 'endpoint доступен'),
+                                   'the LLM answers: ' + (c.detail || 'endpoint reachable')) :
+        st === 'skipped' ? biPlain('LLM не настроена — прогоны пойдут на эвристике',
+                                   'no LLM configured — runs will use the heuristic') :
+                           biPlain('LLM настроена, но НЕ отвечает: ' + (c.detail || 'см. /readyz'),
+                                   'an LLM is configured but does NOT answer: ' + (c.detail || 'see /readyz'));
+    } catch (e) {
+      dot.className = 'dot';
+      txt.textContent = 'LLM ?';
+      host.title = biPlain('состояние LLM неизвестно — control-API не ответил',
+                           'LLM state unknown — control-API did not answer');
+    }
+  }
+  function railLlmStart(){
+    railLlm();
+    /* 30 s: /readyz memoizes its probes (readyCacheTTL), so polling faster would only burn requests
+       without producing a fresher answer. */
+    if (!railLlmTimer) railLlmTimer = setInterval(railLlm, 30000);
+  }
+
+  function bLlmGuard(){
+    var box = ge('b-llmwarn'); if (!box) return;
+    var planner = bVal('b-planner'), be = bVal('b-backend'),
+        mp = bVal('b-modelp').trim(), bu = bVal('b-baseurl').trim();
+    var needsLlm = (planner === 'goal' || planner === 'llm');
+    // Anthropic is a legitimate choice with no base_url and a built-in default model, so "configured"
+    // means: a backend is named AND (anthropic, or openai-compat with a base_url).
+    var configured = be === 'anthropic' || (be === 'openai' && !!bu);
+    if (needsLlm && !configured){
+      /* Auto-open the block that holds the fields — telling someone a field is empty while keeping it
+         hidden is worse than silence. */
+      var adv = ge('b-adv'); if (adv) adv.open = true;
+      box.style.display = '';
+      box.innerHTML = bi(
+        '<strong>Планировщик «' + esc(planner) + '» требует LLM, но модель не выбрана.</strong> ' +
+        'Прогон запустится и <em>молча</em> перейдёт на эвристику: brain по умолчанию идёт в Anthropic, ' +
+        'не находит ключа и продолжает без модели — вердикт при этом будет обычным. ' +
+        'Заполните Backend' + (be === 'openai' ? ' и LLM_BASE_URL' : '') + ' ниже, либо выберите ' +
+        'планировщик <code>heuristic</code>, если LLM не нужна.',
+        '<strong>Planner "' + esc(planner) + '" needs an LLM, but no model is selected.</strong> ' +
+        'The run will start and <em>silently</em> fall back to the heuristic: brain defaults to ' +
+        'Anthropic, finds no key and continues without a model — and the verdict will look ordinary. ' +
+        'Fill in Backend' + (be === 'openai' ? ' and LLM_BASE_URL' : '') + ' below, or choose the ' +
+        '<code>heuristic</code> planner if you do not need an LLM.');
+      return;
+    }
+    // A model without a planner that uses it is the mirror mistake, and just as quiet.
+    if (!needsLlm && configured){
+      box.style.display = '';
+      box.innerHTML = bi(
+        '<strong>Модель выбрана, но планировщик <code>heuristic</code> её не использует.</strong> ' +
+        'Прогон пройдёт детерминированно, без LLM — если это не то, что нужно, смените планировщик.',
+        '<strong>A model is selected, but the <code>heuristic</code> planner does not use it.</strong> ' +
+        'The run will proceed deterministically, without an LLM — change the planner if that is not what ' +
+        'you want.');
+      return;
+    }
+    box.style.display = 'none';
+  }
+  ['b-planner','b-backend','b-baseurl','b-modelp'].forEach(function(id){
+    var el = ge(id); if (el){ el.addEventListener('change', bLlmGuard); el.addEventListener('input', bLlmGuard); }
   });
   ge('b-planner').addEventListener('input',function(){ ge('b-planner').dataset.touched='1'; });
   ['b-goal','b-describe','b-target','b-planner','b-coverage','b-maxsteps','b-planbud',
@@ -3324,6 +3429,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var r = await fetch(capiBase()+'/healthz');
       var j = await r.json().catch(function(){ return {}; });
       vwSetConn(r.ok, j.version);
+      // Only ask about the LLM once the control-API answered: /readyz is served by that same process, so
+      // probing it while the connection is down would report "LLM unknown" for a reason that has nothing
+      // to do with the LLM.
+      if (r.ok) railLlmStart();
     } catch(e){ vwSetConn(false); }
   }
   ['capi','capitok'].forEach(function(id){

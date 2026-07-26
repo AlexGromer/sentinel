@@ -605,6 +605,88 @@ try {
    });
   });
 
+  // M9-LIVE fix: the silent downgrade. The most consequential field in the form used to hide behind a
+  // summary reading "⚙ Budgets, auth, model", and an operator who never expanded it launched a goal-mode
+  // run that quietly became a heuristic one. Both halves are checked: the block must OPEN itself, and the
+  // warning must appear — telling someone a field is empty while keeping it hidden is worse than silence.
+  await check('choosing a planner that needs an LLM warns, and opens the block holding the fields', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    const warn = page.locator('#b-llmwarn');
+    const adv = page.locator('#b-adv');
+
+    // Baseline: heuristic + no model is a perfectly valid combination and must stay quiet, or the warning
+    // becomes wallpaper and stops being read.
+    await page.selectOption('#b-planner', 'heuristic');
+    await page.selectOption('#b-backend', '');
+    // Cleared through the DOM, not `fill`: #b-baseurl lives inside #b-urlWrap, which is display:none until
+    // the backend is openai-compat, so `fill` would wait forever for a field that is correctly invisible.
+    // (The first draft of this check did exactly that and hung the gate.)
+    await page.evaluate(() => {
+      const el = document.getElementById('b-baseurl');
+      if (el) { el.value = ''; el.dispatchEvent(new Event('input', {bubbles: true})); }
+    });
+    await page.waitForTimeout(250);
+    ok(!(await warn.isVisible()), 'a heuristic run with no model must not warn');
+
+    await page.selectOption('#b-planner', 'goal');
+    await page.waitForTimeout(250);
+    ok(await warn.isVisible(), 'goal without a model must warn about the silent fallback to heuristic');
+    const text = await warn.innerText();
+    ok(/эвристик|heuristic/i.test(text), `the warning must name what will actually happen: ${text}`);
+    eq(await adv.evaluate((e) => e.open), true, 'the block holding the model fields must open itself');
+
+    // Configuring a model clears it. `anthropic` needs no base_url — a built-in default model is a real
+    // choice, and demanding a URL for it would train the operator to ignore the warning.
+    await page.selectOption('#b-backend', 'anthropic');
+    await page.waitForTimeout(250);
+    ok(!(await warn.isVisible()), `configuring anthropic must clear the warning, got: ${await warn.innerText()}`);
+
+    // openai-compat DOES need a base_url, and the warning must come back until it has one.
+    await page.selectOption('#b-backend', 'openai');
+    await page.waitForTimeout(250);
+    ok(await warn.isVisible(), 'openai-compat without a base_url must warn');
+    await page.fill('#b-baseurl', 'http://127.0.0.1:11434/v1');
+    await page.waitForTimeout(250);
+    ok(!(await warn.isVisible()), 'a base_url must clear it');
+
+    // The mirror mistake is just as quiet: a model configured that the planner will never use.
+    await page.selectOption('#b-planner', 'heuristic');
+    await page.waitForTimeout(250);
+    ok(await warn.isVisible(), 'a configured model with a heuristic planner must say the LLM is unused');
+  });
+
+  // M9-LIVE fix: /readyz has probed the LLM since ADR-062 and nothing showed it. The three states must
+  // stay distinct — `skipped` (nothing configured, heuristic may be intended) vs `error` (configured and
+  // unreachable, almost never intended) are different news, and one red dot for both rebuilds the
+  // ambiguity this fixes.
+  await check('the rail says whether the LLM is connected, and distinguishes «not configured» from «broken»', async () => {
+    const host = page.locator('#rail-llm');
+    ok(await host.count() === 1, 'the rail must carry an LLM state indicator');
+    // This gate's control-API runs with no LLM configured, so the honest answer is `skipped`.
+    await page.waitForTimeout(500);
+    const txt = (await host.innerText()).trim();
+    ok(/LLM/.test(txt), `the indicator must be labelled: ${txt}`);
+    const title = await host.getAttribute('title');
+    ok(/не настроена|not configured/i.test(title || ''),
+      `with no LLM configured the tooltip must say so rather than claim a failure: ${title}`);
+    const cls = await host.locator('.dot').getAttribute('class');
+    ok(!/\bno\b/.test(cls || ''),
+      `"not configured" must NOT render as the red/error dot: ${cls}`);
+    // And the class must be one the stylesheet actually defines — inventing a class name would leave the
+    // dot permanently grey, a silent no-op.
+    const defined = await page.evaluate(() => {
+      const out = [];
+      for (const sheet of document.styleSheets) {
+        let rules; try { rules = sheet.cssRules; } catch { continue; }
+        for (const r of rules) if (r.selectorText && /\.dot\./.test(r.selectorText)) out.push(r.selectorText);
+      }
+      return out.join(' ');
+    });
+    ok(/\.dot\.ok/.test(defined) && /\.dot\.no/.test(defined),
+      `the dot state classes must exist in the stylesheet: ${defined}`);
+  });
+
   await check('a run with no logs says so instead of looking empty', async () => {
     // A never-run id: the endpoint answers recorded:false, and the view must explain that rather than
     // render the same emptiness it shows for "nothing matched".

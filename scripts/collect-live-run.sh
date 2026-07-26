@@ -48,7 +48,12 @@ usage() { sed -n '2,30p' "$0"; exit "${1:-0}"; }
 # (~:777) — that list gates HTTP artifact reads, this one gates what leaves the machine. If one
 # changes, check the other; they are allowed to differ, but not by accident.
 COLLECT=(plan.json scenario.json reconcile-report.json heal-report.json baseline-report.json
-         report.json report.html llm-transcript.jsonl metrics.prom)
+         report.json report.html llm-transcript.jsonl metrics.prom
+         # ADR-073: junit.xml. Found missing by RUNNING the collector against a real run right after the
+         # reporter landed — the fail-safe correctly refused to ship an unrecognised file, which is how a
+         # brand-new artefact silently stayed out of every bundle. Any future report file needs this line
+         # too; the allowlist is deliberate, not an oversight to be widened with a glob.
+         junit.xml)
 # Recognised but deliberately not collected by default (so they do not show up as "unknown").
 KNOWN_SKIP=(trace.zip checkpoint.db)
 
@@ -66,19 +71,40 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$ID" ] || usage 1
 
-for t in tar python3; do command -v "$t" >/dev/null 2>&1 || fail "missing required tool: $t"; done
+command -v tar >/dev/null 2>&1 || fail "missing required tool: tar"
+# M9-LIVE fix: `python3` is not a universal name. On Windows the interpreter is `python`, and the Python
+# Launcher answers to `py -3`; a hard `command -v python3` made the collector unusable on the very host the
+# milestone was being run from, which BLOCKED artefact collection outright. Resolved once, into $PY, and
+# used everywhere below instead of a literal.
+PY=""
+for c in python3 python "py -3"; do
+  # shellcheck disable=SC2086  # intentional word-split: "py -3" is a command PLUS an argument.
+  if command -v ${c%% *} >/dev/null 2>&1 && $c -c 'import sys; sys.exit(0 if sys.version_info[0]==3 else 1)' 2>/dev/null; then
+    PY="$c"; break
+  fi
+done
+[ -n "$PY" ] || fail "missing required tool: a Python 3 interpreter (tried python3, python, 'py -3')"
 if   command -v sha256sum >/dev/null 2>&1; then SHACMD=(sha256sum)
 elif command -v shasum    >/dev/null 2>&1; then SHACMD=(shasum -a 256)
 else fail "sha256sum or shasum is required"; fi
 
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$0")")"
 
-# realpath via python3 (already a hard dependency): macOS/BSD `readlink -f` is not portable.
-realpath_() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+# realpath via Python (already a hard dependency): macOS/BSD `readlink -f` is not portable.
+# M9-LIVE fix: a WINDOWS Python returns `D:\path\to\x` with BACKSLASHES, while the surrounding bash uses
+# `D:/path/to/x`. The prefix comparison below therefore never matched and reported a bogus "symlink escape"
+# on every single directory. Normalising the separator here keeps that comparison meaningful on both.
+# shellcheck disable=SC2086  # $PY may legitimately be "py -3".
+realpath_() { $PY -c 'import os,sys; print(os.path.realpath(sys.argv[1]).replace(os.sep, "/"))' "$1"; }
 
 # --- resolve the run dir ---------------------------------------------------------------------------
 # Charset-validate BEFORE building any path — mirrors validRunID (cmd/control-api/ws.go) and stops
 # `../`, absolute paths and shell metacharacters at the door rather than after a join.
+# M9-LIVE fix: MINGW64 (Git Bash) aliases `ls` to `ls -F`, which appends `/` to directory names. The
+# guide's `for id in $(ls runs)` therefore produced `control-abc123/` and every invocation died on
+# "invalid run_id". Stripping ONE trailing slash is safe: a run_id can never legitimately contain one (the
+# charset check below rejects it), so this normalises a shell artefact rather than widening the grammar.
+ID="${ID%/}"
 case "$ID" in
   *[!A-Za-z0-9_-]* | "") fail "invalid run_id '$ID' (allowed: letters, digits, '_' and '-')" ;;
 esac
@@ -149,7 +175,8 @@ fi
 
 # --- redact (staging copy only) ---------------------------------------------------------------------
 info "redacting the staging copy (runs/ is not touched)"
-python3 - "$BUNDLE" "$REDACTED" <<'PY'
+# shellcheck disable=SC2086  # $PY may legitimately be "py -3".
+$PY - "$BUNDLE" "$REDACTED" <<'PY'
 """Redact a staged Sentinel run bundle in place.
 
 Layer 1 (structural, JSON/JSONL): blank the literal value/text of every fill|type|select|press step
