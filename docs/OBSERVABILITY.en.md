@@ -195,3 +195,54 @@ expressed against the real §5 metrics, not as-built behavior.
 |---|---|---|---|
 | `DOM_INSTABILITY` | `sentinel_heal_by_strategy_total` rate > 0.20 per run | warning | Investigate AUT DOM churn |
 | `CI_QUARANTINE_THRESHOLD` | `sentinel_quarantined_total` > 5 | critical | **Blocks CI pipeline**; review quarantined steps with `agentctl locators list` |
+
+---
+
+## 7. Two event streams and a message catalogue (ADR-065 · 067 · 068 rev.2)
+
+Sections 1–6 describe **infrastructural** observability — traces, metrics, budget. This section is about
+observability **of a run as a person sees it**, introduced in M9-LIVE.
+
+**One merged stdout+stderr stream is split by AUDIENCE rather than by severity** (`logsink.go`):
+
+| file | what it is | who reads it |
+|---|---|---|
+| `runs/<id>/logs/events.jsonl` | AG-UI frames — the run's **narrative**: "step 2 of 40", "click button Sign in", the healing strategy and its outcome | the Live view, the live timeline |
+| `runs/<id>/logs/run.jsonl` | structured **diagnostics** with level, category, module, step and source | the Logs view |
+| `runs/<id>/logs/run.log` | the raw stream, 1:1 | a person with `grep`, when the two projections above do not answer the question |
+
+Why this is not one "correct" projection: the AG-UI frames are **82% of a run's output** and they are not
+noise — they carry the story. Assigning a log level to a story destroys it, so it gets its own file and its
+own view, and the diagnostics stop being 82% protocol. The frames stay in the in-memory ring buffer
+regardless — the WS `/v1/stream` subscription replays it to drive the live timeline; the sink is a **second**
+consumer of the same lines, which is what keeps the split from touching the live path at all.
+
+**Writes are immediate.** Collapsing repeats and nesting stack frames are PRESENTATION concerns and live on
+the read side (`handleRunLogs`), not the write side. The first version held a record back to count its
+repeats, and a live run proved that wrong twice over: a stuck run emits nothing different, so the held
+record stayed out of the file for as long as the loop lasted — the very case collapsing exists to expose.
+Also, real repeats arrive about 5 s apart, so any deadline short enough to keep the loop visible was also
+too short to collapse anything.
+
+**The message catalogue** (`brain/events.json`) is the single source of truth for every human-facing line.
+A `code` travels on the wire, the text comes from the catalogue, and the placeholder VALUES are recovered by
+matching the English template against the server-rendered string. Axes:
+
+- **level** — debug/info/warn/error;
+- **category** — run · plan · heal · hitl · llm · record · system · browser · app · test;
+- **source** derived from the category (`brain/embed.go::SourceOf`): the tool · the application · testing;
+- **audience** (ADR-068 rev.2) — a layer above the sources: `business` (application+testing) versus `tool`;
+  the gate requires audiences to partition sources **exactly**;
+- **`degrades: true`** (16 codes) — the one legitimate crossing from diagnostics into the narrative: a run
+  that exits zero with the LLM absent must be able to say so on its verdict rather than hide in the log.
+
+The gate `tests/test_event_catalog_offline.py` holds this in both directions: every code a module emits
+exists in the catalogue and names that module; every catalogue entry names modules that really emit it.
+Anchoring is **per module, not per line** — line anchoring went stale all at once on the first conversion.
+
+**What is missing here.** Application events (`app.*`, seven codes) reach `run.jsonl` and do not reach the
+verdict — a run can report `exit 0` while the application throws exceptions. That is `GAP-PROD-001`, analysed
+in `docs/REGRESSION_MAP.en.md` §6. There is also no write-side redaction for foreign output —
+`GAP-SEC-005`, `docs/THREAT_MODEL.en.md` §4.12.
+
+---

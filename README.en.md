@@ -44,6 +44,8 @@ Russian is the primary, authoritative documentation; English copies live in `*.e
 | **M-STRUCTURED-OUT — Strict structured output** | ✅ done — strict `tool_use`/`json_schema` + `extract_json` for authoring/heal (ADR-057) |
 | **M15 — Metrics-in-UI + token-cost** | ✅ done — native SVG results/metrics panels; **M15.1** — the 8th token-cost metric (`tokens` block → `cost_usd`), ADR-051 |
 | **M9-LIVE-prep — Live-run preparation** | ✅ done — an executable `docs/M9_LIVE_PLAN.md` (8 factual errors) + `scripts/collect-live-run.sh` (a redacting artifact collector), #88 |
+| **M9-LIVE — the live run and the fix wave** | ✅ run, wave in progress — Alex drove it on a Windows host with a local Ollama; **16 findings** across two batches, each with a root cause in the code. Eight ADRs closed: config-driven LLM for runs (**ADR-063**) · three UI deployment modes + a runtime token (**ADR-064**) · human-readable events: a catalogue and two streams instead of one log (**ADR-065**) · navigation by what a person is doing, a vertical rail, eight views (**ADR-066**) · three log sources and step correlation (**ADR-067**) · a filter language with fields and live validity (**ADR-068**, revised rev.2: logs by audience + a "detailed" checkbox) · stopping a run (process group) and an honest store marker (**ADR-069**) · a per-element retry budget — the end of the ×34 loop (**ADR-070**). What remains is the `[M9-LIVE-UX]` block in [`BACKLOG.md`](BACKLOG.md) |
+| **Product revision 2026-07-26** | 📋 mapped, work ahead — [`docs/REGRESSION_MAP.en.md`](docs/REGRESSION_MAP.en.md): what the product detects, by what mechanism, and what it does **not**, across three subjects of regression (tool · test · application) against the ГОСТ Р ИСО/МЭК 25010-2015 axes. Six gaps named, three of which change the positioning: `app.*` never reaches the verdict · healing does not signal UI drift · the coverage metric is structurally wrong · no versioning/rollback · no import of existing tests · no JUnit XML. Every open backlog item is tagged with a licence tier (ADR-056 §2) |
 
 Milestone details: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -103,6 +105,7 @@ start an endpoint — `docker compose --profile ollama up -d ollama` (or the mul
 | [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM methodology + token-cost methodology + verified model & runtime catalog |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | pluggable adapters: optional LiteLLM router (behind `LLM_BASE_URL`) + MCP-Inspector M7 debugging |
 | [`docs/COPILOT.md`](docs/COPILOT.md) | co-pilot: vision · status (honest feature inventory) · agreements · wave roadmap [me]/[@0xCoDSnet] |
+| [`docs/REGRESSION_MAP.en.md`](docs/REGRESSION_MAP.en.md) | the regression map: what we detect, by what mechanism, and what we do **not** — across three subjects (tool · test · application), against the ГОСТ Р ИСО/МЭК 25010-2015 axes |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite over the trust boundaries (→ [`SECURITY.md`](SECURITY.md)) |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | contributor guide: build, milestone gates, extension recipes, Secret plumbing |
 | [`docs/DETERMINISM.md`](docs/DETERMINISM.md) | determinism, plan_hash, golden baselines, the headless-only boundary |

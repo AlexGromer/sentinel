@@ -88,6 +88,7 @@ at each `checkpoint` node invocation.
 | `current_step` | Number of the last executed step |
 | `interactive_seen` | `semantic_id`s of all discovered buttons |
 | `interactive_exercised` | `semantic_id`s of buttons that have been clicked |
+| `interactive_failed` | **ADR-070** — `semantic_id` → how many times acting on the element RAISED. It exists because `act` marked an element only on SUCCESS: a control that would not act stayed a candidate forever and the planner proposed it every step (a live log showed one click 34 times until `max_steps`). At the `_EXPLORE_FAIL_LIMIT` threshold (env `SENTINEL_EXPLORE_FAIL_LIMIT`, default 2) the element leaves the candidate set; the same budget covers navigate candidates |
 | `visited_paths` | Page paths visited |
 | `nav_frontier` | Unvisited same-origin links |
 | `coverage_achieved` | `len(exercised) / max(1, len(seen))` |
