@@ -228,3 +228,40 @@ of `agentctl` subcommands is: `run`, `baseline`, `locators`, `export-spec`, `rep
 across `cmd/agentctl/main.go` — zero matches). A SARIF export for GitHub Code Scanning is a
 proposed but unimplemented capability; today, `report.json` (§2) can serve as the source for
 an external conversion script if one is needed.
+
+---
+
+### 11. Run logs (`runs/<id>/logs/`) — ADR-065/067/068
+
+Three files split by **audience** rather than by severity (`cmd/control-api/logsink.go`):
+
+| file | what it is | where it is read |
+|---|---|---|
+| `logs/events.jsonl` | AG-UI frames — the run's **narrative** ("step 2 of 40", "click Sign in", the healing strategy and outcome) | the Live view |
+| `logs/run.jsonl` | structured **diagnostics**: level · category · module · step · source | the Logs view |
+| `logs/run.log` | the raw stdout+stderr stream, 1:1 | the file, `grep` |
+
+Russian text does **not travel on the wire**: the server sends a `code`, the page takes the phrase from
+`/v1/events-catalog`, and recovers placeholder values by matching the English template against the
+rendered string. Collapsing repeats (`×N`) and nesting stack frames happen on the READ side
+(`handleRunLogs`); writes are immediate.
+
+**As-built — important limits:**
+- **`logs/*` are NOT in the artifact whitelist** (`cmd/control-api/main.go`, `artifactWhitelist`). They
+  cannot be fetched through `GET /v1/runs/{id}/artifacts/{name}` — only through
+  `GET /v1/runs/{id}/logs` (token-gated, with level/source/step filters and the ADR-068 expression
+  parser).
+- **The application channel is capped at 500 records**; on truncation `app.log_capped` is printed, so a
+  truncated capture cannot be mistaken for a complete one.
+- **`app.*` events never reach the verdict** — a run reports `exit 0` while the application throws
+  exceptions (`GAP-PROD-001`, analysed in [`REGRESSION_MAP.en.md`](REGRESSION_MAP.en.md) §6).
+- **There is no write-side redaction** — foreign output is stored as received (`GAP-SEC-005`,
+  [`THREAT_MODEL.en.md`](THREAT_MODEL.en.md) §4.12). No TTL is defined for `logs/`, unlike `trace.zip`.
+
+### 12. The store marker on list endpoints — ADR-069
+
+Five list endpoints (`scenarios`/`tests`/`chats`/`results`/`trends`) carry `store: false` plus a
+`store_reason` naming the remedy (`--profile store` + `CONTROL_API_STORE_ADDR`) beside the data. A `501`
+would be wrong here: an empty list is **valid** with a live store. Before ADR-069 an empty `200` meant
+both "nothing saved yet" and "this deployment saves nothing at all" — and "the library will not load"
+was a correct reading of a silent interface.

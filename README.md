@@ -44,6 +44,8 @@
 | **M-STRUCTURED-OUT — Strict structured output** | ✅ готово — строгий `tool_use`/`json_schema` + `extract_json` для authoring/heal (ADR-057) |
 | **M15 — Metrics-in-UI + token-cost** | ✅ готово — нативные SVG-панели результатов/метрик; **M15.1** — 8-я метрика token-cost (`tokens`-блок → `cost_usd`), ADR-051 |
 | **M9-LIVE-prep — Подготовка к живому прогону** | ✅ готово — исполнимый `docs/M9_LIVE_PLAN.md` (8 факт-ошибок) + `scripts/collect-live-run.sh` (редактирующий коллектор артефактов), #88 |
+| **M9-LIVE — живой прогон и фикс-волна** | ✅ прогнан, волна в работе — Alex гонял на Windows-хосте с локальной Ollama; **16 находок** в двух батчах, каждая с root cause по коду. Закрыто восемь ADR: config-driven LLM для прогонов (**ADR-063**) · три режима развёртывания UI + runtime-токен (**ADR-064**) · человекочитаемые события: каталог + два потока вместо одного лога (**ADR-065**) · навигация по задачам человека, вертикальный рельс, восемь видов (**ADR-066**) · три источника логов и привязка к шагу (**ADR-067**) · язык фильтров с полями и живой валидностью (**ADR-068**, ревизия rev.2: логи по аудитории + чекбокс «подробно») · остановка прогона (группа процессов) и честный маркер хранилища (**ADR-069**) · бюджет попыток на элемент — конец цикла ×34 (**ADR-070**). Остаток — блок `[M9-LIVE-UX]` в [`BACKLOG.md`](BACKLOG.md) |
+| **Продуктовая ревизия 2026-07-26** | 📋 карта составлена, работа впереди — [`docs/REGRESSION_MAP.md`](docs/REGRESSION_MAP.md): что продукт обнаруживает, каким механизмом, и чего **не** обнаруживает, по трём субъектам регрессии (инструмент · тест · приложение) на осях ГОСТ Р ИСО/МЭК 25010-2015. Названы шесть пробелов, три из которых меняют позиционирование: `app.*` не доходят до вердикта · починка не сигналит дрейф UI · метрика покрытия структурно неверна · нет версионирования/откáта · нет импорта чужих тестов · нет JUnit XML. Все открытые пункты бэклога размечены тиром лицензии (ADR-056 §2) |
 
 Подробности по вехам: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
@@ -103,6 +105,7 @@ CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile contro
 | [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM-методика + token-cost-методика + каталог моделей и runtime (verified) |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | подключаемые адаптеры: опц. LiteLLM-роутер (за `LLM_BASE_URL`) + MCP-Inspector отладка M7 |
 | [`docs/COPILOT.md`](docs/COPILOT.md) | co-pilot: видение · статус (честный feature-inventory) · договорённости · roadmap по волнам [me]/[@0xCoDSnet] |
+| [`docs/REGRESSION_MAP.md`](docs/REGRESSION_MAP.md) | карта регрессий: что обнаруживаем, каким механизмом, и чего **не** обнаруживаем — по трём субъектам (инструмент · тест · приложение), на осях ГОСТ Р ИСО/МЭК 25010-2015 |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | STRIDE-lite по границам доверия (→ [`SECURITY.md`](SECURITY.md)) |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | гайд контрибьютора: сборка, milestone-гейты, рецепты расширения, Secret-плумбинг |
 | [`docs/DETERMINISM.md`](docs/DETERMINISM.md) | детерминизм, plan_hash, golden baselines, граница headless-only |
