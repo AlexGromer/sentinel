@@ -70,6 +70,13 @@ def _html(rep: dict) -> str:
                 + "<td>" + html.escape(str(d.get("name") or "")) + "</td>"
                 + "<td>" + html.escape(str(d.get("strategy") or "")) + " ("
                 + html.escape(str(d.get("confidence") or "")) + ")</td>"
+                # ADR-080: WHICH heals were applied without full confidence. The data was always in the
+                # artefact (`outcome` on every drift row) and no surface showed it, so a heal applied
+                # optimistically looked identical to one accepted outright.
+                + "<td>" + ("<span class='unverified'>"
+                            + html.escape(str(d.get("outcome") or "")) + "</span>"
+                            if d.get("outcome") != "auto_healed"
+                            else html.escape(str(d.get("outcome") or ""))) + "</td>"
                 + "<td><code>" + html.escape(json.dumps(d.get("from"), ensure_ascii=False)) + "</code>"
                 + " &rarr; <code>" + html.escape(json.dumps(d.get("to"), ensure_ascii=False))
                 + "</code></td></tr>")
@@ -80,7 +87,7 @@ def _html(rep: dict) -> str:
             "<h2>Interface drift</h2><p>re-bound " + str(drift.get("rebind", 0))
             + " · re-grounded <span class='reground'>" + str(drift.get("reground", 0)) + "</span>"
             + note + "</p><table><thead><tr><th>#</th><th>class</th><th>element</th>"
-            + "<th>strategy (conf.)</th><th>locator: frozen &rarr; used</th></tr></thead><tbody>"
+            + "<th>strategy (conf.)</th><th>accepted as</th><th>locator: frozen &rarr; used</th></tr></thead><tbody>"
             + "".join(drows) + "</tbody></table>")
     # ADR-077: what the run LOST. The codes are resolved to the catalogue's verdict sentences, not the
     # log phrasing — a reader of the report is asking "what does this mean for the result?", which is a
@@ -97,7 +104,7 @@ def _html(rep: dict) -> str:
     css = ("body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}"
            "td,th{border:1px solid #ddd;padding:6px 10px;text-align:left}th{background:#f5f5f5}"
            ".healed{color:#1565c0}.ok{color:#2e7d32}.failed{color:#c62828}"
-           ".rebind{color:#1565c0}.reground{color:#b26a00;font-weight:700}"
+           ".rebind{color:#1565c0}.reground{color:#b26a00;font-weight:700}.unverified{color:#b26a00;font-weight:700}"
            "code{background:#f5f5f5;padding:1px 4px}h2{margin-top:1.6rem;font-size:1.05rem}"
            ".exit{font-weight:700;color:" + color + "}")
     return (

@@ -10,6 +10,7 @@ pw-executor format, one of: {testid}, {role,name}, {label}, {text}, {css}, {xpat
 from __future__ import annotations
 
 import json
+import os
 
 from .eventlog import log
 from .llm import complete_structured, extract_json
@@ -22,10 +23,39 @@ _SCHEMA_CSS = {"type": "object", "properties": {
     "css": {"type": "string", "description": "a precise CSS selector for the current element"},
     "none": {"type": "boolean", "description": "true if no element matches the intent"}}}
 
-# Per-strategy base priors (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
+# Per-strategy base PRIORS (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
+#
+# These are PRIORS, not probabilities. Nothing measures them: there is no confidence model, no
+# calibration, and no record of how often a strategy was right — a heal's number is looked up from this
+# table by strategy NAME and nothing else. Said plainly here because GAPS.md used to claim an adaptive
+# mechanism ("threshold 0.90 until N human-labelled outcomes") that was never built, and a reader who
+# believed it would trust these numbers far more than they deserve. ADR-080.
 PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
           "xpath": 0.45, "visual": 0.80}  # visual (set-of-marks) lands in the FLAGGED band by design
-AUTO, FLAG = 0.85, 0.60  # confidence gate thresholds
+
+
+def _env_conf(name: str, default: float) -> float:
+    """A confidence threshold from the environment, clamped to [0,1]; garbage falls back to `default`.
+
+    Falling back rather than raising: a typo in a CI variable must not turn a passing replay into a
+    crash — the same rule replay.py applies to its own thresholds."""
+    try:
+        v = float(os.environ.get(name, "").strip())
+    except ValueError:
+        return default
+    return v if 0.0 <= v <= 1.0 else default
+
+
+AUTO = _env_conf("SENTINEL_HEAL_AUTO", 0.85)  # >= this: applied silently
+FLAG = _env_conf("SENTINEL_HEAL_FLAG", 0.60)  # >= this: applied OPTIMISTICALLY and reported (ADR-005/017)
+
+# Strategies that are NOT frozen with the plan: the locator was produced at heal time from the page as
+# it is NOW, so nothing in the plan vouches for it being the same element (ADR-071 calls this re-ground).
+REGROUND_STRATEGIES = frozenset({"css", "visual"})
+
+
+def is_reground(strategy: str) -> bool:
+    return strategy in REGROUND_STRATEGIES
 
 
 
@@ -93,11 +123,33 @@ class HealingEngine:
 
         strat, loc, conf = chosen
         # 6. verify-before-accept: the candidate MUST resolve to exactly 1 live element.
+        #
+        # NOTE what this does NOT establish: that it is the SAME element. One match is one match, not
+        # the right one. Identity verification is ADR-081 (browser.describe).
         if self._probe(loc) != 1:
             conf = 0.0
-        val = json.dumps(loc)
+        return self._gate(ctx, strat, loc, conf)
 
-        # 7. confidence gate.
+    def _gate(self, ctx: dict, strat: str, loc: dict, conf: float) -> dict:
+        """7. The confidence gate: turn a candidate + its confidence into an outcome.
+
+        Split out of `heal` so the RULE below can be tested as a rule. It guards a future edit rather
+        than today's numbers — no re-ground currently reaches AUTO on its own (css 0.585, visual 0.80
+        against 0.85) — so a test that only drives today's strategies cannot tell whether the guard is
+        there at all. A mutation proved precisely that: deleting the cap broke nothing.
+
+        THE RULE: a re-ground can never be applied SILENTLY. It used to hold only by arithmetic —
+        css scores PRIORS["css"] * 0.90 = 0.585 against FLAG 0.60, a margin of 0.015 — and the test
+        pinned the number rather than the property. Raising a prior, or softening the overconfidence
+        discount to 0.95, would have promoted an unverified locator into the band that EXECUTES
+        (replay.py applies auto_healed | flagged | cache_hit alike) with everything still green.
+        The cap says what was always meant: a locator nothing in the plan vouches for is applied
+        optimistically at best, never quietly. ADR-080.
+        """
+        page, sid, dom = ctx["page_path"], ctx["semantic_id"], ctx["dom_hash"]
+        val = json.dumps(loc)
+        if conf >= AUTO and is_reground(strat):
+            conf = min(conf, (AUTO + FLAG) / 2)
         if conf >= AUTO:
             self.store.save_locator(page, sid, strat, val, conf, dom, "active")
             self._audit(ctx, strat, val, conf, "auto_healed")

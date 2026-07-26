@@ -827,6 +827,19 @@
       "ru_verdict": "пройдено с дрейфом интерфейса — тест подстроился, посмотрите, что изменилось",
       "en_verdict": "passed with interface drift — the test adapted; look at what changed"
     },
+    "heal.applied_unverified": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "report",
+      "degrades": true,
+      "ru": "Починок применено без полной уверенности: {total} (порог доверия {auto})",
+      "en": "Heals applied without full confidence: {total} (auto-accept threshold {auto})",
+      "ru_verdict": "прогон применил починки, в которых НЕ уверен: локатор подобран, но подтверждения, что это тот же элемент, нет — проверьте их прежде, чем доверять зелёному",
+      "en_verdict": "the run applied heals it is NOT confident in: a locator was found, but nothing confirms it is the same element — check them before trusting the green",
+      "modules": [
+        "replay"
+      ]
+    },
     "heal.no_llm_backend": {
       "lvl": "warn",
       "cat": "heal",

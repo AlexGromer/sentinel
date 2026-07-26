@@ -98,7 +98,7 @@ code in CI are out of scope here — that is `docs/TESTING.md`.
 |---|---|---|---|---|---|
 | the brain did not start / crashed | **yes** | control-api records the abnormal exit (`cmd/control-api/main.go:478`) | `-1` | verdict + `logs/run.jsonl` | — |
 | the run was signal-killed or cancelled | **yes** | ADR-069: `state=canceled` is separated from `failed`, because a killed process exits with −1 indistinguishably from a crash (`main.go:506-512`) | `-1` | verdict (state beside the code) | — |
-| the LLM is unreachable → the planner silently falls back to heuristic | **partly** | 19 codes carry `degrades: true` in `brain/events.json`, each with a `{ru,en}_verdict` hint | unchanged | **logs only**; never reaches the verdict | `[PROD-VERDICT-APP]` (same mechanism) |
+| the LLM is unreachable → the planner silently falls back to heuristic | **partly** | 20 codes carry `degrades: true` in `brain/events.json`, each with a `{ru,en}_verdict` hint | unchanged | **logs only**; never reaches the verdict | `[PROD-VERDICT-APP]` (same mechanism) |
 | pw-executor did not come up | **yes** | the `browser.launched` event is absent | `-1` | logs | — |
 | exploration loops on an element that will not act | **yes** (ADR-070) | a per-element retry budget in `brain/graph.py`; events `plan.element_blacklisted`, `plan.unactionable_elements` | unchanged | logs + the reason it stopped | — |
 | the token budget is exhausted | **yes** | `brain/runcontrol.py` → `plan.orchestrator_abort` | unchanged | logs + token metrics | — |
