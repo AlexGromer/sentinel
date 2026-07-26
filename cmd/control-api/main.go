@@ -376,7 +376,12 @@ func validConversationID(id string) bool {
 
 // replayInputs lists the frozen-plan artifacts a replay/baseline (M9.9) may consume from a prior run,
 // in resolution order. Only these names are accepted as a replay input — never an arbitrary path.
-var replayInputs = []string{"plan.json", "scenario.json"}
+// ADR-047 follow-on: `executed-plan.json` is what a REPLAY freezes into its own directory — the plan
+// it accepted and ran. Without it a replay could never be replayed: this list is what `resolveFromRun`
+// probes, a replay wrote only its report, and so the re-run control on a replay was permanently
+// unavailable even though the plan was known. It is LAST in resolution order on purpose: a run that
+// produced its own plan should replay that, not a copy of someone else's.
+var replayInputs = []string{"plan.json", "scenario.json", "executed-plan.json"}
 
 // resolveFromRun maps a prior run_id (from_run) to its frozen-plan path under runs/control-<id>/ plus
 // the plan's target_url (M9.9, ADR-047). from_run is path-traversal-guarded exactly like artifact names
@@ -947,6 +952,7 @@ var artifactWhitelist = map[string]bool{
 	"heal-report.json":      true, // M9.9: replay output (golden diff / heal log)
 	"baseline-report.json":  true, // M9.9: baseline-update output
 	"junit.xml":             true, // ADR-073: the machine contract every CI consumes
+	"executed-plan.json":    true, // ADR-047 follow-on: the plan a replay ran, so the replay is replayable
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).

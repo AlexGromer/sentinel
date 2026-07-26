@@ -53,7 +53,11 @@ COLLECT=(plan.json scenario.json reconcile-report.json heal-report.json baseline
          # reporter landed — the fail-safe correctly refused to ship an unrecognised file, which is how a
          # brand-new artefact silently stayed out of every bundle. Any future report file needs this line
          # too; the allowlist is deliberate, not an oversight to be widened with a glob.
-         junit.xml)
+         junit.xml
+         # ADR-047 follow-on: executed-plan.json — the plan a replay accepted and ran, which is what
+         # makes a replay itself replayable. Same lesson as junit.xml above: added here in the same
+         # change that creates it, because the fail-safe would otherwise drop it without a word.
+         executed-plan.json)
 # Recognised but deliberately not collected by default (so they do not show up as "unknown").
 KNOWN_SKIP=(trace.zip checkpoint.db)
 
