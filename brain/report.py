@@ -51,9 +51,42 @@ def _html(rep: dict) -> str:
             + "</td><td>" + q + "</td></tr>")
     code = rep.get("exit_code", -1)
     color = _EXIT_COLOR.get(code, "#555")
+    # ADR-071: the drift table. `healed N` never answered the question a reader actually has — WHAT moved
+    # in the interface. Each row names the element, the class (re-bind = same element by another frozen
+    # key, repairing the test; re-ground = a new selector chosen from the page as it is now, identity
+    # unverified) and the before -> after locator, so "passed" can be read together with "and here is
+    # what changed underneath".
+    drift = rep.get("drift") or {}
+    dels = drift.get("elements") or []
+    drift_html = ""
+    if dels:
+        drows = []
+        for d in dels:
+            kind = d.get("kind", "")
+            drows.append(
+                "<tr><td>" + html.escape(str(d.get("step"))) + "</td>"
+                + "<td class='" + html.escape(kind) + "'>"
+                + html.escape("re-bind" if kind == "rebind" else "re-ground") + "</td>"
+                + "<td>" + html.escape(str(d.get("name") or "")) + "</td>"
+                + "<td>" + html.escape(str(d.get("strategy") or "")) + " ("
+                + html.escape(str(d.get("confidence") or "")) + ")</td>"
+                + "<td><code>" + html.escape(json.dumps(d.get("from"), ensure_ascii=False)) + "</code>"
+                + " &rarr; <code>" + html.escape(json.dumps(d.get("to"), ensure_ascii=False))
+                + "</code></td></tr>")
+        note = ("" if not drift.get("failed_build") else
+                " <strong>build failed on drift</strong> (threshold "
+                + html.escape(str(drift.get("threshold"))) + ")")
+        drift_html = (
+            "<h2>Interface drift</h2><p>re-bound " + str(drift.get("rebind", 0))
+            + " · re-grounded <span class='reground'>" + str(drift.get("reground", 0)) + "</span>"
+            + note + "</p><table><thead><tr><th>#</th><th>class</th><th>element</th>"
+            + "<th>strategy (conf.)</th><th>locator: frozen &rarr; used</th></tr></thead><tbody>"
+            + "".join(drows) + "</tbody></table>")
     css = ("body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}"
            "td,th{border:1px solid #ddd;padding:6px 10px;text-align:left}th{background:#f5f5f5}"
            ".healed{color:#1565c0}.ok{color:#2e7d32}.failed{color:#c62828}"
+           ".rebind{color:#1565c0}.reground{color:#b26a00;font-weight:700}"
+           "code{background:#f5f5f5;padding:1px 4px}h2{margin-top:1.6rem;font-size:1.05rem}"
            ".exit{font-weight:700;color:" + color + "}")
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Sentinel report</title><style>"
@@ -61,10 +94,12 @@ def _html(rep: dict) -> str:
         + "</h1><p>plan: <code>" + html.escape(str(rep.get("plan_id"))) + "</code> · exit "
         + "<span class='exit'>" + html.escape(str(code)) + "</span> · healed "
         + str(rep.get("healed", 0)) + " · failed " + str(rep.get("failed", 0))
+        + (" · <strong>" + html.escape(str(rep.get("verdict"))) + "</strong>"
+           if rep.get("verdict") else "")
         + " · regressions " + str(len(rep.get("regressions", [])))
         + "</p><table><thead><tr><th>#</th><th>type</th><th>outcome</th><th>heal</th>"
         + "<th>regression</th><th>quar.</th></tr></thead><tbody>" + "".join(rows)
-        + "</tbody></table></body></html>")
+        + "</tbody></table>" + drift_html + "</body></html>")
 
 
 def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
