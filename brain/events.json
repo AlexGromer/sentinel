@@ -989,6 +989,15 @@
         "replay"
       ]
     },
+    "system.artifact_write_failed": {
+      "lvl": "warn",
+      "cat": "system",
+      "ru": "Не удалось записать артефакт {artifact}: {error}",
+      "en": "Could not write the {artifact} artifact: {error}",
+      "modules": [
+        "replay"
+      ]
+    },
     "system.orchestrator_abort_signal": {
       "lvl": "warn",
       "cat": "system",

@@ -133,6 +133,27 @@ def _write(report: dict, run_dir: str) -> None:
         json.dump(report, f, indent=2)
 
 
+def _write_executed_plan(plan: dict, run_dir: str) -> None:
+    """Freeze the plan this run EXECUTED into its own artifact dir, so the run is self-describing.
+
+    Without it a replay could never be replayed: `resolveFromRun` looks for a frozen plan inside the run's
+    own directory, and a replay wrote only its report there — so the re-run control on a replay was
+    permanently unavailable even though the plan was known (it arrived via `from_run`). Handing someone a
+    replay's artifact directory also handed them something they could not re-run.
+
+    The filename is NOT `plan.json`, deliberately. In an explore run that name means "the plan this run
+    PRODUCED", and `persistResult` reads `coverage_achieved` out of it; reusing it here would attribute
+    the ORIGINAL explore's coverage to every replay of it — a silent corruption of the coverage metric in
+    exchange for a shorter name.
+
+    Best-effort: a run must not fail because a convenience copy could not be written."""
+    try:
+        with open(os.path.join(run_dir, "executed-plan.json"), "w") as f:
+            json.dump(plan, f, indent=2)
+    except OSError as e:
+        log("system.artifact_write_failed", artifact="executed-plan.json", error=e)
+
+
 # M9.1 (ADR-026): locator-bearing interaction verbs share the probe -> heal -> act path with click.
 LOCATOR_VERBS = ("click", "fill", "type", "select")
 
@@ -199,6 +220,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         _emit("verdict", run_id, verdict="integrity", exit_code=3, healed=0, failed=0)
         _write(report, run_dir)
         return report
+
+    # Written once, right after the integrity gate and before anything executes: from here on this run
+    # HAS accepted this plan. Deliberately not written above the gate — a run that hard-aborted on a
+    # plan_hash mismatch executed nothing, and putting a re-run of that plan one click away is precisely
+    # what ADR-006 refuses to do.
+    _write_executed_plan(plan, run_dir)
 
     old_base = normalize_url(plan.get("target_url", "")).rsplit("/", 1)[0] + "/"
     new_base = normalize_url(new_target).rsplit("/", 1)[0] + "/"

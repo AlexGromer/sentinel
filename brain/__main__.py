@@ -39,14 +39,20 @@ def _checkpointer(ckpt_path: str):
             yield saver
 
 
-def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe) -> int:
+def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None) -> int:
     """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
-    (describe). Exit: describe with any unmatched -> 1; zero grounded steps -> 1; else 0."""
+    (describe). Exit: describe with any unmatched -> 1; zero grounded steps -> 1; else 0.
+
+    `models`/`tokens` ride along because a scenario is the artifact people HAND EACH OTHER — it is the
+    deliverable of a goal/describe run — and one that cannot say which model authored it, at what token
+    cost, is not reproducible by whoever receives it. It carried neither until now."""
     from .state import canonical_plan_hash
+    from . import budget
     sc = [{**s, "step_id": i + 1} for i, s in enumerate(scenario_steps)]
     obj = {"plan_id": f"{run_id}-scenario", "plan_hash": canonical_plan_hash(sc), "target_url": target,
            "run_mode": "scenario", "mode": ("describe" if is_describe else "goal"),
-           "unmatched": len(unmatched), "steps": sc}
+           "unmatched": len(unmatched), "steps": sc,
+           "models": {"author": author_model}, "tokens": budget.tracker().summary()}
     with open(out / "scenario.json", "w") as f:
         json.dump(obj, f, indent=2)
     if is_describe:
@@ -156,7 +162,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             print(f"  #{s['step_id']:>2} {s['action_type']:<9} {s['intent']}")
         print("=" * 60)
         if scenario_head is not None:    # M9.2b: goal/describe -> scenario.json is the deliverable
-            return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe))
+            return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe),
+                                   author_model=getattr(scenario_head, "model", None))
         plan_file = out / "plan.json"
         trace = pathlib.Path(trace_path)
         ok = plan_file.exists() and len(steps) >= 5 and trace.exists() and trace.stat().st_size > 0
@@ -309,7 +316,8 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
                 print("=" * 60)
                 return _write_scenario(out, run_id, eff_target, scenario_steps,
-                                       scenario_unmatched, bool(describe))
+                                       scenario_unmatched, bool(describe),
+                                       author_model=getattr(scenario_head, "model", None))
         finally:
             tx.close()
 

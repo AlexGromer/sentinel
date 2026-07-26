@@ -461,7 +461,17 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "steps": steps}
         from . import budget  # M15.1: per-run token totals -> persistResult ingests tokens_* + cost_usd
         plan_obj["tokens"] = budget.tracker().summary()
-        plan_obj["models"] = {"plan": getattr(planner, "model", None)}
+        # The model that SPENT the planner tokens above — which is not always the explore planner.
+        # `planner` walks the site and is heuristic by default (no `.model` at all), while the scenario
+        # head is what actually calls the LLM in goal/describe mode. Reading only `planner` left
+        # `models.plan` null on every goal run: cost came out 0 and, more importantly, the `model` label
+        # on every metric point came out empty — and that label is the seam a cross-project rollup groups
+        # on (ADR-056). Both are recorded; `plan` keeps naming the single spender for pricing, because
+        # both heads resolve through the same make_backend("planner") and therefore the same model.
+        _explore_model = getattr(planner, "model", None)
+        _author_model = getattr(scenario_head, "model", None)
+        plan_obj["models"] = {"plan": _explore_model or _author_model,
+                              "explore": _explore_model, "author": _author_model}
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:
             json.dump(plan_obj, f, indent=2)
         # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen
