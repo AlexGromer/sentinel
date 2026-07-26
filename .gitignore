@@ -1193,8 +1193,14 @@ PRIVATE_*.md
 *.internal.md
 *.internal.json
 *.internal.docx
+# 2026-07-26: `.html` was MISSING here while the three above were present, so a self-contained
+# internal HTML note (a competitor matrix built to open locally) would have been committed. Verified
+# with `git check-ignore` before the file was created, not after.
+*.internal.html
 docs/COMPETITIVE_ANALYSIS.internal.md
 docs/COMPETITIVE_ANALYSIS.raw.internal.json
+docs/COMPETITIVE_LANDSCAPE.internal.md
+docs/COMPETITIVE_MATRIX.internal.html
 docs/DOC_CONVENTIONS.internal.md
 # Generated personal runbooks + office binaries (also caught by *.local.* above)
 docs/WINDOWS_TESTING.local.md
