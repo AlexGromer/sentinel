@@ -437,7 +437,9 @@ def _run_report(run_dir) -> int:
             log("system.metrics_pushed", gateway=gw)
         except Exception as e:
             log("system.metrics_push_error", error=e)
-    print(f"report -> {run_dir}/report.html, report.json, metrics.prom")
+    # ADR-073: name junit.xml too. A CLI that writes a file it does not mention is how an operator
+    # concludes the feature is missing.
+    print(f"report -> {run_dir}/report.html, report.json, metrics.prom, junit.xml")
     return 0
 
 

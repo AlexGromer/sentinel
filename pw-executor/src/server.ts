@@ -52,14 +52,26 @@ const APP_MESSAGES: Record<string, string> = {
  * mistaken for a quiet application. */
 const APP_LOG_CAP = Number(process.env.PW_APP_LOG_CAP ?? 500);
 let appLogCount = 0;
+/* ADR-072: the tally, per code. The lines themselves go to stderr, which the brain does NOT read —
+ * `brain/executor.py` inherits the executor's stderr rather than piping it, so the only process that
+ * ever parsed these lines was control-api's log sink, and by the time IT has counted them the run has
+ * already exited with its verdict. Counting here, at the emitter, is what makes the number available
+ * INSIDE the run: the brain asks for it at report time (`browser.appFaults`) and can therefore both
+ * report it on the verdict and, if asked, fail on it. */
+const appFaultCounts: Record<string, number> = {};
+let appFaultsCapped = false;
 
 function appLog(lvl: 'debug' | 'info' | 'warn' | 'error', code: string, fields: Record<string, unknown>): void {
   if (appLogCount > APP_LOG_CAP) return;
   appLogCount += 1;
   if (appLogCount > APP_LOG_CAP) {
+    appFaultsCapped = true;
     console.error(`[warn|app] app.log_capped: ${render(APP_MESSAGES['app.log_capped'], { cap: APP_LOG_CAP })}`);
     return;
   }
+  // Tallied BEFORE the template lookup so a code missing from APP_MESSAGES still counts — the fault
+  // happened whether or not we can phrase it, and a silent drop would understate the application.
+  appFaultCounts[code] = (appFaultCounts[code] ?? 0) + 1;
   const tpl = APP_MESSAGES[code];
   if (tpl === undefined) return; // an uncatalogued code would render as a bare code in the UI
   console.error(`[${lvl}|app] ${code}: ${render(tpl, fields)}`);
@@ -452,6 +464,13 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       );
       return { elements };
     }
+    case 'browser.appFaults': {
+      // Deliberately does NOT require a browser: the brain calls this at report time, and by then the
+      // page may already be closed. Returning the tally of a run that never launched (all zeros) is a
+      // correct answer, not an error.
+      const total = Object.values(appFaultCounts).reduce((a, b) => a + b, 0);
+      return { counts: { ...appFaultCounts }, total, capped: appFaultsCapped, cap: APP_LOG_CAP };
+    }
     case 'browser.screenshotHash': {
       await ensureBrowser();
       // GAP-RISK-009: disable animations + hide the caret + CSS-scale so the hash is byte-stable
@@ -558,6 +577,7 @@ const TOOL_METHODS = [
   'browser.saveStorageState',
   'browser.probe',
   'browser.interactives',
+  'browser.appFaults',
   'browser.screenshotHash',
   'browser.setOfMarks',
   'browser.traceStop',
@@ -617,6 +637,7 @@ async function mainMcp(): Promise<void> {
     'browser.saveStorageState': { path: z.string() },
     'browser.probe': locatorShape,
     'browser.interactives': {},
+    'browser.appFaults': {},
     'browser.screenshotHash': {},
     'browser.setOfMarks': { path: z.string() },
     'browser.traceStop': { path: z.string() },
