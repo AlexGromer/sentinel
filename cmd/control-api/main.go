@@ -849,6 +849,7 @@ var artifactWhitelist = map[string]bool{
 	"plan.json":             true,
 	"heal-report.json":      true, // M9.9: replay output (golden diff / heal log)
 	"baseline-report.json":  true, // M9.9: baseline-update output
+	"junit.xml":             true, // ADR-073: the machine contract every CI consumes
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).

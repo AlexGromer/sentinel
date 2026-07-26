@@ -64,6 +64,35 @@ def _basename(url: str) -> str:
     return p.rsplit("/", 1)[-1] or p
 
 
+def _app_faults(ex) -> dict:
+    """ADR-072: ask the EXECUTOR for its tally of the application's own faults.
+
+    Why the executor and not the log: those lines go to stderr, and `brain/executor.py` inherits the
+    executor's stderr rather than piping it — so the brain never saw them. The only process that parsed
+    them was control-api's log sink, and by the time it has counted, the run has already exited with a
+    verdict. Asking the emitter is what makes the number available INSIDE the run.
+
+    Fail-open by construction: an older executor without the method, or a dead one, yields an empty
+    tally. A run must not fail because we could not count how badly the application behaved."""
+    try:
+        r = ex.call("browser.appFaults") or {}
+    except Exception as e:
+        log("system.app_faults_unavailable", error=e)
+        return {}
+    counts = {k: int(v) for k, v in (r.get("counts") or {}).items() if v}
+    if not counts:
+        return {}
+    # `errors` is the subset a build would reasonably gate on: the page threw, or it logged an error, or
+    # a request failed / answered 4xx-5xx. A console WARNING and a dialog are reported but not counted as
+    # errors — gating on warnings would make the feature unusable on any real application.
+    err_codes = ("app.js_error", "app.console_error", "app.request_failed", "app.http_error")
+    return {"counts": counts,
+            "total": sum(counts.values()),
+            "errors": sum(counts.get(c, 0) for c in err_codes),
+            "capped": bool(r.get("capped")),
+            "cap": r.get("cap")}
+
+
 def _drift_entry(step: dict, attempted: dict, h: dict, page_path: str) -> dict:
     """One row of the drift report (ADR-071): what changed, where, and by which CLASS.
 
@@ -372,10 +401,22 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     drift_total = report["drift"]["rebind"] + report["drift"]["reground"]
     fail_on = _env_int("SENTINEL_FAIL_ON_HEAL", 0)   # 0 = off; N = fail when drifted elements >= N
     drift_fails = bool(fail_on) and drift_total >= fail_on
+    # ADR-072: the application's own faults reach the verdict. Before this, a run could report exit 0
+    # "PASSED" while the page threw exceptions and answered 5xx for the whole run — the events existed,
+    # in a log file nobody opens when the build is green.
+    faults = _app_faults(ex)
+    if faults:
+        report["app_faults"] = faults
+        log("app.faults_summary", total=faults["total"], errors=faults["errors"])
+    app_fail_on = _env_int("SENTINEL_FAIL_ON_APP_ERRORS", 0)   # 0 = off (default): report, do not gate
+    app_fails = bool(app_fail_on) and faults.get("errors", 0) >= app_fail_on
+    if app_fails:
+        report["app_faults"]["failed_build"] = True
+        report["app_faults"]["threshold"] = app_fail_on
     if baseline:
         report["exit_code"] = 0
     else:
-        report["exit_code"] = 2 if regressions else (1 if (failures or drift_fails) else 0)
+        report["exit_code"] = 2 if regressions else (1 if (failures or drift_fails or app_fails) else 0)
     if drift_fails:
         report["drift"]["failed_build"] = True
         report["drift"]["threshold"] = fail_on
@@ -386,8 +427,25 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     _verdict = {0: "pass", 1: "problem", 2: "regression", 3: "integrity"}.get(report["exit_code"], "problem")
     # ADR-071: a pass that needed healing is its own state. Reported on the verdict frame, so the co-pilot
     # timeline and any AG-UI consumer see it without reading heal-report.json.
-    if _verdict == "pass" and drift_total:
+    # Precedence when a run passes but is not clean: the APPLICATION misbehaving outranks our own test
+    # having drifted. A tester who sees both wants the app fault first — it is their bug, whereas drift
+    # is our maintenance. Both remain visible in the report either way.
+    if _verdict == "pass" and faults.get("errors"):
+        _verdict = "pass_with_app_faults"
+    elif _verdict == "pass" and drift_total:
         _verdict = "pass_with_drift"
+    # And when a threshold is what reddened the build, SAY WHICH. Plain "problem" sends the reader looking
+    # for a failed step that does not exist — a support burden this feature would otherwise create itself.
+    # Only when nothing else failed: a real step failure keeps the generic word, because then the step IS
+    # the story.
+    elif _verdict == "problem" and not failures:
+        if app_fails:
+            _verdict = "problem_app_faults"
+        elif drift_fails:
+            _verdict = "problem_drift"
+    # NOTE (PR-2): `ResultRecord.verdict` in the store is derived INDEPENDENTLY on the Go side from the
+    # exit code (`cmd/control-api/main.go::verdictEnum` -> pass|problem|regression|integrity), so the
+    # store still sees only the coarse four. Carrying these states across is part of the surfaces PR.
     report["verdict"] = _verdict
     if drift_total:
         log("heal.drift_summary", total=drift_total, rebind=report["drift"]["rebind"],
@@ -395,6 +453,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     _emit("verdict", run_id, verdict=_verdict, exit_code=report["exit_code"],
           healed=report["healed"], failed=failures,
           drift=drift_total, rebind=report["drift"]["rebind"],
-          reground=report["drift"]["reground"])
+          reground=report["drift"]["reground"],
+          app_faults=faults.get("total", 0), app_errors=faults.get("errors", 0))
     _write(report, run_dir)
     return report

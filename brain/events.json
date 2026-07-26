@@ -1110,6 +1110,29 @@
       "ru": "Сообщений от сайта слишком много — дальше не записываю (предел {cap})",
       "en": "Too many messages from the site — capturing stops here (cap {cap})"
     },
+    "app.faults_summary": {
+      "lvl": "warn",
+      "cat": "app",
+      "phase": "report",
+      "ru": "Проверяемое приложение сообщило о своих сбоях: всего {total}, из них ошибок {errors}",
+      "en": "The application under test reported its own faults: {total} total, {errors} of them errors",
+      "modules": [
+        "replay"
+      ],
+      "degrades": true,
+      "ru_verdict": "тест прошёл, но приложение сыпало ошибками — посмотрите вкладку Логи, источник «приложение»",
+      "en_verdict": "the test passed, but the application was throwing errors — see the Logs view, source \"application\""
+    },
+    "system.app_faults_unavailable": {
+      "lvl": "debug",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Счётчик сбоев приложения недоступен ({error}) — прогон не прерывается, просто без этой цифры",
+      "en": "The application fault tally is unavailable ({error}) — the run continues, just without that number",
+      "modules": [
+        "replay"
+      ]
+    },
     "test.step_passed": {
       "lvl": "info",
       "cat": "test",

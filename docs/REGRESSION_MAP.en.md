@@ -48,7 +48,8 @@ Conflating the three is the source of two concrete defects the product carried f
   a *test* repair. Backlog item `[PROD-HEAL-VERDICT]`.
 - **`PASSED` while the application threw exceptions.** `app.*` events reach the log and nowhere
   else. An *application* regression reaches neither the verdict nor the Results domain. Backlog item
-  `[PROD-VERDICT-APP]`.
+  Closed by **ADR-072**: the emitter keeps the tally (`browser.appFaults`), the verdict gained a
+  `pass_with_app_faults` state, and `SENTINEL_FAIL_ON_APP_ERRORS=N` reddens the build on request.
 
 Hence the rule for reading this map: **a row is only useful together with the "where reported"
 column.** Detecting and not saying is the same as not detecting.
@@ -137,11 +138,11 @@ The thing the product exists for.
 | a step did not execute | **yes** | `brain/replay.py` | **1** | verdict + step breakdown | — |
 | the page's accessibility tree changed | **yes, authoritatively** | `_a11y_hash` (`brain/replay.py:41`) — a hash of the ARIA snapshot; compared on **first** landing on a page, symmetrically in `baseline` and `replay`, so a later click cannot shift the golden | **2** | verdict + `regressions[]` | — |
 | the page screenshot changed | **yes, advisory** | a screenshot hash; by default it does **not** affect the exit code — cross-process render instability would otherwise produce false failures | unchanged (default) | `regressions[]` | `RISK-009` |
-| the application threw a JS exception | **yes, but not into the verdict** | `app.js_error`, emitted by `pw-executor/src/server.ts:79` | unchanged | **the Logs view only** | `[PROD-VERDICT-APP]` |
-| a console error/warning | same | `app.console_error` / `app.console_warn`, `server.ts:82-83` | unchanged | same | `[PROD-VERDICT-APP]` |
-| an application request failed | same | `app.request_failed`, `server.ts:87` | unchanged | same | `[PROD-VERDICT-APP]` |
-| the application answered 4xx/5xx | same | `app.http_error`, `server.ts:93` | unchanged | same | `[PROD-VERDICT-APP]` |
-| the application opened a dialog | same | `app.dialog`, `server.ts:96` | unchanged | same | `[PROD-VERDICT-APP]` |
+| the application threw a JS exception | **yes, and into the verdict (ADR-072)** | `app.js_error`, emitted by `pw-executor/src/server.ts:79`; the per-code tally comes from `browser.appFaults` and the brain files it under `app_faults` | `0` by default; `1` under `SENTINEL_FAIL_ON_APP_ERRORS=N` | the `pass_with_app_faults` verdict + `app_faults` in the report + `<system-err>` on the suite in `junit.xml` | — |
+| a console error/warning | same | `app.console_error` / `app.console_warn`, `server.ts:82-83` | same (⚠ warnings are NOT in `errors` — gating on them would make the feature unusable) | same | — |
+| an application request failed | same | `app.request_failed`, `server.ts:87` | same | same | — |
+| the application answered 4xx/5xx | same | `app.http_error`, `server.ts:93` | same | same | — |
+| the application opened a dialog | same | `app.dialog`, `server.ts:96` | same (not in `errors`) | same | — |
 | **the interface changed but the test healed** | **yes (ADR-071)** | the drift class is derived from whether the strategy is a member of the frozen `alternatives[]`: **re-bind** (same element by another key — repairing the test) versus **re-ground** (a new selector from the current page; nothing verifies element identity) — `brain/replay.py::_drift_entry` | `0` by default; `1` under `SENTINEL_FAIL_ON_HEAL=N` | the `pass_with_drift` verdict state + the AG-UI frame + `drift.elements[]` (before→after) + an "Interface drift" table in the HTML report | — |
 | **performance degraded** | **no** | only `duration_ms` for the whole run is measured | — | a metric | `[PROD-PERF]` |
 | **accessibility degraded** (52872 / WCAG 2.1 criteria) | **no** | the accessibility tree is used as a hash, not as a criterion: "changed" ≠ "became inaccessible" | — | — | `[PROD-A11Y]` |
@@ -205,10 +206,10 @@ guarantee".
 
 Each leads to a `BACKLOG.md` item:
 
-- `[PROD-VERDICT-APP]` — carry `app.*` through to the verdict and the Results domain; decide whether
-  a non-zero count affects the exit code (default: no, visibility only).
-- `[PROD-HEAL-VERDICT]` — UI drift as a first-class outcome: what, where, how; separate re-bind (the
-  same element by another key) from re-ground (a new selector) — they are different news.
+- ~~`[PROD-VERDICT-APP]`~~ — **closed (ADR-072)**. What remains is the surfaces PR: `ResultRecord.verdict`
+  in the store is derived independently on the Go side, so the new verdict states do not reach it yet.
+- ~~`[PROD-HEAL-VERDICT]`~~ — **the brain half is closed (ADR-071)**. Substantively still open:
+  **there is no identity verification for a re-ground** — drift is now visible, not verified.
 - `[PROD-CRAWL]` — measure exploration on a real 50+ page SPA, then redefine coverage.
 - `[PROD-VERSIONING]` — plan revisions, diff, rollback, golden history.
 - `[PROD-FLAKE-RATE]` — flake rate from run history.

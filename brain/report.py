@@ -121,7 +121,7 @@ def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
 
 
 def generate(run_dir: str) -> dict:
-    """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom."""
+    """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom, junit.xml."""
     rep = json.loads(open(os.path.join(run_dir, "heal-report.json")).read())
     with open(os.path.join(run_dir, "report.json"), "w") as f:
         json.dump(rep, f, indent=2)
@@ -129,4 +129,9 @@ def generate(run_dir: str) -> dict:
         f.write(_html(rep))
     with open(os.path.join(run_dir, "metrics.prom"), "w") as f:
         f.write(_metrics(rep))
-    return {"report.json": True, "report.html": True, "metrics.prom": True}
+    # ADR-073: JUnit XML is what every CI actually consumes. Written alongside the others rather than
+    # behind a flag — a reporter nobody enables is a reporter nobody has, and it costs one file.
+    from .junit import to_junit
+    with open(os.path.join(run_dir, "junit.xml"), "w") as f:
+        f.write(to_junit(rep))
+    return {"report.json": True, "report.html": True, "metrics.prom": True, "junit.xml": True}
