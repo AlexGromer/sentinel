@@ -103,9 +103,16 @@ def test_text_reground_flows_through_backend():
     he._backend = FakeBackend('{"css": "#login"}', supports_vision=False)
     r = he.heal(_ctx())
     assert ("complete", 200, 0) in he._backend.calls, he._backend.calls
-    # css prior 0.65 * 0.90 = 0.585 < FLAG 0.60 -> needs_review (locator omitted by the gate)
+    # The PROPERTY, not the arithmetic: a re-ground is never accepted outright. This used to assert the
+    # literal 0.585 (css prior 0.65 x the 0.90 overconfidence discount) against FLAG 0.60 — a 0.015
+    # margin — so changing the discount to 0.95 would have pushed an unverified LLM re-ground into the
+    # band that EXECUTES with every test still green. ADR-080 made the rule explicit; this asserts the
+    # rule. The numbers stay in the comment, where they explain rather than certify.
+    from brain.healing import AUTO, is_reground
+    assert is_reground("css"), "css must be classified as a re-ground"
+    assert r["outcome"] != "auto_healed", r
+    assert r["confidence"] < AUTO, r
     assert r["outcome"] == "needs_review", r
-    assert round(r["confidence"], 3) == 0.585, r
 
 
 if __name__ == "__main__":

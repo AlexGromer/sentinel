@@ -1868,9 +1868,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         +bi('элем.','elem.')+' <span style="color:var(--mut)">('+bi('по плану','from the plan')+' '+esc(d.rebind||0)
         +' · '+bi('заново с живой страницы','re-derived from the live page')+' '+esc(d.reground||0)+')</span></summary>'
         +'<div style="font-size:.86rem">'+els.map(function(e){
+          /* ADR-080: whether the heal was accepted outright or applied OPTIMISTICALLY. Both execute
+             (replay.py treats auto_healed/flagged/cache_hit alike), and until now the badge showed
+             them identically — so a repair the tool was not confident in read like one it was. */
+          var unsure = e.outcome && e.outcome !== 'auto_healed';
           return '<div>'+bi('шаг ','step ')+esc(e.step==null?'?':e.step)+' · <b>'+esc(e.name||'')+'</b> · '
             +(e.kind==='rebind'?bi('ключ из плана','key from the plan'):bi('заново с живой страницы','re-derived from the live page'))
-            +' · '+esc(e.strategy||'')+'</div>';
+            +' · '+esc(e.strategy||'')
+            +(unsure?' · <b style="color:var(--warn)">'+bi('применено без полной уверенности','applied without full confidence')
+                     +' ('+esc(e.outcome)+' '+esc(e.confidence==null?'?':e.confidence)+')</b>':'')
+            +'</div>';
         }).join('')+'</div></details>';
     }
     var a=report.app_faults||{};

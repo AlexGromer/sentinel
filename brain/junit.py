@@ -119,6 +119,10 @@ def to_junit(report: dict, *, suite: str = "sentinel") -> str:
             heal = s.get("heal") or {}
             line = (f"healed via {heal.get('strategy')} "
                     f"(confidence {heal.get('confidence')}, {heal.get('outcome')})")
+            # ADR-080: an optimistically-applied heal is not the same news as an accepted one, and CI
+            # reads these lines. Named in words rather than left to a reader who knows the thresholds.
+            if heal.get("outcome") and heal.get("outcome") != "auto_healed":
+                line += "\nAPPLIED WITHOUT FULL CONFIDENCE — verify this step before trusting the pass"
             if d:
                 line += f"\nclass: {d.get('kind')}\nlocator: {d.get('from')} -> {d.get('to')}"
             # A re-ground goes to stderr, a re-bind to stdout. Both cases PASSED, so neither is a failure —

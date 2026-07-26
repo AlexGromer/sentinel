@@ -21,6 +21,7 @@ import os
 
 from . import agui
 from . import eventlog
+from .healing import AUTO as _HEAL_AUTO
 from .eventlog import log
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
@@ -478,6 +479,20 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     if drift_total:
         log("heal.drift_summary", total=drift_total, rebind=report["drift"]["rebind"],
             reground=report["drift"]["reground"])
+    # ADR-080: heals that were APPLIED while below the auto-accept threshold. SELF_HEALING §194 says
+    # such a heal is applied optimistically AND marked for review; only the first half was ever built,
+    # so a run could repair itself with a locator it did not vouch for and read exactly like a clean
+    # one. Counted from the drift elements because every applied heal already lands there with its
+    # outcome and confidence (see the act path above) — no second bookkeeping to drift out of step.
+    #
+    # It rides the ADR-077 degradation channel rather than a new verdict word: a run can drift AND
+    # fault AND heal unverified at once, while the verdict is a single word, and `degrades` already
+    # reaches the hub badge, report.html and junit.xml without a new surface.
+    unverified = [d for d in report["drift"]["elements"]
+                  if d.get("confidence") is not None and float(d["confidence"]) < _HEAL_AUTO]
+    if unverified:
+        report["drift"]["unverified"] = len(unverified)
+        log("heal.applied_unverified", total=len(unverified), auto=_HEAL_AUTO)
     # ADR-077: collected LAST, after every log that could mean lost quality (drift_summary above and
     # app.faults_summary earlier both carry `degrades`). The catalogue has always known which codes mean
     # degradation and has always carried the sentence to print; until now nothing read it, so a run that
