@@ -17,6 +17,8 @@ from .eventlog import log
 from .llm import complete_structured, extract_json
 from .otel import prompt_hash, set_llm_tokens, span
 from .sanitize import safe_json, safe_text
+from .strategies import PRIORS as _PRIORS
+from .strategies import canonical, prior_for
 
 # Structured-output schema for the text re-grounding call (an INDEX into the live element list | none).
 # ADR-082 replaced a model-AUTHORED css selector with a choice among elements the executor actually
@@ -26,15 +28,12 @@ _SCHEMA_PICK = {"type": "object", "properties": {
     "index": {"type": "integer", "description": "0-based index of the element in current_elements"},
     "none": {"type": "boolean", "description": "true if no element matches the intent"}}}
 
-# Per-strategy base PRIORS (docs/SELF_HEALING.md). Keys match the `alternatives[].strategy` values.
-#
-# These are PRIORS, not probabilities. Nothing measures them: there is no confidence model, no
-# calibration, and no record of how often a strategy was right — a heal's number is looked up from this
-# table by strategy NAME and nothing else. Said plainly here because GAPS.md used to claim an adaptive
-# mechanism ("threshold 0.90 until N human-labelled outcomes") that was never built, and a reader who
-# believed it would trust these numbers far more than they deserve. ADR-080.
-PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text_role": 0.80, "css": 0.65,
-          "xpath": 0.45, "visual": 0.80}  # visual (set-of-marks) lands in the FLAGGED band by design
+# The strategy vocabulary and its priors live in `strategies.py` — one module, two producers
+# (graph.py's explorer and record_bridge's recorder) and this consumer. They used to hold private
+# copies, which is how `text` and `text_role` came to mean the same thing under two spellings, with
+# only one of them known here (ADR-083). Re-exported so `PRIORS` keeps its name at the call sites and
+# in the tests that raise a prior to create the future ADR-080 guards against.
+PRIORS = _PRIORS
 
 # The discount applied to a locator the MODEL chose rather than the plan froze. Not a new number: it is
 # the same 0.90 the css tier already applied, kept so ADR-082 introduces no uncalibrated constant.
@@ -69,8 +68,8 @@ def is_reground(strategy: str, alternatives=None) -> bool:
     A step that froze NO alternatives therefore vouches for nothing, and every key is a re-ground —
     which is the honest reading, not a degenerate one.
     """
-    frozen = {a.get("strategy") for a in (alternatives or []) if isinstance(a, dict)}
-    return strategy not in frozen
+    frozen = {canonical(a.get("strategy")) for a in (alternatives or []) if isinstance(a, dict)}
+    return canonical(strategy) not in frozen
 
 
 # --- identity: is the re-grounded element the one the plan meant? ----------------------------------
@@ -207,7 +206,7 @@ class HealingEngine:
         for alt in alts:
             strat, loc = alt.get("strategy"), alt.get("locator")
             if loc and self._probe(loc) == 1:
-                chosen = (strat, loc, PRIORS.get(strat, 0.5), None)
+                chosen = (strat, loc, prior_for(strat, alt.get("prior")), None)
                 break
 
         # 5. optional LLM re-grounding — only if deterministic rotation failed.

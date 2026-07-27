@@ -29,17 +29,20 @@ import sys
 from .eventlog import log
 from .scenario import VALID_VERBS, ground_scenario
 from .state import canonical_plan_hash, normalize_url, semantic_id
+from .strategies import prior_for as _prior_for
+from .strategies import STRATEGY_BY_LOCATOR_KEY as _STRATEGY_BY_KEY
+from .strategies import CSS as _CSS
 
 # DOM event type -> replay verb. `submit` is dropped: the user's click on the submit control is already
 # captured as its own `click` event, so replaying submit too would double-fire. An explicit event
 # `verb` (a smarter recorder can emit type/select/press) overrides this map.
 _VERB_BY_TYPE = {"click": "click", "input": "fill", "change": "fill", "submit": None}
 
-# Per-strategy priors for the alternatives list (mirrors healing.PRIORS; kept local so the bridge
-# stays import-light). Higher = more trustworthy locator strategy.
-_PRIORS = {"testid": 0.95, "role_name": 0.90, "label": 0.88, "text": 0.80, "css": 0.65, "xpath": 0.45}
-_STRATEGY_BY_KEY = {"testid": "testid", "role": "role_name", "label": "label",
-                    "text": "text", "css": "css", "xpath": "xpath"}
+# ADR-083: the vocabulary comes from `strategies.py` instead of a local mirror. The mirror is exactly
+# how this broke — it spelled the text strategy `text` while the explorer spelled it `text_role`, and
+# `healing.PRIORS` knew only the latter, so a recorded plan's text alternative fell to the
+# unknown-strategy default of 0.5 (below FLAG) and silently never healed. `strategies.py` is kept
+# import-light precisely so this file need not trade correctness for a cheap import.
 
 
 
@@ -48,7 +51,7 @@ def _infer_strategy(loc: dict) -> str:
     for k in ("testid", "role", "label", "text", "css", "xpath"):
         if k in loc:
             return _STRATEGY_BY_KEY[k]
-    return "css"
+    return _CSS
 
 
 def _norm_candidate(c):
@@ -77,7 +80,7 @@ def _resolve_locator(candidates):
     if not norm:
         return None
     _, primary = norm[0]
-    alternatives = [{"strategy": s, "locator": l, "prior": _PRIORS.get(s, 0.5)} for s, l in norm[1:]]
+    alternatives = [{"strategy": s, "locator": l, "prior": _prior_for(s)} for s, l in norm[1:]]
     role, name = "", ""
     for s, l in norm:                                   # role/name from the role_name candidate, if any
         if s == "role_name":

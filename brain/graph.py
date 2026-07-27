@@ -23,6 +23,7 @@ from . import agui, runcontrol
 from .otel import span
 from .eventlog import log
 from .state import RunState, normalize_url, semantic_id, canonical_plan_hash
+from . import strategies as S     # ADR-083: one vocabulary, shared with the recorder
 
 
 
@@ -87,13 +88,14 @@ def _elements_from_interactives(elements: list, path: str) -> list:
             continue
         alts = []
         if testid:
-            alts.append({"strategy": "testid", "locator": {"testid": testid}, "prior": 0.95})
+            alts.append({"strategy": S.TESTID, "locator": {"testid": testid}, "prior": S.PRIORS[S.TESTID]})
         if name:
-            alts.append({"strategy": "role_name", "locator": {"role": role, "name": name}, "prior": 0.90})
+            alts.append({"strategy": S.ROLE_NAME, "locator": {"role": role, "name": name},
+                         "prior": S.PRIORS[S.ROLE_NAME]})
         if role != "button" and e.get("label"):    # buttons stay byte-identical to the old cataloguer (plan_hash)
-            alts.append({"strategy": "label", "locator": {"label": e["label"]}, "prior": 0.88})
+            alts.append({"strategy": S.LABEL, "locator": {"label": e["label"]}, "prior": S.PRIORS[S.LABEL]})
         if text and text != name:
-            alts.append({"strategy": "text_role", "locator": {"text": text}, "prior": 0.80})
+            alts.append({"strategy": S.TEXT_ROLE, "locator": {"text": text}, "prior": S.PRIORS[S.TEXT_ROLE]})
         primary = {"role": role, "name": name} if name else (alts[0]["locator"] if alts else None)
         # M9-LIVE: `disabled` rides along so plan() can skip a control that cannot be actuated right
         # now. It is NOT used to drop the element from perception: the same button is usually enabled
