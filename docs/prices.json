@@ -1,5 +1,5 @@
 {
-  "_asof": "2026-07-13",
+  "_asof": "2026-07-27",
   "_source": "OpenRouter /api/v1/models (auto-refresh) + seeds for unmatched models",
   "_verify": "Illustrative, editable, NOT a claim of current cost. Verify via provider links; assistant cutoff Jan-2026, cloud figures re-verified 2026-07-04. Refreshed by .github/workflows/prices-refresh.yml (OpenRouter); unmatched models keep their seed. Keys mirror docs/index.html MODELS[].key.",
   "_note_sonnet5": "Sonnet 5 intro pricing 2/10 through 2026-08-31, then 3/15 standard from 2026-09-01.",
@@ -41,16 +41,16 @@
       "out": 4.4
     },
     "glm5": {
-      "in": 0.6,
-      "out": 1.92
+      "in": 0.95,
+      "out": 2.55
     },
     "glm47": {
       "in": 0.4,
       "out": 1.75
     },
     "dsflash": {
-      "in": 0.077,
-      "out": 0.154
+      "in": 0.14,
+      "out": 0.28
     },
     "dspro": {
       "in": 0.435,
