@@ -77,6 +77,21 @@ textarea{resize:vertical;min-height:3rem}
 .hide{display:none}
 .mut{color:var(--mut)} .warn{color:var(--warn)} .ok{color:var(--ok)}
 .hint{color:var(--mut);font-size:.78rem;margin-top:.2rem}
+/* ADR-086: collapsible per-field help, in the shape OPNsense uses — a small marker beside the label,
+   the text folded away until asked for, plus one switch that opens every one of them at once. Folded
+   BY DEFAULT on purpose: a form where every field carries a paragraph is as unreadable as a form that
+   explains nothing, and the reader who already knows the field should not have to scroll past the
+   explanation. <details> rather than a div+class, so keyboard and screen readers get the behaviour
+   from the platform instead of from our JavaScript. */
+.fhelp{display:inline;margin-left:.35rem}
+.fhelp>summary{display:inline;list-style:none;cursor:pointer;color:var(--acc);font-size:.72rem;
+  border:1px solid var(--line);border-radius:999px;padding:0 .32rem;user-select:none}
+.fhelp>summary::-webkit-details-marker{display:none}
+.fhelp>summary:hover{background:var(--bg2)}
+.fhelp[open]>summary{background:var(--bg2)}
+.fhelp .fhelp-body{display:block;color:var(--mut);font-size:.78rem;margin:.25rem 0 .1rem;
+  border-left:2px solid var(--line);padding-left:.5rem}
+.helpbar{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--mut);margin:.2rem 0 .6rem}
 
 /* validation */
 .err{color:var(--no);font-size:.78rem;margin-top:.2rem;min-height:0}
@@ -134,6 +149,11 @@ details a{color:var(--acc2)}
   <button type="button" class="subtab-btn" data-subtab="params" role="tab" aria-selected="false">3 · <span data-lang="ru">Параметры прогона</span><span data-lang="en">Run params</span></button>
   <button type="button" class="subtab-btn" data-subtab="review" role="tab" aria-selected="false">4 · <span data-lang="ru">Проверка и запуск</span><span data-lang="en">Review &amp; run</span></button>
 </div>
+
+<!-- ADR-086: OPNsense-style "show all help" — one switch that unfolds every per-field
+     explanation at once, remembered across visits. Folded is the default: a form where every field
+     carries a paragraph is as unreadable as one that explains nothing. -->
+<div data-helpbar></div>
 
 <div id="draftnote" class="errbox hide" style="border-color:var(--line);background:var(--bg2)">
   <span data-lang="ru">Восстановлен сохранённый черновик (секреты не хранятся).</span>
@@ -699,8 +719,117 @@ function renderNumFields() {
     inp.addEventListener('input', onInput);
     var err = document.createElement('div'); err.className = 'err'; err.id = 'e-' + fieldId(k); err.setAttribute('aria-live', 'polite');
     box.appendChild(lab); box.appendChild(inp); box.appendChild(err);
+    if (d.hint) attachHelp(lab, d.hint.ru || '', d.hint.en || '', 'f-' + k);
     host.appendChild(box);
   });
+}
+
+/* ADR-086: attach collapsible help to a field. `host` is the element the marker goes after (a label);
+   the body is inserted as a sibling so it occupies its own line when opened.
+
+   The text is BILINGUAL and both variants are rendered, each in its own <span data-lang>, driven by
+   the page's existing language switch — the same mechanism the static markup uses. Building the
+   string with tr() at render time would freeze the choice made when the field was created, and the
+   language switch would then leave these blocks behind in the old language. */
+function attachHelp(host, ru, en, key) {
+  if (!host || (!ru && !en)) return null;
+  var d = document.createElement('details');
+  d.className = 'fhelp';
+  if (key) d.setAttribute('data-help', key);
+  var sum = document.createElement('summary');
+  sum.setAttribute('aria-label', tr('Подсказка', 'Help'));
+  sum.textContent = '?';
+  var body = document.createElement('span');
+  body.className = 'fhelp-body';
+  var sru = document.createElement('span'); sru.setAttribute('data-lang', 'ru'); sru.textContent = ru || en;
+  var sen = document.createElement('span'); sen.setAttribute('data-lang', 'en'); sen.textContent = en || ru;
+  body.appendChild(sru); body.appendChild(sen);
+  d.appendChild(sum); d.appendChild(body);
+  host.appendChild(d);
+  // No language call needed: both variants are in the DOM and the page shows one of them by a
+  // body-level `lang-ru`/`lang-en` class. A help block created at any time follows the current
+  // language for free — which is exactly why both spans are rendered instead of one tr() string.
+  return d;
+}
+
+/* One switch that opens or folds every help block on the page — the OPNsense "show all help" idiom.
+   The choice is remembered, because a person who wants explanations wants them on the next visit too. */
+var HELP_KEY = 'sentinel_help_open';
+function helpAllOpen() {
+  try { return localStorage.getItem(HELP_KEY) === '1'; } catch (e) { return false; }
+}
+function setHelpAll(open) {
+  try { localStorage.setItem(HELP_KEY, open ? '1' : '0'); } catch (e) {}
+  Array.prototype.forEach.call(document.querySelectorAll('details.fhelp'), function (d) { d.open = open; });
+  var cb = $('helpall');
+  if (cb) cb.checked = open;
+}
+function renderHelpBar() {
+  var hosts = document.querySelectorAll('[data-helpbar]');
+  Array.prototype.forEach.call(hosts, function (h) {
+    if (h.querySelector('#helpall')) return;
+    var box = document.createElement('label');
+    box.className = 'helpbar';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.id = 'helpall'; cb.checked = helpAllOpen();
+    cb.addEventListener('change', function () { setHelpAll(cb.checked); });
+    var txt = document.createElement('span');
+    var ru = document.createElement('span'); ru.setAttribute('data-lang', 'ru'); ru.textContent = 'Показать все подсказки';
+    var en = document.createElement('span'); en.setAttribute('data-lang', 'en'); en.textContent = 'Show all help';
+    txt.appendChild(ru); txt.appendChild(en);
+    box.appendChild(cb); box.appendChild(txt);
+    h.appendChild(box);
+  });
+}
+
+/* Help for the STATIC fields. The generated ones (numeric params, settings, role models) carry their
+   own text from the schema; these are the hand-written inputs, and they were the ones explaining
+   nothing at all. Text is deliberately about CONSEQUENCE ("what happens if I change this") rather
+   than restating the label — a hint that repeats the field name is the same silence with more words. */
+var FIELD_HELP = {
+  target:   ['Адрес, который инструмент откроет и будет исследовать. Поддерживаются http(s):// и file:// — на file:// удобно попробовать инструмент на тестовых страницах из testdata/fixtures.',
+             'The address the tool opens and explores. http(s):// and file:// are both accepted — file:// is the easy way to try the tool against the pages in testdata/fixtures.'],
+  mode:     ['Что делает прогон: explore — сам обходит приложение и строит план; goal/describe — строит план из вашего описания; replay — детерминированно повторяет замороженный план; baseline — обновляет эталоны; chat — многоходовой диалог.',
+             'What the run does: explore walks the app and builds a plan; goal/describe build a plan from your description; replay re-runs a frozen plan deterministically; baseline updates the goldens; chat is a multi-turn conversation.'],
+  planner:  ['Кто решает, куда идти дальше: heuristic — детерминированный обход без ИИ (бесплатно и воспроизводимо); llm/goal — модель выбирает следующий шаг из РЕАЛЬНЫХ элементов страницы, выдумать селектор она не может.',
+             'Who decides the next step: heuristic is a deterministic walk with no AI (free and reproducible); llm/goal let the model choose among the page\u2019s REAL elements — it cannot invent a selector.'],
+  preset:   ['Готовая заготовка настроек провайдера. Внимание: реальные сервисы в docker-compose есть только у ollama и litellm; остальные — это ЗАГОТОВКИ, в них надо подставить свой адрес.',
+             'A ready-made provider profile. Note: only ollama and litellm have a real docker-compose service here; the rest are PLACEHOLDERS whose address you must replace.'],
+  backend:  ['anthropic — родное облако Anthropic. openai — ЛЮБОЙ OpenAI-совместимый эндпоинт: Ollama, vLLM, LiteLLM, DeepSeek, OpenRouter. Именно через него работает локальная и air-gapped установка.',
+             'anthropic is Anthropic\u2019s own cloud. openai is ANY OpenAI-compatible endpoint: Ollama, vLLM, LiteLLM, DeepSeek, OpenRouter — this is the seam a local or air-gapped install runs through.'],
+  baseurl:  ['Адрес OpenAI-совместимого эндпоинта, оканчивающийся на /v1. Имена вида ollama или litellm работают ВНУТРИ docker-compose; с хоста используйте localhost и проброшенный порт.',
+             'The OpenAI-compatible endpoint, ending in /v1. Hostnames like ollama or litellm resolve INSIDE docker-compose; from the host use localhost and the published port.'],
+  apikey:   ['Ключ провайдера. Он НЕ сохраняется этой страницей и не уходит с неё — попадает только в текст, который вы копируете себе. Многие локальные эндпоинты ключа не проверяют, но SDK требует непустую строку.',
+             'The provider key. It is NOT stored by this page and never leaves it — it only appears in the text you copy. Many local endpoints ignore the key, but the SDK requires a non-empty string.'],
+  vision:   ['Разрешает отправлять модели скриншоты. Нужно для починки по картинке, когда сломались все текстовые ключи. Включайте только если модель действительно умеет смотреть на изображения.',
+             'Lets the tool send screenshots to the model. Needed for repairing an element visually when every text key has broken. Turn it on only if the model can actually see images.'],
+  structured: ['Разрешает строгий JSON-ответ по схеме. Многие локальные эндпоинты его отвергают — тогда оставьте выключенным, инструмент разберёт ответ сам.',
+             'Allows strict schema-constrained JSON. Many local endpoints reject it — leave it off and the tool will parse the reply itself.'],
+  loginplan: ['План входа: отдельный прогон, который логинится и сохраняет сессию, чтобы основные прогоны не вводили пароль заново.',
+             'The login plan: a separate run that signs in and saves the session, so ordinary runs never type the password again.'],
+  ss:       ['Файл сохранённой сессии, который прогон ЧИТАЕТ. Пароль при этом не вводится, поэтому в трейс он попасть не может.',
+             'The saved-session file a run READS. No password is typed, so none can reach the trace.'],
+  sss:      ['Куда записать сессию после успешного входа. Файл содержит живые cookies — он создаётся с правами 0600 (ADR-084), но всё равно относитесь к нему как к паролю.',
+             'Where to write the session after a successful login. The file holds live cookies — it is created 0600 (ADR-084), but treat it like a password anyway.'],
+  pwnotrace: ['Полностью отключает запись трейса. Обязательно для прогона, который ВВОДИТ пароль: трейс сохраняет содержимое полей и тела запросов, а маскировать их Playwright не умеет (GAP-RISK-010).',
+             'Disables trace recording entirely. Mandatory for a run that TYPES a password: a trace captures field values and request bodies, and Playwright has no way to mask them (GAP-RISK-010).'],
+  capi:     ['Адрес control-API, если вы хотите сохранить конфигурацию на сервер, а не копировать её руками.',
+             'The control-API address, if you want to save the configuration to the server instead of copying it by hand.'],
+  capitok:  ['Токен доступа к control-API. Как и ключ модели, он не сохраняется этой страницей.',
+             'The control-API token. Like the model key, it is not stored by this page.'],
+  goal:     ['Опишите словами, чего добиться — например «войти и оплатить счёт». Инструмент СНАЧАЛА обойдёт приложение, а потом соберёт план только из реально увиденных элементов.',
+             'Describe the outcome in words — "log in and pay an invoice", say. The tool explores FIRST and then assembles a plan only from elements it actually saw.'],
+  describe: ['Опишите готовый сценарий по шагам. Каждый шаг будет привязан к реальному элементу; шаг, которому не нашлось элемента, попадёт в отчёт как несвязанный, а не будет выдуман.',
+             'Describe a scenario step by step. Each step is bound to a real element; a step with no match is reported as unmatched rather than invented.']
+};
+function renderFieldHelp() {
+  Object.keys(FIELD_HELP).forEach(function (id) {
+    var lab = document.querySelector('label[for="' + id + '"]');
+    if (!lab || lab.querySelector('details.fhelp')) return;
+    attachHelp(lab, FIELD_HELP[id][0], FIELD_HELP[id][1], id);
+  });
+  renderHelpBar();
+  if (helpAllOpen()) setHelpAll(true);
 }
 
 /* ADR-085: operator SETTINGS — retention, healing thresholds, build gates, HITL. Generated entirely
@@ -867,6 +996,7 @@ function renderSchemaDriven() {
   renderRoleModels();
   renderNumFields();
   renderSettings();
+  renderFieldHelp();
   sync();
 }
 
