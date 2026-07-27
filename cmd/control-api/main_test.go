@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -796,6 +797,91 @@ func TestRunArtifactReplayOutputs(t *testing.T) {
 		s.mux().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok"`) {
 			t.Fatalf("artifact %s: got %d body=%s", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestSettingsSchemaDefaultsMatchCode: a settings descriptor states a default, and the code that reads
+// the variable states one too. Two numbers for one decision drift — and this one drifts SILENTLY, since
+// a wrong default in the wizard is indistinguishable from a right one until someone compares behaviour
+// against the form. So the schema is checked against the source that actually reads each variable.
+//
+// Text-matched rather than executed: the readers live in three languages (Go agentctl, Python brain) and
+// several are package-private, so importing them here is not possible. A grep-shaped assertion is weaker
+// than a call, and it is what is available — but it is strictly stronger than no assertion, which is
+// what guarded these numbers before.
+func TestSettingsSchemaDefaultsMatchCode(t *testing.T) {
+	repo := filepath.Join("..", "..")
+	// env -> the literal that must appear next to it where the code reads it.
+	want := map[string]string{
+		"SENTINEL_LOG_KEEP":            "0",
+		"SENTINEL_LOG_TTL_HOURS":       "0",
+		"SENTINEL_TRACE_KEEP":          "10",
+		"SENTINEL_TRACE_TTL_HOURS":     "0",
+		"SENTINEL_HEAL_AUTO":           "0.85",
+		"SENTINEL_HEAL_FLAG":           "0.60",
+		"SENTINEL_FAIL_ON_HEAL":        "0",
+		"SENTINEL_FAIL_ON_APP_ERRORS":  "0",
+		"SENTINEL_AUTO_HITL_THRESHOLD": "0",
+		"SENTINEL_TAKEOVER_TIMEOUT":    "1800",
+	}
+	sources := []string{
+		filepath.Join(repo, "cmd", "agentctl", "main.go"),
+		filepath.Join(repo, "brain", "healing.py"),
+		filepath.Join(repo, "brain", "replay.py"),
+		filepath.Join(repo, "brain", "graph.py"),
+		filepath.Join(repo, "brain", "__main__.py"),
+	}
+	var blob string
+	for _, f := range sources {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("reading %s: %v", f, err)
+		}
+		blob += string(b)
+	}
+	if len(blob) < 1000 {
+		t.Fatal("sources came back empty — every assertion below would be vacuous")
+	}
+
+	for name, d := range settingsSchema {
+		desc, ok := d.(map[string]any)
+		if !ok {
+			t.Fatalf("settings.%s is not a descriptor", name)
+		}
+		env, _ := desc["env"].(string)
+		if env == "" {
+			t.Fatalf("settings.%s has no env", name)
+		}
+		if _, hasDefault := desc["default"]; !hasDefault {
+			t.Fatalf("settings.%s has no default — the wizard would render an empty field", name)
+		}
+		hint, ok := desc["hint"].(map[string]string)
+		if !ok || hint["ru"] == "" || hint["en"] == "" {
+			// The whole point of surfacing a setting is that a person can tell what it does, and the
+			// wizard is bilingual — a one-language hint would code-switch the interface (ADR-061).
+			t.Fatalf("settings.%s needs a bilingual hint, got %v", name, desc["hint"])
+		}
+		lit, checked := want[env]
+		if !checked {
+			continue // a variable whose reader lives outside the files above (e.g. TypeScript)
+		}
+		// Both directions, and the first one is the one that matters. Checking only that the code
+		// contains `lit` compares this test's own table against the code and never looks at the
+		// schema at all — the descriptor could say anything. Caught by mutating the schema and
+		// watching the test stay green.
+		// Compared as NUMBERS: Go prints 0.6 where the Python reader spells 0.60, and those are the
+		// same default. A string comparison would report a difference that does not exist, and the
+		// usual cure for a noisy check is to delete it.
+		got := fmt.Sprintf("%v", desc["default"])
+		gotF, gotErr := strconv.ParseFloat(got, 64)
+		litF, litErr := strconv.ParseFloat(lit, 64)
+		same := got == lit || (gotErr == nil && litErr == nil && gotF == litF)
+		if !same {
+			t.Errorf("settings.%s: schema default %s, but %s is read with %s", name, got, env, lit)
+		}
+		if !strings.Contains(blob, `"`+env+`", `+lit) && !strings.Contains(blob, `"`+env+`", "`+lit+`"`) {
+			t.Errorf("settings.%s: no reader of %s uses %s — this test's table is stale", name, env, lit)
 		}
 	}
 }
