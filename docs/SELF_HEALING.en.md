@@ -117,7 +117,14 @@ or, if no element could plausibly serve the step's purpose:
 Since **ADR-082** the model chooses among elements the executor actually reported instead of
 authoring a CSS selector — the grounding rule the planner has always followed (ADR-022/027,
 `candidates[idx]`). An out-of-range index is discarded, so no reply can produce a locator for an
-element nobody observed. The chosen element's own descriptor becomes the locator (`testid`, else
+element nobody observed.
+
+Reach is unchanged in practice. An explore-authored plan cannot contain an element outside the
+executor's perception, because the site map is built from that same `browser.interactives`. A
+RECORDED plan can (`record_bridge.py` infers the strategy from whatever key the recorder observed,
+including `css`/`xpath`) — but the old tier could not repair such an element either: it scored 0.585
+against FLAG 0.60 and landed in `needs_review`, so the step was never applied. What narrowed is
+unreachable reach, not reachable reach. The chosen element's own descriptor becomes the locator (`testid`, else
 `role`+`name`) and is what Step 7's identity check compares against the frozen locator.
 
 The prompt asks which element now serves the SAME PURPOSE, not which one "matches the intent".
