@@ -125,9 +125,17 @@ def to_junit(report: dict, *, suite: str = "sentinel") -> str:
                 line += "\nAPPLIED WITHOUT FULL CONFIDENCE — verify this step before trusting the pass"
             if d:
                 line += f"\nclass: {d.get('kind')}\nlocator: {d.get('from')} -> {d.get('to')}"
+                # ADR-082: a re-ground now carries a verdict on whether it is the same element, and CI
+                # output is where a reviewer meets it. `contradicted` is not a failure — the step ran
+                # and passed — but it is the one line worth reading in a green build.
+                if d.get("identity"):
+                    line += f"\nidentity: {d['identity']}"
+                if d.get("identity") == "contradicted":
+                    line += ("\nIDENTITY CONTRADICTED — the element found is not the one the plan "
+                             "froze; check whether it was renamed or replaced")
             # A re-ground goes to stderr, a re-bind to stdout. Both cases PASSED, so neither is a failure —
-            # but "we chose a new selector and did not verify it is the same element" is exactly the kind of
-            # thing a reviewer should see without opening another artifact.
+            # but "we chose a new key and its identity was not confirmed" is exactly the kind of thing a
+            # reviewer should see without opening another artifact.
             tag = "system-err" if d.get("kind") == "reground" else "system-out"
             ET.SubElement(tc, tag).text = line
 

@@ -77,6 +77,13 @@ def _html(rep: dict) -> str:
                             + html.escape(str(d.get("outcome") or "")) + "</span>"
                             if d.get("outcome") != "auto_healed"
                             else html.escape(str(d.get("outcome") or ""))) + "</td>"
+                # ADR-082: WHETHER IT IS THE SAME ELEMENT — the question the "locator: frozen -> used"
+                # column raises and could not answer. A re-bind has no claim to make and shows a dash,
+                # rather than an empty cell a reader would read as missing data.
+                + "<td>" + (html.escape(str(d.get("identity")))
+                            if d.get("identity") == "verified"
+                            else ("<span class='unverified'>" + html.escape(str(d.get("identity")))
+                                  + "</span>" if d.get("identity") else "&mdash;")) + "</td>"
                 + "<td><code>" + html.escape(json.dumps(d.get("from"), ensure_ascii=False)) + "</code>"
                 + " &rarr; <code>" + html.escape(json.dumps(d.get("to"), ensure_ascii=False))
                 + "</code></td></tr>")
@@ -87,7 +94,8 @@ def _html(rep: dict) -> str:
             "<h2>Interface drift</h2><p>re-bound " + str(drift.get("rebind", 0))
             + " · re-grounded <span class='reground'>" + str(drift.get("reground", 0)) + "</span>"
             + note + "</p><table><thead><tr><th>#</th><th>class</th><th>element</th>"
-            + "<th>strategy (conf.)</th><th>accepted as</th><th>locator: frozen &rarr; used</th></tr></thead><tbody>"
+            + "<th>strategy (conf.)</th><th>accepted as</th><th>identity</th>"
+            + "<th>locator: frozen &rarr; used</th></tr></thead><tbody>"
             + "".join(drows) + "</tbody></table>")
     # ADR-077: what the run LOST. The codes are resolved to the catalogue's verdict sentences, not the
     # log phrasing — a reader of the report is asking "what does this mean for the result?", which is a

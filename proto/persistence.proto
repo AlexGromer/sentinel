@@ -42,6 +42,11 @@ message AuditRow {
   double confidence = 8;
   string outcome = 9;
   string dom_hash = 10;
+  // ADR-082: verified | contradicted | unverifiable on a re-ground; EMPTY on a re-bind, because a key
+  // the plan froze was never in question and a filled-in "unverifiable" there would invent a doubt the
+  // run does not have. Empty is also what every pre-ADR-082 row carries, and the two are the same
+  // statement — "no identity claim" — so a reader needs no migration date to interpret the column.
+  string identity = 11;
 }
 message AuditRowsReply { repeated AuditRow rows = 1; }
 
