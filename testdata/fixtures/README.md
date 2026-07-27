@@ -15,6 +15,7 @@ All files work as `file://` targets. No CDN or external network requests.
 | `l6-newtab.html` | L6 — Multi-tab | M9.4: browser multi-page tracking (A6) + in-app tab perception (A5) | `target=_blank` link + `window.open()` button (new browser tabs → `browser.tabs`/`browser.switchTab`); a `role=tablist/tab/tabpanel` widget (`[role=tab]` now surfaced by `browser.interactives`) |
 | `l7-appfaults.html` | L7 — A misbehaving app | ADR-067: the application's OWN faults (console errors, a failing fetch, an uncaught throw) reach the log as `app.*` and must NOT be blamed on the tool | 8 identical `console.error` lines (the log view's collapsing case), a 404 fetch the page swallows, handlers that throw |
 | `l8-blindspots.html` | L8 — What we cannot see | ADR-093: every remaining perception blind spot, so the boundary is MEASURED rather than asserted. `browser.perceptionAudit` must report `ratio < 1.0` here and name each zone | §1 `[onclick]`/`[tabindex]`/`contenteditable`/clickable ARIA roles (→ `unseen.outside_selector` = 5) · §2 a button drawn on `<canvas>` (→ `opaque.canvas`) · §3 a **closed** shadow root (→ `opaque.shadow_roots_closed`; the open case is NOT a blind spot — see `l5.html`) · §4 a virtualised list (counted by nothing, deliberately) · §5 controls off screen by each of the two mechanisms — a collapsed box and `visibility:hidden`, whose box stays full size |
+| `l9-roles.html` | L9 — One control per ARIA role | ADR-094: the role model. `browser.interactives` must report the role the ACCESSIBILITY TREE has, not the tag name — the two differ for most of this page | §1 an explicit `role` attribute overriding the tag (`<button role=tab>`, `<a role=button>`, `<a role=tab>`, `<div role=button>`) · §2 `<input>` as eight roles chosen by `type` (textbox / searchbox / checkbox / radio / spinbutton / slider / button) · §3 tags whose implicit role is not their name (`a[href]`→link, `select`→combobox, `select[multiple]`→**listbox**) · §4 an element with NO role (`input[type=hidden]`, carrying a testid on purpose so it is dropped for the reason the test names) |
 
 ## Demo Credentials
 
@@ -37,6 +38,7 @@ testdata/fixtures/
   l6-newtab.html        L6 new browser tab (target=_blank / window.open) + in-app tabs
   l7-appfaults.html     L7 an application that misbehaves (ADR-067)
   l8-blindspots.html    L8 what perception cannot reach (ADR-093)
+  l9-roles.html         L9 one control per ARIA role (ADR-094)
   README.md             this file
 ```
 
