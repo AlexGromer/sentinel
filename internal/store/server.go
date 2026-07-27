@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS healed_locators (
 );
 CREATE TABLE IF NOT EXISTS healing_audit (
   run_id TEXT, step INTEGER, semantic_id TEXT, page_path TEXT, strategy TEXT,
-  original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL
+  original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL,
+  identity TEXT
 );
 CREATE TABLE IF NOT EXISTS golden_snapshots (
   page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL, mac TEXT
@@ -110,6 +111,9 @@ func New(path string) (*Server, error) {
 	if _, err = db.Exec(storeSchema); err != nil { // M13: the 5 StoreService domains
 		return nil, err
 	}
+	if err = ensureColumn(db, "healing_audit", "identity"); err != nil { // ADR-082: pre-identity DBs
+		return nil, err
+	}
 	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)
 		return nil, err
 	}
@@ -162,6 +166,43 @@ func (s *Server) backfillGoldenMACs() error {
 		}
 	}
 	return nil
+}
+
+// ensureColumn adds `col TEXT` to `table` when it is missing — the idempotent ALTER that a schema
+// built from CREATE TABLE IF NOT EXISTS needs, since that statement does nothing to a table which
+// already exists. ADR-082 generalised the pattern rather than copying ensureGoldenMacColumn a second
+// time: this DDL is duplicated verbatim in brain/store.py with no parity gate between them, so every
+// extra hand-written copy is one more place the two languages can silently disagree.
+//
+// `table` and `col` are compile-time literals from this package — never user input — because SQLite
+// cannot parameterise identifiers and a string-formatted DDL would otherwise be an injection site.
+func ensureColumn(db *sql.DB, table, col string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == col {
+			has = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + col + " TEXT")
+	return err
 }
 
 // ensureGoldenMacColumn adds the `mac` column to a golden_snapshots table created before #24.
@@ -291,8 +332,8 @@ func (s *Server) AppendAudit(_ context.Context, a *pb.AuditRow) (*pb.Empty, erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		"INSERT INTO healing_audit(run_id,step,semantic_id,page_path,strategy,original,healed,confidence,outcome,dom_hash,ts) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-		a.RunId, a.Step, a.SemanticId, a.PagePath, a.Strategy, a.Original, a.Healed, a.Confidence, a.Outcome, a.DomHash, now())
+		"INSERT INTO healing_audit(run_id,step,semantic_id,page_path,strategy,original,healed,confidence,outcome,dom_hash,ts,identity) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+		a.RunId, a.Step, a.SemanticId, a.PagePath, a.Strategy, a.Original, a.Healed, a.Confidence, a.Outcome, a.DomHash, now(), a.Identity)
 	return &pb.Empty{}, err
 }
 
@@ -414,7 +455,7 @@ func (s *Server) ClearQuarantine(_ context.Context, _ *pb.Empty) (*pb.Count, err
 }
 
 func (s *Server) AuditRows(_ context.Context, _ *pb.Empty) (*pb.AuditRowsReply, error) {
-	rows, err := s.db.Query("SELECT strategy,outcome,confidence FROM healing_audit")
+	rows, err := s.db.Query("SELECT strategy,outcome,confidence,COALESCE(identity,'') FROM healing_audit")
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +463,9 @@ func (s *Server) AuditRows(_ context.Context, _ *pb.Empty) (*pb.AuditRowsReply, 
 	reply := &pb.AuditRowsReply{}
 	for rows.Next() {
 		a := &pb.AuditRow{}
-		if err := rows.Scan(&a.Strategy, &a.Outcome, &a.Confidence); err != nil {
+		// COALESCE, not a NullString: rows written before ADR-082 have identity NULL, and "no identity
+		// claim" is exactly what the empty string means here — so the two collapse on purpose.
+		if err := rows.Scan(&a.Strategy, &a.Outcome, &a.Confidence, &a.Identity); err != nil {
 			return nil, err
 		}
 		reply.Rows = append(reply.Rows, a)

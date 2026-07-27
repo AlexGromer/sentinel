@@ -284,17 +284,22 @@ func (x *EvictRequest) GetCurrentHash() string {
 }
 
 type AuditRow struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Step          int64                  `protobuf:"varint,2,opt,name=step,proto3" json:"step,omitempty"`
-	SemanticId    string                 `protobuf:"bytes,3,opt,name=semantic_id,json=semanticId,proto3" json:"semantic_id,omitempty"`
-	PagePath      string                 `protobuf:"bytes,4,opt,name=page_path,json=pagePath,proto3" json:"page_path,omitempty"`
-	Strategy      string                 `protobuf:"bytes,5,opt,name=strategy,proto3" json:"strategy,omitempty"`
-	Original      string                 `protobuf:"bytes,6,opt,name=original,proto3" json:"original,omitempty"`
-	Healed        string                 `protobuf:"bytes,7,opt,name=healed,proto3" json:"healed,omitempty"`
-	Confidence    float64                `protobuf:"fixed64,8,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	Outcome       string                 `protobuf:"bytes,9,opt,name=outcome,proto3" json:"outcome,omitempty"`
-	DomHash       string                 `protobuf:"bytes,10,opt,name=dom_hash,json=domHash,proto3" json:"dom_hash,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Step       int64                  `protobuf:"varint,2,opt,name=step,proto3" json:"step,omitempty"`
+	SemanticId string                 `protobuf:"bytes,3,opt,name=semantic_id,json=semanticId,proto3" json:"semantic_id,omitempty"`
+	PagePath   string                 `protobuf:"bytes,4,opt,name=page_path,json=pagePath,proto3" json:"page_path,omitempty"`
+	Strategy   string                 `protobuf:"bytes,5,opt,name=strategy,proto3" json:"strategy,omitempty"`
+	Original   string                 `protobuf:"bytes,6,opt,name=original,proto3" json:"original,omitempty"`
+	Healed     string                 `protobuf:"bytes,7,opt,name=healed,proto3" json:"healed,omitempty"`
+	Confidence float64                `protobuf:"fixed64,8,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Outcome    string                 `protobuf:"bytes,9,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	DomHash    string                 `protobuf:"bytes,10,opt,name=dom_hash,json=domHash,proto3" json:"dom_hash,omitempty"`
+	// ADR-082: verified | contradicted | unverifiable on a re-ground; EMPTY on a re-bind, because a key
+	// the plan froze was never in question and a filled-in "unverifiable" there would invent a doubt the
+	// run does not have. Empty is also what every pre-ADR-082 row carries, and the two are the same
+	// statement — "no identity claim" — so a reader needs no migration date to interpret the column.
+	Identity      string `protobuf:"bytes,11,opt,name=identity,proto3" json:"identity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -395,6 +400,13 @@ func (x *AuditRow) GetOutcome() string {
 func (x *AuditRow) GetDomHash() string {
 	if x != nil {
 		return x.DomHash
+	}
+	return ""
+}
+
+func (x *AuditRow) GetIdentity() string {
+	if x != nil {
+		return x.Identity
 	}
 	return ""
 }
@@ -793,7 +805,7 @@ const file_persistence_proto_rawDesc = "" +
 	"\tpage_path\x18\x01 \x01(\tR\bpagePath\x12\x1f\n" +
 	"\vsemantic_id\x18\x02 \x01(\tR\n" +
 	"semanticId\x12!\n" +
-	"\fcurrent_hash\x18\x03 \x01(\tR\vcurrentHash\"\x98\x02\n" +
+	"\fcurrent_hash\x18\x03 \x01(\tR\vcurrentHash\"\xb4\x02\n" +
 	"\bAuditRow\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\x03R\x04step\x12\x1f\n" +
@@ -808,7 +820,8 @@ const file_persistence_proto_rawDesc = "" +
 	"confidence\x12\x18\n" +
 	"\aoutcome\x18\t \x01(\tR\aoutcome\x12\x19\n" +
 	"\bdom_hash\x18\n" +
-	" \x01(\tR\adomHash\"G\n" +
+	" \x01(\tR\adomHash\x12\x1a\n" +
+	"\bidentity\x18\v \x01(\tR\bidentity\"G\n" +
 	"\x0eAuditRowsReply\x125\n" +
 	"\x04rows\x18\x01 \x03(\v2!.sentinel.persistence.v1.AuditRowR\x04rows\"\x7f\n" +
 	"\x06Golden\x12\x19\n" +

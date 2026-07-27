@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS healed_locators (
 );
 CREATE TABLE IF NOT EXISTS healing_audit (
   run_id TEXT, step INTEGER, semantic_id TEXT, page_path TEXT, strategy TEXT,
-  original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL
+  original TEXT, healed TEXT, confidence REAL, outcome TEXT, dom_hash TEXT, ts REAL,
+  identity TEXT
 );
 CREATE TABLE IF NOT EXISTS golden_snapshots (
   page_key TEXT PRIMARY KEY, a11y_hash TEXT, screenshot_hash TEXT, created_at REAL, mac TEXT
@@ -84,6 +85,7 @@ class LocalStore:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
         self._ensure_golden_mac_column()  # #24: migrate pre-integrity DBs (no mac column)
+        self._ensure_audit_identity_column()  # ADR-082: migrate DBs whose audit predates identity
         self.db.commit()
         self._now = now or time.time
         key_path = os.path.join(os.path.dirname(path) or ".", "golden.key")
@@ -94,6 +96,16 @@ class LocalStore:
         # stripped mac is rejected as tampering rather than silently trusted (closes the strip oracle).
         if not key_existed:
             self._backfill_golden_macs()
+
+    def _ensure_audit_identity_column(self) -> None:
+        """ADR-082. `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so a
+        store written before this change keeps the 11-column audit and every INSERT naming `identity`
+        fails — the same shape as the #24 `mac` migration above, and the only migration mechanism this
+        SQLite has. No backfill: an old row genuinely carries no identity claim, and writing one in
+        would be inventing evidence rather than migrating it."""
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(healing_audit)").fetchall()]
+        if "identity" not in cols:
+            self.db.execute("ALTER TABLE healing_audit ADD COLUMN identity TEXT")
 
     def _ensure_golden_mac_column(self) -> None:
         cols = [r[1] for r in self.db.execute("PRAGMA table_info(golden_snapshots)").fetchall()]
@@ -143,16 +155,21 @@ class LocalStore:
         self.db.commit()
 
     def audit(self, **row) -> None:
-        row = {**row, "ts": self._now()}
+        # `identity` defaults to "" rather than being required: `_audit` is called from five sites and
+        # a re-bind legitimately has none. Absent and empty must mean the same thing here, or the
+        # column would encode "the caller forgot" and "there was nothing to claim" identically anyway
+        # — but only by accident.
+        row = {**row, "ts": self._now(), "identity": row.get("identity") or ""}
         self.db.execute(
             "INSERT INTO healing_audit"
-            "(run_id,step,semantic_id,page_path,strategy,original,healed,confidence,outcome,dom_hash,ts) "
-            "VALUES(:run_id,:step,:semantic_id,:page_path,:strategy,:original,:healed,:confidence,:outcome,:dom_hash,:ts)",
+            "(run_id,step,semantic_id,page_path,strategy,original,healed,confidence,outcome,dom_hash,ts,identity) "
+            "VALUES(:run_id,:step,:semantic_id,:page_path,:strategy,:original,:healed,:confidence,:outcome,:dom_hash,:ts,:identity)",
             row)
         self.db.commit()
 
     def audit_rows(self):
-        return list(self.db.execute("SELECT strategy,outcome,confidence FROM healing_audit").fetchall())
+        return list(self.db.execute(
+            "SELECT strategy,outcome,confidence,COALESCE(identity,'') FROM healing_audit").fetchall())
 
     def save_golden(self, page_key, a11y_hash, screenshot_hash) -> None:
         mac = _golden_mac(self._golden_key, page_key, a11y_hash, screenshot_hash)
@@ -296,10 +313,11 @@ class GrpcStore:
             semantic_id=row.get("semantic_id", ""), page_path=row.get("page_path", ""),
             strategy=row.get("strategy", ""), original=row.get("original", ""),
             healed=row.get("healed", ""), confidence=float(row.get("confidence") or 0.0),
-            outcome=row.get("outcome", ""), dom_hash=row.get("dom_hash", "")))
+            outcome=row.get("outcome", ""), dom_hash=row.get("dom_hash", ""),
+            identity=row.get("identity") or ""))
 
     def audit_rows(self):
-        return [(r.strategy, r.outcome, r.confidence)
+        return [(r.strategy, r.outcome, r.confidence, r.identity)
                 for r in self._stub.AuditRows(self._pb.Empty()).rows]
 
     def save_golden(self, page_key, a11y_hash, screenshot_hash) -> None:

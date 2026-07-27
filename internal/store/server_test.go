@@ -164,3 +164,89 @@ func TestGoldenMacBackfillOnUpgrade(t *testing.T) {
 		t.Fatalf("backfilled legacy row should verify: err=%v g=%+v", err, g)
 	}
 }
+
+// ADR-082: the identity verdict of a re-ground has to survive the run, so the Go store must both
+// carry the column and open a database written before it existed. The Python side owns the same DDL
+// verbatim with no parity gate between them, which is why each language pins its own half.
+func TestAuditIdentityRoundTrip(t *testing.T) {
+	s, ctx := newTest(t), context.Background()
+	if _, err := s.AppendAudit(ctx, &pb.AuditRow{
+		RunId: "r", Strategy: "llm_pick", Outcome: "flagged", Confidence: 0.81,
+		Identity: "contradicted"}); err != nil {
+		t.Fatal(err)
+	}
+	// A re-bind makes no identity claim, and an empty string is how that is said.
+	if _, err := s.AppendAudit(ctx, &pb.AuditRow{
+		RunId: "r", Strategy: "role_name", Outcome: "auto_healed", Confidence: 0.9}); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := s.AuditRows(ctx, &pb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(reply.Rows))
+	}
+	got := map[string]string{}
+	for _, r := range reply.Rows {
+		got[r.Strategy] = r.Identity
+	}
+	if got["llm_pick"] != "contradicted" {
+		t.Fatalf("re-ground verdict lost: %q", got["llm_pick"])
+	}
+	if got["role_name"] != "" {
+		t.Fatalf("a re-bind must claim nothing, got %q", got["role_name"])
+	}
+}
+
+func TestAuditIdentityColumnAddedToPreExistingDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pre-ADR-082 table, by hand: CREATE TABLE IF NOT EXISTS would not touch it later.
+	if _, err := old.Exec(`CREATE TABLE healing_audit (run_id TEXT, step INTEGER, semantic_id TEXT,
+		page_path TEXT, strategy TEXT, original TEXT, healed TEXT, confidence REAL, outcome TEXT,
+		dom_hash TEXT, ts REAL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO healing_audit(run_id,strategy,outcome,confidence)
+		VALUES('old','css','needs_review',0.585)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("opening a pre-identity DB must migrate it, not fail: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	if _, err := s.AppendAudit(ctx, &pb.AuditRow{
+		RunId: "new", Strategy: "visual", Outcome: "flagged", Identity: "verified"}); err != nil {
+		t.Fatalf("writing after migration: %v", err)
+	}
+	reply, err := s.AuditRows(ctx, &pb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Rows) != 2 {
+		t.Fatalf("the pre-existing row must survive; got %d rows", len(reply.Rows))
+	}
+	for _, r := range reply.Rows {
+		// NULL from the old row must read back as "no claim", not blow up the scan.
+		if r.Strategy == "css" && r.Identity != "" {
+			t.Fatalf("a pre-ADR-082 row must claim nothing, got %q", r.Identity)
+		}
+	}
+
+	// Idempotence: a second open must not re-run the ALTER (SQLite errors on a duplicate column).
+	s2, err := New(path)
+	if err != nil {
+		t.Fatalf("second open after migration: %v", err)
+	}
+	_ = s2.Close()
+}

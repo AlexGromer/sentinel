@@ -196,7 +196,7 @@ class HealingEngine:
                     state = _identity_state(ident)
                     self._log_identity(ctx, strat, ident)
                 self.store.bump_used(page, sid, dom)
-                self._audit(ctx, strat, cached["value"], conf, "cache_hit")
+                self._audit(ctx, strat, cached["value"], conf, "cache_hit", state)
                 return {"locator": loc, "strategy": strat, "confidence": conf, "outcome": "cache_hit",
                         "identity": state}
         self.store.evict_stale(page, sid, dom)
@@ -286,15 +286,15 @@ class HealingEngine:
             self._log_identity(ctx, strat, ident)
         if conf >= AUTO:
             self.store.save_locator(page, sid, strat, val, conf, dom, "active")
-            self._audit(ctx, strat, val, conf, "auto_healed")
+            self._audit(ctx, strat, val, conf, "auto_healed", state)
             return {"locator": loc, "strategy": strat, "confidence": conf, "outcome": "auto_healed",
                     "identity": state}
         if conf >= FLAG:
             self.store.save_locator(page, sid, strat, val, conf, dom, "flagged")
-            self._audit(ctx, strat, val, conf, "flagged")
+            self._audit(ctx, strat, val, conf, "flagged", state)
             return {"locator": loc, "strategy": strat, "confidence": conf, "outcome": "flagged",
                     "identity": state}
-        self._audit(ctx, strat, val, conf, "needs_review")
+        self._audit(ctx, strat, val, conf, "needs_review", state)
         return {"outcome": "needs_review", "confidence": conf, "identity": state}
 
     def _llm_reground(self, ctx: dict):
@@ -414,8 +414,13 @@ class HealingEngine:
                 except Exception:
                     pass
 
-    def _audit(self, ctx: dict, strategy: str, healed: str, conf: float, outcome: str) -> None:
+    def _audit(self, ctx: dict, strategy: str, healed: str, conf: float, outcome: str,
+               identity_state: str = "") -> None:
+        # ADR-082: the audit row is the only place a heal outlives its run, so the identity verdict
+        # has to land here or the dataset RISK-002 needs can never be assembled. Empty means "no
+        # claim" — a re-bind, or a row written before this existed.
         self.store.audit(run_id=self.run_id, step=ctx.get("step"), semantic_id=ctx["semantic_id"],
                          page_path=ctx["page_path"], strategy=strategy,
                          original=json.dumps(ctx.get("attempted_locator")), healed=healed,
-                         confidence=conf, outcome=outcome, dom_hash=ctx.get("dom_hash"))
+                         confidence=conf, outcome=outcome, dom_hash=ctx.get("dom_hash"),
+                         identity=identity_state or "")
