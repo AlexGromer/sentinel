@@ -163,8 +163,11 @@ executor): **open shadow DOM**, nested roots included. The engine pierces them, 
 locator tiers (all but `xpath`) resolve and click inside a root. On `l5.html` that is 23 controls of
 23, not 15 — the old wording repeated a number ADR-092 obtained by a different mechanism.
 
-Out of reach: **iframes of any origin** (neither `$$eval` nor `getByRole` crosses the boundary;
-`frameLocator` does, but perception does not use it yet — that is `PROD-BLINDSPOTS`, PR-2), the
+**Depth-1 iframes are reachable as of ADR-095**: `frame` is a where-to-look axis on the locator, `frameLocator`
+carries all six tiers, addressing prefers `name` > `id` > position. ⚠ The VISUAL heal tier still cannot reach them
+(a mark is a box, and a box inside a frame is in that frame's coordinate system) — `[HEAL-VISUAL-FRAME]`.
+
+Out of reach: **frames nested deeper than one level** (a declared boundary, counted in `opaque.frames_nested`), the
 contents of **canvas**, **CLOSED** shadow roots, virtualised lists (the rows are not in the DOM yet),
 and anything clickable outside the selector (`[onclick]`, `[tabindex]`, `contenteditable`, clickable
 ARIA roles — measured at zero occurrences across this entire repository; Alex's call was a fixture

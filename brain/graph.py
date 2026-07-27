@@ -104,17 +104,29 @@ def _elements_from_interactives(elements: list, path: str) -> list:
         anchor = testid or name or text
         if not anchor:
             continue
+        # ADR-095: WHERE the control lives, scoping every locator built below. Merged as a dict so a
+        # control in the top frame produces a locator with NO `frame` key at all — not `None` — which
+        # is what keeps existing plans byte-identical: `canonical_plan_hash` hashes every field of
+        # every step, so an extra key present-but-null would move all 106 stored hashes.
+        #
+        # A scope, not a strategy: the alternative below is still `role_name`, still scored by the
+        # same prior. Making it a seventh strategy would have introduced a prior nobody measured,
+        # next to six already admitted to be unmeasured (GAP-RISK-002).
+        fr = {"frame": e["frame"]} if e.get("frame") else {}
         alts = []
         if testid:
-            alts.append({"strategy": S.TESTID, "locator": {"testid": testid}, "prior": S.PRIORS[S.TESTID]})
+            alts.append({"strategy": S.TESTID, "locator": {"testid": testid, **fr},
+                         "prior": S.PRIORS[S.TESTID]})
         if name:
-            alts.append({"strategy": S.ROLE_NAME, "locator": {"role": role, "name": name},
+            alts.append({"strategy": S.ROLE_NAME, "locator": {"role": role, "name": name, **fr},
                          "prior": S.PRIORS[S.ROLE_NAME]})
         if role != "button" and e.get("label"):    # buttons stay byte-identical to the old cataloguer (plan_hash)
-            alts.append({"strategy": S.LABEL, "locator": {"label": e["label"]}, "prior": S.PRIORS[S.LABEL]})
+            alts.append({"strategy": S.LABEL, "locator": {"label": e["label"], **fr},
+                         "prior": S.PRIORS[S.LABEL]})
         if text and text != name:
-            alts.append({"strategy": S.TEXT_ROLE, "locator": {"text": text}, "prior": S.PRIORS[S.TEXT_ROLE]})
-        primary = {"role": role, "name": name} if name else (alts[0]["locator"] if alts else None)
+            alts.append({"strategy": S.TEXT_ROLE, "locator": {"text": text, **fr},
+                         "prior": S.PRIORS[S.TEXT_ROLE]})
+        primary = {"role": role, "name": name, **fr} if name else (alts[0]["locator"] if alts else None)
         # M9-LIVE: `disabled` rides along so plan() can skip a control that cannot be actuated right
         # now. It is NOT used to drop the element from perception: the same button is usually enabled
         # later in a filled form, and a page model that forgets it would report coverage over a
@@ -124,9 +136,15 @@ def _elements_from_interactives(elements: list, path: str) -> list:
         # `None` means an older executor never said — and it must not read as "invisible", or every
         # element from that executor would be dropped from the candidate set and explore would find
         # nothing at all. Absent evidence is not evidence, so the reader tests `is False`.
-        out.append({"semantic_id": semantic_id(path, role, anchor), "role": role, "name": name,
+        # ADR-095: the frame is part of the control's IDENTITY, not just of its address. Two payment
+        # frames each holding a "Pay" button are two controls, and without this they would collide on
+        # one semantic_id — coverage would count one where there are two, and the second would look
+        # already-exercised. Appended to the anchor rather than added as a fourth component so a
+        # top-frame control hashes to exactly what it always did (`fr` is empty there).
+        sid_anchor = f"{e['frame']}|{anchor}" if e.get("frame") else anchor
+        out.append({"semantic_id": semantic_id(path, role, sid_anchor), "role": role, "name": name,
                     "testid": testid, "locator": primary, "alternatives": alts, "page": path,
-                    "disabled": bool(e.get("disabled")), "visible": e.get("visible")})
+                    "disabled": bool(e.get("disabled")), "visible": e.get("visible"), **fr})
     return out
 
 

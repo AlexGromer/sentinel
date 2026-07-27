@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>L10 helper — the outer frame of the nested pair</title></head>
+<body style="font:13px system-ui; margin:.4rem">
+<!-- Helper for `l10-frames.html` §4, and a separate FILE on purpose.
+
+     The first attempt nested one `srcdoc` inside another. It parsed as an empty document: the inner
+     markup has to be escaped once for the outer attribute and again for the inner one, and the
+     second round did not survive. Nothing failed loudly — the nested frame simply existed with an
+     empty body, so the audit reported `frames_nested: 1` with zero controls behind it and the
+     fixture demonstrated the boundary without demonstrating anything BEHIND the boundary. A gate
+     built on it would have passed against a tool that reads nested frames perfectly and against one
+     that cannot read them at all.
+
+     Two files, no escaping, and the nested control is really there. -->
+<button data-testid="outer-btn">Outer frame button</button>
+<iframe srcdoc='<!doctype html><body style="font:13px system-ui"><button data-testid="deep-btn">Deep button</button></body>'
+        style="width:96%; height:2.4rem"></iframe>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>L10 — controls inside iframes</title>
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 2rem; max-width: 52rem; }
+  section { border: 1px solid #ced4da; border-radius: 6px; padding: .8rem 1rem; margin: .8rem 0; }
+  h2 { font-size: .95rem; margin: 0 0 .5rem; }
+  iframe { width: 100%; height: 4.5rem; border: 1px solid #dee2e6; }
+  .note { color: #6c757d; font-size: .8rem; }
+</style>
+</head>
+<body>
+<!-- ADR-095 fixture. A frame boundary is the one blind spot in `GAP-RISK-005` that is both real and
+     closable: `page.$$eval`, `page.locator` and `getByRole` do NOT cross it — that is a property of
+     the selector engine, not an oversight — while `frameLocator` does, cross-origin included.
+
+     Measured on the corpus before this fixture existed: not one of the ten fixtures contained an
+     `<iframe>` at all, so `unseen.iframe` had been reported as 0 on every page the tool ever saw and
+     no gate could tell a working frame reader from a missing one.
+
+     Each section pins one thing about ADDRESSING a frame, because that — not reading it — is what
+     makes a frame-scoped locator survive into a plan:
+       §1 name -> `iframe[name="..."]`   the author chose it; it survives re-layout
+       §2 id   -> `iframe#...`           usually survives
+       §3 none -> `iframe >> nth=N`      survives neither, and says so out loud
+       §4 a frame nested one level deeper -> NOT perceived, counted in `opaque.frames_nested`
+     A same-origin `srcdoc` is used so the fixture stays a single file; the cross-origin case needs
+     two ports and lives in the gate, which serves the halves from separate servers. -->
+
+<h1>Frames</h1>
+<p class="note">Nothing on this page is reachable by the top-frame selector. Every control below sits
+behind a frame boundary.</p>
+
+<section>
+  <h2>0 — one ordinary control, so the ratio has a numerator outside the frames</h2>
+  <button id="top-btn">Top button</button>
+</section>
+
+<section>
+  <h2>1 — a NAMED frame</h2>
+  <!-- It carries an `id` TOO, on purpose. With only a name, the preference order is unpinned: a
+       build that preferred the id would address this frame perfectly well and no gate would notice.
+       Found by mutation — swapping the two branches left the whole suite green. -->
+  <iframe name="payment" id="payment-frame" srcdoc='<!doctype html><body style="font:13px system-ui">
+    <button data-testid="pay-btn" id="pay">Pay now</button>
+    <label for="card">Card</label><input id="card" aria-label="Card number">
+  </body>'></iframe>
+  <p class="note">Addressed as <code>iframe[name="payment"]</code> even though
+    <code>iframe#payment-frame</code> would also work — a name is chosen by the author and survives
+    re-layout; an id is often generated.</p>
+</section>
+
+<section>
+  <h2>2 — a frame with an id but no name</h2>
+  <iframe id="terms" srcdoc='<!doctype html><body style="font:13px system-ui">
+    <button data-testid="accept-btn">Accept terms</button>
+    <a href="#more">Read more</a>
+  </body>'></iframe>
+  <p class="note">Addressed as <code>iframe#terms</code>.</p>
+</section>
+
+<section>
+  <h2>3 — an anonymous frame</h2>
+  <iframe srcdoc='<!doctype html><body style="font:13px system-ui">
+    <button data-testid="anon-btn">Anonymous frame button</button>
+  </body>'></iframe>
+  <p class="note">Addressed positionally, <code>iframe &gt;&gt; nth=N</code> — the honest last resort.
+    A plan carrying it says out loud that it depends on document order.</p>
+</section>
+
+<section>
+  <h2>4 — a frame inside a frame (the declared boundary)</h2>
+  <!-- A separate FILE, not a nested `srcdoc`. The first version nested one srcdoc inside another and
+       parsed as an empty document — the inner markup needs escaping twice and the second round did
+       not survive. It failed silently: `frames_nested: 1` was reported with nothing behind it, so
+       the fixture showed the boundary without showing anything BEYOND it, and a gate built on it
+       would pass whether or not the tool reads nested frames. -->
+  <iframe id="outer" src="l10-inner.html" style="height:6rem"></iframe>
+  <p class="note">The OUTER frame is perceived; the button inside it is reachable. The frame nested
+    inside THAT one is not: depth is capped at 1 on purpose, and its control is counted in
+    <code>unseen.iframe</code> with the frame itself in <code>opaque.frames_nested</code> — a stated
+    boundary rather than a silent one.</p>
+</section>
+</body>
+</html>

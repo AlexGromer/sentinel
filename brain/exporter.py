@@ -11,24 +11,32 @@ def _esc(s: object) -> str:
 
 
 def _locator_expr(loc: dict):
-    """Map a locator dict to a Playwright `page.<...>` expression (None if unmappable)."""
+    """Map a locator dict to a Playwright `page.<...>` expression (None if unmappable).
+
+    ADR-095: a `frame` scope becomes a `frameLocator(...)` root, exactly as it does in the executor's
+    `buildLocator`. The six tiers below are untouched — they run against the root instead of against
+    `page`, which is the whole point of treating a frame as an axis rather than as a strategy. An
+    exported test that silently dropped the frame would compile, run, and fail on a control the
+    original plan reaches.
+    """
     if not loc:
         return None
+    root = f"page.frameLocator('{_esc(loc['frame'])}')" if loc.get("frame") else "page"
     if "testid" in loc:
-        return f"page.getByTestId('{_esc(loc['testid'])}')"
+        return f"{root}.getByTestId('{_esc(loc['testid'])}')"
     if "role" in loc:
         name = loc.get("name")
         if name:
-            return f"page.getByRole('{_esc(loc['role'])}', {{ name: '{_esc(name)}' }})"
-        return f"page.getByRole('{_esc(loc['role'])}')"
+            return f"{root}.getByRole('{_esc(loc['role'])}', {{ name: '{_esc(name)}' }})"
+        return f"{root}.getByRole('{_esc(loc['role'])}')"
     if "label" in loc:
-        return f"page.getByLabel('{_esc(loc['label'])}')"
+        return f"{root}.getByLabel('{_esc(loc['label'])}')"
     if "text" in loc:
-        return f"page.getByText('{_esc(loc['text'])}')"
+        return f"{root}.getByText('{_esc(loc['text'])}')"
     if "css" in loc:
-        return f"page.locator('{_esc(loc['css'])}')"
+        return f"{root}.locator('{_esc(loc['css'])}')"
     if "xpath" in loc:
-        return f"page.locator('xpath={_esc(loc['xpath'])}')"
+        return f"{root}.locator('xpath={_esc(loc['xpath'])}')"
     return None
 
 
