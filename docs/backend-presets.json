@@ -10,7 +10,14 @@
       "vision": true,
       "structured": true,
       "api_key": "anthropic_env",
-      "default_model": { "planner": "claude-opus-4-8", "heal": "claude-sonnet-4-6" }
+      "default_model": {
+        "planner": "claude-opus-4-8",
+        "heal": "claude-sonnet-4-6"
+      },
+      "hint": {
+        "ru": "Облако Anthropic. Нужен только ключ в ANTHROPIC_API_KEY — адрес подставляется сам.",
+        "en": "Anthropic's cloud. Only a key in ANTHROPIC_API_KEY is needed — the address is built in."
+      }
     },
     "openai": {
       "label": "Cloud — OpenAI-compatible (OpenAI/DeepSeek/OpenRouter)",
@@ -19,7 +26,11 @@
       "vision": false,
       "structured": false,
       "api_key": "real",
-      "note": "set the provider's /v1 base_url + a real key; OpenAI itself supports vision+structured — set LLM_VISION=1/LLM_STRUCTURED=1 if your model does"
+      "note": "set the provider's /v1 base_url + a real key; OpenAI itself supports vision+structured — set LLM_VISION=1/LLM_STRUCTURED=1 if your model does",
+      "hint": {
+        "ru": "Любой облачный OpenAI-совместимый провайдер (OpenAI, DeepSeek, OpenRouter). Подставьте адрес его /v1 и настоящий ключ.",
+        "en": "Any cloud OpenAI-compatible provider (OpenAI, DeepSeek, OpenRouter). Fill in its /v1 address and a real key."
+      }
     },
     "ollama": {
       "label": "Ollama",
@@ -27,7 +38,11 @@
       "base_url": "http://ollama:11434/v1",
       "vision": false,
       "structured": false,
-      "api_key": "noauth"
+      "api_key": "noauth",
+      "hint": {
+        "ru": "✅ Реальный сервис в нашем docker-compose. Поднять: `docker compose --profile ollama up -d ollama`, затем скачать модель: `docker compose exec ollama ollama pull qwen3:14b`. Имя `ollama` резолвится ВНУТРИ compose; с хоста используйте http://localhost:11434/v1.",
+        "en": "✅ A real service in our docker-compose. Start it: `docker compose --profile ollama up -d ollama`, then pull a model: `docker compose exec ollama ollama pull qwen3:14b`. The hostname `ollama` resolves INSIDE compose; from the host use http://localhost:11434/v1."
+      }
     },
     "vllm": {
       "label": "vLLM",
@@ -35,7 +50,11 @@
       "base_url": "http://vllm:8000/v1",
       "vision": false,
       "structured": false,
-      "api_key": "noauth"
+      "api_key": "noauth",
+      "hint": {
+        "ru": "⚠ ЗАГОТОВКА: сервиса `vllm` в нашем compose НЕТ. Либо добавьте одноимённый сервис, либо замените адрес на свой (например http://localhost:8000/v1).",
+        "en": "⚠ PLACEHOLDER: there is no `vllm` service in our compose. Either add one with that name, or replace the address with your own (e.g. http://localhost:8000/v1)."
+      }
     },
     "llamacpp": {
       "label": "llama.cpp / llamafile",
@@ -43,7 +62,11 @@
       "base_url": "http://host:8080/v1",
       "vision": false,
       "structured": false,
-      "api_key": "noauth"
+      "api_key": "noauth",
+      "hint": {
+        "ru": "⚠ ЗАГОТОВКА: `host:8080` — это ПЛЕЙСХОЛДЕР, замените на адрес вашего llama.cpp-сервера.",
+        "en": "⚠ PLACEHOLDER: `host:8080` is a stand-in — replace it with your llama.cpp server's address."
+      }
     },
     "lmstudio": {
       "label": "LM Studio",
@@ -51,7 +74,11 @@
       "base_url": "http://host:1234/v1",
       "vision": false,
       "structured": false,
-      "api_key": "noauth"
+      "api_key": "noauth",
+      "hint": {
+        "ru": "⚠ ЗАГОТОВКА: `host:1234` — ПЛЕЙСХОЛДЕР. LM Studio слушает локально, поэтому из контейнера адрес хоста будет другим.",
+        "en": "⚠ PLACEHOLDER: `host:1234` is a stand-in. LM Studio listens locally, so from inside a container the host address differs."
+      }
     },
     "localai": {
       "label": "LocalAI",
@@ -59,7 +86,11 @@
       "base_url": "http://localai:8080/v1",
       "vision": false,
       "structured": false,
-      "api_key": "noauth"
+      "api_key": "noauth",
+      "hint": {
+        "ru": "⚠ ЗАГОТОВКА: сервиса `localai` в нашем compose НЕТ. Добавьте одноимённый сервис или укажите свой адрес.",
+        "en": "⚠ PLACEHOLDER: there is no `localai` service in our compose. Add one with that name, or point the address at your own."
+      }
     },
     "litellm": {
       "label": "LiteLLM (router)",
@@ -68,7 +99,11 @@
       "vision": false,
       "structured": false,
       "api_key": "noauth",
-      "note": "routes many providers (ADR-045; image in deploy/litellm)"
+      "note": "routes many providers (ADR-045; image in deploy/litellm)",
+      "hint": {
+        "ru": "✅ Реальный сервис в нашем docker-compose — роутер поверх многих провайдеров. Поднять: `docker compose --profile litellm up -d litellm`. Маршруты и КЛЮЧИ ПРОВАЙДЕРОВ — в `deploy/litellm/config.yaml` (читает их из переменных окружения, не хранит литералами). Имя `litellm` резолвится внутри compose.",
+        "en": "✅ A real service in our docker-compose — a router over many providers. Start it: `docker compose --profile litellm up -d litellm`. Routes and PROVIDER KEYS live in `deploy/litellm/config.yaml` (read from environment variables, never stored literally). The hostname `litellm` resolves inside compose."
+      }
     },
     "tgi": {
       "label": "HuggingFace TGI",
@@ -77,7 +112,11 @@
       "vision": false,
       "structured": false,
       "api_key": "noauth",
-      "note": "operator sets the port (no default)"
+      "note": "operator sets the port (no default)",
+      "hint": {
+        "ru": "⚠ ЗАГОТОВКА: порт НЕ задан по умолчанию — `<PORT>` надо заменить самому.",
+        "en": "⚠ PLACEHOLDER: there is no default port — you must replace `<PORT>` yourself."
+      }
     }
   }
 }

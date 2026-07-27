@@ -555,6 +555,32 @@ try {
     await ctx.close();
   });
 
+  /* 10d — ADR-091: a preset says what it takes to make it work. Only ollama and litellm have a real
+     compose service; the other seven are placeholders whose address the user must replace, and that
+     was stated only in a `_note` inside the JSON nobody opens. A dropdown entry that silently means
+     "you have more work to do" is the LiteLLM defect one level down. */
+  await check('presets: each says whether it is a real service or a placeholder', async () => {
+    const { ctx, page } = await freshPage(browser, base);
+    // #preset lives on the step the wizard opens with — the neighbouring preset check selects it
+    // straight away, and clicking "next" first moves PAST it.
+    await page.selectOption('#preset', 'litellm');
+    const lite = await page.textContent('.presetnote');
+    ok(/docker compose --profile litellm/.test(lite), 'litellm names the command that starts it');
+    ok(/deploy\/litellm\/config\.yaml/.test(lite), 'and where the provider keys go');
+
+    await page.selectOption('#preset', 'ollama');
+    ok(/--profile ollama/.test(await page.textContent('.presetnote')), 'ollama names its command');
+
+    await page.selectOption('#preset', 'vllm');
+    const vllm = await page.textContent('.presetnote');
+    ok(/ЗАГОТОВКА|PLACEHOLDER/.test(vllm), 'a preset with no compose service says so');
+
+    // Bilingual, like every other hint on the page.
+    await page.click('#lang-en');
+    ok(/PLACEHOLDER/.test(await page.textContent('.presetnote')), 'and says it in EN too');
+    await ctx.close();
+  });
+
   /* 11 — M11.5 PR-5: "Save to server" writes the config domain and flips /readyz 503 -> 200 */
   await check('config: "Save to server" persists a secret-free document and readiness flips 503 -> 200', async () => {
     const readyz = async (tok) => {
