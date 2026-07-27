@@ -91,7 +91,15 @@ def test_every_role_the_executor_claims_resolves_on_the_page():
             role, name = e.get("role"), (e.get("name") or "").strip()
             if not role or not name or not e.get("visible"):
                 continue
-            probes.append(("browser.probe", {"locator": {"role": role, "name": name}}))
+            # ADR-095: carry the frame scope. Without it a control inside an iframe probes to 0 and
+            # this gate blames the ROLE — which is how it first failed when frame perception landed.
+            # That failure was correct and worth keeping in mind: the check tests the locator the
+            # product would actually build, so it notices when the product starts building a
+            # different one.
+            loc = {"role": role, "name": name}
+            if e.get("frame"):
+                loc["frame"] = e["frame"]
+            probes.append(("browser.probe", {"locator": loc}))
             meta.append((fx, role, name, e.get("tag")))
     res2 = _drive(probes)
     if res2 is None:

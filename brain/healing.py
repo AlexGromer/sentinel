@@ -121,13 +121,20 @@ def descriptor_to_locator(d: dict):
 
     Shared by both re-ground tiers: `browser.interactives` elements and `browser.setOfMarks` marks
     carry the same three fields, so one mapping serves the text tier and the visual tier alike.
+
+    ADR-095: `frame` rides along when the live element has one. It is a SCOPE, so it does not change
+    which strategy this is — `pick_confidence` below still sees a testid or a role+name and scores it
+    from the same table. Dropping it here would have been the silent kind of wrong: the heal would
+    report a locator, the locator would name a control that exists only inside a frame, and the
+    replay would fail on a step the audit had just called healed.
     """
     if not d:
         return None
+    fr = {"frame": d["frame"]} if d.get("frame") else {}
     if d.get("testid"):
-        return {"testid": d["testid"]}
+        return {"testid": d["testid"], **fr}
     if d.get("role") and d.get("name"):
-        return {"role": d["role"], "name": d["name"]}
+        return {"role": d["role"], "name": d["name"], **fr}
     return None
 
 

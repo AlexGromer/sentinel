@@ -8,7 +8,7 @@
  *
  * CRITICAL: stdout carries ONLY protocol frames. All logs MUST go to stderr.
  */
-import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
+import { chromium, Browser, BrowserContext, Page, Locator, Frame } from 'playwright';
 import * as readline from 'node:readline';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -195,7 +195,14 @@ const CLICKABLE_SELECTOR =
   ', [onclick], [tabindex]:not([tabindex="-1"]), [contenteditable=""], [contenteditable="true"]' +
   ', [role=link], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=option]';
 
-/** A locator is a dict with EXACTLY ONE of these shapes (M2 locator model). */
+/** A locator is a dict with EXACTLY ONE of these shapes (M2 locator model), plus an OPTIONAL
+ * `frame` (ADR-095).
+ *
+ * `frame` is not a seventh strategy — it is WHERE to look, orthogonal to HOW. That distinction is
+ * the whole design: a frame-scoped role+name locator is still a `role_name` locator, so
+ * `strategies.py`, the `PRIORS` table, `pick_confidence` and the locator-key vocabulary gate all
+ * stay untouched. Adding a strategy would have meant a prior nobody measured, sitting next to six
+ * others that are already admitted to be unmeasured (GAP-RISK-002). */
 interface LocatorSpec {
   testid?: string;
   role?: string;
@@ -204,20 +211,66 @@ interface LocatorSpec {
   text?: string;
   css?: string;
   xpath?: string;
+  frame?: string;
 }
+
+/** What `buildLocator` can search in. `Page` and `FrameLocator` are unrelated types in Playwright's
+ * .d.ts, but they carry the same five entry points — measured, not assumed: all six locator tiers
+ * (`getByTestId`/`getByRole`/`getByLabel`/`getByText`/`locator(css)`/`locator('xpath=')`) resolve
+ * and click through a `FrameLocator`, cross-origin included. That structural sameness is what makes
+ * `frame` an axis rather than a rewrite. */
+type LocatorRoot = Pick<Page, 'getByTestId' | 'getByRole' | 'getByLabel' | 'getByText' | 'locator'>;
 
 /** Shared locator builder used by BOTH browser.click and browser.probe. */
 function buildLocator(page: Page, locator: LocatorSpec): Locator {
-  if (locator.testid !== undefined) return page.getByTestId(locator.testid);
+  // ADR-095: resolve WHERE first, then HOW. Everything below is byte-identical to what it was —
+  // only the root it runs against changes, which is why a plan without frames produces exactly the
+  // locators it always did.
+  const root: LocatorRoot = locator.frame !== undefined ? page.frameLocator(locator.frame) : page;
+  if (locator.testid !== undefined) return root.getByTestId(locator.testid);
   if (locator.role !== undefined)
-    return page.getByRole(locator.role as Parameters<Page['getByRole']>[0], { name: locator.name });
-  if (locator.label !== undefined) return page.getByLabel(locator.label);
-  if (locator.text !== undefined) return page.getByText(locator.text);
-  if (locator.css !== undefined) return page.locator(locator.css);
-  if (locator.xpath !== undefined) return page.locator('xpath=' + locator.xpath);
+    return root.getByRole(locator.role as Parameters<Page['getByRole']>[0], { name: locator.name });
+  if (locator.label !== undefined) return root.getByLabel(locator.label);
+  if (locator.text !== undefined) return root.getByText(locator.text);
+  if (locator.css !== undefined) return root.locator(locator.css);
+  if (locator.xpath !== undefined) return root.locator('xpath=' + locator.xpath);
   throw new Error(
-    'buildLocator: locator must provide one of {testid}, {role,name}, {label}, {text}, {css}, {xpath}',
+    'buildLocator: locator must provide one of {testid}, {role,name}, {label}, {text}, {css}, {xpath}' +
+      ' — `frame` scopes those, it does not replace them',
   );
+}
+
+/** A selector for the `<iframe>` element that owns `f`, or null if it cannot be addressed (ADR-095).
+ *
+ * Preference order is stability, not convenience: a `name` is chosen by the author and survives
+ * re-layout; an `id` usually does; an index survives neither, and is the honest last resort rather
+ * than a silent one — a plan carrying `iframe >> nth=2` says out loud that it is positional.
+ *
+ * Depth is capped at 1 DELIBERATELY. `frameLocator` chains for deeper nesting, but a chain has to be
+ * carried in the step, compared during identity checks and emitted by the exporter, and nested
+ * iframes are rare enough that paying that everywhere buys very little. A deeper frame is counted in
+ * `opaque.frames_nested` — a stated boundary, not silence. */
+async function frameSelector(page: Page, f: Frame): Promise<string | null> {
+  if (f === page.mainFrame() || f.parentFrame() !== page.mainFrame()) return null;
+  try {
+    const el = await f.frameElement();
+    const own = await el.evaluate((node) => {
+      const e = node as HTMLIFrameElement;
+      const doc = e.ownerDocument;
+      return {
+        name: e.getAttribute('name'),
+        id: e.id || null,
+        nth: doc ? Array.from(doc.querySelectorAll('iframe')).indexOf(e) : -1,
+      };
+    });
+    if (own.name) return `iframe[name="${own.name}"]`;
+    if (own.id) return `iframe#${own.id}`;
+    return own.nth >= 0 ? `iframe >> nth=${own.nth}` : null;
+  } catch {
+    // Detached or mid-navigation: it had a frame a moment ago and does not now. Reporting null lets
+    // the caller count it as unreachable instead of inventing an address for it.
+    return null;
+  }
 }
 
 /** M9.1 (browser.expect): poll an async predicate until true or the deadline — auto-retry that
@@ -530,7 +583,19 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       return { count: await buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).count() };
     case 'browser.interactives': {
       await ensureBrowser();
-      const elements = await page!.$$eval(
+      // ADR-095: the same harvest, run once per addressable root. `$$eval` on the page never crosses
+      // a frame boundary — that is a property of the selector engine, not an oversight — so a
+      // control inside an iframe was invisible to planning, and `browser.perceptionAudit` has been
+      // counting exactly those under `unseen.iframe` since ADR-093. Each element carries the frame
+      // it was found in, and `frame` is a SCOPE on the locator rather than a new strategy, so
+      // nothing about how a locator is chosen or scored changes.
+      const roots: Array<{ frame?: string; scope: Page | Frame }> = [{ scope: page! }];
+      for (const f of page!.frames()) {
+        const sel = await frameSelector(page!, f);
+        if (sel) roots.push({ frame: sel, scope: f });
+      }
+      const elements = (await Promise.all(roots.map(async ({ frame, scope }) => {
+        const found = await scope.$$eval(
         PERCEPTION_SELECTOR,
         (els, { roleSrc, inputRole }) => {
           // eslint-disable-next-line no-new-func
@@ -583,7 +648,12 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
           }));
         },
         { roleSrc: ARIA_ROLE_FN, inputRole: INPUT_ROLE },
-      );
+        );
+        // Present ONLY when the control lives in a frame. An absent key rather than `null` keeps a
+        // frameless page's descriptor byte-identical to what it was, which is what leaves the 106
+        // stored `plan_hash`es alone — `canonical_plan_hash` hashes every field of every step.
+        return frame === undefined ? found : found.map((e) => ({ ...e, frame }));
+      }))).flat();
       return { elements };
     }
     case 'browser.perceptionAudit': {
@@ -605,9 +675,27 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
 
       // Both counts, one engine — the same one `browser.interactives` uses, so `seen` is by
-      // construction the size of the list that RPC returns, not an estimate of it.
-      const seen = await page!.locator(PERCEPTION_SELECTOR).count();
+      // construction the size of the list that RPC returns, not an estimate of it. ADR-095 kept that
+      // true when perception grew: `seen` now sums over the SAME roots the harvest walks, because a
+      // numerator that stayed top-frame-only would under-report the moment we started reading frames
+      // — the ADR-093 defect exactly, running the other way.
+      let seen = await page!.locator(PERCEPTION_SELECTOR).count();
       const topClickable = await page!.locator(CLICKABLE_SELECTOR).count();
+      const addressable = new Map<Frame, string>();
+      let framesNested = 0;
+      for (const f of page!.frames()) {
+        if (f === page!.mainFrame()) continue;
+        const sel = await frameSelector(page!, f);
+        if (sel) addressable.set(f, sel);
+        else framesNested++;   // deeper than one level, or its owner element vanished
+      }
+      for (const f of addressable.keys()) {
+        try {
+          seen += await f.locator(PERCEPTION_SELECTOR).count();
+        } catch {
+          /* detached mid-measure; it is counted as unreachable in the frames list below */
+        }
+      }
 
       // The shadow walk survives ONLY to describe boundaries, never to count controls: the engine
       // already crossed the open ones. A closed root cannot be entered at all, so counting the hosts
@@ -647,15 +735,25 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
           frames.push({
             url: f.url(),
             reachable: true,
+            // ADR-095: whether PERCEPTION can enter, not merely whether measurement can. They were
+            // the same thing until this change and are not any more, and reporting only the second
+            // would tell an operator a frame is fine when nothing can plan against it.
+            perceived: addressable.has(f),
+            selector: addressable.get(f) ?? null,
             clickable: await f.locator(CLICKABLE_SELECTOR).count(),
             canvas: await f.locator('canvas').count(),
           });
         } catch (e) {
-          frames.push({ url: f.url(), reachable: false, error: e instanceof Error ? e.message : String(e) });
+          frames.push({ url: f.url(), reachable: false, perceived: false, selector: null,
+                        error: e instanceof Error ? e.message : String(e) });
         }
       }
 
+      // Only what perception still cannot enter counts as unseen. A frame we now read contributes to
+      // BOTH sides of the fraction, exactly as the top frame does.
       const inFrames = frames.reduce((n, f) => n + (Number(f.clickable) || 0), 0);
+      const unseenInFrames = frames.reduce(
+        (n, f) => n + (f.perceived ? 0 : Number(f.clickable) || 0), 0);
       const total = topClickable + inFrames;
       return {
         seen,
@@ -670,13 +768,19 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
           // be looked at. Where a missed control lives — light DOM or an open shadow root — is not
           // the operator's question anyway: our selector fails to name it either way, and widening
           // the selector would reach it either way.
-          outside_selector: Math.max(0, topClickable - seen),
-          iframe: inFrames,
+          outside_selector: Math.max(0, total - seen - unseenInFrames),
+          iframe: unseenInFrames,
         },
         opaque: {
           canvas: topCanvas + frames.reduce((n, f) => n + (Number(f.canvas) || 0), 0),
           shadow_roots_closed: roots.closed,
           frames_unreachable: frames.filter((f) => !f.reachable).length,
+          // ADR-095: a frame nested deeper than one level. `frameLocator` chains and could reach it,
+          // but the chain would have to be carried in the step, compared during identity checks and
+          // emitted by the exporter — paid everywhere, for a shape that is rare. Named rather than
+          // silently folded into `iframe`, because "we chose not to" and "we could not" are
+          // different sentences to an operator.
+          frames_nested: framesNested,
         },
         // Context, not a boundary: open roots are crossed. Reported because "we walked N shadow
         // roots and missed nothing in them" is the evidence for the claim, and ADR-092 computed this
@@ -702,6 +806,14 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.setOfMarks': {
       // M5-2 visual heal: number every interactive element + (optionally) write an overlay
       // screenshot, returning the mark->element map so the vision LLM picks a mark, not a pixel.
+      //
+      // ⚠ TOP FRAME ONLY, and stated rather than silently true (ADR-095). `browser.interactives` now
+      // reads depth-1 frames; this does not, because a mark is a BOX and a box inside a frame is in
+      // the frame's coordinate system — drawing it on the page's screenshot would put the number
+      // somewhere the control is not. Offsetting by the frame's own box is possible and is not free
+      // (inner scrolling), so the visual tier keeps the smaller reach until something needs it. The
+      // consequence is real and belongs in the open: a heal that falls through to vision cannot
+      // re-ground a control that lives in an iframe.
       await ensureBrowser();
       const outPath = params?.path as string | undefined;
       const marks = await page!.$$eval(

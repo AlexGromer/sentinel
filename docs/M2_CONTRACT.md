@@ -27,7 +27,7 @@ DOM, агент детерминированно переустанавлива�
 ## pw-executor — новые инструменты (M2)
 | Method | Params | Result |
 |--------|--------|--------|
-| `browser.interactives` | — | `{elements:[{role,name,testid,text,tag,visible,disabled}]}` — `role` это **ARIA-роль** (явный атрибут, иначе неявная из тега+`type`), НЕ имя тега (ADR-094); `visible`/`disabled` сообщаются, не фильтруются (ADR-093/070). Читается движком Playwright, поэтому открытые shadow-корни пронизываются. |
+| `browser.interactives` | — | `{elements:[{role,name,testid,text,tag,visible,disabled}]}` — `role` это **ARIA-роль** (явный атрибут, иначе неявная из тега+`type`), НЕ имя тега (ADR-094); `visible`/`disabled` сообщаются, не фильтруются (ADR-093/070). Читается движком Playwright, поэтому открытые shadow-корни пронизываются. Локатор шага может нести ОПЦИОНАЛЬНЫЙ `frame` — область поиска, а не стратегия (ADR-095): `{role,name,frame}` это по-прежнему `role_name`, приор тот же. Ключ присутствует ТОЛЬКО у контрола во фрейме. |
 | `browser.probe` | `{locator}` | `{count}` — разрешает кандидата, подсчитывает совпадения, БЕЗ действия (для verify-before-accept + ротации L1–L6) |
 | `browser.click` (расширенный) | `{locator}` любого из 6 видов | `{clicked,url}` |
 (`browser.navigate/snapshot/links/currentUrl/traceStop` без изменений.)
