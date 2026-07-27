@@ -42,6 +42,15 @@ sentinel-replay:
       -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
       sentinel run --target "$TARGET" --replay --plan /config/plan.json --ci
       --aut-version "${CI_COMMIT_SHA:-unknown}"
+    # ADR-090: build the reports. `agentctl report` is the sole producer of report.html, report.json,
+    # metrics.prom and junit.xml — without this line the artifacts published below do not exist. It runs
+    # even when the replay failed (`|| true` plus `- ` on the run above is not used here: GitLab stops
+    # the script on error, so the report step is guarded explicitly), because a FAILED run is exactly
+    # the one whose report someone wants to read.
+    - >
+      for d in runs/*/; do
+        docker compose run --rm sentinel report --run "/$d" || true;
+      done
   # 0 pass → success · 1 step-fail / 2 visual regression → failure · 3 config/plan-integrity → warning.
   allow_failure:
     exit_codes:
@@ -50,3 +59,10 @@ sentinel-replay:
     when: always
     paths:
       - runs/
+    # ADR-090: publish the JUnit report GitLab already knows how to read. junit.xml has existed since
+    # ADR-073 as "the machine contract every CI consumes", and this template — the first thing a new
+    # user copies — consumed nothing: it archived the directory and left the results invisible in the
+    # pipeline view. A contract nobody is wired to is a file.
+    # Note the glob: one file per run directory, and GitLab merges them.
+    reports:
+      junit: runs/*/junit.xml
