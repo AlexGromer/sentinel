@@ -46,7 +46,11 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # brain modules — the tested application's own console reaches us through the Playwright executor
 # (ADR-067), which is TypeScript. Such an entry is still held to the same two-way rule: the code must
 # actually appear in the named source, or the catalogue is claiming a message nothing sends.
-EMITTERS = {"pw-executor": "pw-executor/src/server.ts"}
+# ADR-089 widened this to the Go control-api: its human-facing lines were outside the catalogue
+# entirely, arriving in the UI through the `system.unclassified` catch-all at `info` — so a Go
+# warning was filed at the same severity as "browser launched".
+EMITTERS = {"pw-executor": "pw-executor/src/server.ts",
+            "control-api": "cmd/control-api/main.go"}
 
 # An emission is `log("<code>"` with a literal first argument. A non-literal call (a code built at
 # runtime) is deliberately unmatched and reported separately: the catalogue cannot vouch for a code it
