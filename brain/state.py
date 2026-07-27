@@ -26,6 +26,7 @@ class RunState(TypedDict, total=False):
     # M9.2b two-phase authoring (ADR-028): a site-wide element map built during the explore walk, then
     # a one-shot scenario head grounds the goal/describe into replayable steps.
     site_map: dict                # page_path -> [element {semantic_id,role,name,testid,locator,alternatives,page}]
+    perception: dict              # ADR-092: page_path -> {seen,total,ratio,unseen{...},opaque{...}} — how much of the page perception can SEE, as opposed to how much of what it saw was exercised (coverage)
     phase: str                    # "explore" | "scenario"
     scenario_steps: list          # the grounded authored steps (appended to exploration_plan)
     scenario_unmatched: list      # refs/draft-steps that could not be grounded to a real element

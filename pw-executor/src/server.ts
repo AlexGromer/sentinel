@@ -477,6 +477,104 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       );
       return { elements };
     }
+    case 'browser.perceptionAudit': {
+      // ADR-092: how much of this page can we SEE? `browser.interactives` walks a fixed 7-token
+      // selector over the light DOM of the top frame only. Everything outside that is invisible to
+      // planning — not broken, just absent, which is worse because nothing says so.
+      //
+      // The measurement the risk register promised as `completeness_ratio` and never had. It reports
+      // a BREAKDOWN rather than one number: "we see 71%" is unactionable, "3 controls are inside a
+      // shadow root and 1 is in an iframe" tells a person what to do about it.
+      await ensureBrowser();
+      const PERCEIVED = 'button, a[href], input, select, textarea, [role=button], [role=tab]';
+      // Anything a person could plausibly click that our selector does NOT name. Kept deliberately
+      // wider than PERCEIVED: the point is to measure what we miss, so a generous denominator that
+      // occasionally over-counts is more honest than a narrow one that flatters us.
+      const CLICKABLE =
+        PERCEIVED +
+        ', [onclick], [tabindex]:not([tabindex="-1"]), [contenteditable=""], [contenteditable="true"]' +
+        ', [role=link], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=option]';
+
+      const scan = (frameName: string) =>
+        page!.evaluate(
+          ({ perceived, clickable, frame }) => {
+            const out = {
+              frame,
+              perceived: 0,
+              light: 0,
+              shadow: 0,
+              canvas: 0,
+              shadowRootsOpen: 0,
+              shadowRootsClosed: 0,
+            };
+            out.perceived = document.querySelectorAll(perceived).length;
+            out.light = document.querySelectorAll(clickable).length;
+            out.canvas = document.querySelectorAll('canvas').length;
+            // Walk every OPEN shadow root. A closed root cannot be entered at all — counting the
+            // hosts we know about is the honest way to report a bound we cannot cross.
+            const walk = (root: ParentNode) => {
+              root.querySelectorAll('*').forEach((el) => {
+                const sr = (el as HTMLElement).shadowRoot;
+                if (sr) {
+                  out.shadowRootsOpen++;
+                  out.shadow += sr.querySelectorAll(clickable).length;
+                  walk(sr);
+                } else if (el.tagName.includes('-')) {
+                  // a custom element with no reachable root: either closed, or not upgraded yet
+                  out.shadowRootsClosed++;
+                }
+              });
+            };
+            walk(document);
+            return out;
+          },
+          { perceived: PERCEIVED, clickable: CLICKABLE, frame: frameName },
+        );
+
+      const top = await scan('(top)');
+      // Frames are a separate world: `page.evaluate` never crosses into them, which is precisely why
+      // an element inside an iframe is invisible to planning today.
+      const frames: Array<Record<string, unknown>> = [];
+      for (const f of page!.frames()) {
+        if (f === page!.mainFrame()) continue;
+        try {
+          const r = await f.evaluate(
+            ({ clickable }) => ({
+              light: document.querySelectorAll(clickable).length,
+              canvas: document.querySelectorAll('canvas').length,
+            }),
+            { clickable: CLICKABLE },
+          );
+          frames.push({ url: f.url(), reachable: true, ...r });
+        } catch (e) {
+          // cross-origin: the browser refuses, and that refusal IS the finding
+          frames.push({ url: f.url(), reachable: false, error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+
+      const inFrames = frames.reduce((n, f) => n + (Number(f.light) || 0), 0);
+      const unreachableFrames = frames.filter((f) => !f.reachable).length;
+      const seen = top.perceived;
+      const total = top.light + top.shadow + inFrames;
+      return {
+        seen,
+        total,
+        // Guarded: a page with nothing clickable would otherwise report 0/0 as a failure of
+        // perception rather than as an empty page.
+        ratio: total > 0 ? Math.round((seen / total) * 1000) / 1000 : null,
+        unseen: {
+          light_no_role: Math.max(0, top.light - top.perceived), // clickable, but outside our selector
+          shadow_dom: top.shadow,
+          iframe: inFrames,
+        },
+        opaque: {
+          canvas: top.canvas + frames.reduce((n, f) => n + (Number(f.canvas) || 0), 0),
+          shadow_roots_closed: top.shadowRootsClosed,
+          frames_unreachable: unreachableFrames,
+        },
+        frames,
+      };
+    }
     case 'browser.appFaults': {
       // Deliberately does NOT require a browser: the brain calls this at report time, and by then the
       // page may already be closed. Returning the tally of a run that never launched (all zeros) is a
@@ -594,6 +692,7 @@ const TOOL_METHODS = [
   'browser.saveStorageState',
   'browser.probe',
   'browser.interactives',
+  'browser.perceptionAudit',
   'browser.appFaults',
   'browser.screenshotHash',
   'browser.setOfMarks',
@@ -654,6 +753,7 @@ async function mainMcp(): Promise<void> {
     'browser.saveStorageState': { path: z.string() },
     'browser.probe': locatorShape,
     'browser.interactives': {},
+    'browser.perceptionAudit': {},
     'browser.appFaults': {},
     'browser.screenshotHash': {},
     'browser.setOfMarks': { path: z.string() },

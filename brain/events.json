@@ -1335,6 +1335,29 @@
       "ru": "Отчёт по прогону не собрался: {error}. Прогон и его вердикт не затронуты — не хватает только report.html / junit.xml / metrics.prom",
       "en": "The run report could not be built: {error}. The run and its verdict are unaffected — only report.html / junit.xml / metrics.prom are missing",
       "emitter": "control-api"
+      },
+    "perception.partial": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "ground",
+      "ru": "Страница {page} видна не полностью: доступно {seen} из {total} интерактивных элементов (доля {ratio}). Вне поля зрения: shadow DOM {shadow}, во фреймах {iframe}. План строится по тому, что ВИДНО, поэтому охват считается от неполной картины",
+      "en": "Page {page} is only partly visible: {seen} of {total} interactive elements are reachable (ratio {ratio}). Out of sight: shadow DOM {shadow}, inside frames {iframe}. The plan is built from what IS visible, so coverage is measured against an incomplete picture",
+      "modules": [
+        "graph"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но часть страницы инструмент не видит — охват посчитан от неполной картины",
+      "en_verdict": "passed, but part of the page is invisible to the tool — coverage was measured against an incomplete picture"
+    },
+    "perception.audit_unavailable": {
+      "lvl": "info",
+      "cat": "plan",
+      "phase": "ground",
+      "ru": "Замер видимости страницы недоступен: {error}. Прогон продолжается, но доля видимого не измерена",
+      "en": "The page-visibility measurement is unavailable: {error}. The run continues, but the visible fraction is not measured",
+      "modules": [
+        "graph"
+      ]
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

@@ -50,6 +50,27 @@ def _tool_args_summary(p: dict) -> str:
     return p.get("intent") or f"{at} {p.get('name') or p.get('semantic_id', '')}"
 
 
+def _perception_audit(ex, path: str) -> dict:
+    """Ask the executor what it can and cannot see on the current page (ADR-092).
+
+    Fail-open on an older executor: a run must not break because a MEASUREMENT is unavailable. But the
+    absence is recorded rather than defaulted to a flattering number — `ratio: None` reads as "not
+    measured", while a missing key would silently become "fine" in every consumer.
+    """
+    try:
+        a = ex.call("browser.perceptionAudit") or {}
+    except Exception as e:
+        log("perception.audit_unavailable", error=e)
+        return {"ratio": None, "reason": "executor does not support browser.perceptionAudit"}
+    if a.get("total") and a.get("ratio") is not None and a["ratio"] < 1.0:
+        # Said out loud, once per page: the blind spot is a property of the page under test, and a
+        # person planning around a coverage number deserves to know the denominator was incomplete.
+        log("perception.partial", page=path, seen=a.get("seen"), total=a.get("total"),
+            ratio=a.get("ratio"), shadow=(a.get("unseen") or {}).get("shadow_dom"),
+            iframe=(a.get("unseen") or {}).get("iframe"))
+    return a
+
+
 def _elements_from_interactives(elements: list, path: str) -> list:
     """Build element descriptors (semantic_id + primary locator + L1–L6 alternatives + role + page) from
     pw-executor `browser.interactives`.
@@ -190,6 +211,18 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         path = normalize_url(pm.get("url", ""))
         elements = _elements_from_interactives(ex.call("browser.interactives").get("elements", []), path)
         buttons = [e for e in elements if e["role"] == "button"]   # coverage/candidates: button subset (unchanged)
+        # ADR-092: measure how much of THIS page perception can even see, per page, before deciding
+        # anything about coverage. Coverage answers "how much of what we saw did we exercise"; this
+        # answers "how much was there to see" — and a coverage of 1.00 over a page we half-perceive is
+        # exactly the reassuring number the register promised to guard against and never did.
+        perception = dict(state.get("perception") or {})
+        # Once per PAGE, not once per step: `ground` runs on every step of the walk, and a live run
+        # against l5.html printed the same "partly visible" line five times. A finding repeated until
+        # it becomes wallpaper is a finding nobody reads — the repeat-collapsing the log view does for
+        # the application's own output (ADR-070) exists for exactly this reason, and our own
+        # diagnostics should not need it.
+        if path not in perception:
+            perception[path] = _perception_audit(ex, path)
         seen = list(dict.fromkeys(list(state.get("interactive_seen", []))
                                   + [b["semantic_id"] for b in buttons]))
         # M9.2b (ADR-028): accumulate the site-wide element map (superset of buttons) for the scenario head.
@@ -212,7 +245,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         coverage = (done_n / total) if total else 0.0
         pm["buttons"] = buttons
         return {"interactive_seen": seen, "nav_frontier": frontier, "visited_paths": visited_paths,
-                "coverage_achieved": coverage, "page_model": pm, "site_map": site_map}
+                "coverage_achieved": coverage, "page_model": pm, "site_map": site_map,
+                "perception": perception}
 
     def plan(state: RunState) -> dict:
         """Assemble candidates, enforce convergence, ask the planner for the next action."""
@@ -461,6 +495,19 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "interactive_seen": len(state.get("interactive_seen", [])),
                     "interactive_exercised": len(state.get("interactive_exercised", [])),
                     "steps": steps}
+        # ADR-092: perception coverage rides ALONGSIDE the steps, not inside them — a step's identity
+        # must not change because a page turned out to have a shadow root, or every existing plan_hash
+        # would break for a measurement that describes the page rather than the test.
+        perception = state.get("perception") or {}
+        if perception:
+            worst = min((v.get("ratio") for v in perception.values() if v.get("ratio") is not None),
+                        default=None)
+            plan_obj["perception"] = {
+                "pages": perception,
+                # The WORST page, not the average: an average hides the one screen we half-see behind
+                # nine we see fully, and it is the half-seen screen that makes a plan incomplete.
+                "worst_ratio": worst,
+            }
         from . import budget  # M15.1: per-run token totals -> persistResult ingests tokens_* + cost_usd
         plan_obj["tokens"] = budget.tracker().summary()
         # The model that SPENT the planner tokens above — which is not always the explore planner.
