@@ -1328,6 +1328,13 @@
         "__main__"
       ],
       "exit": 4
+    },
+    "test.report_failed": {
+      "lvl": "warn",
+      "cat": "test",
+      "ru": "Отчёт по прогону не собрался: {error}. Прогон и его вердикт не затронуты — не хватает только report.html / junit.xml / metrics.prom",
+      "en": "The run report could not be built: {error}. The run and its verdict are unaffected — only report.html / junit.xml / metrics.prom are missing",
+      "emitter": "control-api"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

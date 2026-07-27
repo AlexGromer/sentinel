@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -349,7 +350,10 @@ func newArgvCapturingServer(t *testing.T, exitCode int) (s *server, repo, argvPa
 	repo = t.TempDir()
 	argvPath = filepath.Join(repo, "argv.txt")
 	script := filepath.Join(repo, "fake-agentctl.sh")
-	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argvPath + "'\nexit " + strconv.Itoa(exitCode) + "\n"
+	// ADR-089: APPEND, with a separator between invocations. The run path now spawns agentctl twice —
+	// once for the run and once for `report` — and a script that overwrote left the tests reading the
+	// SECOND argv while claiming to assert the first.
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + argvPath + "'\nprintf -- '--\\n' >> '" + argvPath + "'\nexit " + strconv.Itoa(exitCode) + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatalf("write capturing agentctl: %v", err)
 	}
@@ -421,13 +425,39 @@ func postRunAndWait(t *testing.T, s *server, body string) string {
 	return ""
 }
 
+// readArgv returns the FIRST invocation's argv — the run itself. The report spawn that follows it is
+// asserted separately by readArgvAll, so a test about how a run is launched is not quietly rewritten
+// into a test about how its report is.
 func readArgv(t *testing.T, argvPath string) []string {
+	t.Helper()
+	all := readArgvAll(t, argvPath)
+	if len(all) == 0 {
+		t.Fatal("no agentctl invocation recorded")
+	}
+	return all[0]
+}
+
+// readArgvAll returns every invocation, in order.
+func readArgvAll(t *testing.T, argvPath string) [][]string {
 	t.Helper()
 	b, err := os.ReadFile(argvPath)
 	if err != nil {
 		t.Fatalf("read argv: %v", err)
 	}
-	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	var out [][]string
+	var cur []string
+	for _, ln := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		if ln == "--" {
+			out = append(out, cur)
+			cur = nil
+			continue
+		}
+		cur = append(cur, ln)
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
 }
 
 // TestCreateRunReplayArgv: mode=replay + from_run → `agentctl run --target <plan target> --artifact-dir
@@ -883,5 +913,86 @@ func TestSettingsSchemaDefaultsMatchCode(t *testing.T) {
 		if !strings.Contains(blob, `"`+env+`", `+lit) && !strings.Contains(blob, `"`+env+`", "`+lit+`"`) {
 			t.Errorf("settings.%s: no reader of %s uses %s — this test's table is stale", name, env, lit)
 		}
+	}
+}
+
+// TestReportIsChainedIntoTheRunPath: ADR-089. `agentctl report` is the sole producer of report.html,
+// report.json, metrics.prom and junit.xml, and nothing ever called it for a UI-launched run — measured
+// on this repo before the fix: 192 runs/control-* directories, ZERO with metrics.prom. All four sat in
+// the fetch whitelist and answered 404 in practice, so the product's primary path produced neither the
+// human surface (report.html: identity verdicts, per-step outcomes, before→after locators) nor the
+// machine one (junit.xml, the contract ADR-073 exists for).
+//
+// Asserted against the source: the alternative is a full browser run inside a unit test. The live
+// end-to-end check was done by hand against a real control-api and is recorded in the PR.
+func TestReportIsChainedIntoTheRunPath(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	if !strings.Contains(body, "s.generateReport(rec, artDir, cmd.Env, reportState, reportCanceled)") {
+		t.Fatal("the run teardown no longer calls generateReport — a UI run stops producing any report")
+	}
+	// Order matters: report.json is an input persistResult reads, so generating after it would persist
+	// a result assembled from a file that did not exist yet.
+	gi := strings.Index(body, "s.generateReport(rec, artDir, cmd.Env, reportState, reportCanceled)")
+	pi := strings.Index(body, "s.persistResult(rec)")
+	if gi < 0 || pi < 0 || gi > pi {
+		t.Fatalf("generateReport must precede persistResult (got %d vs %d)", gi, pi)
+	}
+	// A reporting failure must not rewrite the run's outcome: the verdict is already decided.
+	fn := body[strings.Index(body, "func (s *server) generateReport"):]
+	fn = fn[:strings.Index(fn, "\n}")]
+	// Assignment, not comparison: `rec.State =` is a substring of `rec.State ==`, and the function
+	// legitimately READS the state to decide whether there is anything to report. Matching the
+	// substring flagged its own guard clause — the same trap that caught a check earlier today.
+	assign := regexp.MustCompile(`rec\.(State|ExitCode)\s*=[^=]`)
+	if assign.MatchString(fn) {
+		t.Error("generateReport must not change the run's state or exit code")
+	}
+	// …but it must not be silent either.
+	if !strings.Contains(fn, "codeReportFailed") {
+		t.Error("a failed report must emit a catalogued code, or the artifacts vanish with no explanation")
+	}
+	// And every artifact it produces must be fetchable, or it exists only on the server's disk.
+	for _, a := range []string{"report.html", "report.json", "metrics.prom", "junit.xml"} {
+		if !artifactWhitelist[a] {
+			t.Errorf("%s is produced but not in artifactWhitelist — the UI would get 400", a)
+		}
+	}
+}
+
+// TestReportSpawnFollowsTheRun: the report is not just called somewhere in the file — it is the SECOND
+// agentctl invocation of a finished run, with the run's own artifact dir. Source-matching (the test
+// above) proves the call site exists; this proves it actually runs.
+func TestReportSpawnFollowsTheRun(t *testing.T) {
+	s, repo, argvPath := newArgvCapturingServer(t, 0)
+	seedPriorPlan(t, repo, "prior1", "plan.json",
+		`{"target_url":"https://app.example","plan_id":"p1","plan_hash":"h","steps":[]}`)
+	id := postRunAndWait(t, s, runBody(t, map[string]string{"mode": "replay", "from_run": "prior1"}))
+
+	all := readArgvAll(t, argvPath)
+	if len(all) != 2 {
+		t.Fatalf("want 2 agentctl invocations (run, report), got %d: %#v", len(all), all)
+	}
+	want := []string{"report", "--run", filepath.Join(repo, "runs", "control-"+id)}
+	if !reflect.DeepEqual(all[1], want) {
+		t.Fatalf("report argv:\n got %#v\nwant %#v", all[1], want)
+	}
+}
+
+// TestReportIsSkippedForARunThatProducedNothing: a spawn failure has no artifacts to report on, and
+// `agentctl report` would exit non-zero for the honest reason that there is nothing there. Reporting
+// that as a warning would train the reader to ignore the warning.
+func TestReportIsSkippedForARunThatProducedNothing(t *testing.T) {
+	repo := t.TempDir()
+	argvPath := filepath.Join(repo, "argv.txt")
+	s := &server{repo: repo, agentctl: filepath.Join(repo, "does-not-exist"),
+		token: "secret-tok", corsAllow: map[string]bool{}, runs: map[string]*run{}}
+	postRunAndWait(t, s, runBody(t, map[string]string{"target": "https://app.example"}))
+	if _, err := os.Stat(argvPath); err == nil {
+		t.Fatal("a run that never spawned must not trigger a report spawn")
 	}
 }

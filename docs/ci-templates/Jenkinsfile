@@ -60,8 +60,18 @@ pipeline {
 
   post {
     always {
+      // ADR-090: build the reports before archiving. `agentctl report` is the sole producer of
+      // report.html, report.json, metrics.prom and junit.xml — without this the junit step below has
+      // nothing to read. In `post { always }` so a FAILED run still gets one: that is the run whose
+      // report someone actually opens. `|| true` so a reporting problem never masks the real outcome.
+      sh 'for d in runs/*/; do docker compose run --rm sentinel report --run "/$d" || true; done'
       // plan.json / transcript / heal-report / scenario.json / report / trace.zip land here.
       archiveArtifacts artifacts: 'runs/**', allowEmptyArchive: true
+      // ADR-090: hand junit.xml to Jenkins' own test reporter. It has existed since ADR-073 as "the
+      // machine contract every CI consumes", and this template consumed nothing — the results were
+      // archived and invisible in the build. allowEmptyResults, because an explore run legitimately
+      // produces no junit.xml (it is a replay artifact) and a missing file must not redden the build.
+      junit testResults: 'runs/**/junit.xml', allowEmptyResults: true
     }
   }
 }

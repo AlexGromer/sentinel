@@ -742,6 +742,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <div id="b-urlWrap" style="display:none">
             <label for="b-baseurl" style="margin-top:.4rem">LLM_BASE_URL</label>
             <input id="b-baseurl" placeholder="http://localhost:11434/v1">
+            <!-- ADR-091: the hub never mentioned the model router at all, so a user reading only this
+                 page could not know it ships. Two services are real in our compose; everything else
+                 behind an OpenAI-compatible URL is the user's own. -->
+            <div class="hint" style="margin-top:.3rem">
+              <span data-lang="ru">Готовые сервисы в нашем <span class="mono">docker-compose</span>: <span class="mono">ollama</span> (<span class="mono">--profile ollama</span>) и <span class="mono">litellm</span> — роутер поверх многих провайдеров (<span class="mono">--profile litellm</span>, ключи в <span class="mono">deploy/litellm/config.yaml</span>). Любой другой OpenAI-совместимый адрес тоже подойдёт — его вы поднимаете сами. Пошагово — в <a href="./setup/">мастере настройки</a>.</span>
+              <span data-lang="en">Services this <span class="mono">docker-compose</span> really ships: <span class="mono">ollama</span> (<span class="mono">--profile ollama</span>) and <span class="mono">litellm</span>, a router over many providers (<span class="mono">--profile litellm</span>, keys in <span class="mono">deploy/litellm/config.yaml</span>). Any other OpenAI-compatible address works too — that one is yours to run. Step by step in the <a href="./setup/">setup wizard</a>.</span>
+            </div>
           </div>
           <label for="b-modelp" style="margin-top:.4rem">LLM_MODEL_PLANNER</label>
           <input id="b-modelp" placeholder="qwen3:14b  /  claude-opus-4-8  /  o3">

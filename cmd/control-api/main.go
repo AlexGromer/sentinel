@@ -651,10 +651,25 @@ func (s *server) spawnRun(req runRequest) *run {
 		}
 		stateForEvent := rec.State
 		finishedAt := rec.FinishedAt
+		// ADR-089: the report is built while the run still reads as `running`, and the terminal state is
+		// published only afterwards. Otherwise a client that polls GET /v1/runs/{id}, sees `done` and
+		// immediately fetches report.html races the generation and gets a 404 — a run that says it
+		// finished must have finished producing what it promises.
+		reportState, reportCanceled := rec.State, rec.canceled
+		rec.State = "running"
+		s.mu.Unlock()
+		s.generateReport(rec, artDir, cmd.Env, reportState, reportCanceled)
+		s.mu.Lock()
+		rec.State = reportState
 		s.mu.Unlock()
 		if s.store != nil { // M13: persist the terminal state (done/failed + exit_code + finished_at)
 			s.store.upsertRun(rec)
 		}
+		// ADR-089: generate the report BEFORE persisting results, because report.json is one of the
+		// inputs persistResult reads. Until now nothing ever called `agentctl report` for a UI-launched
+		// run, so the product's primary path produced NONE of report.html / report.json / metrics.prom /
+		// junit.xml — measured on this repo: 192 runs/control-* directories, zero with metrics.prom.
+		// All four sit in the artifact whitelist and answered 404 in practice.
 		s.persistScenario(rec) // M14 wave W3: wire the scenarios domain to a real caller (no-op if no scenario.json)
 		s.persistResult(rec)   // M15 (ADR-051): wire the results + metrics domains (no-op if no store/artifacts)
 		lw.flush()             // emit any trailing partial line (all brain output precedes run.finished)
@@ -666,6 +681,50 @@ func (s *server) spawnRun(req runRequest) *run {
 		rec.stream.finish() // release SSE subscribers
 	}()
 	return rec
+}
+
+// codeReportFailed is catalogued in brain/events.json (emitter: control-api).
+const codeReportFailed = "test.report_failed"
+
+// generateReport runs `agentctl report --run <dir>` for a finished run, producing report.html,
+// report.json, metrics.prom and junit.xml (brain/report.py::generate) — the surfaces on which a
+// person reads WHAT happened and a CI reads whether to fail.
+//
+// Deliberately best-effort and non-fatal: the run's own verdict is already decided and its exit code
+// already recorded, so a reporting failure must not change the outcome the user is told about. It is
+// not silent either — a failure emits test.report_failed, because "the artifacts are missing and
+// nobody said why" is the shape this whole change exists to remove.
+//
+// Skipped for a run that never produced anything to report on: a failed spawn has no heal-report.json
+// and `agentctl report` would exit non-zero for the honest reason that there is nothing there.
+func (s *server) generateReport(rec *run, artDir string, runEnv []string, state string, canceled bool) {
+	// The outcome is passed in rather than read off rec: the caller masks rec.State as "running" for
+	// the duration, so that no client sees a finished run whose artifacts are still being written.
+	if state == "failed" || canceled {
+		return
+	}
+	cmd := exec.Command(s.agentctl, "report", "--run", artDir)
+	cmd.Dir = s.repo
+	// The SAME environment the run itself got, not a freshly resolved one. The report is part of that
+	// run, and the per-run settings it needs travel there — PROM_PUSHGATEWAY decides whether the
+	// metrics are pushed at all. Re-resolving would quietly give the report a different world than the
+	// run it describes, which is the kind of difference nobody notices until a number goes missing.
+	cmd.Env = runEnv
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return
+	}
+	// The report is optional for an explore run (heal-report.json is a replay artifact), so a missing
+	// input is expected rather than exceptional — say so once, at a level the log view can filter.
+	line := strings.TrimSpace(string(out))
+	if len(line) > 400 {
+		line = line[:400] + "…"
+	}
+	// The code is a literal constant rather than inlined into the message: brain/events.json is the
+	// single source for what this line means, and the offline catalogue gate reads THIS file looking
+	// for the code as a quoted literal. A code spliced into a longer string is invisible to it.
+	rec.stream.append(aguiLine("log", rec.ID, time.Now().UTC().Format(time.RFC3339),
+		map[string]any{"line": "[warn|test] " + codeReportFailed + ": " + err.Error() + " — " + line}))
 }
 
 // scenarioArtifact mirrors the fields of scenario.json that the scenarios domain needs
@@ -1081,6 +1140,7 @@ var artifactWhitelist = map[string]bool{
 	"baseline-report.json":  true, // M9.9: baseline-update output
 	"junit.xml":             true, // ADR-073: the machine contract every CI consumes
 	"executed-plan.json":    true, // ADR-047 follow-on: the plan a replay ran, so the replay is replayable
+	"metrics.prom":          true, // ADR-089: Prometheus textfile — the run's numbers, now that a UI run produces them
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
