@@ -437,6 +437,19 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const path = params?.path as string | undefined;
       if (!path) throw new Error('saveStorageState: missing params.path');
       await context!.storageState({ path });
+      // ADR-084: this file IS the session — cookies and localStorage of an authenticated user, in
+      // cleartext. Playwright writes it with the process umask (0644 typically), so every local
+      // account could read it. The run directory is chmod 0700 because it MIGHT hold PII; a file that
+      // certainly holds live credentials had no protection at all, and `STORAGE_STATE_SAVE` is an
+      // arbitrary path that usually lands next to the project rather than inside runs/.
+      // Best-effort: a filesystem without POSIX modes (a Windows share) must not fail the run — the
+      // state was still saved, and refusing to continue would trade a real capability for a mode bit
+      // that platform never had.
+      try {
+        fs.chmodSync(path, 0o600);
+      } catch (e) {
+        log('saveStorageState: could not restrict permissions on', path, e);
+      }
       return { path };
     }
     case 'browser.probe':
@@ -522,13 +535,17 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       return { marks, path: outPath ?? null };
     }
     case 'browser.traceStop': {
+      // ADR-084: `path` is now OPTIONAL, and omitting it DISCARDS the trace instead of writing it.
+      // Playwright's `tracing.stop()` without a path throws the buffered trace away, which is
+      // strictly better than writing the file and deleting it: the bytes never reach the disk, so
+      // there is no window in which a green run's live DOM sits in the filesystem.
       const path = params?.path as string | undefined;
-      if (!path) throw new Error('traceStop: missing params.path');
       if (context && tracingStarted && !tracingStopped) {
-        await context.tracing.stop({ path });
+        await context.tracing.stop(path ? { path } : undefined);
         tracingStopped = true;
+        if (!path) log('trace discarded (run finished clean; set SENTINEL_TRACE_ALWAYS=1 to keep it)');
       }
-      return { path }; // no-op when tracing was never started (PW_NO_TRACE=1 auth run)
+      return { path: path ?? null }; // no-op when tracing was never started (PW_NO_TRACE=1 auth run)
     }
     case 'browser.tabs': {
       // M9.4 (A6): list tracked browser tabs/pages (drop any that closed). Indices match switchTab.
@@ -640,7 +657,7 @@ async function mainMcp(): Promise<void> {
     'browser.appFaults': {},
     'browser.screenshotHash': {},
     'browser.setOfMarks': { path: z.string() },
-    'browser.traceStop': { path: z.string() },
+    'browser.traceStop': { path: z.string().optional() }, // ADR-084: omitted = discard the trace
   };
   for (const method of TOOL_METHODS) {
     const toolName = method.replace('browser.', 'browser_'); // MCP tool names avoid dots

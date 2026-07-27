@@ -922,6 +922,16 @@
         "healing"
       ]
     },
+    "system.trace_stop_error": {
+      "lvl": "warn",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Не удалось корректно закрыть трейс: {error} — прогон уже завершён, результат не меняется",
+      "en": "Could not close the trace cleanly: {error} — the run has already finished and its result stands",
+      "modules": [
+        "__main__"
+      ]
+    },
     "heal.pick_out_of_range": {
       "lvl": "warn",
       "cat": "heal",
