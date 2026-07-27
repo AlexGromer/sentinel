@@ -1,0 +1,118 @@
+"""Offline gate: the tool measures how much of a page it can SEE, and says when that is not all of it.
+
+Run:  .venv/bin/python tests/test_perception_measure_offline.py
+
+`GAP-RISK-005` promised a `completeness_ratio` and a gated visual fallback. Neither existed —
+`grep -rni completeness` over *.py/*.ts/*.go returned zero — while the constraints table listed it as
+the mitigation for a11y blind spots. So the product reported coverage of 1.00 over pages it perceived
+in part, and nothing anywhere said the denominator was incomplete.
+
+Coverage answers "how much of what we saw did we exercise". This answers the prior question: "how much
+was there to see". The two multiply, and only one of them was ever measured.
+
+What this pins:
+  * the ratio and its BREAKDOWN reach the plan, so a reader can act on it rather than just feel bad;
+  * a partly-visible page is announced — as a degradation, so it reaches the verdict;
+  * it is announced ONCE PER PAGE, not once per step (a live run printed it five times before);
+  * an older executor without the RPC degrades to "not measured", never to a flattering number;
+  * `worst_ratio`, not the average — an average hides the one half-seen screen behind nine good ones.
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from brain import eventlog                                   # noqa: E402
+from brain.graph import _perception_audit                    # noqa: E402
+
+FULL = {"seen": 9, "total": 9, "ratio": 1.0,
+        "unseen": {"light_no_role": 0, "shadow_dom": 0, "iframe": 0},
+        "opaque": {"canvas": 0, "shadow_roots_closed": 0, "frames_unreachable": 0}}
+PARTIAL = {"seen": 15, "total": 23, "ratio": 0.652,
+           "unseen": {"light_no_role": 0, "shadow_dom": 8, "iframe": 0},
+           "opaque": {"canvas": 0, "shadow_roots_closed": 0, "frames_unreachable": 0}}
+
+
+class Ex:
+    def __init__(self, audit=None, raises=False):
+        self.audit, self.raises, self.calls = audit, raises, 0
+
+    def call(self, m, **p):
+        if m == "browser.perceptionAudit":
+            self.calls += 1
+            if self.raises:
+                raise RuntimeError("unknown method: browser.perceptionAudit")
+            return self.audit
+        return {}
+
+
+def test_a_fully_visible_page_says_nothing():
+    """The negative control, and it comes first: a mechanism that warns about every page is noise, and
+    noise is how a real warning gets ignored."""
+    eventlog.reset_degradations()
+    a = _perception_audit(Ex(FULL), "file:///p")
+    assert a["ratio"] == 1.0, a
+    assert eventlog.degradations() == [], eventlog.degradations()
+
+
+def test_a_partly_visible_page_is_announced_and_reaches_the_verdict():
+    eventlog.reset_degradations()
+    a = _perception_audit(Ex(PARTIAL), "file:///p")
+    assert a["seen"] == 15 and a["total"] == 23, a
+    assert "perception.partial" in eventlog.degradations(), eventlog.degradations()
+
+
+def test_the_breakdown_survives_not_just_the_number():
+    """A ratio alone is unactionable. "8 controls are inside a shadow root" tells a person what to do,
+    and it is what the interface will show."""
+    a = _perception_audit(Ex(PARTIAL), "file:///p")
+    assert a["unseen"]["shadow_dom"] == 8, a
+    for key in ("light_no_role", "shadow_dom", "iframe"):
+        assert key in a["unseen"], (key, a)
+    for key in ("canvas", "shadow_roots_closed", "frames_unreachable"):
+        assert key in a["opaque"], (key, a)
+
+
+def test_an_older_executor_degrades_to_not_measured_never_to_fine():
+    """Fail-open on the MEASUREMENT: a run must not break because a number is unavailable. But the
+    absence is recorded as `ratio: None` — a missing key would read as "fine" in every consumer, which
+    is the failure this whole change exists to remove."""
+    eventlog.reset_degradations()
+    a = _perception_audit(Ex(raises=True), "file:///p")
+    assert a["ratio"] is None, a
+    assert a.get("reason"), "the absence must say WHY, or it reads as a measurement of zero"
+    assert "perception.partial" not in eventlog.degradations(), \
+        "an unavailable measurement is not the same claim as a partly-visible page"
+
+
+def test_the_plan_carries_the_worst_page_not_the_average():
+    """Asserted against the source: building a full plan needs a browser. The choice matters — an
+    average hides the one screen we half-see behind nine we see fully, and it is the half-seen screen
+    that makes the plan incomplete."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "brain" / "graph.py").read_text()
+    i = src.index('plan_obj["perception"]')
+    window = src[max(0, i - 700):i + 300]
+    assert "worst_ratio" in window, window[-300:]
+    assert "min(" in window, "the worst page is a min over ratios, not a mean"
+    assert "sum(" not in window.split("worst_ratio")[0][-400:], "an average would hide the worst page"
+
+
+def test_it_is_measured_once_per_page_not_once_per_step():
+    """`ground` runs on every step of the walk. A live run against l5.html printed the same finding
+    five times before this guard — a finding repeated until it becomes wallpaper is one nobody reads.
+    Asserted on the source, because the loop it guards is the graph's."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "brain" / "graph.py").read_text()
+    i = src.index("perception[path] = _perception_audit")
+    before = src[max(0, i - 400):i]
+    assert "if path not in perception" in before, before[-200:]
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    for fn in fns:
+        fn()
+        print("  ok  ", fn.__name__)
+    print(f"OK — {len(fns)} perception-measurement tests passed")
