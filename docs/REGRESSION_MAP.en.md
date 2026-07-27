@@ -154,11 +154,26 @@ The thing the product exists for.
 
 Not "we did not do it" but "the current architecture does not reach it".
 
-**Perception blind spots** (`GAP-RISK-005`). `browser.interactives` works from a fixed CSS selector
-over `button, a[href], input, select, textarea, [role=button], [role=tab]`. Out of reach: **shadow
-DOM**, the contents of **canvas**, **cross-origin iframes**, custom web components with no ARIA role.
-An element perception cannot see enters neither the map, nor coverage, nor any check — and its
-absence is signalled by nothing.
+**Perception blind spots** (`GAP-RISK-005`). `browser.interactives` works from a fixed CSS selector,
+`PERCEPTION_SELECTOR` (`button, a[href], input, select, textarea, [role=button], [role=tab]`), read
+through `page.$$eval` — i.e. Playwright's selector engine.
+
+What that DOES reach, contrary to what this entry used to say (ADR-093, measured against the built
+executor): **open shadow DOM**, nested roots included. The engine pierces them, and five of the six
+locator tiers (all but `xpath`) resolve and click inside a root. On `l5.html` that is 23 controls of
+23, not 15 — the old wording repeated a number ADR-092 obtained by a different mechanism.
+
+Out of reach: **iframes of any origin** (neither `$$eval` nor `getByRole` crosses the boundary;
+`frameLocator` does, but perception does not use it yet — that is `PROD-BLINDSPOTS`, PR-2), the
+contents of **canvas**, **CLOSED** shadow roots, virtualised lists (the rows are not in the DOM yet),
+and anything clickable outside the selector (`[onclick]`, `[tabindex]`, `contenteditable`, clickable
+ARIA roles — measured at zero occurrences across this entire repository; Alex's call was a fixture
+first, `l8-blindspots.html`, then data).
+
+That absence is NO LONGER silent: `browser.perceptionAudit` reports the visible fraction and a
+breakdown (`unseen.outside_selector`, `unseen.iframe`, `opaque.{canvas, shadow_roots_closed,
+frames_unreachable}`), the plan carries `worst_ratio`, and partial visibility raises
+`perception.partial` with `degrades: true`. The boundary is drawn; what lies beyond it still does.
 
 **SPA states.** The frontier grows from `browser.links` of the same origin. A route change without an
 `<a href>` is invisible. There is no state deduplication: two URLs rendering the same view count

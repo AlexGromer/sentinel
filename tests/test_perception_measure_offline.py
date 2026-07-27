@@ -10,6 +10,14 @@ in part, and nothing anywhere said the denominator was incomplete.
 Coverage answers "how much of what we saw did we exercise". This answers the prior question: "how much
 was there to see". The two multiply, and only one of them was ever measured.
 
+⚠ SCOPE (ADR-093). Everything below runs against a STUB executor, so it pins the PLUMBING and nothing
+else: that the number reaches the plan, once per page, as a degradation, and that an absent RPC
+degrades to "not measured". It cannot tell whether the number is TRUE — and it did not: the value it
+stubbed was itself wrong for a year of commits, because the audit measured a re-implementation of
+perception instead of perception. Whether the number is true is pinned in
+`tests/test_perception_engine_offline.py`, which drives the real executor against a real browser.
+Keep the two apart; a stub that grows opinions about reality is how this went wrong.
+
 What this pins:
   * the ratio and its BREAKDOWN reach the plan, so a reader can act on it rather than just feel bad;
   * a partly-visible page is announced — as a degradation, so it reaches the verdict;
@@ -27,11 +35,20 @@ from brain import eventlog                                   # noqa: E402
 from brain.graph import _perception_audit                    # noqa: E402
 
 FULL = {"seen": 9, "total": 9, "ratio": 1.0,
-        "unseen": {"light_no_role": 0, "shadow_dom": 0, "iframe": 0},
+        "unseen": {"outside_selector": 0, "iframe": 0},
         "opaque": {"canvas": 0, "shadow_roots_closed": 0, "frames_unreachable": 0}}
-PARTIAL = {"seen": 15, "total": 23, "ratio": 0.652,
-           "unseen": {"light_no_role": 0, "shadow_dom": 8, "iframe": 0},
-           "opaque": {"canvas": 0, "shadow_roots_closed": 0, "frames_unreachable": 0}}
+# ADR-093: these numbers used to be `seen 15 / 23` with `shadow_dom: 8`, copied from what the audit
+# reported for `l5.html` — and both the count and the zone were wrong, because the audit was
+# measuring a re-implementation of perception rather than perception. `l5` is in fact fully seen.
+# The stub now carries `l8-blindspots.html`, a fixture built so that a partly-seen page EXISTS, and
+# the real numbers are pinned against the real executor in `test_perception_engine_offline.py`.
+#
+# The lesson this file keeps: a stub answers with whatever its author believed, so a stubbed gate can
+# only pin PLUMBING (does the number reach the plan, once per page, as a degradation). It could never
+# have caught the wrong number, and nothing here should be read as if it had.
+PARTIAL = {"seen": 4, "total": 9, "ratio": 0.444,
+           "unseen": {"outside_selector": 5, "iframe": 0},
+           "opaque": {"canvas": 1, "shadow_roots_closed": 1, "frames_unreachable": 0}}
 
 
 class Ex:
@@ -59,16 +76,16 @@ def test_a_fully_visible_page_says_nothing():
 def test_a_partly_visible_page_is_announced_and_reaches_the_verdict():
     eventlog.reset_degradations()
     a = _perception_audit(Ex(PARTIAL), "file:///p")
-    assert a["seen"] == 15 and a["total"] == 23, a
+    assert a["seen"] == 4 and a["total"] == 9, a
     assert "perception.partial" in eventlog.degradations(), eventlog.degradations()
 
 
 def test_the_breakdown_survives_not_just_the_number():
-    """A ratio alone is unactionable. "8 controls are inside a shadow root" tells a person what to do,
+    """A ratio alone is unactionable. "5 controls sit outside our selector" tells a person what to do,
     and it is what the interface will show."""
     a = _perception_audit(Ex(PARTIAL), "file:///p")
-    assert a["unseen"]["shadow_dom"] == 8, a
-    for key in ("light_no_role", "shadow_dom", "iframe"):
+    assert a["unseen"]["outside_selector"] == 5, a
+    for key in ("outside_selector", "iframe"):
         assert key in a["unseen"], (key, a)
     for key in ("canvas", "shadow_roots_closed", "frames_unreachable"):
         assert key in a["opaque"], (key, a)

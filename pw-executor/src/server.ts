@@ -125,6 +125,32 @@ interface RpcResponse {
   error?: { code: number; message: string };
 }
 
+/** What the tool considers an interactive control. ADR-093: ONE definition.
+ *
+ * This literal used to be copy-pasted three times — `browser.interactives`, `browser.setOfMarks` and
+ * `browser.perceptionAudit` each carried their own copy — and the copies are exactly how the audit
+ * came to measure something other than the perception it reported on. Naming it once makes the three
+ * surfaces disagree only if someone changes them on purpose.
+ *
+ * ⚠ `browser.links` deliberately keeps its OWN `a[href]` selector: it feeds the navigation frontier
+ * (which URLs are reachable), not the control inventory. Merging the two would make every button on
+ * the page look like somewhere to go. Leave it separate.
+ *
+ * Read through Playwright's selector engine (`page.locator` / `page.$$eval`), which PIERCES open
+ * shadow roots — measured, not assumed: on `l5.html` it yields 23 controls where the raw DOM API
+ * yields 15. Anything that measures this selector must go through the same engine or it is measuring
+ * a different page (ADR-093).
+ */
+const PERCEPTION_SELECTOR = 'button, a[href], input, select, textarea, [role=button], [role=tab]';
+
+/** Anything a person could plausibly click that PERCEPTION_SELECTOR does NOT name. Deliberately
+ * wider than what we perceive: the point is to measure what we MISS, and a generous denominator that
+ * occasionally over-counts is more honest than a narrow one that flatters us. */
+const CLICKABLE_SELECTOR =
+  PERCEPTION_SELECTOR +
+  ', [onclick], [tabindex]:not([tabindex="-1"]), [contenteditable=""], [contenteditable="true"]' +
+  ', [role=link], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=option]';
+
 /** A locator is a dict with EXACTLY ONE of these shapes (M2 locator model). */
 interface LocatorSpec {
   testid?: string;
@@ -306,6 +332,9 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       return { url: page!.url(), title: await page!.title() };
     case 'browser.links': {
       await ensureBrowser();
+      // Its own selector ON PURPOSE (ADR-093): this feeds the navigation frontier — which URLs are
+      // reachable from here — not the control inventory. Folding it into PERCEPTION_SELECTOR would
+      // make every button on the page look like somewhere to go.
       const links = await page!.$$eval('a[href]', (els) =>
         els.map((a) => ({ href: (a as HTMLAnchorElement).href, text: (a.textContent || '').trim() })),
       );
@@ -458,7 +487,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.interactives': {
       await ensureBrowser();
       const elements = await page!.$$eval(
-        'button, a[href], input, select, textarea, [role=button], [role=tab]',
+        PERCEPTION_SELECTOR,
         (els) =>
           els.map((e) => ({
             role: e.getAttribute('role') || e.tagName.toLowerCase(),
@@ -466,6 +495,30 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
             testid: e.getAttribute('data-testid'),
             text: (e.textContent || '').trim().slice(0, 200),
             tag: e.tagName.toLowerCase(),
+            // ADR-093: whether the control is RENDERED at all. Same contract as `disabled` below —
+            // reported, never filtered here. It closes a disagreement between two perception
+            // surfaces that neither of them knew about: `browser.setOfMarks` already drops
+            // zero-box elements, so on `l5.html` the text tier saw 23 controls and the visual tier
+            // 16, and nothing anywhere said which was right. Both are: they answer different
+            // questions. Now they say so in the same vocabulary.
+            // Deliberately Playwright's OWN definition of visible — a non-empty box, and not
+            // `visibility:hidden` — because that is the definition that predicts whether `click()`
+            // will work: it is what the actionability check waits for. Two things it therefore does
+            // NOT call hidden, on purpose: `opacity:0` (Playwright will click it, so calling it
+            // invisible would make us disagree with our own executor) and a control merely scrolled
+            // out of view (Playwright scrolls to it).
+            //
+            // There is no `display === 'none'` test here and that is not an omission. An element
+            // inside a `display:none` ancestor computes its OWN display as `block` — getComputedStyle
+            // does not consult ancestors — so such a test would never fire for the case it appears to
+            // handle. The box is what collapses, and the box is what is checked. (An earlier draft
+            // carried the clause; a mutation that deleted it survived, which is how the dead branch
+            // was found rather than reasoned about.)
+            visible: (() => {
+              const r = e.getBoundingClientRect();
+              if (r.width <= 0 || r.height <= 0) return false;
+              return getComputedStyle(e).visibility !== 'hidden';
+            })(),
             // M9-LIVE: whether the control can be actuated AT THIS MOMENT. Reported, not filtered —
             // perception describes the page, the brain decides what to do about it. Both spellings
             // count: `disabled` is only valid on form controls, so a `<div role=button>` can only say
@@ -478,84 +531,76 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       return { elements };
     }
     case 'browser.perceptionAudit': {
-      // ADR-092: how much of this page can we SEE? `browser.interactives` walks a fixed 7-token
-      // selector over the light DOM of the top frame only. Everything outside that is invisible to
-      // planning — not broken, just absent, which is worse because nothing says so.
+      // How much of this page can we SEE? Reports a BREAKDOWN rather than one number: "we see 71%"
+      // is unactionable, "1 control is in an iframe and 3 are outside our selector" tells a person
+      // what to do about it.
       //
-      // The measurement the risk register promised as `completeness_ratio` and never had. It reports
-      // a BREAKDOWN rather than one number: "we see 71%" is unactionable, "3 controls are inside a
-      // shadow root and 1 is in an iframe" tells a person what to do about it.
+      // ADR-093 — THE NUMERATOR IS MEASURED THROUGH THE SAME ENGINE AS THE PERCEPTION IT DESCRIBES.
+      // ADR-092 measured it with `document.querySelectorAll` inside `page.evaluate` while the
+      // perception it claimed to describe uses `page.$$eval`, i.e. Playwright's selector engine,
+      // which PIERCES open shadow roots. So the audit compared perception against a re-implementation
+      // of perception, and the two disagreed exactly where it mattered: on `l5.html` it reported
+      // `seen 15 / 23, shadow_dom: 8` while `browser.interactives` returned all 23 and
+      // `browser.click{role,name}` actuated the very controls the audit called invisible. That false
+      // `ratio < 1.0` raised a degradation, so the lie reached shipped artefacts.
+      //
+      // The rule this encodes: a measurement of a capability must invoke the capability, never
+      // re-derive it. Everything below goes through `locator()` for that reason alone.
       await ensureBrowser();
-      const PERCEIVED = 'button, a[href], input, select, textarea, [role=button], [role=tab]';
-      // Anything a person could plausibly click that our selector does NOT name. Kept deliberately
-      // wider than PERCEIVED: the point is to measure what we miss, so a generous denominator that
-      // occasionally over-counts is more honest than a narrow one that flatters us.
-      const CLICKABLE =
-        PERCEIVED +
-        ', [onclick], [tabindex]:not([tabindex="-1"]), [contenteditable=""], [contenteditable="true"]' +
-        ', [role=link], [role=checkbox], [role=radio], [role=switch], [role=menuitem], [role=option]';
 
-      const scan = (frameName: string) =>
-        page!.evaluate(
-          ({ perceived, clickable, frame }) => {
-            const out = {
-              frame,
-              perceived: 0,
-              light: 0,
-              shadow: 0,
-              canvas: 0,
-              shadowRootsOpen: 0,
-              shadowRootsClosed: 0,
-            };
-            out.perceived = document.querySelectorAll(perceived).length;
-            out.light = document.querySelectorAll(clickable).length;
-            out.canvas = document.querySelectorAll('canvas').length;
-            // Walk every OPEN shadow root. A closed root cannot be entered at all — counting the
-            // hosts we know about is the honest way to report a bound we cannot cross.
-            const walk = (root: ParentNode) => {
-              root.querySelectorAll('*').forEach((el) => {
-                const sr = (el as HTMLElement).shadowRoot;
-                if (sr) {
-                  out.shadowRootsOpen++;
-                  out.shadow += sr.querySelectorAll(clickable).length;
-                  walk(sr);
-                } else if (el.tagName.includes('-')) {
-                  // a custom element with no reachable root: either closed, or not upgraded yet
-                  out.shadowRootsClosed++;
-                }
-              });
-            };
-            walk(document);
-            return out;
-          },
-          { perceived: PERCEIVED, clickable: CLICKABLE, frame: frameName },
-        );
+      // Both counts, one engine — the same one `browser.interactives` uses, so `seen` is by
+      // construction the size of the list that RPC returns, not an estimate of it.
+      const seen = await page!.locator(PERCEPTION_SELECTOR).count();
+      const topClickable = await page!.locator(CLICKABLE_SELECTOR).count();
 
-      const top = await scan('(top)');
-      // Frames are a separate world: `page.evaluate` never crosses into them, which is precisely why
-      // an element inside an iframe is invisible to planning today.
+      // The shadow walk survives ONLY to describe boundaries, never to count controls: the engine
+      // already crossed the open ones. A closed root cannot be entered at all, so counting the hosts
+      // is the honest way to report a bound we cannot cross.
+      const roots = await page!.evaluate(() => {
+        let open = 0;
+        let closed = 0;
+        const walk = (root: ParentNode) => {
+          root.querySelectorAll('*').forEach((el) => {
+            const sr = (el as HTMLElement).shadowRoot;
+            if (sr) {
+              open++;
+              walk(sr);
+            } else if (el.tagName.includes('-')) {
+              // a custom element with no reachable root: either closed, or not upgraded yet
+              closed++;
+            }
+          });
+        };
+        walk(document);
+        return { open, closed };
+      });
+      const topCanvas = await page!.locator('canvas').count();
+
+      // Frames ARE a separate world for perception: `$$eval`/`locator` on the page never cross into
+      // one, which is precisely why a control inside an iframe is invisible to planning today.
+      // Measurement can cross, and does — Playwright injects into out-of-process frames too, so a
+      // cross-origin child is counted rather than written off. (ADR-092 asserted the opposite here:
+      // "cross-origin: the browser refuses, and that refusal IS the finding". Measured against two
+      // local origins, nothing refuses — `frame.evaluate`, `frame.locator` and a click all succeed.
+      // A frame that DOES throw is one that detached or is mid-navigation, which is a different
+      // finding and is now named as one.)
       const frames: Array<Record<string, unknown>> = [];
       for (const f of page!.frames()) {
         if (f === page!.mainFrame()) continue;
         try {
-          const r = await f.evaluate(
-            ({ clickable }) => ({
-              light: document.querySelectorAll(clickable).length,
-              canvas: document.querySelectorAll('canvas').length,
-            }),
-            { clickable: CLICKABLE },
-          );
-          frames.push({ url: f.url(), reachable: true, ...r });
+          frames.push({
+            url: f.url(),
+            reachable: true,
+            clickable: await f.locator(CLICKABLE_SELECTOR).count(),
+            canvas: await f.locator('canvas').count(),
+          });
         } catch (e) {
-          // cross-origin: the browser refuses, and that refusal IS the finding
           frames.push({ url: f.url(), reachable: false, error: e instanceof Error ? e.message : String(e) });
         }
       }
 
-      const inFrames = frames.reduce((n, f) => n + (Number(f.light) || 0), 0);
-      const unreachableFrames = frames.filter((f) => !f.reachable).length;
-      const seen = top.perceived;
-      const total = top.light + top.shadow + inFrames;
+      const inFrames = frames.reduce((n, f) => n + (Number(f.clickable) || 0), 0);
+      const total = topClickable + inFrames;
       return {
         seen,
         total,
@@ -563,15 +608,24 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         // perception rather than as an empty page.
         ratio: total > 0 ? Math.round((seen / total) * 1000) / 1000 : null,
         unseen: {
-          light_no_role: Math.max(0, top.light - top.perceived), // clickable, but outside our selector
-          shadow_dom: top.shadow,
+          // RENAMED, not re-meaninged (ADR-093). The old keys were `light_no_role` and `shadow_dom`,
+          // and `shadow_dom` was the false one. A key whose meaning quietly changes lets every
+          // consumer keep reading it and keep being wrong; a key that disappears forces each one to
+          // be looked at. Where a missed control lives — light DOM or an open shadow root — is not
+          // the operator's question anyway: our selector fails to name it either way, and widening
+          // the selector would reach it either way.
+          outside_selector: Math.max(0, topClickable - seen),
           iframe: inFrames,
         },
         opaque: {
-          canvas: top.canvas + frames.reduce((n, f) => n + (Number(f.canvas) || 0), 0),
-          shadow_roots_closed: top.shadowRootsClosed,
-          frames_unreachable: unreachableFrames,
+          canvas: topCanvas + frames.reduce((n, f) => n + (Number(f.canvas) || 0), 0),
+          shadow_roots_closed: roots.closed,
+          frames_unreachable: frames.filter((f) => !f.reachable).length,
         },
+        // Context, not a boundary: open roots are crossed. Reported because "we walked N shadow
+        // roots and missed nothing in them" is the evidence for the claim, and ADR-092 computed this
+        // number and then never returned it.
+        shadow_roots_open: roots.open,
         frames,
       };
     }
@@ -595,7 +649,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
       const outPath = params?.path as string | undefined;
       const marks = await page!.$$eval(
-        'button, a[href], input, select, textarea, [role=button], [role=tab]',
+        PERCEPTION_SELECTOR,
         (els) =>
           els
             .map((e, i) => {
@@ -608,9 +662,16 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
                   .slice(0, 120),
                 testid: e.getAttribute('data-testid'),
                 bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+                // ADR-093: the SAME definition `browser.interactives` reports as `visible`, so the
+                // two perception surfaces cannot disagree about what is on screen. This filter used
+                // to be `bbox > 0` alone, which let a `visibility:hidden` control through: its box
+                // is full-size, so the vision tier was handed a numbered mark over a patch of
+                // nothing and asked which element it was. Offering a model an element that is not in
+                // the picture is worse than offering it nothing.
+                onScreen: r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden',
               };
             })
-            .filter((m) => m.bbox.w > 0 && m.bbox.h > 0),
+            .filter((m) => m.onScreen),
       );
       if (outPath) {
         await page!.evaluate((ms) => {

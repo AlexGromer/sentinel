@@ -1335,13 +1335,13 @@
       "ru": "Отчёт по прогону не собрался: {error}. Прогон и его вердикт не затронуты — не хватает только report.html / junit.xml / metrics.prom",
       "en": "The run report could not be built: {error}. The run and its verdict are unaffected — only report.html / junit.xml / metrics.prom are missing",
       "emitter": "control-api"
-      },
+    },
     "perception.partial": {
       "lvl": "warn",
       "cat": "plan",
       "phase": "ground",
-      "ru": "Страница {page} видна не полностью: доступно {seen} из {total} интерактивных элементов (доля {ratio}). Вне поля зрения: shadow DOM {shadow}, во фреймах {iframe}. План строится по тому, что ВИДНО, поэтому охват считается от неполной картины",
-      "en": "Page {page} is only partly visible: {seen} of {total} interactive elements are reachable (ratio {ratio}). Out of sight: shadow DOM {shadow}, inside frames {iframe}. The plan is built from what IS visible, so coverage is measured against an incomplete picture",
+      "ru": "Страница {page} видна не полностью: инструмент различает {seen} из {total} интерактивных элементов (доля {ratio}). Вне поля зрения: вне селектора {outside}, во фреймах {iframe}. План строится по тому, что ВИДНО, поэтому охват считается от неполной картины",
+      "en": "Page {page} is only partly visible: the tool distinguishes {seen} of {total} interactive elements (ratio {ratio}). Out of sight: outside our selector {outside}, inside frames {iframe}. The plan is built from what IS visible, so coverage is measured against an incomplete picture",
       "modules": [
         "graph"
       ],

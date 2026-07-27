@@ -66,7 +66,7 @@ def _perception_audit(ex, path: str) -> dict:
         # Said out loud, once per page: the blind spot is a property of the page under test, and a
         # person planning around a coverage number deserves to know the denominator was incomplete.
         log("perception.partial", page=path, seen=a.get("seen"), total=a.get("total"),
-            ratio=a.get("ratio"), shadow=(a.get("unseen") or {}).get("shadow_dom"),
+            ratio=a.get("ratio"), outside=(a.get("unseen") or {}).get("outside_selector"),
             iframe=(a.get("unseen") or {}).get("iframe"))
     return a
 
@@ -123,9 +123,13 @@ def _elements_from_interactives(elements: list, path: str) -> list:
         # later in a filled form, and a page model that forgets it would report coverage over a
         # smaller page than the one under test. plan_hash is unaffected — it hashes the STEPS, and no
         # step carries this field (state.py canonical_plan_hash).
+        # ADR-093: `visible` is carried as THREE states, not coerced to a bool like `disabled` above.
+        # `None` means an older executor never said — and it must not read as "invisible", or every
+        # element from that executor would be dropped from the candidate set and explore would find
+        # nothing at all. Absent evidence is not evidence, so the reader tests `is False`.
         out.append({"semantic_id": semantic_id(path, role, anchor), "role": role, "name": name,
                     "testid": testid, "locator": primary, "alternatives": alts, "page": path,
-                    "disabled": bool(e.get("disabled"))})
+                    "disabled": bool(e.get("disabled")), "visible": e.get("visible")})
     return out
 
 
@@ -262,9 +266,17 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         for b in pm.get("buttons", []):
             if b["semantic_id"] in exercised:
                 continue
-            # Two distinct reasons not to propose it, counted together because the tester's question is
-            # the same either way: "why does coverage say 60% when I can see ten buttons?"
-            if b["semantic_id"] in spent or b.get("disabled"):
+            # Three distinct reasons not to propose it, counted together because the tester's question
+            # is the same either way: "why does coverage say 60% when I can see ten buttons?"
+            #
+            # ADR-093 adds `visible`. A control in a `display:none` panel cannot be actuated now, and
+            # proposing it spends the ADR-070 attempt budget on something that was never going to
+            # work — twice, then blacklists it, and the blacklist is permanent for the run even
+            # though the panel may open two steps later. Measured on `l5.html`: 7 of the 23 perceived
+            # controls sit in closed tab panels. Like `disabled`, it does NOT remove the element from
+            # `interactive_seen`: the page has that control, and a denominator that forgets it would
+            # report coverage over a smaller page than the one under test.
+            if b["semantic_id"] in spent or b.get("disabled") or b.get("visible") is False:
                 blocked += 1
                 continue
             candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
