@@ -149,8 +149,9 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             final = app.invoke(init_state, config=cfg)
             # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
             final = _resume_through_takeovers(app, final, cfg, rc, run_id)
-        ex.call("browser.traceStop", path=trace_path)
-        ex.call("shutdown")
+        # ADR-084: explore's trace holds the same live application DOM a replay's does, so the same
+        # rule applies. The exit code is not known yet here, so the decision is made below, right
+        # before it is computed.
         steps = final.get("exploration_plan", [])
         cov, ph = final.get("coverage_achieved", 0.0), final.get("plan_hash", "")
         scenario_steps = final.get("scenario_steps", [])
@@ -165,8 +166,13 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe),
                                    author_model=getattr(scenario_head, "model", None))
         plan_file = out / "plan.json"
-        trace = pathlib.Path(trace_path)
-        ok = plan_file.exists() and len(steps) >= 5 and trace.exists() and trace.stat().st_size > 0
+        # `trace.exists()` used to be part of this criterion. It asserted a BY-PRODUCT rather than the
+        # result — a trace file proves the browser ran, which `len(steps) >= 5` already proves better —
+        # and after ADR-084 a clean explore deliberately leaves no trace at all, so keeping it would
+        # have made every successful explore report failure.
+        ok = plan_file.exists() and len(steps) >= 5
+        _stop_trace(ex, trace_path, 0 if ok else 1)
+        ex.call("shutdown")
         return 0 if ok else 1
     finally:
         tx.close()
@@ -302,7 +308,9 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                         # M9.8 F4 (ADR-054): a takeover during the cold turn pauses here too — await Return
                         # and resume BEFORE tearing down the browser (mirror _run_explore).
                         final = _resume_through_takeovers(app, final, cfg, rc, run_id)
-                        ex.call("browser.traceStop", path=trace_path)
+                        # ADR-084: a cold chat turn is an explore; same rule, and its exit code is
+                        # the scenario write below, so keep the trace only when nothing was authored.
+                        _stop_trace(ex, trace_path, 0 if final.get("scenario_steps") else 1)
                         ex.call("shutdown")
                     finally:
                         ex.close()
@@ -320,6 +328,38 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                        author_model=getattr(scenario_head, "model", None))
         finally:
             tx.close()
+
+
+def _stop_trace(ex, trace_path: str, exit_code: int) -> None:
+    """Stop tracing, keeping the artifact only when `_keep_trace` says the run is worth a post-mortem.
+
+    Swallows its own errors: teardown must not turn a finished run into a crash, and every call site
+    is already past the point where the result is decided."""
+    try:
+        if _keep_trace(exit_code):
+            ex.call("browser.traceStop", path=trace_path)
+        else:
+            ex.call("browser.traceStop")
+    except Exception as e:
+        log("system.trace_stop_error", error=e)
+
+
+def _keep_trace(exit_code: int) -> bool:
+    """ADR-084: keep `trace.zip` only when the run did NOT finish clean.
+
+    The trace is the best post-mortem tool we have — and on a GREEN run there is no post-mortem to
+    perform, while the file still holds the tested application's live DOM (`input.value` included) and
+    request bodies, unredactable because Playwright has no mask API. Keeping it by default meant every
+    passing CI run left a copy of someone's application state on disk for the sake of a diagnosis
+    nobody was going to make.
+
+    `exit_code != 0` rather than "a step failed": a golden regression exits 2 without any step
+    failing, and that is exactly a case a human will want to look at frame by frame.
+
+    `SENTINEL_TRACE_ALWAYS=1` restores the old behaviour for someone debugging a run that passes but
+    behaves oddly. `PW_NO_TRACE=1` still wins over both — it means the trace was never recorded.
+    """
+    return exit_code != 0 or os.environ.get("SENTINEL_TRACE_ALWAYS") == "1"
 
 
 def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_version, ci, force) -> int:
@@ -370,7 +410,9 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
             except Exception as e:
                 log("system.storage_state_error", error=e)
         try:
-            ex.call("browser.traceStop", path=trace_path)
+            # ADR-084: keep the artifact only when the run is worth a post-mortem; otherwise the
+            # executor discards the buffered trace and nothing reaches the disk.
+            _stop_trace(ex, trace_path, int(report.get("exit_code", 1)))
             ex.call("shutdown")
         except Exception:
             pass
