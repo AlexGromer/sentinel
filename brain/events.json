@@ -244,6 +244,14 @@
       "en": "Did not start",
       "ru_hint": "процесс не удалось запустить или он был прерван сигналом",
       "en_hint": "the process could not be spawned, or was killed by a signal"
+    },
+    "4": {
+      "icon": "💥",
+      "severity": "tool_failure",
+      "ru": "Инструмент сломался",
+      "en": "The tool itself failed",
+      "ru_hint": "это НАША ошибка, а не находка в вашем приложении — приложите вывод к отчёту о баге",
+      "en_hint": "this is OUR failure, not a finding about your application — attach the output to a bug report"
     }
   },
   "$comment_narrative": "Stream A. Templates for the AG-UI event types (brain/agui.py + cmd/control-api). `{}` placeholders are filled from the event's `data`.",
@@ -1310,6 +1318,16 @@
       "modules": [
         "__main__"
       ]
+    },
+    "fatal.internal_error": {
+      "lvl": "error",
+      "cat": "run",
+      "ru": "Внутренняя ошибка инструмента: {error}. Это НЕ находка в вашем приложении — прогон прерван, приложите вывод к отчёту о баге",
+      "en": "Internal tool error: {error}. This is NOT a finding about your application — the run was aborted; attach the output to a bug report",
+      "modules": [
+        "__main__"
+      ],
+      "exit": 4
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

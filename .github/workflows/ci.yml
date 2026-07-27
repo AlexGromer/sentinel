@@ -116,16 +116,30 @@ jobs:
       - name: Hub Logs-view DOM gate (headless Chromium; ADR-065)
         run: node scripts/hub-dom-check.mjs
 
-      - name: Python offline suite (m3..m9_2b + r2_multiturn + r3_takeover + determinism + record_bridge + sanitize + m13_chats + m14_agui + m14_replay_agui + m_structured_out + m11_4 + adaptive_budget + event_catalog + explore_loop + heal_drift + app_faults_junit + degradation_verdict + replayable_and_model_id + heal_unverified + heal_identity + heal_identity_store + strategy_vocabulary + artifact_secrets — FakeBackend/FakeExecutor, no network)
+      - name: Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -e
-          for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4 adaptive_budget event_catalog explore_loop heal_drift app_faults_junit degradation_verdict replayable_and_model_id heal_unverified heal_identity heal_identity_store strategy_vocabulary artifact_secrets; do
-            echo "== test_${t}_offline =="
-            .venv/bin/python tests/test_${t}_offline.py
+          # ADR-087: DISCOVERED, not listed. This was a hand-kept list of 31 names, so a gate added in
+          # tests/ ran only if someone also remembered to add it here — and a gate that does not run is
+          # indistinguishable from one that passes. Four suites were added this week alone; the list
+          # survived only because each addition was noticed by hand.
+          shopt -s nullglob
+          found=0
+          for f in tests/test_*_offline.py; do
+            echo "== $(basename "$f" .py) =="
+            .venv/bin/python "$f"
+            found=$((found + 1))
           done
-          # M9.8 recorder→bridge tie (offline, FakeExecutor) — doesn't fit the _offline.py glob above.
+          # A glob that matches nothing must fail loudly rather than report success over an empty set —
+          # the vacuous-pass failure mode this project keeps meeting in its own tests.
+          if [ "$found" -lt 25 ]; then
+            echo "::error::only $found offline suites discovered — the glob is not finding tests/"
+            exit 1
+          fi
+          echo "-- $found offline suites --"
+          # M9.8 recorder→bridge tie (offline, FakeExecutor) — doesn't match the *_offline.py glob.
           echo "== test_record_bridge_recorder_e2e =="
           .venv/bin/python tests/test_record_bridge_recorder_e2e.py
 

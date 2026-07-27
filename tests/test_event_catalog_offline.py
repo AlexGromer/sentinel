@@ -94,6 +94,41 @@ def emitted_codes() -> dict[str, set[str]]:
     return found
 
 
+
+def check_exit_promises_match_the_code(events):
+    """ADR-087: an entry that declares `exit: N` promises the process really exits N.
+
+    Nothing checked this, and four entries were wrong in the direction that misleads hardest: they
+    declared 3 ("нужен человек: план или настройки не сходятся") while the code returned 2 ("страница
+    отличается от сохранённого эталона"). A missing plan.json therefore reached every exit-code reader
+    as a visual regression, sending them to look at the UI instead of at their config.
+
+    Matched from the source rather than executed: the four paths need a browser, a plan and a live
+    executor between them. A text assertion is weaker than a call and is what is available — and it is
+    strictly stronger than the nothing that guarded these before.
+    """
+    src = (REPO / "brain" / "__main__.py").read_text()
+    declared = {c: e["exit"] for c, e in events.items() if "exit" in e}
+    if not declared:
+        fail("no entry declares an exit — this check would be vacuous")
+    checked = 0
+    for code, want in declared.items():
+        # find `log("<code>" ...)` and the first `return N` within the next few lines
+        for m in re.finditer(r'log\("' + re.escape(code) + r'"', src):
+            tail = src[m.end(): m.end() + 400]
+            rm = re.search(r'\breturn (-?\d+)\b', tail)
+            if not rm:
+                continue
+            got = int(rm.group(1))
+            checked += 1
+            if got != want:
+                fail(f"{code}: catalogue promises exit {want}, code returns {got} — a reader of the "
+                     f"exit code is told the wrong thing about whose problem this is")
+    if checked == 0:
+        fail("no declared exit could be matched to a return — the check is not looking at anything")
+    return checked
+
+
 def main() -> int:
     cat = json.loads(CATALOG.read_text())
     events = cat["events"]
@@ -166,6 +201,10 @@ def main() -> int:
             fail(f"{code}: phase {entry['phase']!r} is not in `phases`")
         if "exit" in entry and str(entry["exit"]) not in exits:
             fail(f"{code}: exit code {entry['exit']!r} is not in `exit_codes`")
+
+    # ADR-087: the vocabulary check above proves the code EXISTS; this proves the process
+    # really returns it. Four entries promised 3 while returning 2 until it was written.
+    check_exit_promises_match_the_code(events)
 
     # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
     # matching that template against the rendered string. If the two drift, the UI silently falls back

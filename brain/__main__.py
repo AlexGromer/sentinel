@@ -372,7 +372,7 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
 
     if not plan_file or not pathlib.Path(plan_file).exists():
         log("fatal.plan_missing", path=plan_file)
-        return 2
+        return 3
     try:
         plan = json.loads(pathlib.Path(plan_file).read_text())
     except Exception as e:
@@ -462,7 +462,7 @@ def _run_export_spec(out, plan_file, spec_out) -> int:
     from .exporter import export_spec
     if not plan_file or not pathlib.Path(plan_file).exists():
         log("fatal.plan_missing_export", path=plan_file)
-        return 2
+        return 3
     plan = json.loads(pathlib.Path(plan_file).read_text())
     dest = spec_out or str(out / "exported.spec.ts")
     pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
@@ -476,7 +476,7 @@ def _run_report(run_dir) -> int:
     from .report import generate
     if not (pathlib.Path(run_dir) / "heal-report.json").exists():
         log("fatal.heal_report_missing", dir=run_dir)
-        return 2
+        return 3
     generate(run_dir)
     gw = os.environ.get("PROM_PUSHGATEWAY")
     if gw:
@@ -557,7 +557,7 @@ def main() -> int:
     pw_cmd = os.environ.get("PW_EXECUTOR_CMD")
     if not pw_cmd:
         log("fatal.executor_cmd_unset")
-        return 2
+        return 3
     if run_mode == "mcp-server":
         # M7 (ADR-020): expose the brain as an MCP server; the host drives + supplies the model.
         from .server import run_mcp_server
@@ -597,9 +597,14 @@ def main() -> int:
             rc = _run_explore(ex, run_id, out, target,
                               float(os.environ.get("COVERAGE_TARGET", "0.85")),
                               int(os.environ.get("MAX_STEPS", "40")))
-    except Exception:
+    except Exception as e:
+        # ADR-087: an unhandled exception in OUR code used to exit 1, and exit 1 means "Тест нашёл
+        # проблему … это результат работы, а не поломка инструмента". So every internal crash was
+        # presented to the user as a finding about THEIR application — the exact confusion principle 8
+        # exists to prevent, and the one the product is least able to afford.
         traceback.print_exc()
-        rc = 1
+        log("fatal.internal_error", error=e)
+        rc = 4
     finally:
         ex.close()
         _run_span.__exit__(None, None, None)

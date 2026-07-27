@@ -51,10 +51,20 @@ func newToken() string {
 	return hex.EncodeToString(b)
 }
 
+// usage lists EVERY subcommand. ADR-088: it used to list four of seven, and the three it omitted were
+// the ones a user most needs — `report` is the sole producer of report.html, report.json, metrics.prom
+// and junit.xml, and `export-spec` is the migration path to @playwright/test that competitors sell as a
+// feature. A subcommand absent from usage exists only for someone reading main.go's switch.
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> [--planner heuristic|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
+	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> [--planner heuristic|llm|goal] [--goal <g>|--describe <d>]")
+	fmt.Fprintln(os.Stderr, "               [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
+	fmt.Fprintln(os.Stderr, "               [--run-config <run.yaml>] [--scenario <name>] [--coverage-target <0..1>]")
+	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--artifact-dir <dir>]        (all flags: agentctl run --help)")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
+	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
+	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
+	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")

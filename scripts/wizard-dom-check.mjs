@@ -515,6 +515,46 @@ try {
     await ctx.close();
   });
 
+  /* 10c — ADR-086: collapsible per-field help (the OPNsense idiom) — folded by default, one switch
+     opens them all, and the choice survives a reload. Folded by default is the decision under test:
+     a form where every field carries a paragraph is as unreadable as one explaining nothing. */
+  await check('help: folded by default, one switch opens all, choice persists, bilingual', async () => {
+    const { ctx, page } = await freshPage(browser, base);
+
+    // Static fields carry help now — they explained nothing at all before.
+    const markers = await page.$$eval('details.fhelp', (els) => els.length);
+    ok(markers >= 10, `help attached to ${markers} fields`);
+    const openAtStart = await page.$$eval('details.fhelp[open]', (els) => els.length);
+    eq(openAtStart, 0, 'every block starts folded');
+
+    // A folded block still HAS its text — the reader can reach it, the layout is not paying for it.
+    // textContent works on any step; clicking needs the field's step to be the visible one.
+    const targetHelp = await page.textContent('label[for="target"] details.fhelp .fhelp-body');
+    ok(/file:\/\//.test(targetHelp), 'target help explains the consequence, not the label');
+
+    await page.click('button[data-next="model"]');
+    await page.click('button[data-next="params"]');
+    await page.click('label[for="target"] details.fhelp > summary');
+    eq(await page.$$eval('details.fhelp[open]', (e) => e.length), 1, 'clicking one opens exactly one');
+
+    // The switch opens every one of them, and the preference is remembered.
+    await page.check('#helpall');
+    const allOpen = await page.$$eval('details.fhelp[open]', (e) => e.length);
+    eq(allOpen, markers, 'the switch opens all of them');
+    await page.reload();
+    // `attached`, not the default `visible`: the first help block belongs to a step that is not the
+    // one shown after a reload, and waiting for visibility would hang on a page that is perfectly fine.
+    await page.waitForSelector('details.fhelp', { state: 'attached' });
+    ok(await page.isChecked('#helpall'), 'the preference survives a reload');
+    ok((await page.$$eval('details.fhelp[open]', (e) => e.length)) >= 10, 'and re-opens the blocks');
+
+    // Bilingual: switching language switches the help text with everything else.
+    await page.click('#lang-en');
+    const en = await page.textContent('label[for="pwnotrace"] details.fhelp .fhelp-body');
+    ok(/Playwright has no way to mask/.test(en), 'EN help renders under EN');
+    await ctx.close();
+  });
+
   /* 11 — M11.5 PR-5: "Save to server" writes the config domain and flips /readyz 503 -> 200 */
   await check('config: "Save to server" persists a secret-free document and readiness flips 503 -> 200', async () => {
     const readyz = async (tok) => {
