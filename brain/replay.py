@@ -22,6 +22,7 @@ import os
 from . import agui
 from . import eventlog
 from .healing import AUTO as _HEAL_AUTO
+from .healing import is_reground
 from .eventlog import log
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
@@ -111,8 +112,12 @@ def _drift_entry(step: dict, attempted: dict, h: dict, page_path: str) -> dict:
 
     Deriving the class from membership in `alternatives[]` rather than from a hardcoded strategy list is
     deliberate: the real question is "was this key frozen with the plan?", and an authored or imported plan
-    may legitimately carry a `css` alternative — in which case using it IS a rebind."""
-    frozen = {a.get("strategy") for a in (step.get("alternatives") or []) if isinstance(a, dict)}
+    may legitimately carry a `css` alternative — in which case using it IS a rebind.
+
+    Since ADR-082 the SAME rule decides both this row and the confidence gate: `healing.is_reground`
+    reads membership in `alternatives[]` too, instead of the hardcoded `{css, visual}` it used to
+    hold. Two definitions of one word had made the same heal a re-bind here and a re-ground there.
+    """
     strategy = h.get("strategy")
     return {"step": step.get("step_id"),
             "semantic_id": step.get("semantic_id"),
@@ -120,10 +125,12 @@ def _drift_entry(step: dict, attempted: dict, h: dict, page_path: str) -> dict:
             # step actually carries, because `intent` is optional on imported plans.
             "name": step.get("intent") or step.get("name") or step.get("semantic_id") or "",
             "page": page_path,
-            "kind": "rebind" if strategy in frozen else "reground",
+            "kind": "reground" if is_reground(strategy, step.get("alternatives")) else "rebind",
             "strategy": strategy,
             "confidence": h.get("confidence"),
             "outcome": h.get("outcome"),      # auto_healed | flagged | cache_hit
+            # ADR-082: verified | contradicted | unverifiable on a re-ground, absent on a re-bind.
+            "identity": h.get("identity"),
             "from": attempted,                # the locator the frozen plan asked for
             "to": h.get("locator")}           # the locator that actually worked
 
@@ -309,7 +316,12 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 ctx = {"step": s.get("step_id"), "semantic_id": s.get("semantic_id"),
                        "page_path": page_path, "intent": s.get("intent"),
                        "attempted_locator": primary, "alternatives": s.get("alternatives") or [],
-                       "dom_hash": _a11y_hash(snap.get("ariaSnapshot", ""))[:16], "interactives": inter}
+                       "dom_hash": _a11y_hash(snap.get("ariaSnapshot", ""))[:16], "interactives": inter,
+                       # ADR-082: WHY the frozen locator failed, not just THAT it did. 0 = the element
+                       # or its name moved; >= 2 = the name still matches but ambiguously, which is a
+                       # different kind of drift and the one identity verification cannot resolve.
+                       # The number was already computed above and thrown away.
+                       "probe_count": count}
                 h = heal.heal(ctx)
                 if h.get("outcome") in ("auto_healed", "flagged", "cache_hit") and h.get("locator"):
                     try:

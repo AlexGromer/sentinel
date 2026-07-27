@@ -34,7 +34,11 @@ PAGE = "file:///s/app.html"
 FROZEN = {"testid": "pay"}                  # what the plan asked for
 MOVED = {"role": "button", "name": "Pay"}   # a key the plan ALSO froze, prior 0.90 -> accepted outright
 WEAK = {"text": "Pay"}                      # ALSO frozen, prior 0.80 -> APPLIED OPTIMISTICALLY (flagged)
-NEW = {"css": "#pay-v2"}                    # nothing in the plan vouches for this -> re-ground
+NEW_PICK = {"testid": "pay-v2"}             # nothing in the plan vouches for this -> re-ground
+# What `browser.interactives` reports on the drifted page. The text tier picks an INDEX into this list
+# (ADR-082), so the re-ground's locator is a real key belonging to a real element, and the element's
+# own role/name are what the identity check compares against the frozen locator.
+LIVE = [{"role": "button", "name": "Pay now", "testid": "pay-v2"}]
 
 # The applied-but-unconfident band is 0.60-0.84, and reaching it took a corrected fixture: the first
 # version drove it with a css re-ground, which scores 0.585 and is therefore NEVER APPLIED — the very
@@ -84,12 +88,12 @@ class Store:
 
 
 class Backend:
-    """A heal backend that always answers with the same CSS selector."""
+    """A heal backend that always picks the first live element (ADR-082: an index, not a selector)."""
     model = "fake"
     supports_vision = False
 
     def complete(self, prompt, **kw):
-        return type("R", (), {"text": '{"css": "#pay-v2"}', "data": {"css": "#pay-v2"},
+        return type("R", (), {"text": '{"index": 0}', "data": {"index": 0},
                               "usage": {}, "prompt_tokens": 0, "completion_tokens": 0})()
 
 
@@ -125,15 +129,25 @@ def _run(ex, use_llm=False):
 # --- the rule: a re-ground is never accepted outright ----------------------------------------------
 def test_a_reground_is_never_accepted_outright():
     """The claim is about the RULE, so it is asserted against the gate directly and at every threshold
-    setting — not against one arithmetic coincidence."""
-    assert is_reground("css") and is_reground("visual"), "the re-ground set lost a member"
-    assert not is_reground("testid") and not is_reground("role_name"), "a frozen key is not a re-ground"
+    setting — not against one arithmetic coincidence.
 
-    ex = Ex([NEW])                       # only the LLM's selector resolves -> re-ground path
+    Since ADR-082 the class is derived from MEMBERSHIP in the frozen `alternatives[]` rather than from
+    a hardcoded strategy set, so the assertion now names a plan — which is what ADR-071 always said the
+    question was. The claim itself is word for word what it was: a key the plan froze is a re-bind, a
+    key it did not is a re-ground.
+    """
+    alts = _plan()["steps"][0]["alternatives"]
+    assert alts, "a vacuous membership test would pass against an empty alternatives list"
+    assert is_reground("llm_pick", alts) and is_reground("visual", alts), "an unfrozen key IS a re-ground"
+    assert not is_reground("testid", alts) and not is_reground("role_name", alts), \
+        "a frozen key is not a re-ground"
+
+    ex = Ex([NEW_PICK])                  # only the element the model picks resolves -> re-ground path
     r = Heal(ex, use_llm=True).heal({
         "step": 1, "semantic_id": "sid-pay", "page_path": PAGE, "intent": "click 'Pay'",
-        "attempted_locator": FROZEN, "alternatives": _plan()["steps"][0]["alternatives"],
-        "dom_hash": "d", "interactives": []})
+        "attempted_locator": FROZEN, "alternatives": alts,
+        "dom_hash": "d", "interactives": LIVE})
+    assert r["strategy"] == "llm_pick", r     # the re-ground really happened; the check is not vacuous
     assert r["outcome"] != "auto_healed", r
     assert r["confidence"] < AUTO, r
 
@@ -141,27 +155,33 @@ def test_a_reground_is_never_accepted_outright():
 def test_the_rule_holds_even_if_a_reground_prior_is_raised():
     """The rule guards a FUTURE change, so the future is what the test must create.
 
-    Today no re-ground reaches AUTO on its own (css 0.585, visual 0.80 against 0.85), which means the
-    cap never fires and removing it breaks nothing — a mutation proved exactly that. What the cap is
-    FOR is the day someone raises a prior or softens the overconfidence discount: before ADR-080 that
-    edit would have promoted an unverified re-ground into the silently-applied band with every test
-    still green. So the test raises the prior itself and asserts the rule survives it."""
+    Today no re-ground reaches AUTO on its own, which means the cap never fires and removing it breaks
+    nothing — a mutation proved exactly that. What the cap is FOR is the day someone raises a prior or
+    softens the overconfidence discount: before ADR-080 that edit would have promoted an unverified
+    re-ground into the silently-applied band with every test still green. So the test raises the prior
+    itself and asserts the rule survives it.
+
+    The control below now carries the frozen `alternatives[]`, because since ADR-082 that list is what
+    makes a key a re-bind. Feeding the gate a context without one would make EVERY key a re-ground —
+    correctly, since a plan that froze nothing vouches for nothing — and the control would then pass
+    for the wrong reason."""
     import brain.healing as h
     original = dict(h.PRIORS)
+    alts = _plan()["steps"][0]["alternatives"]
     try:
         h.PRIORS["visual"] = 0.99          # far above AUTO — the "someone bumped it" future
-        ex = Ex([NEW])
+        ex = Ex([NEW_PICK])
         eng = HealingEngine(ex, Store(), "r", use_llm=False)
         # Feed the gate directly: this is about the RULE, not about how a candidate is produced.
         r = eng._gate({"step": 1, "semantic_id": "sid", "page_path": PAGE, "intent": "i",
-                       "attempted_locator": FROZEN, "dom_hash": "d"},
-                      "visual", NEW, h.PRIORS["visual"])
+                       "attempted_locator": FROZEN, "alternatives": alts, "dom_hash": "d"},
+                      "visual", NEW_PICK, h.PRIORS["visual"])
         assert r["outcome"] != "auto_healed", r
         assert r["confidence"] < h.AUTO, r
         # And the control: a FROZEN key at the same raised confidence still is accepted outright, so
         # the cap is narrow rather than a blanket refusal.
         r2 = eng._gate({"step": 1, "semantic_id": "sid", "page_path": PAGE, "intent": "i",
-                        "attempted_locator": FROZEN, "dom_hash": "d"},
+                        "attempted_locator": FROZEN, "alternatives": alts, "dom_hash": "d"},
                        "role_name", MOVED, 0.99)
         assert r2["outcome"] == "auto_healed", r2
     finally:

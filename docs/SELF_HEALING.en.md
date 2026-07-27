@@ -97,31 +97,43 @@ Invoked **only if Steps 3–4 both fail** to produce a unique live match.
 **Budget pre-check:** verify remaining heal-model token budget (Sonnet by default) before calling the model. If budget
 is exhausted, skip directly to Step 8 confidence gate at confidence = 0.
 
-**Prompt inputs** (`brain/healing.py:121-128` — exactly three fields):
-- `intent` — the step's intent
-- `original_locator` — the failed `attempted_locator`
-- `current_elements` — the page's current interactive elements
+**Prompt inputs** (`brain/healing.py::_llm_reground` — exactly three fields):
+- `step intent` — the step's intent
+- `element the step used to use` — the failed `attempted_locator`
+- `elements on the page now` — the page's current interactive elements, **each with its index**
 
 (the prompt sends exactly these three; there is no failed-strategy table and no `element_description`)
 
-**Model output** (structured JSON, schema `_SCHEMA_CSS` — a CSS selector only, with no
+**Model output** (structured JSON, schema `_SCHEMA_PICK` — an INDEX into the element list, with no
 self-reported `confidence` / `reasoning` / `strategy`):
 ```json
-{"css": "<precise CSS selector for the current element>"}
+{"index": 2}
 ```
-or, if no element matches:
+or, if no element could plausibly serve the step's purpose:
 ```json
 {"none": true}
 ```
 
-**Discount applied:** the model does not report its own confidence — a FIXED discount is applied
-to the `css` strategy's base prior instead: `final_confidence = PRIORS["css"] × 0.90 = 0.65 × 0.90 = 0.585`.
+Since **ADR-082** the model chooses among elements the executor actually reported instead of
+authoring a CSS selector — the grounding rule the planner has always followed (ADR-022/027,
+`candidates[idx]`). An out-of-range index is discarded, so no reply can produce a locator for an
+element nobody observed. The chosen element's own descriptor becomes the locator (`testid`, else
+`role`+`name`) and is what Step 7's identity check compares against the frozen locator.
 
-**Practical consequence:** 0.585 is below the FLAGGED threshold (0.60), so LLM re-grounding always
-lands in `needs_review` (Step 8), even when the candidate passes the live-DOM check in Step 7.
-LLM re-grounding can never reach AUTO-HEAL and can never be FLAGGED — it is always either
-`needs_review` or `failed` (confidence zeroed if the candidate does not resolve to exactly one
-element in Step 7).
+The prompt asks which element now serves the SAME PURPOSE, not which one "matches the intent".
+That wording is load-bearing and a live run proved it: asked the latter, both qwen3:14b and
+qwen2.5vl:7b answered `{"none": true}` for every rename — correct in a literal reading, since no
+element carries that name any more, which is exactly why the step failed. Proposing the candidate is
+the tier's job; deciding whether it is really the same element is the identity check's.
+
+**Discount applied:** the model does not report its own confidence — the prior of the locator the
+pick produced is discounted by a FIXED factor instead:
+`final_confidence = PRIORS[testid|role_name] × 0.90` (0.855 or 0.81).
+
+**Practical consequence:** both values clear FLAGGED (0.60) and are capped below AUTO by ADR-080, so
+a text re-ground is applied OPTIMISTICALLY and reported. Before ADR-082 the tier scored
+`PRIORS["css"] × 0.90 = 0.585`, below FLAGGED, and therefore healed nothing ever — while still
+suppressing the visual tier below, which `heal` reaches only `if not chosen`.
 
 The discounted confidence is passed to Step 7.
 
@@ -178,6 +190,38 @@ a second probe here. Only LLM and visual candidates (Steps 5–6) go through thi
 
 This step closes the gap between "model says this locator works" and "locator actually works right
 now."
+
+### Identity (ADR-082) — the second half of the same step
+
+A cardinality probe establishes that ONE element matched. It does not establish that it is the SAME
+element, and until ADR-082 nothing did: a re-ground could bind a different control and the run
+reported an ordinary heal.
+
+For a **re-ground** (a strategy the plan did not freeze — see Step 8) the live element's descriptor
+is compared with what the frozen locator already carries:
+
+| Outcome | Meaning | Effect |
+|---|---|---|
+| `verified` | live `role` and normalised `name` equal the frozen ones | applied; no degradation reported |
+| `contradicted` | they differ — the control was renamed or is a different one | **applied anyway**, and reported as a degradation (`heal.identity_contradicted`) |
+| `unverifiable` | the plan froze no name (a testid-only primary), or the tier reported nothing | applied; reported as `heal.identity_unverifiable` |
+
+It is a **predicate, not a score**: there is no threshold, which is deliberate — `PRIORS` are
+unmeasured by this file's own admission (GAP-RISK-002), and a similarity threshold would be a second
+uncalibrated number beside the first.
+
+The comparison is **stricter than the probe that produced the candidate**: `buildLocator` passes
+`{name}` to `getByRole` without `exact`, so Playwright matches case-insensitively and by substring —
+`"Pay"` is satisfied by `"Pay now"`. Equality is not.
+
+A **re-bind** carries no identity annotation at all: the plan vouches for a frozen key, and
+inventing a doubt there would be as dishonest as hiding one on a re-ground.
+
+**What this does not close:** two controls genuinely indistinguishable by role and name (two
+"Add to cart" buttons in a list) pass the check even when the wrong one is bound. That is the
+"same *instance*" question, and only surroundings could answer it — but the case is now countable
+(`probe_count >= 2` reaches the heal context), which is the labelled signal a future mechanism would
+need.
 
 ---
 

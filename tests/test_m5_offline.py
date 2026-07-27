@@ -97,22 +97,52 @@ def test_tier7_gated_off_by_use_visual_false():
 
 
 def test_text_reground_flows_through_backend():
-    css_loc = {"css": "#login"}
-    st, ex = _store(), FakeEx(extra_ok=css_loc)          # make the css selector resolve to 1
+    """The text tier now picks an INDEX into the live element list (ADR-082) instead of authoring a
+    CSS selector, so the fixture feeds it a list and the model answers with a number.
+
+    Two assertions changed meaning here, and both changes are the point rather than accommodation:
+      * the strategy is `llm_pick`, and the locator is a REAL key (testid) rather than a model-written
+        selector — the same grounding rule the planner has always followed (ADR-022/027);
+      * the outcome is `flagged`, not `needs_review`. The old css tier scored 0.585 against FLAG 0.60
+        and was therefore NEVER applied — a paid model call whose result was always discarded, which
+        additionally suppressed the visual tier (`heal` tries it only `if not chosen`). A tier that
+        cannot heal is not a safety property; it is dead code that shadowed a live path.
+    """
+    st, ex = _store(), FakeEx()
     he = HealingEngine(ex, st, "r", use_llm=False, use_visual=False)
-    he._backend = FakeBackend('{"css": "#login"}', supports_vision=False)
-    r = he.heal(_ctx())
+    he._backend = FakeBackend('{"index": 0}', supports_vision=False)
+    ctx = _ctx()
+    ctx["interactives"] = [{"role": "button", "name": "Launch", "testid": "cta"},
+                           {"role": "button", "name": "Other", "testid": None}]
+    r = he.heal(ctx)
     assert ("complete", 200, 0) in he._backend.calls, he._backend.calls
+    assert r["strategy"] == "llm_pick", r
+    assert r["locator"] == {"testid": "cta"}, r          # index -> REAL locator, not an invented one
     # The PROPERTY, not the arithmetic: a re-ground is never accepted outright. This used to assert the
     # literal 0.585 (css prior 0.65 x the 0.90 overconfidence discount) against FLAG 0.60 — a 0.015
     # margin — so changing the discount to 0.95 would have pushed an unverified LLM re-ground into the
     # band that EXECUTES with every test still green. ADR-080 made the rule explicit; this asserts the
     # rule. The numbers stay in the comment, where they explain rather than certify.
     from brain.healing import AUTO, is_reground
-    assert is_reground("css"), "css must be classified as a re-ground"
+    assert is_reground("llm_pick", ctx["alternatives"]), "a key the plan never froze is a re-ground"
     assert r["outcome"] != "auto_healed", r
     assert r["confidence"] < AUTO, r
-    assert r["outcome"] == "needs_review", r
+    assert r["outcome"] == "flagged", r
+    # And it says WHOSE element it found: the plan froze "Get started", the page offers "Launch".
+    assert r["identity"] == "contradicted", r
+
+
+def test_an_out_of_range_pick_is_discarded_rather_than_used():
+    """The bounds check is the whole reason an index is safer than a selector: a model that answers
+    with a number nobody offered must produce NO heal, never an invented locator."""
+    st, ex = _store(), FakeEx()
+    he = HealingEngine(ex, st, "r", use_llm=False, use_visual=False)
+    he._backend = FakeBackend('{"index": 99}', supports_vision=False)
+    ctx = _ctx()
+    ctx["interactives"] = [{"role": "button", "name": "Launch", "testid": "cta"}]
+    assert ctx["interactives"], "the fixture must offer at least one element to be out of range OF"
+    r = he.heal(ctx)
+    assert r["outcome"] == "failed", r
 
 
 if __name__ == "__main__":

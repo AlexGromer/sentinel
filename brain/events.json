@@ -805,14 +805,50 @@
       "lvl": "warn",
       "cat": "heal",
       "phase": "heal",
-      "ru": "Выбран НОВЫЙ селектор с текущей страницы для «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — этого ключа в замороженном плане не было, тождество элемента не проверено",
-      "en": "A NEW selector was chosen from the current page for \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this key was not in the frozen plan, and element identity is unverified",
+      "ru": "Выбран НОВЫЙ ключ с текущей страницы для «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — этого ключа в замороженном плане не было",
+      "en": "A NEW key was chosen from the current page for \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this key was not in the frozen plan",
       "modules": [
         "replay"
       ],
       "degrades": true,
       "ru_verdict": "прошло, но привязка выбрана заново — проверьте, тот ли это элемент",
       "en_verdict": "passed, but the binding was chosen anew — check it is the same element"
+    },
+    "heal.identity_verified": {
+      "lvl": "info",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Переоснова для «{element}» (шаг {step}, стратегия {strategy}) указывает на элемент с той же ролью и тем же именем, что заморозил план — тождество подтверждено",
+      "en": "The re-ground for \"{element}\" (step {step}, strategy {strategy}) points at an element with the same role and name the plan froze — identity confirmed",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.identity_contradicted": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Переоснова для «{element}» (шаг {step}, стратегия {strategy}) указывает на ДРУГОЙ элемент, чем заморозил план: было «{frozen}» — починка применена, но тождество опровергнуто",
+      "en": "The re-ground for \"{element}\" (step {step}, strategy {strategy}) points at a DIFFERENT element than the plan froze: it was \"{frozen}\" — the heal was applied, but identity is contradicted",
+      "modules": [
+        "healing"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но найденный элемент не тот, что заморозил план — проверьте, переименован он или подменён",
+      "en_verdict": "passed, but the element found is not the one the plan froze — check whether it was renamed or replaced"
+    },
+    "heal.identity_unverifiable": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Тождество элемента для «{element}» (шаг {step}, стратегия {strategy}) проверить нечем — план не заморозил имени либо тир не сообщил, что нашёл",
+      "en": "Element identity for \"{element}\" (step {step}, strategy {strategy}) cannot be checked — the plan froze no name, or the tier reported nothing about what it found",
+      "modules": [
+        "healing"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но проверить тождество элемента было нечем",
+      "en_verdict": "passed, but there was nothing to check the element's identity against"
     },
     "heal.drift_summary": {
       "lvl": "warn",
@@ -882,6 +918,16 @@
       "phase": "heal",
       "ru": "ИИ не смог найти элемент заново: {error}",
       "en": "The AI could not re-locate the element: {error}",
+      "modules": [
+        "healing"
+      ]
+    },
+    "heal.pick_out_of_range": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "ИИ указал номер элемента вне списка — выбор отброшен, селектор не выдумывается (ADR-082)",
+      "en": "The AI returned an element number outside the list — the pick was discarded rather than turned into an invented selector (ADR-082)",
       "modules": [
         "healing"
       ]
