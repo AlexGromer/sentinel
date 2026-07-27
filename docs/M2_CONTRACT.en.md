@@ -27,7 +27,7 @@ without `alternatives` still replay, just with fewer heal options.)
 ## pw-executor — new tools (M2)
 | Method | Params | Result |
 |--------|--------|--------|
-| `browser.interactives` | — | `{elements:[{role,name,testid,text,tag,css}]}` (DOM eval over buttons/links/inputs) |
+| `browser.interactives` | — | `{elements:[{role,name,testid,text,tag,visible,disabled}]}` — `role` is the **ARIA role** (explicit attribute, else implicit from tag+`type`), NOT a tag name (ADR-094); `visible`/`disabled` are reported, never filtered (ADR-093/070). Read through Playwright's selector engine, so open shadow roots are pierced. |
 | `browser.probe` | `{locator}` | `{count}` — resolve a candidate, count matches, NO action (for verify-before-accept + L1–L6 rotation) |
 | `browser.click` (extended) | `{locator}` any of the 6 kinds | `{clicked,url}` |
 (`browser.navigate/snapshot/links/currentUrl/traceStop` unchanged.)

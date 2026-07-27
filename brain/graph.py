@@ -76,30 +76,27 @@ def _elements_from_interactives(elements: list, path: str) -> list:
     pw-executor `browser.interactives`.
 
     M9.2b (ADR-028): generalized beyond buttons to **input/select/link** so a login/form/billing scenario
-    can ground. Coverage still uses the button subset (`role == "button"`) so pure-explore convergence and
-    `plan_hash` are unchanged — button `semantic_id`s are identical to the old button-only cataloguer.
+    can ground.
 
     semantic_id anchors on testid (stable across DOM drift) when present, else the accessible name. The
     primary locator is role+name (human-natural, drift-fragile); stabler testid/label/text are healing
     alternatives ordered by strategy prior (testid 0.95 > role_name 0.90 > label 0.88 > text 0.80).
+
+    ADR-094: there is NO tag->role ladder here any more. The executor now reports the true ARIA role,
+    so this function consumes it instead of re-deriving it. The ladder it replaces asked about the TAG
+    first (`if tag == "button" or erole == "button"`), which inverted the ARIA rule that an explicit
+    `role` attribute overrides the tag's implicit role — so every `<button role="tab">` was frozen as
+    a button, and `getByRole('button', ...)` can never match a control the accessibility tree calls a
+    tab. It also flattened every `<input>` to `textbox` regardless of `type`, which is wrong for
+    checkbox, radio, submit and search. Deriving a role in a second place was the defect; the fix is
+    to have only one place, not a better ladder.
     """
     out = []
     for e in elements:
-        tag = (e.get("tag") or "").lower()
-        erole = (e.get("role") or "").lower()
-        if tag == "button" or erole == "button":
-            role = "button"
-        elif tag == "a" or erole == "link":
-            role = "link"
-        elif tag == "select" or erole in ("combobox", "listbox"):
-            role = "combobox"
-        elif erole in ("checkbox", "radio", "switch"):
-            role = erole
-        elif tag in ("input", "textarea") or erole == "textbox":
-            role = "textbox"
-        elif erole:
-            role = erole
-        else:
+        role = (e.get("role") or "").lower()
+        if not role:
+            # No ARIA role at all — a hidden input, an anchor without href. Not a control; putting it
+            # in the page model would mean planning steps against something nothing can address.
             continue
         name = (e.get("name") or "").strip()
         testid = e.get("testid")
@@ -156,6 +153,20 @@ _REFINE_HISTORY_KEEP = int(os.environ.get("SENTINEL_REFINE_HISTORY_KEEP", "6"))
 # the explore graph's heal node is a stub by design (healing belongs to replay) — so a third attempt
 # can only produce the same exception. Env-tunable because a slow real app may legitimately want 3.
 _EXPLORE_FAIL_LIMIT = max(1, int(os.environ.get("SENTINEL_EXPLORE_FAIL_LIMIT", "2")))
+
+# Roles explore proposes clicking, and therefore the roles coverage is measured over (ADR-094).
+#
+# It is `{button, tab}` rather than `{button}` to keep the SET OF ELEMENTS exactly what it was, now
+# that they carry correct labels. Before this ADR a `<button role="tab">` was mis-typed as a button
+# and so it was already a candidate — an unreachable one, since the locator named a role the page
+# does not have. Dropping to `{button}` alone would have quietly REMOVED four controls per tabbed
+# page from both the candidate set and the coverage denominator, and a coverage number that improves
+# because the page got smaller is the flattering-number failure this codebase keeps finding.
+#
+# Deliberately NOT widened further. `checkbox`, `radio` and `textbox` are clickable too, but explore
+# has never proposed them and adding them here would be a behaviour change wearing a bug fix's
+# clothes: coverage denominators would grow on every form page for reasons unrelated to roles.
+_CLICK_ROLES = ("button", "tab")
 
 
 def _rolling_summary(user_turns: list) -> str:
@@ -214,7 +225,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         pm = dict(state.get("page_model") or {})
         path = normalize_url(pm.get("url", ""))
         elements = _elements_from_interactives(ex.call("browser.interactives").get("elements", []), path)
-        buttons = [e for e in elements if e["role"] == "button"]   # coverage/candidates: button subset (unchanged)
+        buttons = [e for e in elements if e["role"] in _CLICK_ROLES]  # coverage/candidates
         # ADR-092: measure how much of THIS page perception can even see, per page, before deciding
         # anything about coverage. Coverage answers "how much of what we saw did we exercise"; this
         # answers "how much was there to see" — and a coverage of 1.00 over a page we half-perceive is
@@ -279,9 +290,14 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             if b["semantic_id"] in spent or b.get("disabled") or b.get("visible") is False:
                 blocked += 1
                 continue
+            # ADR-094: the element's OWN role, not the literal "button". This was a third place where
+            # a role was decided rather than read — and it wrote the wrong one into the human-facing
+            # intent too, so a live run printed "click button 'Overview'" for a control the page calls
+            # a tab. The locator was already right; the label beside it disagreed, which is exactly
+            # how a wrong role stays invisible to a reader.
             candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
-                               "role": "button", "name": b["name"], "target": None,
-                               "intent": f"click button '{b['name']}'",
+                               "role": b["role"], "name": b["name"], "target": None,
+                               "intent": f"click {b['role']} '{b['name']}'",
                                "locator": b["locator"], "alternatives": b["alternatives"]})
         for nu in state.get("nav_frontier", []):
             nav_sid = semantic_id(nu, "navigate", "")

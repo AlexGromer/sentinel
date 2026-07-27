@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>L9 — one control per ARIA role</title>
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 2rem; max-width: 48rem; }
+  section { border: 1px solid #ced4da; border-radius: 6px; padding: .8rem 1rem; margin: .8rem 0; }
+  h2 { font-size: .95rem; margin: 0 0 .5rem; }
+  label { display: block; margin: .25rem 0; }
+  .note { color: #6c757d; font-size: .8rem; }
+</style>
+</head>
+<body>
+<!-- ADR-094 fixture. One control per ARIA role, so the role model is checked against the ROLES that
+     exist rather than against the handful our other fixtures happen to contain.
+
+     Why it had to exist: `browser.interactives` used to emit `role` as
+     `getAttribute('role') || tagName`, which is not a role — for a plain `<a>` it read "a", and there
+     is no ARIA role called `a`, so every locator built from it resolved to nothing. Measured across
+     the whole fixture corpus: 48 unusable locators, 42 of them from that one conflation, and all 42
+     on the self-healing path. The corpus could show the damage but could not pin the fix: it has no
+     visible checkbox, radio, submit or search input, so the four cases where `<input>` was flattened
+     to `textbox` were invisible to every gate.
+
+     §1 is the ARIA rule that was inverted: an explicit `role` attribute beats the tag's implicit one.
+     §2 is `<input>`, which is not one control but eight roles chosen by `type`.
+     §3 is the tags whose implicit role is not their name.
+     §4 is the elements that have NO role, which must be reported as none rather than as their tag.
+
+     Every role here is what Playwright's OWN engine resolves — measured, not transcribed from the
+     spec, and the two disagree: the spec gives `color`/`date`/`time` no role while Playwright calls
+     them `textbox`, and it calls `file`/`image` `button`. The engine is what `getByRole` consults,
+     so the engine is the authority. -->
+
+<h1>One control per role</h1>
+
+<section>
+  <h2>1 — an explicit role attribute overrides the tag</h2>
+  <button role="tab" id="r-tab">TabByRole</button>
+  <a href="#x" role="button" id="r-linkbutton">LinkAsButton</a>
+  <a href="#y" role="tab" id="r-linktab">LinkAsTab</a>
+  <div role="button" id="r-divbutton" tabindex="0">DivAsButton</div>
+  <p class="note">A `&lt;button role="tab"&gt;` is a TAB. Asking the page for a button by that name
+    finds nothing — which is why every tabbed fixture had coverage 0.00 for months.</p>
+</section>
+
+<section>
+  <h2>2 — &lt;input&gt; is eight roles, chosen by type</h2>
+  <label><input type="text" aria-label="RoleText"> text → textbox</label>
+  <label><input type="search" aria-label="RoleSearch"> search → searchbox</label>
+  <label><input type="checkbox" aria-label="RoleCheckbox"> checkbox → checkbox</label>
+  <label><input type="radio" name="g" aria-label="RoleRadio"> radio → radio</label>
+  <label><input type="number" aria-label="RoleNumber"> number → spinbutton</label>
+  <label><input type="range" aria-label="RoleRange"> range → slider</label>
+  <input type="submit" value="RoleSubmit"> <span class="note">submit → button</span>
+</section>
+
+<section>
+  <h2>3 — tags whose implicit role is not their tag name</h2>
+  <a href="#z" id="r-link">RoleLink</a> <span class="note">a[href] → link</span><br>
+  <select aria-label="RoleSelect"><option>one</option><option>two</option></select>
+  <span class="note">select → combobox</span><br>
+  <select aria-label="RoleMulti" multiple size="2"><option>one</option><option>two</option></select>
+  <span class="note">select[multiple] → listbox, NOT combobox</span><br>
+  <textarea aria-label="RoleArea"></textarea> <span class="note">textarea → textbox</span>
+</section>
+
+<section>
+  <h2>4 — no role at all</h2>
+  <!-- These match PERCEPTION_SELECTOR (`input`, and an `a` is caught by nothing without href) but
+       carry no role. Reporting the tag name here is what produced `getByRole('input')`. The honest
+       answer is an empty role, and the brain drops such an element from the page model rather than
+       planning a step nothing can address. -->
+  <!-- ⚠ It carries a testid AND an aria-label ON PURPOSE. Without them the brain drops it at the
+       "no anchor" guard, several lines before the role is ever consulted — so a gate built on a
+       nameless hidden input proves nothing about roles at all. Found by mutation: a version of the
+       brain that substituted the tag for a missing role kept every test green, because this element
+       never reached the code under test. A negative control has to fail for the reason it names. -->
+  <input type="hidden" id="r-hidden" data-testid="hidden-no-role" aria-label="RoleHidden" value="nope">
+  <p class="note">`input[type=hidden]` has no role. Expected: perceived by the selector, dropped by
+    the brain — and never reported as role "input".</p>
+</section>
+</body>
+</html>

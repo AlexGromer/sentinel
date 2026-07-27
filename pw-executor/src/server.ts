@@ -143,6 +143,50 @@ interface RpcResponse {
  */
 const PERCEPTION_SELECTOR = 'button, a[href], input, select, textarea, [role=button], [role=tab]';
 
+/** The ARIA role an `<input>` carries by its `type`. ADR-094.
+ *
+ * MEASURED against Playwright's own role engine, not transcribed from the ARIA spec — and the two
+ * disagree in three places that matter to us: `color`, `date` and `time` resolve as `textbox` here
+ * although the spec assigns them no role, and `file`/`image` resolve as `button`. Playwright's engine
+ * is what `getByRole` consults, so it is the only authority that predicts whether the locator we
+ * build will find anything. A map copied from the spec would have been correct and useless.
+ *
+ * An absent entry means "no role" — a hidden input is not a control, and claiming one for it would
+ * put an unclickable thing into the page model. */
+const INPUT_ROLE: Record<string, string> = {
+  text: 'textbox', password: 'textbox', email: 'textbox', tel: 'textbox', url: 'textbox',
+  color: 'textbox', date: 'textbox', time: 'textbox', 'datetime-local': 'textbox', month: 'textbox',
+  week: 'textbox',
+  search: 'searchbox',
+  checkbox: 'checkbox',
+  radio: 'radio',
+  submit: 'button', reset: 'button', button: 'button', file: 'button', image: 'button',
+  number: 'spinbutton',
+  range: 'slider',
+  // `hidden` is deliberately absent.
+};
+
+/** The page-side source of `ariaRole`, inlined into every `$$eval` that needs it.
+ *
+ * It is a STRING because `$$eval` callbacks are serialised into the page and cannot close over
+ * module scope. That is also why it is defined once here rather than written out at each call site —
+ * two copies of a role table is the same defect ADR-093 removed from the selector, one layer down. */
+const ARIA_ROLE_FN = `(e, INPUT_ROLE) => {
+  // An explicit role attribute WINS over the tag. This is the ARIA rule, and getting it backwards is
+  // what made every <button role="tab"> unreachable: the brain froze role "button" for a control the
+  // accessibility tree calls a tab, and getByRole('button') can never match it. The attribute is a
+  // token LIST — the first token that names a role we know is the effective one.
+  const explicit = (e.getAttribute('role') || '').trim().toLowerCase();
+  if (explicit) return explicit.split(/\\s+/)[0];
+  const tag = e.tagName.toLowerCase();
+  if (tag === 'button') return 'button';
+  if (tag === 'a') return e.hasAttribute('href') ? 'link' : '';   // an anchor without href is not a link
+  if (tag === 'textarea') return 'textbox';
+  if (tag === 'select') return (e.multiple || e.size > 1) ? 'listbox' : 'combobox';
+  if (tag === 'input') return INPUT_ROLE[(e.getAttribute('type') || 'text').toLowerCase()] || '';
+  return '';
+}`;
+
 /** Anything a person could plausibly click that PERCEPTION_SELECTOR does NOT name. Deliberately
  * wider than what we perceive: the point is to measure what we MISS, and a generous denominator that
  * occasionally over-counts is more honest than a narrow one that flatters us. */
@@ -488,12 +532,22 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
       const elements = await page!.$$eval(
         PERCEPTION_SELECTOR,
-        (els) =>
-          els.map((e) => ({
-            role: e.getAttribute('role') || e.tagName.toLowerCase(),
+        (els, { roleSrc, inputRole }) => {
+          // eslint-disable-next-line no-new-func
+          const ariaRole = new Function('return ' + roleSrc)() as (e: Element, m: Record<string, string>) => string;
+          return els.map((e) => ({
+            // ADR-094: the ARIA ROLE, which is what `getByRole` consults — no longer
+            // `role attribute || tagName`. That field was named `role` and was not one: for a plain
+            // `<a>` it read "a", and `a` is not an ARIA role at all, so every locator built from it
+            // resolved to nothing. Measured across this repo's fixtures: 42 of 48 broken locators
+            // came from that one conflation, and they were ALL on the self-healing path, which is
+            // the product's central promise.
+            role: ariaRole(e, inputRole),
             name: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 200),
             testid: e.getAttribute('data-testid'),
             text: (e.textContent || '').trim().slice(0, 200),
+            // The tag stays, separately. It is not a role and never was, but it is real information
+            // and the brain uses it to tell a link from a button when grouping.
             tag: e.tagName.toLowerCase(),
             // ADR-093: whether the control is RENDERED at all. Same contract as `disabled` below —
             // reported, never filtered here. It closes a disagreement between two perception
@@ -526,7 +580,9 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
             disabled:
               (e as HTMLButtonElement).disabled === true ||
               e.getAttribute('aria-disabled') === 'true',
-          })),
+          }));
+        },
+        { roleSrc: ARIA_ROLE_FN, inputRole: INPUT_ROLE },
       );
       return { elements };
     }
@@ -650,13 +706,19 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const outPath = params?.path as string | undefined;
       const marks = await page!.$$eval(
         PERCEPTION_SELECTOR,
-        (els) =>
-          els
+        (els, { roleSrc, inputRole }) => {
+          // eslint-disable-next-line no-new-func
+          const ariaRole = new Function('return ' + roleSrc)() as (e: Element, m: Record<string, string>) => string;
+          return els
             .map((e, i) => {
               const r = e.getBoundingClientRect();
               return {
                 mark: i,
-                role: e.getAttribute('role') || e.tagName.toLowerCase(),
+                // ADR-094: the same true ARIA role `browser.interactives` reports. `healing.py`
+                // maps marks and interactives through ONE function (`descriptor_to_locator`), so a
+                // mark carrying a tag name where a role belongs breaks the visual tier in exactly
+                // the way it broke the text tier.
+                role: ariaRole(e, inputRole),
                 name: (e.getAttribute('aria-label') || (e as HTMLElement).innerText || e.textContent || '')
                   .trim()
                   .slice(0, 120),
@@ -671,7 +733,9 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
                 onScreen: r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden',
               };
             })
-            .filter((m) => m.onScreen),
+            .filter((m) => m.onScreen);
+        },
+        { roleSrc: ARIA_ROLE_FN, inputRole: INPUT_ROLE },
       );
       if (outPath) {
         await page!.evaluate((ms) => {
