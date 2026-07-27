@@ -47,7 +47,7 @@ coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[],
 
 ### 2. Отчёт о запуске (`report.json` + `report.html` + `metrics.prom`)
 
-Основной артефакт для CI-потребления, испускаемый в конце каждого запуска.
+Основной артефакт для CI-потребления. ⚠ **Испускается НЕ автоматически** (проверено 2026-07-27, ADR-088): эти четыре файла пишет только `agentctl report --run <run-dir>`, и вызвать её надо ОТДЕЛЬНО после прогона. Прогон, запущенный из интерфейса, их не получает вовсе — control-api спавнит `run` и `baseline update`, но не `report` (проверено на диске: **192** каталога `runs/control-*`, из них с `metrics.prom` — **ноль**; по всем прогонам 9 из 263). Эта строка раньше утверждала «испускаемый в конце каждого запуска» — читатель, пришедший сюда за артефактами для CI, планировал вокруг автоматики, которой нет. Единица работы — `[PROD-REPORT-CHAIN]`.
 
 **As-built:** имён `run_report.json`/`run_report.html` в коде нет. Реально `brain/report.py::generate()`
 (`brain/report.py:88-97`) читает `heal-report.json` (артефакт **replay**-запуска; baseline-прогон пишет `baseline-report.json`) и пишет три

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -107,5 +108,48 @@ func TestFilteredEnvOptOut(t *testing.T) {
 	got := envMap(filteredEnv())
 	if _, ok := got["AWS_SECRET_ACCESS_KEY"]; !ok {
 		t.Error("opt-out (=0): AWS_SECRET_ACCESS_KEY must pass through unfiltered")
+	}
+}
+
+// TestUsageListsEverySubcommand: ADR-088. The dispatcher's switch is the truth about what exists; the
+// usage string is the only place a user learns it. They drifted — four of seven were listed, and the
+// three missing ones (report, export-spec, calibrate) were the ones a user most needs: `report` is the
+// sole producer of report.html/report.json/metrics.prom/junit.xml.
+//
+// A subcommand absent from usage exists only for someone reading this file, which is not a user.
+func TestUsageListsEverySubcommand(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	// the dispatcher: every `case "<name>":` inside the subcommand switch
+	start := strings.Index(body, "switch os.Args[1]")
+	if start < 0 {
+		t.Fatal("subcommand switch not found — this test is looking at the wrong thing")
+	}
+	end := strings.Index(body[start:], "\n\t}")
+	if end < 0 {
+		t.Fatal("could not delimit the subcommand switch")
+	}
+	re := regexp.MustCompile(`case "([a-z-]+)"`)
+	var cases []string
+	for _, m := range re.FindAllStringSubmatch(body[start:start+end], -1) {
+		cases = append(cases, m[1])
+	}
+	if len(cases) < 5 {
+		t.Fatalf("found only %v subcommands — the parser is not seeing the switch", cases)
+	}
+
+	// the usage function's literal text
+	us := strings.Index(body, "func usage()")
+	ue := strings.Index(body[us:], "\n}")
+	usageText := body[us : us+ue]
+
+	for _, c := range cases {
+		if !strings.Contains(usageText, "agentctl "+c) {
+			t.Errorf("subcommand %q is dispatched but absent from usage() — a user cannot discover it", c)
+		}
 	}
 }
