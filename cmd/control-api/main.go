@@ -333,8 +333,136 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			"vision":     map[string]any{"env": "LLM_VISION", "type": "bool", "default": false, "role_split": true, "note": "opt-in ('1'); openai backends default off (many are text-only, e.g. DeepSeek); anthropic always vision-capable"},
 			"structured": map[string]any{"env": "LLM_STRUCTURED", "type": "bool", "default": false, "role_split": true, "note": "opt-in ('1'); openai backends default off (many local endpoints reject json_schema); anthropic always structured"},
 		},
-		"note": "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
+		// ADR-085: operator SETTINGS — knobs that change how a run behaves or how long its artifacts
+		// live. They were reachable only by exporting an environment variable, i.e. discoverable only by
+		// reading source, which is the same failure `[DOCS-REGISTERS]` describes: a capability nobody
+		// can find does not exist for the person who needs it.
+		//
+		// `hint` is BILINGUAL and `note` is not, deliberately. The wizard renders RU/EN and the preset
+		// code says why a plain `note` is never shown: "English provenance data for the JSON/docs, not
+		// UI chrome — rendering it here would code-switch the RU interface" (ADR-061). A setting whose
+		// whole point is to be explained needs an explanation the reader's interface can actually use.
+		//
+		// `min`/`step` travel with the field instead of living in the wizard's per-key branches, so a
+		// new setting arrives with sane input constraints rather than inheriting `step=1000` from an
+		// `else` written for token budgets.
+		"settings": settingsSchema,
+		"note":     "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
 	})
+}
+
+// settingsSchema is the single source for operator-facing settings: one entry per environment
+// variable a person may reasonably want to change, with the default READ FROM THE SAME PLACE the code
+// reads it (see the `env` field — the pairing is asserted by TestSettingsSchemaDefaultsMatchCode).
+//
+// Grouping is by the question the operator is answering, not by which binary happens to read the
+// variable: "how long do artifacts live" is one decision even though logs are pruned by agentctl and
+// traces by the brain.
+var settingsSchema = map[string]any{
+	// --- retention: how long artifacts of past runs stay on disk ------------------------------------
+	"log_keep": map[string]any{
+		"env": "SENTINEL_LOG_KEEP", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Логи скольких последних прогонов сохранять. 0 — не удалять никогда.",
+			"en": "How many recent runs keep their logs. 0 — never delete.",
+		},
+	},
+	"log_ttl_hours": map[string]any{
+		"env": "SENTINEL_LOG_TTL_HOURS", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Логи старше скольких часов удалять. 0 — не удалять никогда. Логи содержат вывод вашего приложения; секреты в них уже отредактированы при записи (ADR-081), но это данные о прогоне.",
+			"en": "Delete logs older than this many hours. 0 — never delete. Logs carry your application's own output; secrets are already redacted at write time (ADR-081), but this is still run data.",
+		},
+	},
+	"trace_keep": map[string]any{
+		"env": "SENTINEL_TRACE_KEEP", "type": "int", "default": 10, "min": -1, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Трейсы скольких последних прогонов сохранять. Отрицательное значение отключает удаление по счётчику.",
+			"en": "How many recent runs keep their trace. A negative value disables count-based pruning.",
+		},
+	},
+	"trace_ttl_hours": map[string]any{
+		"env": "SENTINEL_TRACE_TTL_HOURS", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Трейсы старше скольких часов удалять. 0 — не удалять по возрасту.",
+			"en": "Delete traces older than this many hours. 0 — no age-based pruning.",
+		},
+	},
+	"trace_always": map[string]any{
+		"env": "SENTINEL_TRACE_ALWAYS", "type": "bool", "default": false, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Сохранять трейс и у зелёного прогона. По умолчанию трейс остаётся только у прогона, который завершился не нулевым кодом: он несёт живой DOM вашего приложения, и у зелёного прогона разбирать нечего (ADR-084).",
+			"en": "Keep the trace even on a green run. By default a trace survives only when the run exited non-zero: it carries your application's live DOM, and a green run has nothing to diagnose (ADR-084).",
+		},
+	},
+	// --- healing: when a repaired locator is trusted -------------------------------------------------
+	"heal_auto": map[string]any{
+		"env": "SENTINEL_HEAL_AUTO", "type": "number", "default": 0.85, "min": 0, "max": 1, "step": 0.05,
+		"group": "healing",
+		"hint": map[string]string{
+			"ru": "Уверенность, начиная с которой починка применяется молча. ⚠ Число не откалибровано — это приор, а не измеренная вероятность (GAP-RISK-002).",
+			"en": "Confidence at or above which a repair is applied silently. ⚠ Uncalibrated — a prior, not a measured probability (GAP-RISK-002).",
+		},
+	},
+	"heal_flag": map[string]any{
+		"env": "SENTINEL_HEAL_FLAG", "type": "number", "default": 0.60, "min": 0, "max": 1, "step": 0.05,
+		"group": "healing",
+		"hint": map[string]string{
+			"ru": "Уверенность, начиная с которой починка применяется, но помечается для проверки человеком. Ниже — шаг падает.",
+			"en": "Confidence at or above which a repair is applied but flagged for human review. Below it the step fails.",
+		},
+	},
+	"heal_llm": map[string]any{
+		"env": "HEAL_LLM", "type": "bool", "default": false, "group": "healing",
+		"hint": map[string]string{
+			"ru": "Разрешить ИИ выбирать элемент заново, когда ни один замороженный ключ не сработал.",
+			"en": "Let the model re-pick the element when no frozen key resolves.",
+		},
+	},
+	"heal_visual": map[string]any{
+		"env": "HEAL_VISUAL", "type": "bool", "default": false, "group": "healing",
+		"hint": map[string]string{
+			"ru": "Разрешить поиск элемента по скриншоту (нужна vision-модель). Требует включённого LLM_VISION.",
+			"en": "Allow locating the element from a screenshot (needs a vision model). Requires LLM_VISION.",
+		},
+	},
+	// --- build gates: what turns a finished run red --------------------------------------------------
+	"fail_on_heal": map[string]any{
+		"env": "SENTINEL_FAIL_ON_HEAL", "type": "int", "default": 0, "min": 0, "step": 1, "group": "gates",
+		"hint": map[string]string{
+			"ru": "Ронять сборку, если элементов с дрейфом не меньше N. 0 — выключено (сообщать, но не гейтить).",
+			"en": "Fail the build when drifted elements reach N. 0 — off (report, do not gate).",
+		},
+	},
+	"fail_on_app_errors": map[string]any{
+		"env": "SENTINEL_FAIL_ON_APP_ERRORS", "type": "int", "default": 0, "min": 0, "step": 1, "group": "gates",
+		"hint": map[string]string{
+			"ru": "Ронять сборку, если само приложение выдало не меньше N ошибок (исключения, ошибки консоли, упавшие запросы, 4xx-5xx). 0 — выключено. Предупреждения не считаются.",
+			"en": "Fail the build when the application itself produced N or more errors (exceptions, console errors, failed requests, 4xx-5xx). 0 — off. Warnings do not count.",
+		},
+	},
+	"visual_authoritative": map[string]any{
+		"env": "SENTINEL_VISUAL_AUTHORITATIVE", "type": "bool", "default": false, "group": "gates",
+		"hint": map[string]string{
+			"ru": "Считать расхождение скриншота с эталоном регрессией, а не справочным сигналом. По умолчанию выключено: побайтовая стабильность кадра в реальном браузере ещё не подтверждена.",
+			"en": "Treat a screenshot difference from the golden as a regression rather than advisory. Off by default: byte-stability of a frame in a real browser is not yet proven.",
+		},
+	},
+	// --- human in the loop ---------------------------------------------------------------------------
+	"auto_hitl_threshold": map[string]any{
+		"env": "SENTINEL_AUTO_HITL_THRESHOLD", "type": "int", "default": 0, "min": 0, "step": 1, "group": "hitl",
+		"hint": map[string]string{
+			"ru": "После скольких подряд неудачных починок звать человека. 0 — не звать никогда.",
+			"en": "How many consecutive failed repairs before asking a human. 0 — never ask.",
+		},
+	},
+	"takeover_timeout": map[string]any{
+		"env": "SENTINEL_TAKEOVER_TIMEOUT", "type": "int", "default": 1800, "min": 0, "step": 60, "group": "hitl",
+		"hint": map[string]string{
+			"ru": "Сколько секунд ждать человека, взявшего управление. По истечении прогон ПРОДОЛЖАЕТСЯ сам.",
+			"en": "Seconds to wait for an operator who took control. On expiry the run CONTINUES on its own.",
+		},
+	},
 }
 
 type runRequest struct {

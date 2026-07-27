@@ -262,6 +262,15 @@ details a{color:var(--acc2)}
     <div id="numfields" class="grid"></div>
   </fieldset>
 
+  <!-- ADR-085: operator settings, generated from schema.settings. Each row carries a bilingual hint:
+       until now these knobs existed only as environment variables, i.e. findable only by reading the
+       source, which for the person who needs them is the same as not existing. -->
+  <fieldset>
+    <legend><span data-lang="ru">Настройки</span><span data-lang="en">Settings</span>
+      <span class="mut" style="font-size:.75rem"> — <span data-lang="ru">хранение, пороги, гейты; тоже из схемы</span><span data-lang="en">retention, thresholds, gates; also from the schema</span></span></legend>
+    <div id="settings"></div>
+  </fieldset>
+
   <div class="navrow">
     <button type="button" class="nav" data-back="model"><span data-lang="ru">← Назад</span><span data-lang="en">← Back</span></button>
     <button type="button" class="nav" data-primary data-next="review"><span data-lang="ru">Далее →</span><span data-lang="en">Next →</span></button>
@@ -368,6 +377,170 @@ var FALLBACK_SCHEMA = {
     "plan_budget": {"type": "int", "default": 50000},
     "heal_budget": {"type": "int", "default": 20000},
     "total_budget": {"type": "int", "default": 0}
+  },
+  "settings": {
+    "auto_hitl_threshold": {
+      "default": 0,
+      "env": "SENTINEL_AUTO_HITL_THRESHOLD",
+      "group": "hitl",
+      "hint": {
+        "en": "How many consecutive failed repairs before asking a human. 0 — never ask.",
+        "ru": "После скольких подряд неудачных починок звать человека. 0 — не звать никогда."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "fail_on_app_errors": {
+      "default": 0,
+      "env": "SENTINEL_FAIL_ON_APP_ERRORS",
+      "group": "gates",
+      "hint": {
+        "en": "Fail the build when the application itself produced N or more errors (exceptions, console errors, failed requests, 4xx-5xx). 0 — off. Warnings do not count.",
+        "ru": "Ронять сборку, если само приложение выдало не меньше N ошибок (исключения, ошибки консоли, упавшие запросы, 4xx-5xx). 0 — выключено. Предупреждения не считаются."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "fail_on_heal": {
+      "default": 0,
+      "env": "SENTINEL_FAIL_ON_HEAL",
+      "group": "gates",
+      "hint": {
+        "en": "Fail the build when drifted elements reach N. 0 — off (report, do not gate).",
+        "ru": "Ронять сборку, если элементов с дрейфом не меньше N. 0 — выключено (сообщать, но не гейтить)."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "heal_auto": {
+      "default": 0.85,
+      "env": "SENTINEL_HEAL_AUTO",
+      "group": "healing",
+      "hint": {
+        "en": "Confidence at or above which a repair is applied silently. ⚠ Uncalibrated — a prior, not a measured probability (GAP-RISK-002).",
+        "ru": "Уверенность, начиная с которой починка применяется молча. ⚠ Число не откалибровано — это приор, а не измеренная вероятность (GAP-RISK-002)."
+      },
+      "max": 1,
+      "min": 0,
+      "step": 0.05,
+      "type": "number"
+    },
+    "heal_flag": {
+      "default": 0.6,
+      "env": "SENTINEL_HEAL_FLAG",
+      "group": "healing",
+      "hint": {
+        "en": "Confidence at or above which a repair is applied but flagged for human review. Below it the step fails.",
+        "ru": "Уверенность, начиная с которой починка применяется, но помечается для проверки человеком. Ниже — шаг падает."
+      },
+      "max": 1,
+      "min": 0,
+      "step": 0.05,
+      "type": "number"
+    },
+    "heal_llm": {
+      "default": false,
+      "env": "HEAL_LLM",
+      "group": "healing",
+      "hint": {
+        "en": "Let the model re-pick the element when no frozen key resolves.",
+        "ru": "Разрешить ИИ выбирать элемент заново, когда ни один замороженный ключ не сработал."
+      },
+      "type": "bool"
+    },
+    "heal_visual": {
+      "default": false,
+      "env": "HEAL_VISUAL",
+      "group": "healing",
+      "hint": {
+        "en": "Allow locating the element from a screenshot (needs a vision model). Requires LLM_VISION.",
+        "ru": "Разрешить поиск элемента по скриншоту (нужна vision-модель). Требует включённого LLM_VISION."
+      },
+      "type": "bool"
+    },
+    "log_keep": {
+      "default": 0,
+      "env": "SENTINEL_LOG_KEEP",
+      "group": "retention",
+      "hint": {
+        "en": "How many recent runs keep their logs. 0 — never delete.",
+        "ru": "Логи скольких последних прогонов сохранять. 0 — не удалять никогда."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "log_ttl_hours": {
+      "default": 0,
+      "env": "SENTINEL_LOG_TTL_HOURS",
+      "group": "retention",
+      "hint": {
+        "en": "Delete logs older than this many hours. 0 — never delete. Logs carry your application's own output; secrets are already redacted at write time (ADR-081), but this is still run data.",
+        "ru": "Логи старше скольких часов удалять. 0 — не удалять никогда. Логи содержат вывод вашего приложения; секреты в них уже отредактированы при записи (ADR-081), но это данные о прогоне."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "takeover_timeout": {
+      "default": 1800,
+      "env": "SENTINEL_TAKEOVER_TIMEOUT",
+      "group": "hitl",
+      "hint": {
+        "en": "Seconds to wait for an operator who took control. On expiry the run CONTINUES on its own.",
+        "ru": "Сколько секунд ждать человека, взявшего управление. По истечении прогон ПРОДОЛЖАЕТСЯ сам."
+      },
+      "min": 0,
+      "step": 60,
+      "type": "int"
+    },
+    "trace_always": {
+      "default": false,
+      "env": "SENTINEL_TRACE_ALWAYS",
+      "group": "retention",
+      "hint": {
+        "en": "Keep the trace even on a green run. By default a trace survives only when the run exited non-zero: it carries your application's live DOM, and a green run has nothing to diagnose (ADR-084).",
+        "ru": "Сохранять трейс и у зелёного прогона. По умолчанию трейс остаётся только у прогона, который завершился не нулевым кодом: он несёт живой DOM вашего приложения, и у зелёного прогона разбирать нечего (ADR-084)."
+      },
+      "type": "bool"
+    },
+    "trace_keep": {
+      "default": 10,
+      "env": "SENTINEL_TRACE_KEEP",
+      "group": "retention",
+      "hint": {
+        "en": "How many recent runs keep their trace. A negative value disables count-based pruning.",
+        "ru": "Трейсы скольких последних прогонов сохранять. Отрицательное значение отключает удаление по счётчику."
+      },
+      "min": -1,
+      "step": 1,
+      "type": "int"
+    },
+    "trace_ttl_hours": {
+      "default": 0,
+      "env": "SENTINEL_TRACE_TTL_HOURS",
+      "group": "retention",
+      "hint": {
+        "en": "Delete traces older than this many hours. 0 — no age-based pruning.",
+        "ru": "Трейсы старше скольких часов удалять. 0 — не удалять по возрасту."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "visual_authoritative": {
+      "default": false,
+      "env": "SENTINEL_VISUAL_AUTHORITATIVE",
+      "group": "gates",
+      "hint": {
+        "en": "Treat a screenshot difference from the golden as a regression rather than advisory. Off by default: byte-stability of a frame in a real browser is not yet proven.",
+        "ru": "Считать расхождение скриншота с эталоном регрессией, а не справочным сигналом. По умолчанию выключено: побайтовая стабильность кадра в реальном браузере ещё не подтверждена."
+      },
+      "type": "bool"
+    }
   },
   "llm": {
     "backend": {"env": "LLM_BACKEND", "type": "enum", "enum": ["anthropic", "openai", "sampling"], "default": "anthropic", "role_split": true},
@@ -491,6 +664,20 @@ function numericFields() {
 }
 function fieldId(k) { return 'f-' + k; }
 
+/* ADR-085: input bounds come from the DESCRIPTOR when it carries them. They used to be per-key
+   branches here, so any field the server added later fell into the `else` and inherited step=1000 —
+   sane for a token budget, meaningless for hours or for a 0..1 confidence. The branches remain only
+   for the run-params fields, whose descriptors predate `min`/`step` and are asserted byte-for-byte
+   against the handler by TestSetupWizardSchemaSnapshotMatchesHandler. */
+function applyBounds(inp, d, k) {
+  if (d && d.min !== undefined) inp.min = String(d.min);
+  if (d && d.max !== undefined) inp.max = String(d.max);
+  if (d && d.step !== undefined) { inp.step = String(d.step); return; }
+  if (k === 'coverage_target') { inp.min = '0'; inp.max = '1'; inp.step = '0.05'; }
+  else if (k === 'max_steps')  { inp.min = '1'; inp.step = '1'; }
+  else if (d && d.min === undefined) { inp.min = '0'; inp.step = '1000'; }
+}
+
 /* Numeric run-params are GENERATED from the schema: a field added server-side shows up here with no edit. */
 function renderNumFields() {
   var host = $('numfields');
@@ -507,14 +694,76 @@ function renderNumFields() {
     inp.type = 'number';
     inp.id = fieldId(k);
     inp.setAttribute('data-draft', '');
-    if (k === 'coverage_target') { inp.min = '0'; inp.max = '1'; inp.step = '0.05'; }
-    else if (k === 'max_steps')  { inp.min = '1'; inp.step = '1'; }
-    else                          { inp.min = '0'; inp.step = '1000'; }
+    applyBounds(inp, d, k);
     inp.value = (keep[k] !== undefined && keep[k] !== '') ? keep[k] : (d['default'] !== undefined ? String(d['default']) : '');
     inp.addEventListener('input', onInput);
     var err = document.createElement('div'); err.className = 'err'; err.id = 'e-' + fieldId(k); err.setAttribute('aria-live', 'polite');
     box.appendChild(lab); box.appendChild(inp); box.appendChild(err);
     host.appendChild(box);
+  });
+}
+
+/* ADR-085: operator SETTINGS — retention, healing thresholds, build gates, HITL. Generated entirely
+   from schema.settings, so a knob added server-side appears here with no edit to this file.
+
+   Each row shows a BILINGUAL hint, and that is the point of the section rather than decoration: these
+   were reachable only by exporting an environment variable, i.e. discoverable only by reading source.
+   The hint is `hint[lang]`, never the descriptor's `note` — `note` is English provenance for the
+   JSON/docs, and rendering it here would code-switch the RU interface (the rule the preset code
+   already states). A setting whose whole purpose is to be understood cannot arrive in one language. */
+var SETTING_GROUPS = [
+  ['retention', 'Хранение артефактов', 'Artifact retention'],
+  ['healing',   'Самопочинка',         'Self-healing'],
+  ['gates',     'Когда сборка краснеет', 'What turns the build red'],
+  ['hitl',      'Участие человека',    'Human in the loop']
+];
+function settingsOf(group) {
+  var st = SCHEMA.settings || {};
+  return Object.keys(st).sort().filter(function (k) { return st[k].group === group; });
+}
+function settingId(k) { return 's-' + k; }
+function renderSettings() {
+  var host = $('settings');
+  if (!host) return;
+  var keep = {};
+  Object.keys(SCHEMA.settings || {}).forEach(function (k) {
+    var el = $(settingId(k));
+    if (el) keep[k] = (el.type === 'checkbox') ? el.checked : el.value;
+  });
+  host.innerHTML = '';
+  SETTING_GROUPS.forEach(function (g) {
+    var keys = settingsOf(g[0]);
+    if (!keys.length) return;
+    var fs = document.createElement('fieldset');
+    var lg = document.createElement('legend');
+    lg.textContent = tr(g[1], g[2]);
+    fs.appendChild(lg);
+    keys.forEach(function (k) {
+      var d = SCHEMA.settings[k];
+      var box = document.createElement('div');
+      var lab = document.createElement('label');
+      lab.setAttribute('for', settingId(k));
+      lab.textContent = d.env;                       // the env var IS the stable name; the hint explains it
+      var inp = document.createElement('input');
+      inp.id = settingId(k);
+      inp.setAttribute('data-draft', '');
+      if (d.type === 'bool') {
+        inp.type = 'checkbox';
+        inp.checked = (keep[k] !== undefined) ? !!keep[k] : !!d['default'];
+      } else {
+        inp.type = 'number';
+        applyBounds(inp, d, k);
+        inp.value = (keep[k] !== undefined && keep[k] !== '') ? keep[k]
+                  : (d['default'] !== undefined ? String(d['default']) : '');
+      }
+      inp.addEventListener(d.type === 'bool' ? 'change' : 'input', onInput);
+      var hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = (d.hint && d.hint[lang()]) || '';
+      box.appendChild(lab); box.appendChild(inp); box.appendChild(hint);
+      fs.appendChild(box);
+    });
+    host.appendChild(fs);
   });
 }
 
@@ -617,6 +866,7 @@ function renderSchemaDriven() {
   refreshOptionLabels();
   renderRoleModels();
   renderNumFields();
+  renderSettings();
   sync();
 }
 
@@ -792,6 +1042,17 @@ function buildEnv() {
   });
   if ($('vision').checked)     env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.vision && SCHEMA.llm.vision.env) || 'LLM_VISION') + '=1');
   if ($('structured').checked) env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.structured && SCHEMA.llm.structured.env) || 'LLM_STRUCTURED') + '=1');
+  // ADR-085: a setting the operator CHANGED is exported; one left at its default is not, so the
+  // generated block stays short and every line in it means "I decided this".
+  Object.keys(SCHEMA.settings || {}).sort().forEach(function (k) {
+    var d = SCHEMA.settings[k], el = $(settingId(k));
+    if (!el) return;
+    if (d.type === 'bool') {
+      if (el.checked !== !!d['default']) env.push('export ' + d.env + '=' + (el.checked ? '1' : '0'));
+    } else if (el.value !== '' && String(el.value) !== String(d['default'])) {
+      env.push('export ' + d.env + '=' + el.value);
+    }
+  });
   var keyEnv = (be === 'anthropic') ? 'ANTHROPIC_API_KEY' : ((SCHEMA.llm && SCHEMA.llm.api_key && SCHEMA.llm.api_key.env) || 'LLM_API_KEY');
   env.push('export ' + keyEnv + '=' + (key || '...') + '        # DO NOT COMMIT');
   if (be === 'anthropic' && !key) env.push('# no key -> offline heuristic / L1–L6 fallback');

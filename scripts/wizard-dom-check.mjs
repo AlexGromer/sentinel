@@ -474,6 +474,47 @@ try {
     await ctx.close();
   });
 
+  /* 10b — ADR-085: operator settings are rendered from schema.settings, explained in the reader's
+     language, and only EXPORTED when actually changed. Before this, these knobs existed solely as
+     environment variables — findable by reading source, which for their audience is not findable. */
+  await check('settings: rendered from the schema, explained bilingually, exported only when changed', async () => {
+    const { ctx, page } = await freshPage(browser, base);
+    await page.click('button[data-next="model"]');
+    await page.click('button[data-next="params"]');
+
+    const rows = await page.$$eval('#settings input', (els) => els.map((e) => e.id));
+    ok(rows.length >= 10, `settings rendered (${rows.length} controls)`);
+    ok(rows.includes('s-log_ttl_hours'), 'the TTL knob this was asked for is present');
+
+    // The hint is the WHOLE POINT: a number with no explanation is what the env var already was.
+    const hintRu = await page.textContent('#settings div:has(> #s-log_ttl_hours) .hint');
+    ok(/\u0447\u0430\u0441\u043e\u0432/.test(hintRu), 'RU hint explains the unit, not just the name');
+    await page.click('button[data-lang-set="en"]').catch(() => {});
+    await page.evaluate(() => { document.documentElement.lang = 'en'; });
+
+    // Bounds come from the descriptor, not from a per-key branch: hours must not inherit step=1000.
+    const stepAttr = await page.getAttribute('#s-log_ttl_hours', 'step');
+    eq(stepAttr, '1', 'step comes from the schema');
+    const confStep = await page.getAttribute('#s-heal_auto', 'step');
+    eq(confStep, '0.05', 'a 0..1 confidence gets a 0.05 step, not 1000');
+    eq(await page.getAttribute('#s-heal_auto', 'max'), '1', 'and its max');
+
+    await page.fill('#target', 'https://app.example');
+    await page.click('button[data-next="review"]');
+    eq(await step(page), "review", "settings do not block the step");
+
+    // Untouched settings must NOT appear: every exported line should mean "I decided this".
+    let env = await page.textContent('#env');
+    ok(!/SENTINEL_LOG_TTL_HOURS/.test(env), 'a default-valued setting is not exported');
+
+    await page.click('button[data-back="params"]');
+    await page.fill('#s-log_ttl_hours', '48');
+    await page.click('button[data-next="review"]');
+    env = await page.textContent('#env');
+    ok(/export SENTINEL_LOG_TTL_HOURS=48/.test(env), 'a changed setting reaches the generated env');
+    await ctx.close();
+  });
+
   /* 11 — M11.5 PR-5: "Save to server" writes the config domain and flips /readyz 503 -> 200 */
   await check('config: "Save to server" persists a secret-free document and readiness flips 503 -> 200', async () => {
     const readyz = async (tok) => {
