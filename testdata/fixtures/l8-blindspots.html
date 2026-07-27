@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>L8 — what the tool cannot see</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+  section { border: 1px solid #ced4da; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+  h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  .fake-btn { display: inline-block; padding: .4rem 1rem; background: #0d6efd; color: #fff;
+              border-radius: 4px; cursor: pointer; user-select: none; }
+  .note { color: #6c757d; font-size: .8rem; }
+  #vlist { height: 6rem; overflow-y: scroll; border: 1px solid #dee2e6; }
+  #vlist div { height: 1.5rem; padding: 0 .4rem; }
+  [contenteditable] { border: 1px dashed #adb5bd; padding: .3rem; min-height: 1.4rem; }
+</style>
+</head>
+<body>
+<!-- ADR-093 fixture. Every OTHER fixture is a page the tool handles; this one is the page it does
+     NOT, and it exists so the claim "here is where our sight ends" is measured rather than asserted.
+
+     The order this fixture was built in matters. `GAP-RISK-005` promised a `completeness_ratio` that
+     never existed, and ADR-092 then shipped a ratio measured against a re-implementation of
+     perception rather than perception itself — reporting 8 shadow-DOM controls as unseen while
+     `browser.click` was actuating them. Both failures are the same one: a statement about coverage
+     with nothing underneath it. So the rule is now: no claim about a blind spot without a page that
+     demonstrates it.
+
+     What each section is for, and which key of `browser.perceptionAudit` it must move:
+       * §1 outside the selector  -> unseen.outside_selector   (reachable in principle, unnamed by us)
+       * §2 canvas                -> opaque.canvas             (pixels; no DOM node to address)
+       * §3 closed shadow root    -> opaque.shadow_roots_closed (a boundary nothing crosses)
+       * §4 virtualised list      -> COUNTED BY NOTHING        (the rows are not in the DOM yet)
+     §4 is the honest one: an uncounted blind spot stays uncounted, and saying so is the point.
+     Deliberately NO <iframe> here — frames get their own fixture (l9). -->
+
+<h1>Blind spots</h1>
+<p class="note">A page built out of the things Sentinel does not perceive. Two ordinary controls are
+included so the ratio has a numerator.</p>
+
+<section>
+  <h2>0 — ordinary controls (these ARE perceived)</h2>
+  <button id="btn-real">Real button</button>
+  <a href="#anchor" id="lnk-real">Real link</a>
+</section>
+
+<section>
+  <h2>1 — clickable, but outside the 7-token selector</h2>
+  <!-- Each of these is something a person clicks and our selector does not name. They are reachable
+       by CSS, so widening the selector WOULD pick them up — the cost is noise, which is why the
+       decision was to measure first (Alex, 2026-07-27) rather than widen on the assumption that
+       real apps are full of them. Measured: zero occurrences across every other page in this repo. -->
+  <div class="fake-btn" onclick="mark('div-onclick')" id="d-onclick">div with onclick</div>
+  <span tabindex="0" id="d-tabindex" class="fake-btn">span with tabindex</span>
+  <div contenteditable="true" id="d-editable">contenteditable field</div>
+  <div role="menuitem" id="d-menuitem" class="fake-btn">role=menuitem</div>
+  <div role="switch" aria-checked="false" id="d-switch" class="fake-btn">role=switch</div>
+  <p class="note">Expected: <code>unseen.outside_selector = 5</code>.</p>
+</section>
+
+<section>
+  <h2>2 — a control drawn on a canvas</h2>
+  <!-- There is no element under the pixels. A vision model can SEE this button in a screenshot, but
+       `browser.setOfMarks` cannot mark it: marks are built from the same DOM selector, so the visual
+       heal tier has exactly the same ceiling as the text tier. That is why the UI does not offer a
+       "vision only" category — today it would be empty. -->
+  <canvas id="cv" width="220" height="48"></canvas>
+  <p class="note">Expected: <code>opaque.canvas = 1</code>. The button inside it is counted by nothing.</p>
+</section>
+
+<section>
+  <h2>3 — a CLOSED shadow root</h2>
+  <!-- The open-root case is NOT a blind spot: Playwright's selector engine pierces open roots, which
+       is what l5.html demonstrates and what ADR-092 got wrong. A closed root is the real boundary —
+       `element.shadowRoot` is null for everyone, including us, including the page's own scripts. -->
+  <x-sealed-widget id="sealed"></x-sealed-widget>
+  <p class="note">Expected: <code>opaque.shadow_roots_closed = 1</code>. The button inside is
+    counted by nothing — we cannot count what we cannot enter, and pretending otherwise is what a
+    flattering denominator does.</p>
+</section>
+
+<section>
+  <h2>4 — a virtualised list</h2>
+  <!-- 500 logical rows, ~8 in the DOM. This blind spot cannot be measured at all: the missing rows
+       are not hidden, they do not exist until something scrolls. Counting requires ACTING on the
+       page, which an audit must not do. It is listed in the UI as "not seen at all" on the strength
+       of this fixture, and the count stays absent rather than being guessed. -->
+  <div id="vlist"></div>
+  <p class="note">500 logical rows, only the visible slice is in the DOM. Expected: no audit key
+    moves — this is a blind spot the tool cannot even size.</p>
+</section>
+
+<section>
+  <h2>5 — perceived, but not on screen</h2>
+  <!-- NOT a blind spot: we see these and say so. They are here because the two mechanisms that make
+       a control unusable RIGHT NOW collapse differently, and only one of them is caught by a box
+       measurement:
+         * inside a `display:none` ancestor -> the box collapses to 0x0;
+         * `visibility:hidden`              -> the box stays FULL SIZE (measured: 137x21).
+       Without the second case a mutation deleting the visibility test survives, because every hidden
+       control in every other fixture happens to be the first kind. `l5.html` has seven of those and
+       not one of these. -->
+  <div style="display:none"><button id="btn-in-none">hidden by an ancestor</button></div>
+  <button id="btn-vis-hidden" style="visibility:hidden">hidden by visibility</button>
+  <p class="note">Both are perceived and both report <code>visible: false</code>; neither is a blind
+    spot. They raise <code>seen</code>, so they also keep the ratio honest.</p>
+</section>
+
+<p id="out" class="note">nothing clicked yet</p>
+
+<script>
+  function mark(what) { document.getElementById('out').textContent = 'clicked: ' + what; }
+
+  // §2 — draw a button-looking thing. No element, only pixels.
+  (function () {
+    var c = document.getElementById('cv').getContext('2d');
+    c.fillStyle = '#198754'; c.fillRect(0, 0, 220, 48);
+    c.fillStyle = '#fff'; c.font = '16px system-ui';
+    c.fillText('Submit (canvas)', 40, 30);
+    document.getElementById('cv').addEventListener('click', function () { mark('canvas-button'); });
+  })();
+
+  // §3 — a genuinely CLOSED root. `mode:'closed'` means the handle is returned to this closure and
+  // to nobody else; `document.getElementById('sealed').shadowRoot` is null for every caller.
+  customElements.define('x-sealed-widget', class extends HTMLElement {
+    connectedCallback() {
+      var root = this.attachShadow({ mode: 'closed' });
+      var b = document.createElement('button');
+      b.id = 'sealed-btn';
+      b.textContent = 'Sealed button';
+      b.addEventListener('click', function () { mark('sealed-button'); });
+      root.appendChild(b);
+    }
+  });
+
+  // §4 — render only the slice in view, exactly as a virtual scroller does.
+  (function () {
+    var host = document.getElementById('vlist'), TOTAL = 500, ROW = 24;
+    var spacer = document.createElement('div');
+    spacer.style.height = (TOTAL * ROW) + 'px';
+    spacer.style.position = 'relative';
+    host.appendChild(spacer);
+    function render() {
+      var first = Math.floor(host.scrollTop / ROW), last = Math.min(TOTAL, first + 8);
+      spacer.textContent = '';
+      for (var i = first; i < last; i++) {
+        var r = document.createElement('div');
+        r.style.position = 'absolute';
+        r.style.top = (i * ROW) + 'px';
+        r.textContent = 'row ' + i;
+        spacer.appendChild(r);
+      }
+    }
+    host.addEventListener('scroll', render);
+    render();
+  })();
+</script>
+</body>
+</html>

@@ -13,6 +13,8 @@ All files work as `file://` targets. No CDN or external network requests.
 | `l4.html` → `l4-dashboard.html` → `l4-billing.html` | L4 — Multi-page flow | M9.2 cross-page goal scenarios: 3-step nav, sessionStorage handoff, modal confirm | Step 1: login form → Step 2: sidebar dashboard with stats + CTA → Step 3: plan upgrade + invoice table + confirmation modal |
 | `l5.html` | L5 — Tabs + Shadow DOM | RISK-005: ARIA tab keyboard nav, async content injection, shadow-DOM pierce locators | `role=tablist/tab/tabpanel`, dynamic slot (`#dynamic-slot`, injected 600ms after tab activation), `<x-color-picker>` custom element with `attachShadow({mode:'open'})` |
 | `l6-newtab.html` | L6 — Multi-tab | M9.4: browser multi-page tracking (A6) + in-app tab perception (A5) | `target=_blank` link + `window.open()` button (new browser tabs → `browser.tabs`/`browser.switchTab`); a `role=tablist/tab/tabpanel` widget (`[role=tab]` now surfaced by `browser.interactives`) |
+| `l7-appfaults.html` | L7 — A misbehaving app | ADR-067: the application's OWN faults (console errors, a failing fetch, an uncaught throw) reach the log as `app.*` and must NOT be blamed on the tool | 8 identical `console.error` lines (the log view's collapsing case), a 404 fetch the page swallows, handlers that throw |
+| `l8-blindspots.html` | L8 — What we cannot see | ADR-093: every remaining perception blind spot, so the boundary is MEASURED rather than asserted. `browser.perceptionAudit` must report `ratio < 1.0` here and name each zone | §1 `[onclick]`/`[tabindex]`/`contenteditable`/clickable ARIA roles (→ `unseen.outside_selector` = 5) · §2 a button drawn on `<canvas>` (→ `opaque.canvas`) · §3 a **closed** shadow root (→ `opaque.shadow_roots_closed`; the open case is NOT a blind spot — see `l5.html`) · §4 a virtualised list (counted by nothing, deliberately) · §5 controls off screen by each of the two mechanisms — a collapsed box and `visibility:hidden`, whose box stays full size |
 
 ## Demo Credentials
 
@@ -33,6 +35,8 @@ testdata/fixtures/
   l4-billing.html       L4 step 3 — billing + upgrade modal
   l5.html               L5 ARIA tabs + dynamic injection + shadow DOM
   l6-newtab.html        L6 new browser tab (target=_blank / window.open) + in-app tabs
+  l7-appfaults.html     L7 an application that misbehaves (ADR-067)
+  l8-blindspots.html    L8 what perception cannot reach (ADR-093)
   README.md             this file
 ```
 
