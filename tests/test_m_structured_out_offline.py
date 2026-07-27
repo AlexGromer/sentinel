@@ -172,13 +172,17 @@ def test_describe_draft():
 
 
 # ---- healing --------------------------------------------------------------
-def test_heal_llm_reground_css():
+def test_heal_llm_reground_pick():
+    """The structured contract for the text tier is an INDEX into the live element list, not a
+    model-authored selector (ADR-082) — so the schema-driven and fallback backends alike are asserted
+    to yield the picked element's own real locator."""
     budget.reset(heal_limit=10_000)
-    ctx = {"intent": "submit", "attempted_locator": {"css": "#old"},
-           "interactives": [{"role": "button", "name": "Submit"}]}
-    for be in _fakes({"css": "#new"}):
+    ctx = {"intent": "submit", "attempted_locator": {"role": "button", "name": "Submit"},
+           "interactives": [{"role": "button", "name": "Send", "testid": "send"}]}
+    for be in _fakes({"index": 0}):
         out = HealingEngine(None, None, "run1", use_llm=True, backend=be)._llm_reground(ctx)
-        assert out is not None and out[0] == "css" and out[1] == {"css": "#new"}, (be.name, out)
+        assert out is not None and out[0] == "llm_pick" and out[1] == {"testid": "send"}, (be.name, out)
+        assert out[3] == ctx["interactives"][0], (be.name, out)   # the live descriptor rides along
     for be in _fakes({"none": True}):
         assert HealingEngine(None, None, "run1", use_llm=True, backend=be)._llm_reground(ctx) is None
     budget.reset()

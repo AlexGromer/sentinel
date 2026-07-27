@@ -35,7 +35,7 @@ Default-OFF for OpenAI-compat is deliberate: many local endpoints (Ollama/vLLM) 
 
 5 text sites → `complete_structured(self._backend, prompt, _SCHEMA, …)`; `j = result.data`:
 - `planner.py`: `LLMPlanner` (`_SCHEMA_PICK`) · `GoalPlanner.propose` (`_SCHEMA_PICK`) · `build_scenario` (`_SCHEMA_STEPS`) · `DescribePlanner.draft` (`_SCHEMA_DRAFT`).
-- `healing.py`: `_llm_reground` (`_SCHEMA_CSS`, text).
+- `healing.py`: `_llm_reground` (`_SCHEMA_PICK` — an index into the live element list, ADR-082).
 
 1 vision site → `_visual_reground`: `complete_vision(…)` + `extract_json(result.text)`.
 
