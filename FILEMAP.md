@@ -234,6 +234,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/retention_download_test.go | Tests | — |
 | cmd/agentctl/sweep_downloaded.go | Go source | — |
 | cmd/agentctl/sweep_downloaded_test.go | Tests | — |
+| docs/capabilities.json | Configuration | — |
+| tests/test_capabilities_offline.py | Tests | — |
 ## Directory Structure
 ```
 agent_development/

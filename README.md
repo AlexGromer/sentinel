@@ -101,6 +101,7 @@ CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile contro
 ## Документация
 | Документ | О чём |
 |----------|-------|
+| [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) | **что этот инструмент умеет** — каталог работающих возможностей с путями доступа (OpenAI-shim · Helm · CDP-attach · takeover · MCP-сервер · login-as-test · air-gapped-бандл · …), проверяемый гейтом |
 | [`docs/TESTING.md`](docs/TESTING.md) | offline-гейты, локальные модели, live-прогон, zero-level docker-compose |
 | [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) | VRAM-методика + token-cost-методика + каталог моделей и runtime (verified) |
 | [`docs/ADAPTERS.md`](docs/ADAPTERS.md) | подключаемые адаптеры: опц. LiteLLM-роутер (за `LLM_BASE_URL`) + MCP-Inspector отладка M7 |
