@@ -99,6 +99,13 @@ def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_
         if verb not in VALID_VERBS:                        # out-of-spec verb -> not authorable
             unmatched.append({"ref": r.get("ref"), "reason": f"unsupported verb {verb!r}"})
             continue
+        # secretRef is fill-only across the whole product (executor, recorder, _verb_step). A
+        # secretRef on any other verb is REJECTED, not carried and then silently dropped by
+        # _verb_step: a dropped secretRef reads as "the secret is protected" while the field is
+        # actually left empty (SEC-SCENARIO-SECRETREF).
+        if r.get("secretRef") is not None and verb != "fill":
+            unmatched.append({"ref": r.get("ref"), "reason": f"secretRef is valid on fill only, not {verb!r}"})
+            continue
         bound.append((el, verb, r))
     return _emit(bound, start_page, start_id), unmatched
 
@@ -142,6 +149,12 @@ def reconcile(draft_steps: list, site_map: dict, start_page: str = "", start_id:
         verb = (d.get("verb") or "click").strip().lower()
         if verb not in VALID_VERBS:                        # out-of-spec verb -> not authorable
             unmatched.append({"intent": d.get("intent"), "reason": f"unsupported verb {verb!r}"})
+            continue
+        # secretRef is fill-only (see ground_scenario): reject it on any other verb rather than let
+        # _verb_step drop it silently and leave the secret field empty (SEC-SCENARIO-SECRETREF).
+        if d.get("secretRef") is not None and verb != "fill":
+            unmatched.append({"intent": d.get("intent"),
+                              "reason": f"secretRef is valid on fill only, not {verb!r}"})
             continue
         extra = {k: d.get(k) for k in ("value", "text", "key", "clear", "condition", "expected",
                                        "expect_ok", "secretRef", "intent") if d.get(k) is not None}
