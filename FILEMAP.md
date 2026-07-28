@@ -238,6 +238,11 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | docs/CAPABILITIES.md | Documentation | **ADR-104** «что этот инструмент умеет» — проза по группам из манифеста; закрывает класс LiteLLM (код есть, найти нельзя). Линкуется из README и лендинга
 | docs/CAPABILITIES.en.md | Documentation | Английское зеркало CAPABILITIES.md
 | tests/test_capabilities_offline.py | Tests | **ADR-104** поведенческий гейт: путь доступа КАЖДОЙ фичи резолвится в реальном коде (не утверждение о форме страницы) · high-severity фичи присутствуют поимённо · README и лендинг линкуют каталог. 3/3 мутации |
+| brain/importer.py | Python | **ADR-105** транспилятор чужой сюиты: @playwright/test → наши шаги + отчёт о переписывании (слабые локаторы с приором, выброшенные конструкции с последствием). Секрет=`secretRef`, фрейм сохраняется, ничего не роняет молча |
+| tests/test_importer_offline.py | Tests | **ADR-105** гейт на реальной `.spec.ts`: все шаги транспилированы · секрет=ref · фрейм сохранён · выброшенные конструкции названы · слабые помечены · ФС-канал `_run_import` пишет отчёт+сценарии. 2 бага пойманы, 4 мутации |
+| testdata/import/playwright-login.spec.ts | Tests | **ADR-105** фикстура импорта: сильные/слабые локаторы, секрет, фрейм, route+waitForTimeout без эквивалента |
+| cmd/control-api/import_handler.go | Go | **ADR-105** HTTP-канал `POST /v1/import`: синхронно спавнит тот же `agentctl import`; граница `validImportName` (traversal), лимиты 200/8МиБ |
+| cmd/control-api/import_handler_test.go | Tests | **ADR-105** юнит-гейт границы: `validImportName` против traversal/сепараторов/расширений · `lastLine` ограничен |
 ## Directory Structure
 ```
 agent_development/
