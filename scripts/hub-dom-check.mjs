@@ -925,6 +925,63 @@ try {
     eq(msg.recorded, false, 'a run with no log file must report recorded=false');
     ok(msg.reason.length > 0, 'recorded=false must carry a reason a person can read');
   });
+  await check('perception: three categories, and they add up to what the audit measured', async () => {
+    // ADR-097. Exercised through the real `perceptionBlock` in the real page — it is a pure function
+    // of plan.json, so it needs no run, and asserting the rendered HTML is what an operator sees.
+    const out = await page.evaluate(() => window.__gate.perceptionBlock({ perception: {
+      worst_ratio: 0.444,
+      pages: { '/p': { seen: 4, total: 9, ratio: 0.444, usable: 2, blocked: 2, no_role: 0,
+                       unseen: { outside_selector: 5, iframe: 0 },
+                       opaque: { canvas: 1, shadow_roots_closed: 1, frames_nested: 0, frames_unreachable: 0 } } },
+    } }));
+    ok(out.includes('44%'), 'the worst-page ratio must be shown');
+    // Anchored on the SUMMARY. The body carries a glyph per category, so a document-wide search for
+    // ⚠ is satisfied by the "cannot act" row and passes even when the headline says everything is
+    // fine. Caught by mutation — forcing `partial = false` left this green. Fifth instance in this
+    // repository of "assert the cell, not the document".
+    const summaryOf = (h) => (h.match(/<summary>([\s\S]*?)<\/summary>/) || [,''])[1];
+    ok(/⚠/.test(summaryOf(out)), 'a partly-seen page must SUMMARISE as a warning, not a tick');
+    ok(!/✓/.test(summaryOf(out)), 'and it must not also carry a tick in the same summary');
+    ok(/<b>2<\/b>\s*(<[^>]*>)*\s*видим и можем|>2</.test(out), 'the usable count must be rendered');
+    ok(out.includes('5'), 'the unseen count must be rendered');
+    // The opaque zones are named but NOT folded into the three counts — they cannot be counted, and a
+    // guess in the denominator is the flattering number wearing a pessimistic coat.
+    ok(out.includes('canvas'), 'an opaque zone must be named');
+    ok(!/<b>9<\/b>/.test(out) || out.includes('44%'),
+       'the breakdown must not silently absorb the opaque zones into a total');
+  });
+
+  await check('perception: "not measured" does not read as "all visible"', async () => {
+    // ADR-092's own rule, and the defect it closed: an older executor returns ratio null, and a null
+    // that renders like 100% re-creates exactly the reassuring number this work removed.
+    const nul = await page.evaluate(() => window.__gate.perceptionBlock({ perception: {
+      worst_ratio: null,
+      pages: { '/p': { ratio: null, reason: 'executor does not support browser.perceptionAudit' } } } }));
+    const full = await page.evaluate(() => window.__gate.perceptionBlock({ perception: {
+      worst_ratio: 1,
+      pages: { '/p': { seen: 9, total: 9, ratio: 1, usable: 9, blocked: 0, no_role: 0,
+                       unseen: { outside_selector: 0, iframe: 0 }, opaque: {} } } } }));
+    ok(nul.length > 0, 'an unmeasured page must still say something');
+    ok(!nul.includes('100%'), 'not measured must never render as a percentage');
+    ok(/не измерена|not measured/.test(nul), 'it has to say it was not measured, in words');
+    ok(full.includes('100%'), 'a fully seen page shows 100%');
+    ok(nul !== full, 'not measured and fully visible must not render identically');
+    // Asserted on the SUMMARY, not on the block: the body carries a glyph per category, and a
+    // document-wide search finds those too. (Caught by this check failing — the same "assert the
+    // cell, not the document" trap this repository keeps stepping into.)
+    const sum = (h) => (h.match(/<summary>([\s\S]*?)<\/summary>/) || [,''])[1];
+    ok(/✓/.test(sum(full)) && !/⚠/.test(sum(full)), 'a fully seen page summarises as a tick');
+    ok(!/⚠/.test(full), 'and with every category at zero, nothing inside wears a warning either');
+  });
+
+  await check('perception: absent block renders nothing rather than an empty shell', async () => {
+    // A replay carries no perception (the audit runs on the explore path). An empty box with three
+    // zeroes would read as "we saw nothing", which is a different and false claim.
+    for (const plan of [{}, { perception: {} }, { perception: { pages: {} } }]) {
+      const out = await page.evaluate((p) => window.__gate.perceptionBlock(p), plan);
+      eq(out, '', `a plan without perception must render nothing, got: ${out.slice(0, 60)}`);
+    }
+  });
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

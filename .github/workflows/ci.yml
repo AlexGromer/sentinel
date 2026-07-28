@@ -103,7 +103,19 @@ jobs:
       # "an interactive browser run is manual" boundary ADR-061 shipped with. Playwright + the browser
       # are already present from the pw-executor steps above; no new dependency.
       - name: Setup-wizard DOM gate (headless Chromium; M11.5)
-        run: node scripts/wizard-dom-check.mjs
+        # ADR-097: a FLOOR on the count, like the Python suite has. Without it a deleted check
+        # silently lowers the denominator and the step still reports success — a gate that
+        # cannot fail is indistinguishable from a gate that passes. The number is a floor, not
+        # the current count: raising it on every added check would make it a maintenance tax
+        # rather than a tripwire.
+        run: |
+          out=$(node scripts/wizard-dom-check.mjs 2>&1); echo "$out"
+          echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
+            echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
+          n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
+          if [ "$n" -lt 15 ]; then
+            echo "::error::only $n checks ran in scripts/wizard-dom-check.mjs — expected at least 15"; exit 1
+          fi
 
 
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
@@ -114,7 +126,19 @@ jobs:
       # values, and <option> labels that switch language (they cannot be CSS-toggled). None of that is
       # reachable from Go or Python, so a real Chromium drives a real run against the real page.
       - name: Hub Logs-view DOM gate (headless Chromium; ADR-065)
-        run: node scripts/hub-dom-check.mjs
+        # ADR-097: a FLOOR on the count, like the Python suite has. Without it a deleted check
+        # silently lowers the denominator and the step still reports success — a gate that
+        # cannot fail is indistinguishable from a gate that passes. The number is a floor, not
+        # the current count: raising it on every added check would make it a maintenance tax
+        # rather than a tripwire.
+        run: |
+          out=$(node scripts/hub-dom-check.mjs 2>&1); echo "$out"
+          echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
+            echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
+          n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
+          if [ "$n" -lt 26 ]; then
+            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 26"; exit 1
+          fi
 
       - name: Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)
         env:

@@ -40,7 +40,11 @@ CATALOG = REPO / "brain" / "events.json"
 # Modules that emit diagnostics through the module-level log()/_log() helpers. Kept explicit rather
 # than globbed: a new brain module that logs must be added here deliberately, which is the point.
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
-               "record_bridge", "replay", "server", "budget"]
+               "record_bridge", "replay", "server", "budget", "report"]
+# `report` joined the list in ADR-097, when the report generator gained its first `log()` call. It is
+# listed rather than special-cased: a module that emits and is not scanned is a module whose codes the
+# catalogue cannot vouch for, and the gate said so — it called the new entry a PHANTOM, which was the
+# correct answer to "catalogued, emitted by nothing I look at".
 
 # Not every human-facing message comes from the brain. An entry may name an `emitter` instead of
 # brain modules — the tested application's own console reaches us through the Playwright executor

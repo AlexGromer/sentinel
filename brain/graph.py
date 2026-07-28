@@ -50,18 +50,34 @@ def _tool_args_summary(p: dict) -> str:
     return p.get("intent") or f"{at} {p.get('name') or p.get('semantic_id', '')}"
 
 
-def _perception_audit(ex, path: str) -> dict:
+def _perception_audit(ex, path: str, elements: "list | None" = None) -> dict:
     """Ask the executor what it can and cannot see on the current page (ADR-092).
 
     Fail-open on an older executor: a run must not break because a MEASUREMENT is unavailable. But the
     absence is recorded rather than defaulted to a flattering number — `ratio: None` reads as "not
     measured", while a missing key would silently become "fine" in every consumer.
+
+    ADR-097: `elements` (the page model) splits what we SEE into what we can ACT on and what we
+    cannot. The executor cannot do that split — it reports per-control facts (`visible`, `disabled`),
+    and deciding what they mean for planning is the brain's job. Seeing and being able to act are
+    different capabilities, and the interface has to say which one a number is about: a page where
+    every control is behind a closed panel is fully perceived and entirely unusable.
     """
     try:
         a = ex.call("browser.perceptionAudit") or {}
     except Exception as e:
         log("perception.audit_unavailable", error=e)
         return {"ratio": None, "reason": "executor does not support browser.perceptionAudit"}
+    if elements is not None:
+        usable = sum(1 for e in elements
+                     if e.get("visible") is not False and not e.get("disabled"))
+        # `no_role` is the gap between what the executor perceived and what reached the page model.
+        # It is reported rather than folded into either side: an element with no ARIA role is not a
+        # blind spot (we saw it) and not a usable control (nothing can address it), and quietly
+        # adding it to either would make the breakdown stop summing to the whole.
+        a["usable"] = usable
+        a["blocked"] = len(elements) - usable
+        a["no_role"] = max(0, (a.get("seen") or 0) - len(elements))
     if a.get("total") and a.get("ratio") is not None and a["ratio"] < 1.0:
         # Said out loud, once per page: the blind spot is a property of the page under test, and a
         # person planning around a coverage number deserves to know the denominator was incomplete.
@@ -255,7 +271,10 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         # the application's own output (ADR-070) exists for exactly this reason, and our own
         # diagnostics should not need it.
         if path not in perception:
-            perception[path] = _perception_audit(ex, path)
+            # ADR-097: the page model goes in so the measurement can separate what we SEE from what
+            # we can ACT on. Both come from the same moment on the same page — computing them apart
+            # is how the audit and perception came to describe different pages in the first place.
+            perception[path] = _perception_audit(ex, path, elements)
         seen = list(dict.fromkeys(list(state.get("interactive_seen", []))
                                   + [b["semantic_id"] for b in buttons]))
         # M9.2b (ADR-028): accumulate the site-wide element map (superset of buttons) for the scenario head.
