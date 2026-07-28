@@ -982,6 +982,120 @@ try {
       eq(out, '', `a plan without perception must render nothing, got: ${out.slice(0, 60)}`);
     }
   });
+
+  /* ---------------- ADR-101: per-field help in the hub ----------------
+     ADR-086 built this for the wizard and said so in its own scope ("17 hand-written fields of the
+     WIZARD"). The hub — which is what GitHub Pages serves at the root — had none, so a reader of the
+     published UI saw no help anywhere and concluded the mechanism did not exist. These checks are
+     about what a person SEES, which is why they live here and not in Go. */
+
+  await check('help: every run-panel field carries a folded marker, and it is a <details>', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/#build`, { waitUntil: 'load' });
+    const got = await page.evaluate(() => {
+      const out = [];
+      document.querySelectorAll('details.fhelp').forEach((d) => out.push({
+        key: d.getAttribute('data-help'),
+        tag: d.tagName,
+        open: d.open,
+        marker: (d.querySelector('summary') || {}).textContent || '',
+        body: (d.querySelector('.fhelp-body') || {}).textContent || '',
+      }));
+      return out;
+    });
+    // A count, not "at least one": a mechanism that attached to a single field would otherwise pass.
+    ok(got.length >= 12, `expected 12+ helped fields, found ${got.length}`);
+    for (const h of got) {
+      eq(h.tag, 'DETAILS', `${h.key}: help must be <details> so keyboard/AT behaviour comes from the platform`);
+      ok(h.open === false, `${h.key}: help must be FOLDED by default — a form where every field carries a paragraph is unreadable`);
+      ok(h.marker.trim().startsWith('?'), `${h.key}: the marker must be the "?" affordance, got ${JSON.stringify(h.marker.slice(0, 12))}`);
+      ok(h.body.length > 40, `${h.key}: help body is ${h.body.length} chars — too short to be an explanation`);
+    }
+  });
+
+  await check('help: the text says what CHANGES, not a longer spelling of the label', async () => {
+    // The failure this guards is the one ADR-086 names: "a hint that repeats the field name is the
+    // same silence, only wordier". Asserted as three SPECIFIC facts, each of which contradicts what
+    // the field name suggests — so a hint reduced to a restatement cannot satisfy them.
+    const body = (key) => page.evaluate(
+      (k) => (document.querySelector(`details.fhelp[data-help="${k}"] .fhelp-body [data-lang="ru"]`) || {}).textContent || '', key);
+
+    const budget = await body('b-planbud');
+    ok(/эвристик/i.test(budget),
+      'plan_budget help must say the run DEGRADES to the heuristic rather than failing (brain/budget.py:3-11)');
+    ok(/НЕ роняет|не роняет/.test(budget), 'plan_budget help must say running out does not fail the run');
+
+    const ss = await body('b-ss');
+    ok(/НЕАВТОРИЗОВАН/i.test(ss),
+      'storage_state help must say a missing/corrupt file continues UNAUTHENTICATED (pw-executor/src/server.ts:384,387)');
+
+    const steps = await body('b-maxsteps');
+    ok(/НЕЗАВЕРШ/i.test(steps),
+      'max_steps help must say reaching it ends the run UNFINISHED (brain/graph.py:349-350)');
+
+    // And the generic form: no help may simply echo its own label.
+    const echoes = await page.evaluate(() => {
+      const bad = [];
+      document.querySelectorAll('details.fhelp').forEach((d) => {
+        const lab = d.closest('label');
+        const labText = (lab ? lab.textContent : '').replace(d.textContent, '').trim();
+        const bodyText = (d.querySelector('.fhelp-body') || {}).textContent || '';
+        if (labText && bodyText.trim() === labText) bad.push(d.getAttribute('data-help'));
+      });
+      return bad;
+    });
+    eq(echoes.length, 0, `help that only restates its label: ${echoes.join(', ')}`);
+  });
+
+  await check('help: bilingual in the DOM, so the language toggle carries it', async () => {
+    // ADR-086 records falling into this exact trap once: building the string with tr() freezes the
+    // language of the moment, and the toggle leaves those blocks behind. Both variants must be
+    // present in the DOM at all times, including the marker's accessible name.
+    const both = await page.evaluate(() => {
+      const d = document.querySelector('details.fhelp[data-help="b-maxsteps"]');
+      return {
+        ru: !!d.querySelector('.fhelp-body [data-lang="ru"]'),
+        en: !!d.querySelector('.fhelp-body [data-lang="en"]'),
+        ariaRu: !!d.querySelector('summary [data-lang="ru"]'),
+        ariaEn: !!d.querySelector('summary [data-lang="en"]'),
+      };
+    });
+    ok(both.ru && both.en, 'both language variants must be in the DOM, not chosen at creation time');
+    ok(both.ariaRu && both.ariaEn, "the marker's accessible name must be bilingual too, not a frozen aria-label");
+
+    // And the visible one actually follows the toggle.
+    const visible = async () => page.evaluate(() => {
+      const spans = document.querySelectorAll('details.fhelp[data-help="b-maxsteps"] .fhelp-body span');
+      return Array.from(spans).filter((s) => s.offsetParent !== null || getComputedStyle(s).display !== 'none')
+        .map((s) => s.getAttribute('data-lang'));
+    });
+    await page.evaluate(() => { document.querySelector('details.fhelp[data-help="b-maxsteps"]').open = true; });
+    await page.evaluate(() => setLang('ru'));
+    eq((await visible()).join(','), 'ru', 'RU selected → the Russian variant is the visible one');
+    await page.evaluate(() => setLang('en'));
+    eq((await visible()).join(','), 'en', 'EN selected → the English variant is, without re-rendering');
+    await page.evaluate(() => setLang('ru'));
+  });
+
+  await check('help: one switch opens every block, and the choice survives a reload', async () => {
+    const openCount = () => page.evaluate(
+      () => document.querySelectorAll('details.fhelp[open]').length);
+    const total = await page.evaluate(() => document.querySelectorAll('details.fhelp').length);
+
+    await page.evaluate(() => { document.getElementById('helpall').checked = true;
+                                document.getElementById('helpall').dispatchEvent(new Event('change')); });
+    eq(await openCount(), total, 'the switch must open every block, not the first one');
+
+    // Persisted: the reader who wants everything explained should not re-ask on every visit.
+    await page.reload({ waitUntil: 'load' });
+    eq(await page.evaluate(() => document.getElementById('helpall').checked), true,
+      'the switch must come back checked after a reload');
+    eq(await openCount(), total, 'and the blocks must come back open');
+
+    await page.evaluate(() => { document.getElementById('helpall').checked = false;
+                                document.getElementById('helpall').dispatchEvent(new Event('change')); });
+    eq(await openCount(), 0, 'unchecking must fold them all again');
+  });
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

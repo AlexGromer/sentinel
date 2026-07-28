@@ -107,6 +107,25 @@ input[type=range]{padding:0}
 input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 input:disabled{opacity:.4}
 .hint{display:block;font-size:.74rem;color:var(--mut);margin-top:.2rem}
+/* ADR-101: the ADR-086 per-field help, brought from the setup wizard to the hub. Same idiom, same
+   CSS, deliberately: two implementations of one affordance drift, and the reader who learns the "?"
+   marker in one place should meet the same thing here. Folded by default for the same reason as
+   there — a form where every field carries a paragraph is as unreadable as one that explains
+   nothing. <details>, so keyboard and screen-reader behaviour comes from the platform. */
+.fhelp{display:inline;margin-left:.35rem}
+.fhelp>summary{display:inline;list-style:none;cursor:pointer;color:var(--acc);font-size:.72rem;
+  border:1px solid var(--line);border-radius:999px;padding:0 .32rem;user-select:none}
+.fhelp>summary::-webkit-details-marker{display:none}
+.fhelp>summary:hover{background:var(--bg2)}
+.fhelp[open]>summary{background:var(--bg2)}
+.fhelp .fhelp-body{display:block;color:var(--mut);font-size:.78rem;margin:.25rem 0 .1rem;
+  border-left:2px solid var(--line);padding-left:.5rem;font-weight:400;white-space:normal}
+.helpbar{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--mut);margin:.2rem 0 .6rem}
+.helpbar input{width:auto}
+/* The accessible name of the "?" marker, in both languages at once. The wizard builds it with tr(),
+   which freezes the language at creation time — the very trap ADR-086 names for the body text. Here
+   it is two data-lang spans like everything else, so the language toggle carries it too. */
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .presets{display:flex;flex-wrap:wrap;gap:8px}
 .presets button{flex:1;min-width:84px;background:var(--bg3);border:1px solid var(--line);
   color:var(--tx);padding:.55rem;border-radius:8px;cursor:pointer;font:inherit}
@@ -633,6 +652,11 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <span data-lang="ru">Сборка <code>run.yaml</code> / env / команды из проверенной поверхности конфигурации (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Скачай файлы или нажми «▶ Запустить» для прямого вызова control-API (нужно подключение выше).</span>
       <span data-lang="en">Build a valid <code>run.yaml</code> / env block / launch command from the verified config surface (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Download the files or press «▶ Run» to call the control-API directly (connection above required).</span>
     </p>
+    <!-- ADR-101: host for the "show all help" switch. Every label below carries a folded "?" whose
+         text says what CHANGES if you touch the field — the labels here are literally environment
+         variable names (coverage_target, max_steps, plan_budget), which is the shape ADR-086 called
+         "an environment variable with a border around it". -->
+    <div data-helpbar></div>
 
     <div class="grid g2">
       <div>
@@ -3826,6 +3850,144 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   window.__gate = { perceptionBlock: perceptionBlock };
 
 })(); /* end m12 */
+
+/* =========================================================================
+   ADR-101 — per-field help in the hub (the ADR-086 idiom, ported from the wizard)
+
+   ADR-086 gave every wizard field a folded explanation and stopped there, in its own words at "17
+   hand-written fields of the WIZARD". The consequence was invisible from inside: the hub is what
+   GitHub Pages serves at the root, so a reader who opens the published UI sees no help anywhere and
+   concludes the mechanism does not exist. Meanwhile the labels here are literally environment
+   variable names — `coverage_target`, `max_steps`, `plan_budget` — which is exactly the shape
+   ADR-086 set out to fix.
+
+   The mechanism is COPIED, not reinvented: same <details class="fhelp">, same "?" marker, same
+   single "show all" switch with a remembered state. Two implementations of one affordance drift.
+
+   Bilingual by construction — both variants are rendered as `data-lang` spans and the body class
+   picks one, so a block created at any moment follows the current language. Building the string with
+   a tr()-style call would freeze the language of the moment, which is the trap ADR-086 already fell
+   into once and documented.
+
+   The text says WHAT CHANGES IF YOU TOUCH THIS, never a longer spelling of the label. Every claim
+   below is taken from the code, not from the field name — and three of them contradict what the name
+   suggests, which is precisely why they earn their place:
+     - a budget does NOT stop the run (brain/budget.py:3-11) — it degrades to the heuristic planner
+       and deterministic healing, which reads as "it silently got worse" if you do not know;
+     - a missing or corrupt storage_state does NOT fail the run (pw-executor/src/server.ts:384,387) —
+       it continues UNAUTHENTICATED;
+     - max_steps is a loop guard, and reaching it ends the run UNFINISHED (brain/graph.py:349-350).
+   ========================================================================= */
+(function hubHelp(){
+  'use strict';
+  var HELP_KEY = 'sentinel_help_all';
+
+  var FIELD_HELP = {
+    'b-mode': [
+      'Что инструмент СДЕЛАЕТ: explore обойдёт приложение сам; goal сначала обойдёт, а план соберёт только из реально увиденных элементов; describe привяжет ваши шаги к найденным элементам. Шаг, которому элемента не нашлось, попадёт в отчёт как несвязанный, а не будет выдуман.',
+      'What the tool WILL DO: explore walks the app on its own; goal explores first and then assembles a plan only from elements it actually saw; describe binds your steps to found elements. A step with no match is reported as unmatched rather than invented.'],
+    'b-target': [
+      'Инструмент будет водить именно этот сайт, и его текст — надписи, имена, номера заказов — осядет в артефактах прогона и в базе локаторов. Где именно и что с этим делать, перечислено в docs/DB_FOREIGN_TEXT.md.',
+      'The tool will drive this site, and its text — labels, names, order numbers — ends up in the run artifacts and in the locator store. Where exactly, and what to do about it, is listed in docs/DB_FOREIGN_TEXT.md.'],
+    'b-planner': [
+      'Кто строит план: heuristic не обращается к модели вовсе (и потому не тратит токенов), llm и goal обращаются. На heuristic бюджеты ниже неактивны.',
+      'Who builds the plan: heuristic calls no model at all (and so spends no tokens), llm and goal do. With heuristic the budgets below are inert.'],
+    'b-coverage': [
+      'Доля интерактивных элементов, после которой обход считается достаточным (по умолчанию 0.85). Обход завершается, когда доля достигнута И новых элементов не осталось, — поэтому большее значение удлиняет прогон, но не гарантирует, что найдётся больше.',
+      'The share of interactive elements at which exploring is considered enough (0.85 by default). Exploring stops when the share is reached AND nothing new is left, so a higher value lengthens the run without guaranteeing it finds more.'],
+    'b-maxsteps': [
+      'Жёсткий потолок шагов (по умолчанию 40). Это защита от зацикливания, а не цель: достигнув его, прогон останавливается НЕЗАВЕРШЁННЫМ с причиной max_steps.',
+      'A hard ceiling on steps (40 by default). It is a loop guard, not a target: on reaching it the run stops UNFINISHED with reason max_steps.'],
+    'b-planbud': [
+      'Потолок токенов на планирование. Исчерпание НЕ роняет прогон — планировщик молча переходит на эвристику, то есть качество плана падает, а ошибки не будет. 0 выключает проверку.',
+      'A token ceiling for planning. Running out does NOT fail the run — the planner quietly falls back to the heuristic, so plan quality drops with no error. 0 disables the check.'],
+    'b-healbud': [
+      'Потолок токенов на самопочинку. Как и у планирования, исчерпание переводит в деградацию, а не в ошибку: остаются детерминированные стратегии без обращения к модели.',
+      'A token ceiling for healing. As with planning, running out degrades rather than fails: the deterministic strategies remain, with no model call.'],
+    'b-totbud': [
+      'Общий потолок на прогон, поверх двух предыдущих. 0 — выключено, и это умолчание. Срабатывание тоже означает деградацию, а не остановку.',
+      'A whole-run ceiling on top of the two above. 0 means off, and that is the default. Hitting it also means degradation, not a stop.'],
+    'b-ss': [
+      'Файл сессии Playwright: вход выполняется один раз, дальше прогоны стартуют уже авторизованными. ⚠ Путь указан, а файла нет или он битый — прогон НЕ упадёт, а тихо пойдёт НЕАВТОРИЗОВАННЫМ, оставив только строку в логе.',
+      'A Playwright session file: log in once, and later runs start already authenticated. ⚠ If the path is set but the file is missing or corrupt the run does NOT fail — it quietly proceeds UNAUTHENTICATED, leaving only a log line.'],
+    'b-sss': [
+      'Куда записать сессию после успешного входа — запись происходит только при коде выхода 0. Файл содержит живые cookie: обращайтесь с ним как с паролем.',
+      'Where to write the session after a successful login — written only on exit code 0. The file holds live cookies: treat it like a password.'],
+    'b-loginplan': [
+      'План отдельного прогона «вход как тест»: он вводит логин и пароль, а сессию сохраняет в файл выше — после чего боевые прогоны пароля больше не вводят. Пароль в таком плане задаётся ссылкой secretRef на имя переменной окружения, а не значением.',
+      'The plan of a separate "login as a test" run: it types the credentials and saves the session to the file above, after which production runs never type the password again. The password in such a plan is a secretRef naming an environment variable, never a value.'],
+    'b-modelp': [
+      'Модель, которая строит план. Пустое поле — умолчание сборки; для локального бэкенда сюда идёт имя модели вашего сервера, а не название вендора.',
+      'The model that builds the plan. Empty means the build default; for a local backend this takes your server\'s model name, not a vendor brand.'],
+    'b-modelh': [
+      'Отдельная модель для самопочинки. Пусто — используется та же, что и для плана. Смысл разделения в том, что переоснова локатора дешевле планирования и не требует такой же сильной модели.',
+      'A separate model for healing. Empty reuses the planning one. The point of splitting them is that re-grounding a locator is cheaper than planning and does not need an equally strong model.'],
+    'b-temp': [
+      'Разброс ответов модели. Выше — план от прогона к прогону перестаёт совпадать, а вместе с ним и plan_hash, на котором держится воспроизводимость повтора.',
+      'How much the model varies. Higher, and the plan stops matching between runs — and so does the plan_hash that replay reproducibility rests on.']
+  };
+
+  function helpAllOpen(){
+    try { return localStorage.getItem(HELP_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setHelpAll(open){
+    try { localStorage.setItem(HELP_KEY, open ? '1' : '0'); } catch (e) {}
+    Array.prototype.forEach.call(document.querySelectorAll('details.fhelp'), function(d){ d.open = open; });
+    var cb = document.getElementById('helpall');
+    if (cb) cb.checked = open;
+  }
+  function biSpan(ru, en){
+    var f = document.createDocumentFragment();
+    var a = document.createElement('span'); a.setAttribute('data-lang','ru'); a.textContent = ru;
+    var b = document.createElement('span'); b.setAttribute('data-lang','en'); b.textContent = en;
+    f.appendChild(a); f.appendChild(b);
+    return f;
+  }
+  function attachHelp(host, ru, en, key){
+    if (!host || (!ru && !en)) return null;
+    var d = document.createElement('details');
+    d.className = 'fhelp';
+    d.setAttribute('data-help', key);
+    var sum = document.createElement('summary');
+    sum.appendChild(document.createTextNode('?'));
+    var vh = document.createElement('span'); vh.className = 'vh';
+    vh.appendChild(biSpan('Подсказка', 'Help'));
+    sum.appendChild(vh);
+    var body = document.createElement('span');
+    body.className = 'fhelp-body';
+    body.appendChild(biSpan(ru || en, en || ru));
+    d.appendChild(sum); d.appendChild(body);
+    host.appendChild(d);
+    return d;
+  }
+  function renderHelpBar(){
+    Array.prototype.forEach.call(document.querySelectorAll('[data-helpbar]'), function(h){
+      if (h.querySelector('#helpall')) return;
+      var box = document.createElement('label');
+      box.className = 'helpbar';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.id = 'helpall'; cb.checked = helpAllOpen();
+      cb.addEventListener('change', function(){ setHelpAll(cb.checked); });
+      var txt = document.createElement('span');
+      txt.appendChild(biSpan('Показать все подсказки', 'Show all help'));
+      box.appendChild(cb); box.appendChild(txt);
+      h.appendChild(box);
+    });
+  }
+  function renderFieldHelp(){
+    Object.keys(FIELD_HELP).forEach(function(id){
+      var pair = FIELD_HELP[id];
+      if (!pair) return;
+      var lab = document.querySelector('label[for="' + id + '"]');
+      if (!lab || lab.querySelector('details.fhelp')) return;
+      attachHelp(lab, pair[0], pair[1], id);
+    });
+    renderHelpBar();
+    if (helpAllOpen()) setHelpAll(true);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderFieldHelp);
+  else renderFieldHelp();
+})();
 
 /* ----------------------------- self-tests (LOCAL_MODELS §5/§6) -----------------------------
    In-browser only; log to console; document the worked-example vectors + the blended/multiplier
