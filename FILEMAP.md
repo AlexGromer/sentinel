@@ -234,8 +234,10 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/retention_download_test.go | Tests | — |
 | cmd/agentctl/sweep_downloaded.go | Go source | — |
 | cmd/agentctl/sweep_downloaded_test.go | Tests | — |
-| docs/capabilities.json | Configuration | — |
-| tests/test_capabilities_offline.py | Tests | — |
+| docs/capabilities.json | Documentation | **ADR-104** машиночитаемый каталог возможностей: каждая фича + путь доступа (cli/http/mode/profile/env/code/file). Источник истины для CAPABILITIES.md; гейт проверяет, что путь резолвится в коде
+| docs/CAPABILITIES.md | Documentation | **ADR-104** «что этот инструмент умеет» — проза по группам из манифеста; закрывает класс LiteLLM (код есть, найти нельзя). Линкуется из README и лендинга
+| docs/CAPABILITIES.en.md | Documentation | Английское зеркало CAPABILITIES.md
+| tests/test_capabilities_offline.py | Tests | **ADR-104** поведенческий гейт: путь доступа КАЖДОЙ фичи резолвится в реальном коде (не утверждение о форме страницы) · high-severity фичи присутствуют поимённо · README и лендинг линкуют каталог. 3/3 мутации |
 ## Directory Structure
 ```
 agent_development/
