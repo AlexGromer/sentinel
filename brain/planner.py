@@ -64,11 +64,22 @@ _SCHEMA_PICK = {"type": "object", "properties": {
     "index": {"type": "integer", "description": "0-based index into the candidate list to act on"},
     "done": {"type": "boolean", "description": "true to stop (goal met or exploration complete)"},
     "reason": {"type": "string", "description": "why, when done"}}}
+# `secretRef` (SEC-SCENARIO-SECRETREF, M9.1/ADR-026): a secret is entered by naming the environment
+# variable that holds it, never by writing the value. Without this property the model had no way to
+# author a login except to put the password in `value` verbatim, and that literal was then stored in
+# scenarios.steps_json in the clear (docs/DB_FOREIGN_TEXT.md) — the recorder path already carried
+# secretRef, only LLM authoring could not. It is fill-only end to end: the executor resolves secretRef
+# for browser.fill alone (pw-executor/src/server.ts) and grounding honours it only for fill
+# (scenario.ground_scenario), so a secretRef on any other verb is rejected rather than silently
+# dropped — a dropped secretRef would read as "protected" while the field stayed empty or leaked.
 _SCHEMA_STEPS = {"type": "object", "properties": {"steps": {"type": "array", "items": {
     "type": "object", "properties": {
         "ref": {"type": "string", "description": "semantic_id of a real element from the map"},
         "verb": {"type": "string", "enum": _VERBS},
-        "value": {"type": "string", "description": "value for fill/type/select"}},
+        "value": {"type": "string", "description": "value for fill/type/select"},
+        "secretRef": {"type": "string", "description":
+                      "for a SECRET (password/token/card): the NAME of an environment variable holding "
+                      "it, never the value itself. fill verb only. Use INSTEAD of value."}},
     "required": ["ref", "verb"]}}}, "required": ["steps"]}
 _SCHEMA_DRAFT = {"type": "object", "properties": {"steps": {"type": "array", "items": {
     "type": "object", "properties": {
@@ -76,7 +87,10 @@ _SCHEMA_DRAFT = {"type": "object", "properties": {"steps": {"type": "array", "it
         "intent": {"type": "string", "description": "short goal of this step"},
         "hypothesized_target": {"type": "object", "properties": {
             "role": {"type": "string"}, "name": {"type": "string"}, "text": {"type": "string"}}},
-        "value": {"type": "string"}},
+        "value": {"type": "string"},
+        "secretRef": {"type": "string", "description":
+                      "for a SECRET (password/token/card): the NAME of an environment variable holding "
+                      "it, never the value itself. fill verb only. Use INSTEAD of value."}},
     "required": ["verb", "intent"]}}}, "required": ["steps"]}
 
 
@@ -253,8 +267,12 @@ class GoalPlanner:
                 + convo
                 + f"elements: {json.dumps(safe_json(menu))[:8000]}\n"
                 + 'Reply with ONLY JSON: {"steps": [{"ref": "<semantic_id from elements>", '
-                '"verb": "click|fill|type|select|press|assert", "value": "<optional>"}]}. '
-                "Use only refs present in elements; omit anything not present."
+                '"verb": "click|fill|type|select|press|assert", "value": "<optional>", '
+                '"secretRef": "<optional ENV VAR NAME for a secret>"}]}. '
+                "Use only refs present in elements; omit anything not present. "
+                "For a SECRET value (password, token, card number) use a fill step and set secretRef to "
+                "the NAME of the environment variable that holds it (e.g. \"LOGIN_PASSWORD\") INSTEAD of "
+                "value — never write the secret itself. secretRef is for fill only."
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_STEPS,
                                          max_tokens=_SCENARIO_TOKENS, temperature=0, role="plan")
@@ -309,7 +327,9 @@ class DescribePlanner:
                 + convo
                 + 'Reply with ONLY JSON: {"steps": [{"verb": "click|fill|type|select|press|assert", '
                 '"intent": "<short>", "hypothesized_target": {"role": "<opt>", "name": "<opt>", '
-                '"text": "<opt>"}, "value": "<opt>"}]}.'
+                '"text": "<opt>"}, "value": "<opt>", "secretRef": "<opt ENV VAR NAME for a secret>"}]}. '
+                "For a SECRET (password, token, card number) use a fill step and set secretRef to the "
+                "NAME of the environment variable holding it INSTEAD of value — never write the secret."
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_DRAFT,
                                          max_tokens=_SCENARIO_TOKENS, temperature=0, role="plan")
