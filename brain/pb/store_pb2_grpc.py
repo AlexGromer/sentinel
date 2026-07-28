@@ -160,6 +160,11 @@ class StoreServiceStub:
                 request_serializer=store__pb2.ConfigKey.SerializeToString,
                 response_deserializer=persistence__pb2.Empty.FromString,
                 _registered_method=True)
+        self.PurgeStore = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/PurgeStore',
+                request_serializer=store__pb2.PurgeReq.SerializeToString,
+                response_deserializer=store__pb2.PurgeReport.FromString,
+                _registered_method=True)
 
 
 class StoreServiceServicer:
@@ -326,6 +331,13 @@ class StoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PurgeStore(self, request, context):
+        """purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_StoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -453,6 +465,11 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     servicer.DeleteConfig,
                     request_deserializer=store__pb2.ConfigKey.FromString,
                     response_serializer=persistence__pb2.Empty.SerializeToString,
+            ),
+            'PurgeStore': grpc.unary_unary_rpc_method_handler(
+                    servicer.PurgeStore,
+                    request_deserializer=store__pb2.PurgeReq.FromString,
+                    response_serializer=store__pb2.PurgeReport.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1130,6 +1147,33 @@ class StoreService:
             '/sentinel.persistence.v1.StoreService/DeleteConfig',
             store__pb2.ConfigKey.SerializeToString,
             persistence__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PurgeStore(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/PurgeStore',
+            store__pb2.PurgeReq.SerializeToString,
+            store__pb2.PurgeReport.FromString,
             options,
             channel_credentials,
             insecure,

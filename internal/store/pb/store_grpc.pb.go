@@ -50,6 +50,7 @@ const (
 	StoreService_GetConfig_FullMethodName      = "/sentinel.persistence.v1.StoreService/GetConfig"
 	StoreService_ListConfig_FullMethodName     = "/sentinel.persistence.v1.StoreService/ListConfig"
 	StoreService_DeleteConfig_FullMethodName   = "/sentinel.persistence.v1.StoreService/DeleteConfig"
+	StoreService_PurgeStore_FullMethodName     = "/sentinel.persistence.v1.StoreService/PurgeStore"
 )
 
 // StoreServiceClient is the client API for StoreService service.
@@ -87,6 +88,8 @@ type StoreServiceClient interface {
 	GetConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*ConfigRecord, error)
 	ListConfig(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ConfigList, error)
 	DeleteConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*Empty, error)
+	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
+	PurgeStore(ctx context.Context, in *PurgeReq, opts ...grpc.CallOption) (*PurgeReport, error)
 }
 
 type storeServiceClient struct {
@@ -347,6 +350,16 @@ func (c *storeServiceClient) DeleteConfig(ctx context.Context, in *ConfigKey, op
 	return out, nil
 }
 
+func (c *storeServiceClient) PurgeStore(ctx context.Context, in *PurgeReq, opts ...grpc.CallOption) (*PurgeReport, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PurgeReport)
+	err := c.cc.Invoke(ctx, StoreService_PurgeStore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StoreServiceServer is the server API for StoreService service.
 // All implementations must embed UnimplementedStoreServiceServer
 // for forward compatibility.
@@ -382,6 +395,8 @@ type StoreServiceServer interface {
 	GetConfig(context.Context, *ConfigKey) (*ConfigRecord, error)
 	ListConfig(context.Context, *Empty) (*ConfigList, error)
 	DeleteConfig(context.Context, *ConfigKey) (*Empty, error)
+	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
+	PurgeStore(context.Context, *PurgeReq) (*PurgeReport, error)
 	mustEmbedUnimplementedStoreServiceServer()
 }
 
@@ -466,6 +481,9 @@ func (UnimplementedStoreServiceServer) ListConfig(context.Context, *Empty) (*Con
 }
 func (UnimplementedStoreServiceServer) DeleteConfig(context.Context, *ConfigKey) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteConfig not implemented")
+}
+func (UnimplementedStoreServiceServer) PurgeStore(context.Context, *PurgeReq) (*PurgeReport, error) {
+	return nil, status.Error(codes.Unimplemented, "method PurgeStore not implemented")
 }
 func (UnimplementedStoreServiceServer) mustEmbedUnimplementedStoreServiceServer() {}
 func (UnimplementedStoreServiceServer) testEmbeddedByValue()                      {}
@@ -938,6 +956,24 @@ func _StoreService_DeleteConfig_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreService_PurgeStore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PurgeReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).PurgeStore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_PurgeStore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).PurgeStore(ctx, req.(*PurgeReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StoreService_ServiceDesc is the grpc.ServiceDesc for StoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1044,6 +1080,10 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteConfig",
 			Handler:    _StoreService_DeleteConfig_Handler,
+		},
+		{
+			MethodName: "PurgeStore",
+			Handler:    _StoreService_PurgeStore_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

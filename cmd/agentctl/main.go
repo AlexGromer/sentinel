@@ -67,6 +67,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
 	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
 	fmt.Fprintln(os.Stderr, "  agentctl redact-trace --trace <trace.zip>   # strip typed values + credentials from a trace (ADR-098)")
+	fmt.Fprintln(os.Stderr, "  agentctl purge-store --tables <a,b> --yes [--older-than 720h] [--vacuum]")
+	fmt.Fprintln(os.Stderr, "                                             # delete stored foreign text (ADR-100); never automatic")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")
@@ -641,6 +643,8 @@ func main() {
 		code = cmdCalibrate(repo, os.Args[2:])
 	case "redact-trace":
 		code = cmdRedactTrace(os.Args[2:])
+	case "purge-store":
+		code = cmdPurgeStore(repo, os.Args[2:])
 	default:
 		usage()
 		code = 2
