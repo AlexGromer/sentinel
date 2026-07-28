@@ -492,10 +492,24 @@ func cmdRun(repo string, args []string) int {
 		// always reaches the brain; only read when RUN_MODE=chat. The SENTINEL_ prefix is allowlisted too.
 		"SENTINEL_CONVERSATION_ID=" + *conversationID,
 	}
-	if *replay { // replay needs the locator/golden/quarantine store
+	if runNeedsStore(*mode, *replay) {
 		return runWithStore(repo, runID, extra)
 	}
 	return spawnBrain(repo, runID, extra) // explore needs no store
+}
+
+// runNeedsStore decides whether this run must start the store-gateway (STORE_ADDR).
+//
+//   - replay reads the locator/golden/quarantine store, so it always has.
+//   - chat mode was the SEC-CHATS-WIRING-GAP bug: _project_chat (brain/__main__.py) writes the
+//     browsable `chats` projection only when make_chat_projector() sees STORE_ADDR, and chat runs
+//     fell into the storeless branch by omission — the comment said "explore needs no store" and
+//     chat was never separated out. The projection was silently a no-op for every chat run, so the
+//     multi-turn conversation never appeared in the hub. It adds no new class of data: the goal and
+//     turns already live in the checkpointer thread (conversations.db), which stays the source of
+//     truth; this is an index over it, and it is cleanable by `agentctl purge-store` (ADR-100).
+func runNeedsStore(mode string, replay bool) bool {
+	return replay || mode == "chat"
 }
 
 func cmdBaseline(repo string, args []string) int {
