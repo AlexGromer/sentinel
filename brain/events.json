@@ -1417,6 +1417,26 @@
       "degrades": true,
       "ru_verdict": "прошло, но на диске остался неочищенный трейс — удалите его вручную",
       "en_verdict": "passed, but an unredacted trace was left on disk — remove it by hand"
+    },
+    "system.checkpoint_discarded": {
+      "lvl": "debug",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Чекпойнт прогона удалён: {path}. Он привязан к уникальному run_id и возобновлению не подлежит — после прогона это чистый остаток",
+      "en": "The run checkpoint was deleted: {path}. It is keyed by a unique run_id and cannot be resumed — after the run it is pure residue",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.checkpoint_kept": {
+      "lvl": "warn",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Чекпойнт прогона не удалён: {path} ({error}). Это потраченный диск, а не неверный результат — но копится он молча, поэтому сказано вслух",
+      "en": "The run checkpoint could not be deleted: {path} ({error}). That is wasted disk rather than a wrong answer — but it accumulates silently, so it is said out loud",
+      "modules": [
+        "__main__"
+      ]
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

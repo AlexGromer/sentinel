@@ -142,13 +142,22 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
         }
         ckpt = str((out / "checkpoint.db").resolve())
+        # ADR-099: this file is DELETED when the run ends (see the finally below). Measured on a dev
+        # box: 284 of them, 570 MB — 94% of everything runs/ held, and nothing pruned them, because
+        # `sweepTraces` and `sweepLogs` prune traces and logs and no sweeper owns the run directory.
+        # It is safe to delete because it is unresumable BY CONSTRUCTION: the thread is keyed by a
+        # run_id that is unique per run, which is exactly why multi-turn chat keeps its own shared
+        # store (`_conversations_store_path`) instead of reusing this one.
         rc = runcontrol.make_client()  # M8/M9.8 F4: shared by the graph's checkpoint gate + the resume loop
         cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": run_id}}
-        with _checkpointer(ckpt) as saver:
-            app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
-            final = app.invoke(init_state, config=cfg)
-            # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
-            final = _resume_through_takeovers(app, final, cfg, rc, run_id)
+        try:
+            with _checkpointer(ckpt) as saver:
+                app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
+                final = app.invoke(init_state, config=cfg)
+                # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
+                final = _resume_through_takeovers(app, final, cfg, rc, run_id)
+        finally:
+            _discard_checkpoint(ckpt)
         # ADR-084: explore's trace holds the same live application DOM a replay's does, so the same
         # rule applies. The exit code is not known yet here, so the decision is made below, right
         # before it is computed.
@@ -328,6 +337,38 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                        author_model=getattr(scenario_head, "model", None))
         finally:
             tx.close()
+
+
+def _discard_checkpoint(ckpt: str) -> None:
+    """Delete the per-run LangGraph checkpoint (ADR-099).
+
+    It cannot be resumed: the thread is keyed by a run_id unique to this run, which is precisely why
+    multi-turn chat keeps its own shared store rather than reusing this one. So once the graph has
+    finished, the file is pure residue — and it was the biggest residue we had. Measured on a dev box
+    before this change: 284 files, 570 MB, 94% of everything under runs/, pruned by nothing, because
+    the two sweepers that exist own traces and logs and no sweeper owned the run directory.
+
+    In a `finally`, so a crashed run leaves no more behind than a clean one — a failure is exactly when
+    an operator is least likely to go looking for stray files.
+
+    Swallows its own errors: teardown must not turn a finished run into a crash, and a checkpoint left
+    behind is wasted disk, not a wrong answer. It is still SAID, because "the tool quietly used more
+    disk than it admitted" is the shape of the problem being fixed.
+    """
+    import glob
+    removed = 0
+    # SQLite may leave -wal/-shm beside the database; deleting the .db alone would leave the pair.
+    for path in (ckpt, ckpt + "-wal", ckpt + "-shm"):
+        try:
+            os.remove(path)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log("system.checkpoint_kept", path=path, error=e)
+            return
+    if removed:
+        log("system.checkpoint_discarded", path=ckpt)
 
 
 def _stop_trace(ex, trace_path: str, exit_code: int) -> None:

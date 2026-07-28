@@ -367,6 +367,23 @@ var settingsSchema = map[string]any{
 			"en": "How many recent runs keep their logs. 0 — never delete.",
 		},
 	},
+	// ADR-099: the run DIRECTORY, which until now had no lifetime at all. Same shape as the two
+	// above deliberately — one question ("how long does this kind of thing live"), one pair of knobs,
+	// so an operator does not have to learn a second vocabulary for the same decision.
+	"run_keep": map[string]any{
+		"env": "SENTINEL_RUN_KEEP", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Каталоги скольких последних прогонов сохранять целиком. 0 — не удалять никогда. Самый свежий не удаляется в любом случае.",
+			"en": "How many recent runs keep their whole directory. 0 — never delete. The newest is never removed regardless.",
+		},
+	},
+	"run_ttl_hours": map[string]any{
+		"env": "SENTINEL_RUN_TTL_HOURS", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Через сколько часов удалять каталог прогона целиком. 0 — не удалять по возрасту.",
+			"en": "After how many hours a run's whole directory is deleted. 0 — never delete by age.",
+		},
+	},
 	"log_ttl_hours": map[string]any{
 		"env": "SENTINEL_LOG_TTL_HOURS", "type": "int", "default": 0, "min": 0, "step": 1, "group": "retention",
 		"hint": map[string]string{
@@ -966,7 +983,7 @@ func (s *server) persistResult(rec *run) {
 			drift, appFaults = art.Drift, art.AppFaults
 		}
 	}
-	var visibility *float64 // ADR-097: nil = never measured, which is not the same as measured at 0
+	var visibility *float64                                 // ADR-097: nil = never measured, which is not the same as measured at 0
 	if praw, pok := s.readArtifact(rec, "plan.json"); pok { // authoring/explore: coverage_achieved
 		var pc planCoverage
 		if json.Unmarshal([]byte(praw), &pc) == nil {
@@ -1170,6 +1187,16 @@ var artifactWhitelist = map[string]bool{
 	"junit.xml":             true, // ADR-073: the machine contract every CI consumes
 	"executed-plan.json":    true, // ADR-047 follow-on: the plan a replay ran, so the replay is replayable
 	"metrics.prom":          true, // ADR-089: Prometheus textfile — the run's numbers, now that a UI run produces them
+	// ADR-099: the trace. Until now the one artifact a person could not reach without shell access to
+	// the server — which meant the post-mortem of a failed run was unavailable to exactly the person
+	// the product is for.
+	//
+	// ⚠ It is opened KNOWING what is inside, and the two halves are not the same. ADR-098 redacts the
+	// TEXT (typed values, credentials, the driver's own narration). It does NOT touch the SCREENSHOTS,
+	// by decision — cleaning pixels means OCR plus masking, which is unreliable. So a downloaded trace
+	// may show whatever was on the tested application's screen. The lever for that is
+	// SENTINEL_TRACE_SCREENSHOTS=0, which stops the frames being recorded at all.
+	"trace.zip": true,
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
@@ -1264,7 +1291,12 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if strings.HasSuffix(name, ".html") {
+	if strings.HasSuffix(name, ".zip") {
+		// ADR-099: binary, and always an attachment. A zip served as JSON would arrive corrupted
+		// through anything that assumes text, and the browser must never be invited to open it.
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	} else if strings.HasSuffix(name, ".html") {
 		// Serve report.html as a download, never inline — avoids the browser rendering
 		// agent-influenced HTML if someone navigates straight to this endpoint.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
