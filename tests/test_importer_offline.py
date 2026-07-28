@@ -107,6 +107,30 @@ def test_report_totals_are_consistent():
         _check(t["bound"] <= t["steps"], f"{t['name']}: bound {t['bound']} > steps {t['steps']}")
 
 
+# 7 — the filesystem channel (channel 1) end to end: the brain's _run_import walks the dir, writes the
+#     aggregate report and the transpiled scenarios, and exits 0. This is what `agentctl import --from`
+#     drives — the market-entry path (in CI the repo is already checked out).
+def test_fs_channel_writes_report_and_scenarios():
+    import json as _json
+    import pathlib
+    import tempfile
+    from brain.__main__ import _run_import
+
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d)
+        rc = _run_import(out, os.path.join(REPO, "testdata", "import"))
+        _check(rc == 0, f"_run_import exit={rc}, want 0")
+        rep = _json.loads((out / "import-report.json").read_text())
+        _check(rep["engine"] == "playwright", "report does not name the source engine")
+        _check(rep["totals"]["tests"] == 2 and rep["totals"]["steps"] == 12,
+               f"aggregate totals wrong: {rep['totals']}")
+        _check(rep["totals"]["dropped"] == 2, "the aggregate lost the dropped-construct count")
+        scen = _json.loads((out / "imported-scenarios.json").read_text())
+        _check(len(scen["tests"]) == 2, "the transpiled scenarios were not written")
+        # a bad dir is a clean exit 3, not a crash.
+        _check(_run_import(out, os.path.join(d, "nope")) == 3, "a missing import dir must exit 3")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

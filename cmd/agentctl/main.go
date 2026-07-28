@@ -66,6 +66,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
+	fmt.Fprintln(os.Stderr, "  agentctl import --from <dir>                 # transpile existing tests -> steps + rewrite report (ADR-105)")
 	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
 	fmt.Fprintln(os.Stderr, "  agentctl redact-trace --trace <trace.zip>   # strip typed values + credentials from a trace (ADR-098)")
 	fmt.Fprintln(os.Stderr, "  agentctl purge-store --tables <a,b> --yes [--older-than 720h] [--vacuum]")
@@ -614,6 +615,33 @@ func cmdExportSpec(repo string, args []string) int {
 }
 
 // cmdReport: agentctl report --run <dir>  (M4) — HTML+JSON report + Prometheus metrics
+// cmdImport: agentctl import --from <dir>  (PROD-IMPORT, ADR-105)
+//
+// Channel 1 — the filesystem path — is the main one because in CI the repository is already checked
+// out: there is nowhere to import FROM and no reason to, a directory is enough. It transpiles the
+// existing suite and writes the rewrite report (import-report.json). No browser, no LLM, no network.
+func cmdImport(repo string, args []string) int {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests) (required)")
+	_ = fs.Parse(args)
+	if *from == "" {
+		fmt.Fprintln(os.Stderr, "error: --from <dir> is required")
+		return 2
+	}
+	abs, err := filepath.Abs(*from)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "import: %v\n", err)
+		return 1
+	}
+	runID := newRunID()
+	dir := mkArtifactDir(repo, runID, "")
+	return spawnBrain(repo, runID, []string{
+		"RUN_MODE=import",
+		"ARTIFACT_DIR=" + dir,
+		"IMPORT_DIR=" + abs,
+	})
+}
+
 func cmdReport(repo string, args []string) int {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	runDir := fs.String("run", "", "run directory containing heal-report.json (required)")
@@ -694,6 +722,8 @@ func main() {
 		code = cmdLocators(repo, os.Args[2:])
 	case "export-spec":
 		code = cmdExportSpec(repo, os.Args[2:])
+	case "import":
+		code = cmdImport(repo, os.Args[2:])
 	case "report":
 		code = cmdReport(repo, os.Args[2:])
 	case "calibrate":
