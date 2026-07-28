@@ -22,7 +22,13 @@
 // so the two cannot drift into disagreeing about the word "token". That function already carries the
 // reasoning this would otherwise have to repeat: `api-key`/`api key`/`api.key` all canonicalize to
 // `api_key`, while `max_tokens` and `total_tokens` are counters and must survive.
-package main
+package redact
+
+// MOVED here from cmd/control-api in ADR-098, unchanged apart from the package clause and the
+// exported name. It had to move because a SECOND consumer appeared — the trace redactor — and the one
+// thing this file must never become is two files. "What counts as a credential" is already shared
+// with configguard for exactly that reason; copying the scanner would have re-introduced the drift a
+// package boundary was chosen to prevent.
 
 import (
 	"regexp"
@@ -46,12 +52,12 @@ var (
 	// deliberate correction rather than a style choice — see scanNamedSecrets.
 )
 
-// redactSecrets removes credential-shaped material from one line of captured output.
+// Line removes credential-shaped material from one line of captured output.
 //
 // Applied to EVERY line the sink sees, not only the `app.*` ones: our own diagnostics quote URLs and
 // request bodies too, and a redactor that trusted the source would be trusting the very thing it is
 // there to check. A pure string function, so it is testable without a browser, a run or a disk.
-func redactSecrets(line string) string {
+func Line(line string) string {
 	if line == "" {
 		return line
 	}

@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"github.com/AlexGromer/sentinel/internal/redact"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
 	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
+	fmt.Fprintln(os.Stderr, "  agentctl redact-trace --trace <trace.zip>   # strip typed values + credentials from a trace (ADR-098)")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")
@@ -510,6 +512,37 @@ func cmdReport(repo string, args []string) int {
 	})
 }
 
+// cmdRedactTrace: agentctl redact-trace --trace <path>  (ADR-098)
+//
+// A subcommand rather than a step folded into `report`, for two reasons that both come down to WHEN.
+// The trace is written the moment the run ends and the report is built afterwards, so folding this in
+// would leave the raw archive on disk for the whole gap. And a replay driven directly (`python -m
+// brain`) never reaches `report` at all, which would make the redaction depend on how the run was
+// started — the worst property a security control can have.
+//
+// It fails LOUDLY. The caller's contract (brain/__main__.py) is to DELETE the trace when this returns
+// non-zero: a trace that could not be redacted is not a degraded artifact, it is a leak, and keeping
+// it because the cleanup failed would invert the whole point.
+func cmdRedactTrace(args []string) int {
+	fs := flag.NewFlagSet("redact-trace", flag.ExitOnError)
+	trace := fs.String("trace", "", "path to trace.zip (required)")
+	_ = fs.Parse(args)
+	if *trace == "" {
+		fmt.Fprintln(os.Stderr, "error: --trace <path> is required")
+		return 2
+	}
+	st, err := redact.TraceFile(*trace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "redact-trace: %v\n", err)
+		return 1
+	}
+	// Counts, never content: a tool that printed what it found would be a second copy of the leak.
+	fmt.Printf("redacted %s: %d entries (%d images copied), %d typed values, %d narrated logs, "+
+		"%d snapshot values, %d text lines\n",
+		*trace, st.Entries, st.Images, st.TypedValues, st.NarratedLogs, st.SnapshotVals, st.TextualLines)
+	return 0
+}
+
 // cmdCalibrate: agentctl calibrate  (M4) — heal precision/histogram from healing_audit
 func cmdCalibrate(repo string, args []string) int {
 	runID := newRunID()
@@ -548,6 +581,8 @@ func main() {
 		code = cmdReport(repo, os.Args[2:])
 	case "calibrate":
 		code = cmdCalibrate(repo, os.Args[2:])
+	case "redact-trace":
+		code = cmdRedactTrace(os.Args[2:])
 	default:
 		usage()
 		code = 2

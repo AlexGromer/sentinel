@@ -30,6 +30,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/AlexGromer/sentinel/internal/redact"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -154,7 +155,7 @@ func (s *logSink) write(line string) {
 	// GAP-SEC-005 / ADR-081: redact BEFORE anything is written, and for every line rather than only the
 	// `app.*` ones. This is the single choke point — run.log, run.jsonl and events.jsonl all descend
 	// from here — so a secret cannot reach disk by taking another path out of this function.
-	line = redactSecrets(line)
+	line = redact.Line(line)
 
 	s.writeRaw(line)
 

@@ -429,7 +429,15 @@ async function ensureBrowser(): Promise<void> {
   // M9.1/ADR-026 + GAP-RISK-010: an auth run sets PW_NO_TRACE=1 so a typed password never lands in
   // trace.zip (the trace captures DOM input.value AND the submit POST body — Playwright has no mask API).
   if (process.env.PW_NO_TRACE !== '1') {
-    await context.tracing.start({ screenshots: true, snapshots: true });
+    // ADR-098: screenshots are a SEPARATE lever from redaction, because pixels are not redactable.
+    // The text of a trace is cleaned (internal/redact); a screenshot of a filled login form is not —
+    // that would mean OCR plus masking, which is unreliable and expensive, and a redactor that
+    // half-works on images is worse than one that says it does not try. So whoever needs the frames
+    // confidential turns them off; whoever needs the post-mortem keeps them. Default ON: the trace
+    // exists to explain a failed run, and the failure is usually visible rather than textual.
+    const wantShots = (process.env.SENTINEL_TRACE_SCREENSHOTS ?? '1') !== '0';
+    await context.tracing.start({ screenshots: wantShots, snapshots: true });
+    if (!wantShots) log('tracing: screenshots DISABLED (SENTINEL_TRACE_SCREENSHOTS=0)');
     tracingStarted = true;
     log('tracing started');
   } else {
