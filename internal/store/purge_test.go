@@ -117,10 +117,12 @@ func TestPurgeVacuumIsTheOnlyThingThatRemovesTheBytes(t *testing.T) {
 				t.Fatalf("counts = %+v, want healing_audit=40", rep.Counts)
 			}
 
-			// Checkpoint so both branches are judged against the main database file.
-			if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-				t.Fatalf("checkpoint: %v", err)
-			}
+			// Deliberately NO checkpoint here. An earlier version of this test checkpointed before
+			// grepping "so both branches are judged against the main file", and that silently did
+			// the product's job for it: removing BOTH wal_checkpoint calls from the vacuum path left
+			// this test green (caught by mutation). The files are now read exactly as PurgeStore
+			// left them, which is the only way the checkpointing can be observed at all.
+			//
 			// THE ASSERTION THAT SEPARATES THE POLICIES. Note it is about CONTENT, not file size:
 			// VACUUM here leaves the file the same length and only rewrites what is inside it, so a
 			// size-based check would prove nothing (measured).
