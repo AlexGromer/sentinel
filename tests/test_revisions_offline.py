@@ -109,6 +109,38 @@ def test_scenario_id_cannot_traverse():
                 pass
 
 
+# 6 — the LIVE wire: freezing a scenario records a revision when SENTINEL_TEST_ID is set, and records
+#     NOTHING when it is not (an ad-hoc run is not a versioned test). This is what keeps the store from
+#     being a library nobody calls — the chats-projection lesson.
+def test_freeze_scenario_records_a_revision_when_named():
+    import pathlib
+    from brain.__main__ import _write_scenario
+
+    steps = [{"semantic_id": "a", "verb": "fill", "value": "x"}]
+    with tempfile.TemporaryDirectory() as d:
+        revdir = os.path.join(d, "revs")
+        os.environ["SENTINEL_REVISIONS_DIR"] = revdir
+        try:
+            # named test -> a revision is recorded under that id.
+            os.environ["SENTINEL_TEST_ID"] = "login-test"
+            out = pathlib.Path(d) / "run1"
+            out.mkdir()
+            _write_scenario(out, "run1", "http://x", steps, [], False)
+            hist = R.list_revisions(revdir, "login-test")
+            _check(len(hist) == 1, f"a named scenario freeze recorded no revision: {hist}")
+
+            # ad-hoc run (no id) -> nothing recorded.
+            os.environ.pop("SENTINEL_TEST_ID", None)
+            out2 = pathlib.Path(d) / "run2"
+            out2.mkdir()
+            _write_scenario(out2, "run2", "http://x", steps, [], False)
+            _check(R.list_revisions(revdir, "login-test") == hist,
+                   "an unnamed run added a revision — ad-hoc runs must not be versioned")
+        finally:
+            os.environ.pop("SENTINEL_TEST_ID", None)
+            os.environ.pop("SENTINEL_REVISIONS_DIR", None)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:
