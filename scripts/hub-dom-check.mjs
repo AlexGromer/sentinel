@@ -1004,7 +1004,7 @@ try {
       return out;
     });
     // A count, not "at least one": a mechanism that attached to a single field would otherwise pass.
-    ok(got.length >= 12, `expected 12+ helped fields, found ${got.length}`);
+    ok(got.length >= 16, `expected 16+ helped fields, found ${got.length}`);
     for (const h of got) {
       eq(h.tag, 'DETAILS', `${h.key}: help must be <details> so keyboard/AT behaviour comes from the platform`);
       ok(h.open === false, `${h.key}: help must be FOLDED by default — a form where every field carries a paragraph is unreadable`);
