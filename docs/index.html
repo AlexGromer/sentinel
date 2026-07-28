@@ -3889,6 +3889,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     'b-target': [
       'Инструмент будет водить именно этот сайт, и его текст — надписи, имена, номера заказов — осядет в артефактах прогона и в базе локаторов. Где именно и что с этим делать, перечислено в docs/DB_FOREIGN_TEXT.md.',
       'The tool will drive this site, and its text — labels, names, order numbers — ends up in the run artifacts and in the locator store. Where exactly, and what to do about it, is listed in docs/DB_FOREIGN_TEXT.md.'],
+    'b-goal': [
+      'Читается только в режиме goal. Опишите словами, чего добиться — например «войти и оплатить счёт»: инструмент СНАЧАЛА обойдёт приложение, а план соберёт только из реально увиденных элементов, поэтому названное вами, но не найденное на странице не будет выдумано.',
+      'Read only in goal mode. Describe the outcome in words — "log in and pay an invoice": the tool explores FIRST and assembles the plan only from elements it actually saw, so anything you name that is not on the page is not invented.'],
+    'b-describe': [
+      'Читается только в режиме describe. Опишите готовый сценарий по шагам: каждый шаг привязывается к реальному элементу, а шаг, которому элемента не нашлось, попадёт в отчёт как несвязанный, а не будет выдуман.',
+      'Read only in describe mode. Describe a ready scenario step by step: each step binds to a real element, and a step with no match is reported as unmatched rather than invented.'],
     'b-planner': [
       'Кто строит план: heuristic не обращается к модели вовсе (и потому не тратит токенов), llm и goal обращаются. На heuristic бюджеты ниже неактивны.',
       'Who builds the plan: heuristic calls no model at all (and so spends no tokens), llm and goal do. With heuristic the budgets below are inert.'],
