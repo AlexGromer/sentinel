@@ -251,3 +251,95 @@ func TestSweepLogsKeepsNewestAndSpearsTheAuditTrail(t *testing.T) {
 		}
 	}
 }
+
+// ADR-099: the run DIRECTORY had no lifetime. `sweepTraces` owns traces and `sweepLogs` owns logs,
+// and nothing owned the thing holding them — measured on a dev box as 344 directories and 606 MB.
+func TestSweepRunsIsOffByDefault(t *testing.T) {
+	root := t.TempDir()
+	old := filepath.Join(root, "run-old")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "plan.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(old, time.Now().Add(-90*24*time.Hour), time.Now().Add(-90*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	newer := filepath.Join(root, "run-new")
+	if err := os.MkdirAll(newer, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SENTINEL_RUN_KEEP", "")
+	t.Setenv("SENTINEL_RUN_TTL_HOURS", "")
+
+	sweepRuns(root)
+
+	// OFF by default on purpose: a run directory holds the plan and the reports — the evidence a
+	// person came back for. Deleting it on an upgrade nobody asked for is a worse failure than disk.
+	if _, err := os.Stat(old); err != nil {
+		t.Fatalf("a 90-day-old run was deleted with both knobs unset: %v", err)
+	}
+}
+
+func TestSweepRunsNeverTakesTheNewest(t *testing.T) {
+	root := t.TempDir()
+	// Three runs, all older than the TTL. Even so the newest must survive: a person who has just run
+	// something and finds nothing there learns that the tool eats its own output.
+	var dirs []string
+	for i, age := range []time.Duration{72, 48, 24} {
+		d := filepath.Join(root, "run-"+string(rune('a'+i)))
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-age * time.Hour)
+		if err := os.Chtimes(d, when, when); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, d)
+	}
+	t.Setenv("SENTINEL_RUN_TTL_HOURS", "1")
+	t.Setenv("SENTINEL_RUN_KEEP", "0")
+
+	sweepRuns(root)
+
+	if _, err := os.Stat(dirs[2]); err != nil { // run-c, the newest
+		t.Fatalf("the newest run was swept even though every run was past the TTL: %v", err)
+	}
+	for _, d := range dirs[:2] {
+		if _, err := os.Stat(d); err == nil {
+			t.Fatalf("%s survived a TTL it was well past", d)
+		}
+	}
+}
+
+func TestSweepRunsKeepsTheNewestN(t *testing.T) {
+	root := t.TempDir()
+	var dirs []string
+	for i := 0; i < 4; i++ {
+		d := filepath.Join(root, "run-"+string(rune('a'+i)))
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-time.Duration(4-i) * time.Hour) // run-d newest
+		if err := os.Chtimes(d, when, when); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, d)
+	}
+	t.Setenv("SENTINEL_RUN_KEEP", "2")
+	t.Setenv("SENTINEL_RUN_TTL_HOURS", "0")
+
+	sweepRuns(root)
+
+	for _, d := range dirs[2:] { // the two newest
+		if _, err := os.Stat(d); err != nil {
+			t.Fatalf("%s should have been kept (keep=2): %v", d, err)
+		}
+	}
+	for _, d := range dirs[:2] {
+		if _, err := os.Stat(d); err == nil {
+			t.Fatalf("%s should have been swept (keep=2)", d)
+		}
+	}
+}

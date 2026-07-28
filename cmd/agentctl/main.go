@@ -101,6 +101,7 @@ func mkArtifactDir(repo, runID, override string) string {
 		_ = os.Chmod(runsRoot, 0o700)
 		sweepTraces(runsRoot)
 		sweepLogs(runsRoot)
+		sweepRuns(runsRoot)
 	}
 	return dir
 }
@@ -169,6 +170,63 @@ func sweepTraces(runsRoot string) {
 		tooOld := ttlHours > 0 && now.Sub(tr.mod) > time.Duration(ttlHours)*time.Hour
 		if tooMany || tooOld {
 			_ = os.Remove(tr.path)
+		}
+	}
+}
+
+// sweepRuns enforces retention on the run DIRECTORIES themselves (ADR-099).
+//
+// The gap this fills was measured, not guessed: `sweepTraces` owns traces and `sweepLogs` owns logs,
+// and NOTHING owned the directory holding them. On a dev box that left 344 directories and 606 MB —
+// of which 570 MB was `checkpoint.db`, a file neither sweeper looks at. That particular leak is now
+// closed at the source (the brain deletes its own checkpoint), and this is the general answer: a run
+// directory is a thing with a lifetime, and until now it had none.
+//
+// OFF BY DEFAULT, like logs and unlike traces, and for the same reason: a run directory holds the
+// plan, the reports and the executed plan — the evidence a person came back for. Deleting it on an
+// upgrade nobody asked for would be a worse failure than unbounded disk. A trace is a bulky
+// by-product and may default to bounded; the record of what the tool did is not.
+//
+// The NEWEST is never swept even when the knobs say it should be. A person who has just run
+// something and finds nothing there learns that the tool eats its own output, and no amount of
+// correct arithmetic makes that a good first impression.
+//
+// Best-effort throughout: retention must never fail a run.
+func sweepRuns(runsRoot string) {
+	keep := envInt("SENTINEL_RUN_KEEP", 0)          // 0 = off (not "keep none")
+	ttlHours := envInt("SENTINEL_RUN_TTL_HOURS", 0) // 0 = off
+	if keep <= 0 && ttlHours <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(runsRoot)
+	if err != nil {
+		return
+	}
+	type runDir struct {
+		path string
+		mod  time.Time
+	}
+	var dirs []runDir
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		dirs = append(dirs, runDir{filepath.Join(runsRoot, e.Name()), info.ModTime()})
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].mod.After(dirs[j].mod) }) // newest first
+	now := time.Now()
+	for i, d := range dirs {
+		if i == 0 {
+			continue // never the newest — see the comment above
+		}
+		tooMany := keep > 0 && i >= keep
+		tooOld := ttlHours > 0 && now.Sub(d.mod) > time.Duration(ttlHours)*time.Hour
+		if tooMany || tooOld {
+			_ = os.RemoveAll(d.path)
 		}
 	}
 }

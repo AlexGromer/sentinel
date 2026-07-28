@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -994,5 +995,53 @@ func TestReportIsSkippedForARunThatProducedNothing(t *testing.T) {
 	postRunAndWait(t, s, runBody(t, map[string]string{"target": "https://app.example"}))
 	if _, err := os.Stat(argvPath); err == nil {
 		t.Fatal("a run that never spawned must not trigger a report spawn")
+	}
+}
+
+// ADR-099: the trace is downloadable, served as a binary attachment, and byte-exact.
+//
+// Written as a BEHAVIOURAL test after a mutation walked straight through the Python source check
+// that stood in for it: that check asserted the substring `"trace.zip": true` appears in the
+// whitelist, and commenting the entry out leaves `// "trace.zip": true,` — which contains it. The
+// only assertion a comment cannot satisfy is one that asks the server for the file.
+func TestTraceIsDownloadableAsBinary(t *testing.T) {
+	s, repo := newRunServer(t)
+	id := createRunAndWait(t, s)
+	artDir := filepath.Join(repo, "runs", "control-"+id)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A real zip's magic plus a byte that is not valid UTF-8: anything treating the response as text
+	// mangles it, which is the failure a JSON content type would produce silently.
+	body := []byte("PK\x03\x04\xff\xfe binary trace bytes")
+	if err := os.WriteFile(filepath.Join(artDir, "trace.zip"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+id+"/artifact?name=trace.zip", nil)
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the trace is not reachable through the API: got %d — the post-mortem of a failed "+
+			"run needs shell access to the server again", rec.Code)
+	}
+	if got := rec.Body.Bytes(); !bytes.Equal(got, body) {
+		t.Fatalf("the trace arrived altered: %q want %q", got, body)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("Content-Type = %q, want application/zip (a zip served as text arrives corrupted)", ct)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "attachment") {
+		t.Fatalf("Content-Disposition = %q — the browser must never be invited to open a trace", cd)
+	}
+	// The negative control: the path guard still holds for everything not on the list.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+id+"/artifact?name=checkpoint.db", nil)
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatal("an unlisted artifact was served; opening the trace must not open the directory")
 	}
 }
