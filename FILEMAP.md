@@ -222,6 +222,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/linewriter_contract_test.go | Tests | **SEC-RUNS-ERROR-UNGUARDED** пинит контракт `lineWriter.Write` → `(len(p), nil)` на любом входе (пустой, без перевода строки, битый UTF-8, секрето-образный, огромный) и при nil-safe sink. Инвариант, на котором держится чистота `runs.error`; ошибка или короткая запись ловятся |
 | cmd/agentctl/trace_swept_test.go | Tests | **SEC-TRACE-SWEPT-SILENTLY** через настоящий `sweepTraces` над реальным деревом: маркер `trace-removed.json` называет причину (count vs ttl) · выживший прогон НЕ помечается · без удаления маркера нет · **удаление НЕ УДАЛОСЬ → маркера нет** (пойман мутацией M3: маркер должен значить «трейс исчез», а не «пытались»). Слышимая половина (строка в stderr) — на стороне вызывающего |
 | cmd/control-api/retention_download_test.go | Tests | **SEC-RETENTION-DOWNLOAD** httptest через настоящую ручку: ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ — просмотр (вкл. ложные `?download=0`/`?download=true`) не пишет маркера · настоящее `?download=1` пишет `downloaded.json` {downloaded, at} · скачивание НИЧЕГО не удаляет. 4/4 мутации, вкл. «удалить при отдаче» |
+| cmd/agentctl/sweep_downloaded.go | Go | **SEC-RETENTION-DOWNLOAD-CONSUMER** явная команда `agentctl sweep-downloaded` — удаляет каталоги прогонов с маркером `downloaded.json` (ADR-103). Не автоматическая (нет в блоке свипов) и не часть `purge-store` (та чистит строки БД по gRPC, эта — каталоги на ФС). `--yes` обязателен, `--dry-run` только показывает, счётчики без путей. Решение «какие прогоны» — чистая функция `runsWithDownloadMarker` |
+| cmd/agentctl/sweep_downloaded_test.go | Tests | **SEC-RETENTION-DOWNLOAD-CONSUMER** гейты: отбор только помеченных · отказ без `--yes` · `--dry-run` не удаляет · ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ (непомеченный прогон не тронут) · пустой прогон = no-op. 3/3 мутации |
 | docs/DB_FOREIGN_TEXT.md | Documentation | **ADR-100** рассуждение, без которого список неприменим: различение ПРИСУЩЕГО текста (локатор `{"role":"button","name":"Confirm payment"}` — это и есть текст страницы; вычистить = сломать самопочинку) и СЛУЧАЙНОГО. Три файла БД, а не один; `brain/store.py::_SCHEMA` не объявляет домены M13 вовсе. Единственная не присущая утечка — `scenarios.steps_json[].value`, которую support-бандл уже затирает, а БД нет |
 | docs/DB_FOREIGN_TEXT.en.md | Documentation | Английское зеркало `DB_FOREIGN_TEXT.md` |
 | cmd/agentctl/purge_cli_test.go | Tests | **ADR-100** слой CLI отдельно от RPC, который он зовёт — написан ПОТОМУ, что мутационный прогон нашёл дыру: сервер отвергает пустую область, и ничто не доказывало, что это делает команда, а у подтверждения `--yes` серверного двойника нет вовсе, то есть без этого файла оно не покрыто нигде. Все случаи возвращаются ДО набора номера, поэтому отказ (2) не может быть удовлетворён случайным подключением (1). Ожидаемый список таблиц выписан руками, а не импортирован из `internal/store`: импорт заставил бы тест согласиться с кодом по построению и не утверждать ничего |
@@ -230,6 +232,8 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | cmd/control-api/linewriter_contract_test.go | Tests | — |
 | cmd/agentctl/trace_swept_test.go | Tests | — |
 | cmd/control-api/retention_download_test.go | Tests | — |
+| cmd/agentctl/sweep_downloaded.go | Go source | — |
+| cmd/agentctl/sweep_downloaded_test.go | Tests | — |
 ## Directory Structure
 ```
 agent_development/
