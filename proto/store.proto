@@ -142,6 +142,43 @@ message ConfigRecord {
 message ConfigKey { string key = 1; }
 message ConfigList { repeated ConfigRecord items = 1; }
 
+// --- purge (ADR-100): explicitly-invoked cleanup of stored foreign text ------------------------
+// Redaction-on-write cannot help what was written BEFORE it existed (ADR-098/099 closed the trace;
+// this closes the store). Cleanup here means DELETING ROWS, not blanking fields: nearly all foreign
+// text in this store is INHERENT — a locator IS the page's text ({"role":"button","name":"Pay now"}),
+// so blanking it would break healing rather than protect anything. See docs/DB_FOREIGN_TEXT.md.
+//
+// This RPC is never called automatically. It has no place in agentctl's start-of-run sweep block
+// (sweepTraces/sweepLogs/sweepRuns): a swept trace is reproducible by re-running, healing history is
+// not, and an automatic purge would make "the tool tidied up" indistinguishable from "evidence was
+// erased".
+message PurgeReq {
+  // Required and non-empty. An empty scope is REFUSED, never taken to mean "everything".
+  repeated string tables = 1;
+  // Epoch seconds. 0 => no age filter (every row of the named tables). The server maps this onto
+  // each table's own time column, which is REAL epoch in the heal schema and RFC3339 TEXT in M13.
+  double older_than_epoch = 2;
+  // THE DEPLOYER'S CHOICE, and both answers are legitimate:
+  //   false — rows leave the queries, but THE BYTES REMAIN in freed pages (measured: modernc
+  //           sqlite v1.53.0 defaults to secure_delete=0, so a deleted row is still greppable).
+  //   true  — the bytes are gone, AND SO IS RECOVERABILITY: VACUUM rewrites the file, which some
+  //           organizations must not do. We do not choose this for them.
+  bool vacuum = 3;
+}
+message PurgeTableCount {
+  string table = 1;
+  int64 rows = 2;
+}
+message PurgeReport {
+  repeated PurgeTableCount counts = 1;
+  bool vacuumed = 2;
+  // Non-empty when vacuum was asked for but not performed — a skipped scrub must never be silent.
+  string vacuum_skipped = 3;
+  // What the caller just gave up, named out loud (ARCHITECTURE principle 7): purging healing_audit
+  // blinds `agentctl calibrate`, purging healed_locators resets the heal cache, and so on.
+  repeated string capabilities_lost = 4;
+}
+
 service StoreService {
   // runs
   rpc UpsertRun(RunRecord) returns (Empty);
@@ -174,4 +211,6 @@ service StoreService {
   rpc GetConfig(ConfigKey) returns (ConfigRecord);
   rpc ListConfig(Empty) returns (ConfigList);
   rpc DeleteConfig(ConfigKey) returns (Empty);   // idempotent, like DeleteScenario/DeleteTest/DeleteChat
+  // purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
+  rpc PurgeStore(PurgeReq) returns (PurgeReport);
 }
