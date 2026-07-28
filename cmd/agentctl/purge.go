@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/AlexGromer/sentinel/internal/store"
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
@@ -41,6 +41,20 @@ func cmdPurgeStore(repo string, args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --tables is required — an empty scope is refused, not treated as \"all tables\"")
 		fmt.Fprintln(os.Stderr, "       purgeable: "+strings.Join(purgeableTableNames(), ", "))
 		return 2
+	}
+	// An unknown table is a USAGE mistake, so it earns the usage exit code and no round trip. The
+	// gateway validates the scope again regardless — this is a fast path, not the boundary. Both
+	// sides read the same published set, so the two cannot disagree.
+	known := map[string]bool{}
+	for _, n := range purgeableTableNames() {
+		known[n] = true
+	}
+	for _, n := range names {
+		if !known[n] {
+			fmt.Fprintf(os.Stderr, "error: %q is not a purgeable table\n       purgeable: %s\n",
+				n, strings.Join(purgeableTableNames(), ", "))
+			return 2
+		}
 	}
 	if !*yes {
 		fmt.Fprintf(os.Stderr, "refusing to purge %s without --yes: this deletes rows and cannot be undone\n",
@@ -115,7 +129,7 @@ func dialStore(repo string) (storepb.StoreServiceClient, func(), error) {
 		}
 		stopGateway = stop
 	}
-	conn, err := grpc.NewClient(addr,
+	conn, err := grpc.NewClient(storeTarget(addr),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(purgeTokenInterceptor(token)))
 	if err != nil {
@@ -126,6 +140,24 @@ func dialStore(repo string) (storepb.StoreServiceClient, func(), error) {
 		_ = conn.Close()
 		stopGateway()
 	}, nil
+}
+
+// storeTarget turns a store address into a gRPC target. STORE_ADDR carries a BARE SOCKET PATH by
+// convention — startGateway returns one and brain/store.py:282 prefixes it with "unix:" on the way
+// into the channel — whereas a compose deployment hands out a full target
+// (CONTROL_API_STORE_ADDR=unix:/app/state/store.sock). Passing a bare path straight to
+// grpc.NewClient fails with "name resolver error: produced zero addresses", which is what a live run
+// of this command actually did before this function existed: no unit test saw it, because every test
+// stops before the dial.
+func storeTarget(addr string) string {
+	if strings.Contains(addr, "://") || strings.HasPrefix(addr, "unix:") ||
+		strings.HasPrefix(addr, "dns:") || strings.HasPrefix(addr, "passthrough:") {
+		return addr
+	}
+	if strings.HasPrefix(addr, "/") { // an absolute path is a unix socket, not a host:port
+		return "unix:" + addr
+	}
+	return addr // host:port — gRPC's default resolver handles it
 }
 
 // purgeTokenInterceptor mirrors the control-API's storeTokenInterceptor: the gateway authenticates
@@ -150,12 +182,8 @@ func splitList(s string) []string {
 	return out
 }
 
-// purgeableTableNames is the CLI's copy of the gateway's answer, used only to make the usage message
-// helpful. The gateway remains the authority: it validates the scope again and refuses an unknown
-// name, so a drift here costs a worse error message, never a wrong purge.
-func purgeableTableNames() []string {
-	out := []string{"chats", "golden_snapshots", "healed_locators", "healing_audit",
-		"metrics", "results", "runs", "scenarios", "tests"}
-	sort.Strings(out)
-	return out
-}
+// purgeableTableNames reads the gateway's published set rather than keeping a copy of it. An earlier
+// version hard-coded the list "so the usage message is helpful", which quietly created a second
+// source of truth that nothing compared: add a table to the registry and the CLI would go on
+// refusing it, with no test anywhere able to notice.
+func purgeableTableNames() []string { return store.PurgeableTables() }

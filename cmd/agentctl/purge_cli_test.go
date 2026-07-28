@@ -35,6 +35,11 @@ func TestPurgeStoreCLIRefusesBeforeItConnects(t *testing.T) {
 		{"comma-only scope", []string{"--tables", ",,", "--yes"}},
 		{"whitespace-only scope", []string{"--tables", "   ", "--yes"}},
 		{"scope but no confirmation", []string{"--tables", "healing_audit"}},
+		// An unknown name is a usage mistake and earns the usage code without a round trip. Found by
+		// running the real command: the gateway's refusal arrives as a generic error and exited 1,
+		// so a typo read as an infrastructure failure.
+		{"unknown table", []string{"--tables", "healing_audit,nope", "--yes"}},
+		{"config is never offered", []string{"--tables", "config", "--yes"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if code := cmdPurgeStore(repo, tc.args); code != 2 {
@@ -65,22 +70,51 @@ func TestSplitListDropsEmptiesAndTrims(t *testing.T) {
 	}
 }
 
-// TestPurgeableTableNamesMatchTheGateway keeps the CLI's usage hint honest. The gateway stays the
-// authority — it validates the scope again — so a drift here costs a misleading error message rather
-// than a wrong purge, which is exactly why it would otherwise go unnoticed.
-func TestPurgeableTableNamesMatchTheGateway(t *testing.T) {
-	// Deliberately spelled out rather than imported from internal/store: importing the map would make
-	// this test agree with the code by construction and assert nothing at all.
-	want := []string{"chats", "golden_snapshots", "healed_locators", "healing_audit",
-		"metrics", "results", "runs", "scenarios", "tests"}
+// TestPurgeableTableNamesReflectsTheGateway. The CLI now reads the gateway's published set instead
+// of copying it, so this does not re-check the list member by member — that would only assert that
+// store.PurgeableTables() equals itself. What is worth pinning is the two properties the CLI relies
+// on when it validates a scope locally.
+//
+// Kills: reintroducing a hard-coded list in the CLI (it would go stale against the registry and the
+// non-empty check below is the only thing that would still hold).
+// Kills: adding `config` to the purgeable registry — the CLI would then offer a table whose whole
+// point is that it must not be emptied.
+func TestPurgeableTableNamesReflectsTheGateway(t *testing.T) {
 	got := purgeableTableNames()
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("purgeableTableNames() = %v, want %v", got, want)
+	if len(got) == 0 {
+		t.Fatal("no purgeable tables — the local scope check would reject everything")
 	}
-	// config must NOT be offered: it is live configuration, and the gateway refuses it.
 	for _, n := range got {
 		if n == "config" {
-			t.Fatal("the CLI offers `config`, which the gateway refuses to purge")
+			t.Fatal("`config` is offered as purgeable: it is live configuration, not accumulated history")
+		}
+	}
+	// The inventory gate (internal/store) is what pins the membership itself; here it is enough that
+	// the names the CLI validates against are the ones the gateway will accept.
+	if !strings.Contains(strings.Join(got, ","), "healing_audit") {
+		t.Fatalf("purgeableTableNames() = %v, missing healing_audit", got)
+	}
+}
+
+// TestStoreTargetPrefixesABareSocketPath is a regression test for a bug that shipped past every
+// other gate in this change: startGateway returns a BARE socket path, grpc.NewClient needs a target,
+// and passing the path through unchanged fails with "produced zero addresses". Nothing caught it
+// because every other test stops before the dial — it took running the real command against a real
+// gateway. Hence a pure function, so the conversion is reachable by a test at all.
+func TestStoreTargetPrefixesABareSocketPath(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		// What startGateway returns and what STORE_ADDR carries by convention (brain/store.py:282
+		// prefixes the same way).
+		{"/abs/state/sentinel-store-purge.sock", "unix:/abs/state/sentinel-store-purge.sock"},
+		// What a compose deployment hands out — already a target, must not be double-prefixed.
+		{"unix:/app/state/store.sock", "unix:/app/state/store.sock"},
+		{"dns:///gateway:50051", "dns:///gateway:50051"},
+		{"passthrough:///127.0.0.1:50051", "passthrough:///127.0.0.1:50051"},
+		// host:port is a valid target on its own.
+		{"127.0.0.1:50051", "127.0.0.1:50051"},
+	} {
+		if got := storeTarget(tc.in); got != tc.want {
+			t.Errorf("storeTarget(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

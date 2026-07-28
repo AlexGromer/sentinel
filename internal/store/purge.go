@@ -173,7 +173,13 @@ func (s *Server) purgeOne(name string, pt purgeTable, olderThan float64) (int64,
 	return res.RowsAffected()
 }
 
-func purgeableNames() []string {
+func purgeableNames() []string { return PurgeableTables() }
+
+// PurgeableTables is the one place the purgeable set is published. The CLI validates against THIS
+// rather than keeping its own copy: a copy would let the two drift, and the drift is invisible —
+// a stale CLI list either offers a table the gateway refuses or refuses one it would accept, and
+// nothing about a correct purge would look different until somebody hit the mismatch.
+func PurgeableTables() []string {
 	out := make([]string, 0, len(purgeable))
 	for k := range purgeable {
 		out = append(out, k)
