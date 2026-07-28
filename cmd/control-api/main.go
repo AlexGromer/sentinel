@@ -1197,6 +1197,10 @@ var artifactWhitelist = map[string]bool{
 	// may show whatever was on the tested application's screen. The lever for that is
 	// SENTINEL_TRACE_SCREENSHOTS=0, which stops the frames being recorded at all.
 	"trace.zip": true,
+	// SEC-TRACE-SWEPT-SILENTLY: the marker sweepTraces drops when it deletes a trace by retention.
+	// The hub reads it to distinguish "the trace was removed" from "this run never had one" — without
+	// it, both look identical (no trace.zip), and a swept trace reads as a run that was never traced.
+	"trace-removed.json": true,
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).

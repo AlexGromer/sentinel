@@ -382,6 +382,7 @@ Production-grade автономный standalone агент UI-тестиров�
 | 2026-07-28 | Подсказки ADR-086 перенесены из мастера в хаб (`docs/index.html` — корень GitHub Pages): 14 полей панели прогона, текст про последствие из кода, три факта против интуиции. Гейт хаба +4 проверки, порог CI 26→35 | ADR-101 | @AlexGromer |
 | 2026-07-28 | `secretRef` добавлен в LLM-схему авторства (обе схемы + промпты), fill-only по существующему контракту; `secretRef` на не-fill отвергается, а не теряется. Закрывает единственную не присущую утечку инвентаря ADR-100 | ADR-102 | @AlexGromer |
 | 2026-07-28 | Chat-режим подключён к store-gateway (`runNeedsStore`), проекция `chats` (ADR-050) перестала быть мёртвой проводкой — SEC-CHATS-WIRING-GAP; инвариант `lineWriter.Write`→`(len(p),nil)`, держащий чистоту `runs.error`, закреплён тестом — SEC-RUNS-ERROR-UNGUARDED | ADR-100/102 follow-on | @AlexGromer |
+| 2026-07-28 | `sweepTraces` перестал удалять трейс молча (SEC-TRACE-SWEPT-SILENTLY): строка счётчиков в stderr + маркер `trace-removed.json` (в whitelist ручки артефактов) + заметка в хабе; ретеншен остаётся ON по умолчанию, но больше не бесшумен | ADR-099 follow-on | @AlexGromer |
 ## 7. Где живут детали (`docs/`)
 | Файл | Содержимое |
 |------|------------|

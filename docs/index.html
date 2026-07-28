@@ -2085,6 +2085,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         box.appendChild(btn);
       })(names[i],content);
     }
+    // SEC-TRACE-SWEPT-SILENTLY: a run whose trace was deleted by retention gets a trace-removed.json
+    // marker (agentctl sweepTraces). Surface it, so a swept trace reads as "removed on purpose, and
+    // why" instead of being indistinguishable from a run that was never traced. There is no trace
+    // download button to grey out — there never was one — so the note IS the signal.
+    var mk=await fetchArtifact(base,id,'trace-removed.json');
+    if (mk){
+      var why=''; try{ var m=JSON.parse(mk); why=m.reason==='ttl'?bi(' (по сроку хранения)',' (past its TTL)')
+                                                              :bi(' (сверх лимита keep)',' (over the keep limit)'); }catch(e){}
+      var note=document.createElement('div'); note.className='hint';
+      note.innerHTML='<span data-lang="ru">Трейс этого прогона удалён ретеншеном'+why+' — он существовал, но его больше нет. Настройки: <span class="mono">SENTINEL_TRACE_KEEP</span> / <span class="mono">SENTINEL_TRACE_TTL_HOURS</span>.</span>'
+                    +'<span data-lang="en">This run\'s trace was removed by retention'+why+' — it existed, but is gone now. Knobs: <span class="mono">SENTINEL_TRACE_KEEP</span> / <span class="mono">SENTINEL_TRACE_TTL_HOURS</span>.</span>';
+      box.appendChild(note);
+    }
   }
   async function bSubmit(body, label){
     var base=capiBase();

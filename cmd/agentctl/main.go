@@ -14,6 +14,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/AlexGromer/sentinel/internal/redact"
@@ -139,6 +140,15 @@ func envInt(name string, def int) int {
 // older runs, plus any trace older than SENTINEL_TRACE_TTL_HOURS (default 0 = TTL off). Only the
 // trace.zip is removed — plan.json / reports stay for the audit trail. Best-effort: every error is
 // ignored, retention must never fail a run. The just-created run has no trace.zip yet, so it is safe.
+//
+// NOTHING HERE HAPPENS SILENTLY (SEC-TRACE-SWEPT-SILENTLY, ARCHITECTURE principle 7). Until the trace
+// became downloadable (ADR-099) a removed trace was invisible and no one noticed; now the missing
+// download button reads as a loss, so every removal (a) logs a one-line summary to stderr — which a
+// control-API run captures into the run log — and (b) drops a `trace-removed` marker in the swept
+// run's own directory. The marker is what lets the hub tell "the trace was removed by retention" from
+// "this run never had a trace", instead of showing an identical empty state for both. This retention
+// stays ON by default (unlike sweepLogs/sweepRuns) because an unbounded pile of trace.zip is the
+// exact leak #26 closed; the asymmetry is defensible now only because it is no longer silent.
 func sweepTraces(runsRoot string) {
 	keep := envInt("SENTINEL_TRACE_KEEP", 10)
 	ttlHours := envInt("SENTINEL_TRACE_TTL_HOURS", 0)
@@ -150,29 +160,61 @@ func sweepTraces(runsRoot string) {
 		return
 	}
 	type trace struct {
-		path string
-		mod  time.Time
+		dir string
+		mod time.Time
 	}
 	var traces []trace
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		p := filepath.Join(runsRoot, e.Name(), "trace.zip")
-		info, err := os.Stat(p)
+		dir := filepath.Join(runsRoot, e.Name())
+		info, err := os.Stat(filepath.Join(dir, "trace.zip"))
 		if err != nil {
 			continue // no trace in this run
 		}
-		traces = append(traces, trace{p, info.ModTime()})
+		traces = append(traces, trace{dir, info.ModTime()})
 	}
 	sort.Slice(traces, func(i, j int) bool { return traces[i].mod.After(traces[j].mod) }) // newest first
 	now := time.Now()
+	removedCount, removedTTL := 0, 0
 	for i, tr := range traces {
 		tooMany := keep >= 0 && i >= keep
 		tooOld := ttlHours > 0 && now.Sub(tr.mod) > time.Duration(ttlHours)*time.Hour
-		if tooMany || tooOld {
-			_ = os.Remove(tr.path)
+		if !(tooMany || tooOld) {
+			continue
 		}
+		reason := "count" // count-pruning is checked first; a run can be both, count is the headline
+		if tooOld && !tooMany {
+			reason = "ttl"
+		}
+		if err := os.Remove(filepath.Join(tr.dir, "trace.zip")); err != nil {
+			continue // could not remove -> do not claim we did (no marker, not counted)
+		}
+		writeTraceRemovedMarker(tr.dir, reason, keep, ttlHours)
+		if reason == "ttl" {
+			removedTTL++
+		} else {
+			removedCount++
+		}
+	}
+	if n := removedCount + removedTTL; n > 0 {
+		// Audible: one line, counts only, never a path or content — the run log is shareable.
+		fmt.Fprintf(os.Stderr, "[agentctl] trace retention: removed %d trace.zip (%d over keep=%d, %d over ttl=%dh)\n",
+			n, removedCount, keep, removedTTL, ttlHours)
+	}
+}
+
+// writeTraceRemovedMarker records, in the swept run's own directory, that its trace.zip was deleted
+// by retention rather than never captured — the one bit the hub needs to stop showing "no trace" and
+// "trace swept" as the same empty state. Best-effort, like the sweep itself.
+func writeTraceRemovedMarker(runDir, reason string, keep, ttlHours int) {
+	m := map[string]any{
+		"removed_by": "retention", "reason": reason, "keep": keep, "ttl_hours": ttlHours,
+		"removed_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if b, err := json.Marshal(m); err == nil {
+		_ = os.WriteFile(filepath.Join(runDir, "trace-removed.json"), b, 0o600)
 	}
 }
 
