@@ -73,6 +73,31 @@ func TestSweepTracesMarkerReasonIsTTLWhenOnlyTooOld(t *testing.T) {
 	}
 }
 
+// TestSweepTracesNoMarkerWhenRemovalFails — the marker must mean the trace is ACTUALLY gone. If the
+// removal fails, a marker would be a false claim: "removed" over a trace that is still on disk.
+//
+// Kills: writing the marker before (or regardless of) the os.Remove success check.
+func TestSweepTracesNoMarkerWhenRemovalFails(t *testing.T) {
+	t.Setenv("SENTINEL_TRACE_KEEP", "0") // everything is over the limit -> all would be removed
+	t.Setenv("SENTINEL_TRACE_TTL_HOURS", "0")
+	runsRoot := filepath.Join(t.TempDir(), "runs")
+	// Make trace.zip a NON-EMPTY DIRECTORY: os.Stat still sees it (so it is a removal candidate), but
+	// os.Remove refuses a non-empty directory — a deterministic removal failure without needing perms.
+	dir := filepath.Join(runsRoot, "stuck", "trace.zip")
+	if err := os.MkdirAll(filepath.Join(dir, "inner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepTraces(runsRoot)
+
+	if _, err := os.Stat(filepath.Join(runsRoot, "stuck", "trace-removed.json")); err == nil {
+		t.Fatal("a trace that could NOT be removed was marked as removed — the marker must mean it is gone")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the un-removable trace vanished unexpectedly: %v", err)
+	}
+}
+
 // TestSweepTracesNoMarkerWhenNothingRemoved.
 // Kills: writing a marker unconditionally (which would make every run look swept).
 func TestSweepTracesNoMarkerWhenNothingRemoved(t *testing.T) {
