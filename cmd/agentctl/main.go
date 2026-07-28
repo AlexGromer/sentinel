@@ -623,6 +623,7 @@ func cmdExportSpec(repo string, args []string) int {
 func cmdImport(repo string, args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests) (required)")
+	artifactDir := fs.String("artifact-dir", "", "where to write import-report.json (default ./runs/<id>)")
 	_ = fs.Parse(args)
 	if *from == "" {
 		fmt.Fprintln(os.Stderr, "error: --from <dir> is required")
@@ -634,7 +635,7 @@ func cmdImport(repo string, args []string) int {
 		return 1
 	}
 	runID := newRunID()
-	dir := mkArtifactDir(repo, runID, "")
+	dir := mkArtifactDir(repo, runID, *artifactDir)
 	return spawnBrain(repo, runID, []string{
 		"RUN_MODE=import",
 		"ARTIFACT_DIR=" + dir,
