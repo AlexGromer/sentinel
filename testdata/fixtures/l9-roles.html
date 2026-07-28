@@ -61,7 +61,32 @@
   <span class="note">select → combobox</span><br>
   <select aria-label="RoleMulti" multiple size="2"><option>one</option><option>two</option></select>
   <span class="note">select[multiple] → listbox, NOT combobox</span><br>
+  <!-- ⚠ VISIBLE and wrapped in its label, on purpose (ADR-096). A <select> inside a <label>
+       contributes its OPTIONS to that label's textContent, so a naive read names it
+       "WrappedSelect: one two" while the accessibility tree says "WrappedSelect:" — and the naive
+       name resolves to ZERO, because getByRole matches the given string INSIDE the real one and a
+       superset is not a substring. The only other wrapped select in this repository sits in l5's
+       hidden Settings panel, where nothing is in the accessibility tree, so no gate could see the
+       difference. -->
+  <label>WrappedSelect: <select><option>one</option><option>two</option></select></label>
+  <span class="note">the label's text names it — its own options do not</span><br>
   <textarea aria-label="RoleArea"></textarea> <span class="note">textarea → textbox</span>
+</section>
+
+<section>
+  <h2>3b — where the NAME comes from when there is no label (ADR-096)</h2>
+  <!-- Both of these had surviving mutations until they existed: every other control in the corpus
+       has a label or an aria-label, so the two fallback branches were never reached and deleting
+       them changed nothing anywhere. -->
+  <input placeholder="SearchPlaceholder"> <span class="note">no label → the placeholder IS the
+    accessible name (verified against `ariaSnapshot`: `textbox "SearchPlaceholder"`)</span><br>
+  <!-- An unlabelled select has NO accessible name — `ariaSnapshot` shows a bare `- combobox:` and
+       "alpha beta" resolves to zero. Naming it after its options would produce a locator that looks
+       specific and matches nothing, which is exactly what l5's theme picker used to do. The testid
+       is here so the control stays addressable: an unnameable control is the PAGE's a11y defect, and
+       the tool should report it rather than have its own gate fall over. -->
+  <select data-testid="unlabelled-select"><option>alpha</option><option>beta</option></select>
+  <span class="note">no label → no accessible name; its options are NOT a label</span>
 </section>
 
 <section>

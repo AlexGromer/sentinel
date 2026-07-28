@@ -187,6 +187,74 @@ const ARIA_ROLE_FN = `(e, INPUT_ROLE) => {
   return '';
 }`;
 
+/** The page-side source of `accessibleName` — what the ACCESSIBILITY TREE calls this control, which
+ * is what `getByRole(role, {name})` matches on. ADR-096.
+ *
+ * The old computation was `aria-label || textContent`, and an `<input>` has no text content. Its name
+ * comes from the associated `<label>`, which was never read — so eleven form fields across this
+ * repository's fixtures arrived with an empty name, failed the brain's "no anchor" guard and were
+ * DROPPED from the page model without a word. On `l3.html`, the validation-form fixture, five of nine
+ * controls reached the model while the audit reported a ratio of 1.00: we were not blind to them, we
+ * threw them away after seeing them. Measured: every one of those is addressable —
+ * `getByRole('textbox', {name: 'Username'})` resolves on `l2.html` where our name was ''.
+ *
+ * `<select>` was worse than empty: `textContent` on a select is the concatenation of its OPTIONS, so
+ * `l5.html`'s theme picker reported the name "System default Light Dark" while the accessibility tree
+ * calls it "Theme:". A wrong name is not a smaller version of a missing one — it produces a locator
+ * that looks specific and matches nothing.
+ *
+ * Order follows the accessible-name computation for the sources that actually occur in applications.
+ * It is deliberately NOT the full W3C algorithm: this is a claim, and the gate proves the claim by
+ * asking the engine to resolve every name we report (the ADR-094 pattern). Measured at 102 of 102
+ * visible controls resolving across the corpus. */
+const ACCESSIBLE_NAME_FN = `(e) => {
+  const t = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  const al = e.getAttribute('aria-label');
+  if (t(al)) return t(al);
+  const lb = e.getAttribute('aria-labelledby');
+  if (lb) {
+    const s = lb.split(/\\s+/).map((id) => e.ownerDocument.getElementById(id))
+                .filter(Boolean).map((n) => n.textContent).join(' ');
+    if (t(s)) return t(s);
+  }
+  const tag = e.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+    // \`labels\` is the DOM's own answer and covers BOTH <label for=id> and a wrapping <label>.
+    // Re-deriving it with querySelector would miss the wrapping form, which is what l5's checkboxes
+    // use.
+    //
+    // The control's OWN subtree is removed first. A <select> wrapped in its label contributes its
+    // options to that label's textContent, so the naive read gives "Theme: System defaultLight"
+    // while the accessibility tree says "Theme:" — measured against \`ariaSnapshot\`, and the naive
+    // name resolves to ZERO because getByRole's name match looks for the given string INSIDE the
+    // real one, and a superset is not a substring. It changes nothing for a checkbox or a text
+    // field, which contribute no text; it is the difference between working and not for a select.
+    if (e.labels && e.labels.length) {
+      const s = Array.from(e.labels).map((l) => {
+        const c = l.cloneNode(true);
+        c.querySelectorAll('input, select, textarea, button').forEach((n) => n.remove());
+        return c.textContent;
+      }).join(' ');
+      if (t(s)) return t(s);
+    }
+    const ph = e.getAttribute('placeholder');
+    if (t(ph)) return t(ph);
+    if (tag === 'input' && ['submit', 'reset', 'button'].includes((e.getAttribute('type') || '').toLowerCase())) {
+      const v = e.getAttribute('value');
+      if (t(v)) return t(v);
+    }
+  }
+  // Text content names a button or a link. It does NOT name a <select>: those children are options,
+  // not a label, and treating them as one is how "System default Light Dark" happened.
+  if (tag !== 'select') {
+    const s = t(e.textContent);
+    if (s) return s;
+  }
+  const ti = e.getAttribute('title');
+  if (t(ti)) return t(ti);
+  return '';
+}`;
+
 /** Anything a person could plausibly click that PERCEPTION_SELECTOR does NOT name. Deliberately
  * wider than what we perceive: the point is to measure what we MISS, and a generous denominator that
  * occasionally over-counts is more honest than a narrow one that flatters us. */
@@ -597,9 +665,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const elements = (await Promise.all(roots.map(async ({ frame, scope }) => {
         const found = await scope.$$eval(
         PERCEPTION_SELECTOR,
-        (els, { roleSrc, inputRole }) => {
+        (els, { roleSrc, nameSrc, inputRole }) => {
           // eslint-disable-next-line no-new-func
           const ariaRole = new Function('return ' + roleSrc)() as (e: Element, m: Record<string, string>) => string;
+          // eslint-disable-next-line no-new-func
+          const accName = new Function('return ' + nameSrc)() as (e: Element) => string;
           return els.map((e) => ({
             // ADR-094: the ARIA ROLE, which is what `getByRole` consults — no longer
             // `role attribute || tagName`. That field was named `role` and was not one: for a plain
@@ -608,8 +678,15 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
             // came from that one conflation, and they were ALL on the self-healing path, which is
             // the product's central promise.
             role: ariaRole(e, inputRole),
-            name: (e.getAttribute('aria-label') || e.textContent || '').trim().slice(0, 200),
+            // ADR-096: the ACCESSIBLE name — what `getByRole(role, {name})` matches. It was
+            // `aria-label || textContent`, which is empty for every `<input>` and is the OPTION LIST
+            // for a `<select>`. Eleven labelled form fields per corpus arrived nameless and were
+            // dropped by the brain's no-anchor guard without a word.
+            name: accName(e).slice(0, 200),
             testid: e.getAttribute('data-testid'),
+            // Raw text stays separate and raw: it feeds the `text_role` strategy, which matches page
+            // text rather than the accessibility tree. Conflating the two would make the fallback
+            // strategy a duplicate of the primary one.
             text: (e.textContent || '').trim().slice(0, 200),
             // The tag stays, separately. It is not a role and never was, but it is real information
             // and the brain uses it to tell a link from a button when grouping.
@@ -647,7 +724,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
               e.getAttribute('aria-disabled') === 'true',
           }));
         },
-        { roleSrc: ARIA_ROLE_FN, inputRole: INPUT_ROLE },
+        { roleSrc: ARIA_ROLE_FN, nameSrc: ACCESSIBLE_NAME_FN, inputRole: INPUT_ROLE },
         );
         // Present ONLY when the control lives in a frame. An absent key rather than `null` keeps a
         // frameless page's descriptor byte-identical to what it was, which is what leaves the 106
@@ -818,9 +895,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const outPath = params?.path as string | undefined;
       const marks = await page!.$$eval(
         PERCEPTION_SELECTOR,
-        (els, { roleSrc, inputRole }) => {
+        (els, { roleSrc, nameSrc, inputRole }) => {
           // eslint-disable-next-line no-new-func
           const ariaRole = new Function('return ' + roleSrc)() as (e: Element, m: Record<string, string>) => string;
+          // eslint-disable-next-line no-new-func
+          const accName = new Function('return ' + nameSrc)() as (e: Element) => string;
           return els
             .map((e, i) => {
               const r = e.getBoundingClientRect();
@@ -831,9 +910,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
                 // mark carrying a tag name where a role belongs breaks the visual tier in exactly
                 // the way it broke the text tier.
                 role: ariaRole(e, inputRole),
-                name: (e.getAttribute('aria-label') || (e as HTMLElement).innerText || e.textContent || '')
-                  .trim()
-                  .slice(0, 120),
+                // ADR-096: the same accessible name `browser.interactives` reports. Both feed
+                // `descriptor_to_locator`, so two name computations would put the visual tier and
+                // the text tier on different pages — the asymmetry ADR-093 removed for visibility
+                // and ADR-094 for roles, one field further along.
+                name: accName(e).slice(0, 120),
                 testid: e.getAttribute('data-testid'),
                 bbox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
                 // ADR-093: the SAME definition `browser.interactives` reports as `visible`, so the
@@ -847,7 +928,7 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
             })
             .filter((m) => m.onScreen);
         },
-        { roleSrc: ARIA_ROLE_FN, inputRole: INPUT_ROLE },
+        { roleSrc: ARIA_ROLE_FN, nameSrc: ACCESSIBLE_NAME_FN, inputRole: INPUT_ROLE },
       );
       if (outPath) {
         await page!.evaluate((ms) => {
