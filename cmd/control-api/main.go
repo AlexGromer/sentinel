@@ -1294,6 +1294,16 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	// SEC-RETENTION-DOWNLOAD. The hub reads plan.json / scenario.json / heal-report.json on every run
+	// open just to DRAW the run, so a retention rule of "delete once served" would destroy a run the
+	// moment a human looked at it. `?download=1` is the distinction: the hub sets it ONLY on a real
+	// download action, never on a display fetch. A genuine download leaves a downloaded.json marker —
+	// "the human has a copy" — and nothing more. Deletion is deliberately NOT automatic here (operator
+	// decision): the marker is what a later explicit policy consumes, so a download can never be the
+	// thing that erases the evidence. A view writes no marker, which the negative-control test pins.
+	if r.URL.Query().Get("download") == "1" {
+		markDownloaded(rec.ArtifactDir, name)
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if strings.HasSuffix(name, ".zip") {
 		// ADR-099: binary, and always an attachment. A zip served as JSON would arrive corrupted
@@ -1309,6 +1319,18 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 	_, _ = io.Copy(w, f)
+}
+
+// markDownloaded records, in the run's own directory, that a human took a real copy of an artifact
+// (SEC-RETENTION-DOWNLOAD). It is the "the human has it" signal an explicit retention policy consumes
+// — NOT a deletion. Best-effort and append-only in spirit: it records the most recent download; a
+// prior marker is overwritten, which is fine because the fact it records ("this run was downloaded")
+// is monotonic. It carries no foreign text — only the artifact name and a timestamp.
+func markDownloaded(artifactDir, name string) {
+	m := map[string]any{"downloaded": name, "at": time.Now().UTC().Format(time.RFC3339)}
+	if b, err := json.Marshal(m); err == nil {
+		_ = os.WriteFile(filepath.Join(artifactDir, "downloaded.json"), b, 0o600)
+	}
 }
 
 // readArtifact returns the contents of a whitelisted artifact for a run (or "", false). Used by the

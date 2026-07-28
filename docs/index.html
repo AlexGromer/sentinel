@@ -1646,9 +1646,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
 
   /* ---- artifact fetch + download ---- */
-  async function fetchArtifact(base, id, name){
+  // SEC-RETENTION-DOWNLOAD: `download` defaults to false — a fetch to DRAW the run is a view, and a
+  // view must never be mistaken for a human taking a copy. Only the ⬇ buttons pass download=true, and
+  // only on click, so merely opening the artifacts panel (which pre-fetches to see what exists) does
+  // not read as a download. The flag rides as ?download=1; the server marks the run downloaded only
+  // then, and never deletes.
+  async function fetchArtifact(base, id, name, download){
     try {
-      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/artifact?name='+encodeURIComponent(name),{headers:authHdr()});
+      var q='?name='+encodeURIComponent(name)+(download?'&download=1':'');
+      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/artifact'+q,{headers:authHdr()});
       return r.ok ? await r.text() : null;
     } catch(ep3){ return null; }
   }
@@ -2081,7 +2087,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (!content) continue;
       (function(n,c){
         var btn=document.createElement('button'); btn.className='btn'; btn.innerHTML='⬇ '+esc(n);
-        btn.addEventListener('click',function(){ dlBlob(n,c); });
+        // The pre-fetch above was a VIEW (built the button); the CLICK is the genuine download, so it
+        // re-fetches with download=1 to mark the run "taken by a human" (SEC-RETENTION-DOWNLOAD).
+        // Falls back to the already-fetched content if the re-fetch fails, so a download never breaks.
+        btn.addEventListener('click',async function(){ var f=await fetchArtifact(base,id,n,true); dlBlob(n, f!=null?f:c); });
         box.appendChild(btn);
       })(names[i],content);
     }
@@ -2489,7 +2498,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       (function(n,c){
         var btn=document.createElement('button'); btn.className='btn';
         btn.innerHTML='⬇ '+esc(n);
-        btn.addEventListener('click',function(){ dlBlob(n,c); });
+        // As above: the click is the real download, re-fetched with download=1 so the run is marked
+        // downloaded rather than merely viewed (SEC-RETENTION-DOWNLOAD).
+        btn.addEventListener('click',async function(){ var f=await fetchArtifact(base,id,n,true); dlBlob(n, f!=null?f:c); });
         el.querySelector('.chDl').appendChild(btn);
       })(name,content);
     }
