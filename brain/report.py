@@ -8,6 +8,8 @@ import html
 import json
 import os
 
+from .eventlog import log
+
 _EXIT_COLOR = {0: "#2e7d32", 1: "#f9a825", 2: "#c62828", 3: "#6a1b9a"}
 
 
@@ -109,6 +111,53 @@ def _html(rep: dict) -> str:
                      + "".join("<li><code>" + html.escape(str(c)) + "</code> — "
                                + html.escape(verdict_sentence(c)) + "</li>" for c in degr)
                      + "</ul>")
+    # ADR-097: how much of the page the tool could SEE, next to the coverage figure that is measured
+    # against it. Coverage answers "how much of what we saw did we exercise"; a run that perceived two
+    # thirds of a screen and exercised all of it reports 1.00, and that is true — of the two thirds.
+    # The reader has to be told which page the fraction is of.
+    #
+    # Three categories, and they SUM to the audit's own denominator. A breakdown that does not
+    # decompose is decoration; this one is asserted to add up, so a category cannot quietly absorb
+    # another. `opaque` is listed apart because those zones cannot be counted at all — a canvas may
+    # hold one control or ten — and a guess inside the fraction would be the flattering number wearing
+    # a pessimistic coat.
+    perc_html = ""
+    perc = rep.get("perception") or {}
+    pages = perc.get("pages") or {}
+    measured = {k: v for k, v in pages.items() if isinstance(v, dict) and v.get("ratio") is not None}
+    if pages and not measured:
+        # Said, not omitted. An absent section reads as "nothing to report", which is a different and
+        # false claim from "we could not measure" (the older-executor case ADR-092 fails open into).
+        perc_html = ("<h2>Page visibility</h2><p>Not measured &mdash; "
+                     + html.escape(str(next(iter(pages.values()), {}).get("reason") or "no reason given"))
+                     + ". Coverage below is a fraction of an unknown whole.</p>")
+    elif measured:
+        def _sum(f):
+            return sum(int(f(v) or 0) for v in measured.values())
+        usable = _sum(lambda v: v.get("usable"))
+        blocked = _sum(lambda v: (v.get("blocked") or 0) + (v.get("no_role") or 0))
+        unseen = _sum(lambda v: ((v.get("unseen") or {}).get("outside_selector") or 0)
+                      + ((v.get("unseen") or {}).get("iframe") or 0))
+        worst = perc.get("worst_ratio")
+        opq = {}
+        for v in measured.values():
+            for k, n in (v.get("opaque") or {}).items():
+                opq[k] = opq.get(k, 0) + int(n or 0)
+        opq_txt = " · ".join(f"{html.escape(k.replace('_', ' '))}: {n}" for k, n in sorted(opq.items()) if n)
+        perc_html = (
+            "<h2>Page visibility</h2><p>The tool could see <strong>"
+            + (f"{round(worst * 100)}%" if worst is not None else "?")
+            + "</strong> of the least-visible page ("
+            + str(len(measured)) + " measured). Coverage is a fraction of THAT.</p>"
+            + "<table><thead><tr><th>controls</th><th>what it means</th></tr></thead><tbody>"
+            + f"<tr><td>{usable}</td><td class='ok'>seen and usable</td></tr>"
+            + f"<tr><td>{blocked}</td><td class='"
+            + ("unverified" if blocked else "")
+            + "'>seen, cannot act &mdash; off screen, disabled, or nothing to address it by</td></tr>"
+            + f"<tr><td>{unseen}</td><td>not seen at all &mdash; outside our selector, or behind a frame"
+            + " boundary</td></tr></tbody></table>"
+            + (f"<p>Cannot be counted: {opq_txt}.</p>" if opq_txt else ""))
+
     css = ("body{font:14px system-ui;margin:2rem}table{border-collapse:collapse;width:100%}"
            "td,th{border:1px solid #ddd;padding:6px 10px;text-align:left}th{background:#f5f5f5}"
            ".healed{color:#1565c0}.ok{color:#2e7d32}.failed{color:#c62828}"
@@ -126,7 +175,7 @@ def _html(rep: dict) -> str:
         + " · regressions " + str(len(rep.get("regressions", [])))
         + "</p><table><thead><tr><th>#</th><th>type</th><th>outcome</th><th>heal</th>"
         + "<th>regression</th><th>quar.</th></tr></thead><tbody>" + "".join(rows)
-        + "</tbody></table>" + degr_html + drift_html + "</body></html>")
+        + "</tbody></table>" + perc_html + degr_html + drift_html + "</body></html>")
 
 
 def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
@@ -148,8 +197,25 @@ def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
 
 
 def generate(run_dir: str) -> dict:
-    """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom, junit.xml."""
+    """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom, junit.xml.
+
+    ADR-097: `plan.json` is read too, for the page-visibility block. The two artefacts are written by
+    different paths — the audit runs during explore, the heal report during replay — so a report built
+    from the heal report alone can never mention how much of the page was visible while it prints a
+    coverage number beside it. Absent or unreadable plan.json is not an error: a replay of an imported
+    plan legitimately has no audit, and the report says "not measured" rather than inventing a figure.
+    """
     rep = json.loads(open(os.path.join(run_dir, "heal-report.json")).read())
+    try:
+        plan = json.loads(open(os.path.join(run_dir, "plan.json")).read())
+        if isinstance(plan.get("perception"), dict):
+            rep.setdefault("perception", plan["perception"])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:
+        # Said out loud rather than swallowed: a malformed plan is a fact about the run, and a report
+        # that quietly omits a section is indistinguishable from a run that had nothing to report.
+        log("report.perception_unreadable", error=e)
     with open(os.path.join(run_dir, "report.json"), "w") as f:
         json.dump(rep, f, indent=2)
     with open(os.path.join(run_dir, "report.html"), "w") as f:

@@ -1903,6 +1903,93 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      hand the complete map to the LLM to AUTHOR a grounded scenario (ADR-028). This strip makes that
      pipeline — and where the LLM actually took over — visible, from plan.json (explore) + scenario.json
      (authoring). A pure explore run shows only the first phase. */
+  /* ADR-097: what the tool could SEE of the page under test, in three categories, and what it could
+     not see at all.
+
+     The measurement existed since ADR-092 and reached NO surface: `plan.json` carried
+     `perception.worst_ratio` and the only reader in the whole repository was a test. So the hub kept
+     printing `coverage NN%` beside it with no hint that the denominator might be a fraction of the
+     page — which is the reassuring number this whole line of work exists to remove.
+
+     Three categories, and they are chosen from what is TRUE rather than from what sounds complete:
+       * seen and usable        — in the page model, on screen, not disabled;
+       * seen, cannot act       — perceived and reported, but off screen, disabled, or carrying no
+                                  ARIA role to address it by;
+       * not seen at all        — outside our selector, or behind a frame we do not enter.
+     There is deliberately NO "vision only" category, although it was the wording the work started
+     from: `browser.setOfMarks` is bounded by the SAME selector, so vision sees no more than the text
+     tier and, until ADR-093, saw seven controls fewer. A category that is empty by construction
+     would be the interface making the same kind of claim the registry used to make.
+
+     `opaque` is listed apart from the three because those zones cannot be COUNTED — a canvas may
+     hold one button or ten, and a closed shadow root gives nothing at all. Folding a guess into the
+     denominator would be the flattering-number failure wearing a pessimistic coat.
+
+     "Not measured" renders differently from "all visible" on purpose (ADR-092's own rule): an older
+     executor returns `ratio: null`, and a null that reads as 1.0 is exactly the defect being closed. */
+  function perceptionBlock(plan){
+    var p = plan && plan.perception;
+    if (!p || !p.pages) return '';
+    var pages = Object.keys(p.pages);
+    if (!pages.length) return '';
+    var measured = pages.filter(function(k){ return p.pages[k].ratio != null; });
+    if (!measured.length){
+      var why = (p.pages[pages[0]] || {}).reason || '';
+      return '<div id="b-perception" style="padding:.15rem 0 .15rem 1.6rem;color:var(--mut);font-size:.86rem">'
+        + bi('видимость страницы не измерена','page visibility not measured')
+        + (why ? ' <span style="font-size:.9em">(' + esc(why) + ')</span>' : '') + '</div>';
+    }
+    var worst = p.worst_ratio;
+    var pct = (worst != null) ? Math.round(worst * 100) + '%' : null;
+    var partial = (worst != null && worst < 1);
+    /* Summed across pages, and the per-page rows below keep the detail: an operator asks "how much of
+       my app can this thing even see" before asking "which screen". */
+    function sum(f){ return measured.reduce(function(n,k){ return n + (Number(f(p.pages[k])) || 0); }, 0); }
+    var usable  = sum(function(v){ return v.usable; });
+    var blocked = sum(function(v){ return (v.blocked||0) + (v.no_role||0); });
+    var unseen  = sum(function(v){ return ((v.unseen||{}).outside_selector||0) + ((v.unseen||{}).iframe||0); });
+    var opaque  = measured.map(function(k){ return p.pages[k].opaque || {}; });
+    var opq = { canvas:0, shadow_roots_closed:0, frames_nested:0, frames_unreachable:0 };
+    opaque.forEach(function(o){ Object.keys(opq).forEach(function(kk){ opq[kk] += Number(o[kk]) || 0; }); });
+    var opqBits = [];
+    if (opq.canvas)              opqBits.push(bi('нарисовано на canvas: ','drawn on canvas: ')+opq.canvas);
+    if (opq.shadow_roots_closed) opqBits.push(bi('закрытых shadow-корней: ','closed shadow roots: ')+opq.shadow_roots_closed);
+    if (opq.frames_nested)       opqBits.push(bi('вложенных фреймов: ','nested frames: ')+opq.frames_nested);
+    if (opq.frames_unreachable)  opqBits.push(bi('недостижимых фреймов: ','unreachable frames: ')+opq.frames_unreachable);
+
+    var mark = partial ? '<span style="color:var(--warn)">⚠</span>' : '<span style="color:var(--ok)">✓</span>';
+    var out = '<details id="b-perception" style="padding:.15rem 0 .15rem 1.6rem;font-size:.86rem">'
+      + '<summary>' + mark + ' ' + bi('инструмент видит страницу на ','the tool sees ') + '<b>' + pct + '</b>'
+      + bi('','of the page') + ' <span style="color:var(--mut)">('
+      + bi('худшая из ','worst of ') + measured.length + bi(' стр.',' pages') + ')</span></summary>'
+      + '<div style="padding-left:.6rem">'
+      + '<div><span style="color:var(--ok)">✓</span> <b>' + usable + '</b> '
+        + bi('видим и можем действовать','seen and usable') + '</div>'
+      /* The glyph tracks the COUNT. A zero row wearing a warning colour is noise, and noise is how a
+         real warning stops being read — the same reason ADR-092 made the audit speak once per page
+         rather than once per step. */
+      + '<div><span style="color:var(--' + (blocked ? 'warn' : 'mut') + ')">' + (blocked ? '⚠' : '•')
+        + '</span> <b>' + blocked + '</b> '
+        + bi('видим, но действовать не можем','seen, cannot act')
+        + ' <span style="color:var(--mut)">' + bi('(вне экрана, выключено или нечем адресовать)',
+                                                  '(off screen, disabled, or nothing to address it by)')
+        + '</span></div>'
+      + '<div><span style="color:var(--mut)">•</span> <b>' + unseen + '</b> '
+        + bi('не видим совсем','not seen at all')
+        + ' <span style="color:var(--mut)">' + bi('(вне нашего селектора или за границей фрейма)',
+                                                  '(outside our selector, or behind a frame boundary)')
+        + '</span></div>'
+      + (opqBits.length
+          ? '<div style="color:var(--mut);margin-top:.2rem">' + bi('не поддаётся подсчёту: ','cannot be counted: ')
+            + opqBits.join(' · ') + '</div>'
+          : '')
+      + '<div style="color:var(--mut);margin-top:.3rem">'
+        + bi('Покрытие считается от того, что ВИДНО. Если видно не всё — знаменатель неполон.',
+             'Coverage is measured against what IS visible. If that is not everything, the denominator is incomplete.')
+      + '</div></div></details>';
+    return out;
+  }
+
   async function renderRunPhases(base, id){
     var box=ge('b-phases'); box.innerHTML='';
     var planRaw=await fetchArtifact(base,id,'plan.json'); if (!planRaw) return;
@@ -1924,6 +2011,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                    (steps!=null?'<b>'+steps+'</b> '+bi('шагов','steps'):null),
                    bi('эвристика, без LLM','heuristic, no LLM') ].filter(Boolean).join(' · ');
     var html=row('1', true, bi('Исследование UI','UI exploration'), exDetail);
+    html+=perceptionBlock(plan);
     // phase 2 exists only for goal/describe (scenario_head wired -> scenario.json with run_mode "scenario")
     if (sc && (sc.run_mode==='scenario' || (sc.steps&&sc.steps.length) || sc.unmatched!=null)){
       var g=(sc.steps&&sc.steps.length)||0, unm=sc.unmatched;
@@ -3727,6 +3815,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     setView(VIEWS.indexOf(v) >= 0 ? v : 'chat', {silent:true});
     vwProbeConn();
   })();
+
+  /* A deliberate TEST SEAM, and named as one (ADR-097).
+     `perceptionBlock` is a pure function of `plan.json`, so the DOM gate asserts its output directly.
+     The alternative was a third stubbed run plus a control-api restart to render one <details> —
+     machinery out of all proportion to a formatter, and machinery that would test the plumbing rather
+     than the wording. Everything else in this file is reached by driving the DOM, and should stay
+     that way: this object exists for pure functions only, and if it grows a stateful member that is
+     the signal the gate has started testing the wrong thing. */
+  window.__gate = { perceptionBlock: perceptionBlock };
 
 })(); /* end m12 */
 

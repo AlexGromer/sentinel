@@ -816,6 +816,21 @@ type planCoverage struct {
 	CoverageAchieved float64           `json:"coverage_achieved"`
 	Tokens           *tokensBlock      `json:"tokens"` // M15.1
 	Models           map[string]string `json:"models"` // M15.1: {plan: <model id>}
+	// ADR-097: how much of the page the tool could SEE. Coverage answers "how much of what we saw did
+	// we exercise" and this answers the prior question — they multiply, and until now only one of them
+	// left the brain. This struct dropped the whole block at unmarshal, so `worst_ratio` had exactly
+	// one reader in the repository and it was a test.
+	Perception *planPerception `json:"perception"`
+}
+
+// planPerception is the page-visibility block plan.json carries ALONGSIDE steps (never inside one:
+// `canonical_plan_hash` hashes every field of every step, and a measurement describing the page must
+// not change the identity of the test).
+type planPerception struct {
+	// A POINTER on purpose. A run that never measured (an older executor, or a replay, which does not
+	// audit at all) must be distinguishable from one that measured 0.0 — a nil that reads as zero is
+	// the same defect as a null that reads as 1.0, pointing the other way.
+	WorstRatio *float64 `json:"worst_ratio"`
 }
 
 // metricKV is a name/value pair for a metric point.
@@ -951,12 +966,21 @@ func (s *server) persistResult(rec *run) {
 			drift, appFaults = art.Drift, art.AppFaults
 		}
 	}
+	var visibility *float64 // ADR-097: nil = never measured, which is not the same as measured at 0
 	if praw, pok := s.readArtifact(rec, "plan.json"); pok { // authoring/explore: coverage_achieved
 		var pc planCoverage
 		if json.Unmarshal([]byte(praw), &pc) == nil {
 			rr.Coverage = pc.CoverageAchieved
 			if rr.PlanId == "" {
 				rr.PlanId = pc.PlanID
+			}
+			// ADR-097: carried so the coverage number can be READ WITH the caveat it needs. A run
+			// that saw two thirds of its page and exercised all of it reports coverage 1.00, and
+			// that is true of the two thirds — the reader has to be told which page the fraction is
+			// of. Emitted as its own metric point rather than folded into `coverage`: multiplying
+			// them would produce a third number nobody could decompose again.
+			if pc.Perception != nil && pc.Perception.WorstRatio != nil {
+				visibility = pc.Perception.WorstRatio
 			}
 			if tok == nil && pc.Tokens != nil { // M15.1: authoring planner-LLM tokens (heal-report takes precedence)
 				tok, costModel = pc.Tokens, pc.Models["plan"]
@@ -981,6 +1005,11 @@ func (s *server) persistResult(rec *run) {
 	// ADR-076. Emitted only when the run actually produced the block, so a series never gains a zero
 	// point from a mode that cannot report it: explore/goal runs carry no heal-report, and a run with no
 	// drift at all is not the same fact as a run that was never able to have any.
+	// ADR-097. Only when the run actually measured: a series that gains a 0 from every replay would
+	// say the tool went blind, when in fact a replay never asks.
+	if visibility != nil {
+		pts = append(pts, metricKV{"visibility", *visibility})
+	}
 	if drift != nil {
 		pts = append(pts,
 			metricKV{"drift_total", float64(drift.Rebind + drift.Reground)},

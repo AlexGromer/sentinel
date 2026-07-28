@@ -235,3 +235,75 @@ func TestResultsMetricsFailOpenNoStore(t *testing.T) {
 		t.Fatalf("trends no metric: got %d want 400", rec.Code)
 	}
 }
+
+// ADR-097: the page-visibility number has to LEAVE the decoder.
+//
+// `planCoverage` used to drop the whole `perception` block at unmarshal, so `worst_ratio` had exactly
+// one reader in the repository and it was a Python test. Two mutations proved a source-shape check in
+// Python could not stand in for this: renaming the json tag, and dropping the assignment that moves
+// the value out of the struct, both leave the source LOOKING right and produce a run with no metric.
+// Only running the path catches either.
+//
+// The absence case is asserted in the same test on purpose: a replay never audits, and a series that
+// gained a 0 from every replay would say the tool had gone blind when in fact it was never asked.
+func TestVisibilityMetricOnlyWhenMeasured(t *testing.T) {
+	sc, err := newStoreClient(startTestGateway(t, ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s := storeBackedTestServer(sc)
+
+	write := func(dir, plan string) {
+		heal := `{"plan_id":"p","mode":"explore","exit_code":0,"healed":0,"failed":0,"steps":[{"step_id":1}]}`
+		if err := os.WriteFile(filepath.Join(dir, "heal-report.json"), []byte(heal), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if plan != "" {
+			if err := os.WriteFile(filepath.Join(dir, "plan.json"), []byte(plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	finish := func(id, dir string) {
+		s.persistResult(&run{ID: id, State: "done", Target: "https://app.example", Mode: "explore",
+			ExitCode: 0, StartedAt: "2026-07-05T00:00:00Z", FinishedAt: "2026-07-05T00:00:01Z",
+			ArtifactDir: dir})
+	}
+
+	measured := t.TempDir()
+	write(measured, `{"plan_id":"p","coverage_achieved":1,`+
+		`"perception":{"worst_ratio":0.652,"pages":{"/a":{"ratio":0.652}}}}`)
+	finish("vis-measured", measured)
+
+	pts, err := sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: "visibility"})
+	if err != nil || len(pts.Points) != 1 {
+		t.Fatalf("QueryMetrics(visibility) = %+v err=%v — the number never left the decoder", pts, err)
+	}
+	if v := pts.Points[0].Value; v < 0.6519 || v > 0.6521 {
+		t.Fatalf("visibility = %v want 0.652 — decoded under the wrong name, or from the wrong field", v)
+	}
+
+	// A run that never measured: no plan.json at all, and one with a plan that carries no perception.
+	// Both must leave the series untouched — still exactly the one point from above.
+	noPlan := t.TempDir()
+	write(noPlan, "")
+	finish("vis-noplan", noPlan)
+
+	noPerc := t.TempDir()
+	write(noPerc, `{"plan_id":"p","coverage_achieved":1}`)
+	finish("vis-noperc", noPerc)
+
+	pts, err = sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: "visibility"})
+	if err != nil || len(pts.Points) != 1 {
+		t.Fatalf("visibility has %d points after two unmeasured runs (want 1) — a run that never "+
+			"asked is reporting that it saw nothing: %+v", len(pts.Points), pts)
+	}
+
+	// ...while coverage, which every run reports, gained a point from each of the three.
+	cov, err := sc.cl.QueryMetrics(context.Background(), &storepb.MetricsQuery{Name: "coverage"})
+	if err != nil || len(cov.Points) != 3 {
+		t.Fatalf("coverage has %d points (want 3) — the negative control above would be vacuous if "+
+			"persistResult were simply not running for those runs", len(cov.Points))
+	}
+}

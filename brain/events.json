@@ -1358,6 +1358,16 @@
       "modules": [
         "graph"
       ]
+    },
+    "report.perception_unreadable": {
+      "lvl": "warn",
+      "cat": "test",
+      "phase": "report",
+      "ru": "Блок видимости страницы не прочитан из plan.json: {error}. Отчёт собран без него — это не выдуманное число, а отсутствующее",
+      "en": "The page-visibility block could not be read from plan.json: {error}. The report is built without it — an absent number rather than an invented one",
+      "modules": [
+        "report"
+      ]
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
