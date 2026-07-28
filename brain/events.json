@@ -1368,6 +1368,55 @@
       "modules": [
         "report"
       ]
+    },
+    "system.trace_redacted": {
+      "lvl": "info",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Трейс очищен перед сохранением: {detail}. Введённые значения и учётные данные удалены; ПИКСЕЛИ скриншотов не чистятся — их отключает SENTINEL_TRACE_SCREENSHOTS=0",
+      "en": "The trace was redacted before being kept: {detail}. Typed values and credentials are gone; screenshot PIXELS are not cleaned — turn them off with SENTINEL_TRACE_SCREENSHOTS=0",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.trace_raw_kept": {
+      "lvl": "warn",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Трейс сохранён БЕЗ очистки (SENTINEL_TRACE_RAW=1): {path}. В нём могут быть введённые пароли и токены — это режим диагностики самого инструмента",
+      "en": "The trace was kept UNREDACTED (SENTINEL_TRACE_RAW=1): {path}. It may contain typed passwords and tokens — this is a mode for diagnosing the tool itself",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но трейс сохранён без очистки — в нём могут быть чужие учётные данные",
+      "en_verdict": "passed, but the trace was kept unredacted — it may contain someone else’s credentials"
+    },
+    "system.trace_discarded_unredacted": {
+      "lvl": "warn",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Трейс УДАЛЁН, потому что его не удалось очистить: {error}. Разбор потерян намеренно — неочищенный трейс это утечка, а не ухудшенный артефакт",
+      "en": "The trace was DELETED because it could not be redacted: {error}. The post-mortem is lost on purpose — an unredacted trace is a leak, not a degraded artifact",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но трейс для разбора удалён: очистить его не удалось",
+      "en_verdict": "passed, but the post-mortem trace was deleted: it could not be redacted"
+    },
+    "system.trace_leak": {
+      "lvl": "error",
+      "cat": "system",
+      "phase": "report",
+      "ru": "НЕОЧИЩЕННЫЙ трейс остался на диске: {path} ({error}). Удалите его вручную — в нём могут быть введённые пароли и токены",
+      "en": "An UNREDACTED trace is still on disk: {path} ({error}). Remove it by hand — it may contain typed passwords and tokens",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "прошло, но на диске остался неочищенный трейс — удалите его вручную",
+      "en_verdict": "passed, but an unredacted trace was left on disk — remove it by hand"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

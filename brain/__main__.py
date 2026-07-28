@@ -338,10 +338,55 @@ def _stop_trace(ex, trace_path: str, exit_code: int) -> None:
     try:
         if _keep_trace(exit_code):
             ex.call("browser.traceStop", path=trace_path)
+            _redact_trace(trace_path)
         else:
             ex.call("browser.traceStop")
     except Exception as e:
         log("system.trace_stop_error", error=e)
+
+
+def _redact_trace(trace_path: str) -> None:
+    """Strip typed values and credentials from a kept trace (ADR-098). FAILS CLOSED.
+
+    Runs here, immediately after the archive exists, rather than as part of report generation: the
+    report is built later, and a replay started directly (`python -m brain`) never reaches it at all.
+    A redaction that depends on how the run was launched is the worst property a security control can
+    have.
+
+    ⚠ THE WINDOW IS REAL AND IS NOT CLOSED. Playwright writes the zip itself and offers no hook
+    between "bytes hit the disk" and "we can read them", so the raw archive exists for the duration of
+    one subprocess. ADR-084 could avoid its window — discarding is a supported option — and this one
+    cannot. Saying so is the honest half.
+
+    On ANY failure the trace is DELETED. A trace that could not be redacted is not a degraded
+    artifact, it is a leak; keeping it because the cleanup failed would invert the point of the
+    cleanup. The run's verdict is untouched either way — this is teardown, and the result is already
+    decided.
+    """
+    import shutil
+    import subprocess
+
+    if os.environ.get("SENTINEL_TRACE_RAW") == "1":
+        # Opt-in escape hatch for diagnosing the tool itself. Announced every time, because a mode
+        # that silently keeps credentials is exactly the thing this function exists to prevent.
+        log("system.trace_raw_kept", path=trace_path)
+        return
+    tool = os.environ.get("SENTINEL_AGENTCTL") or shutil.which("agentctl") or "bin/agentctl"
+    try:
+        r = subprocess.run([tool, "redact-trace", "--trace", trace_path],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            log("system.trace_redacted", path=trace_path, detail=(r.stdout or "").strip()[:200])
+            return
+        reason = (r.stderr or r.stdout or f"exit {r.returncode}").strip()[:200]
+    except Exception as e:                                   # tool missing, timeout, unreadable
+        reason = f"{type(e).__name__}: {e}"[:200]
+    try:
+        os.remove(trace_path)
+        log("system.trace_discarded_unredacted", path=trace_path, error=reason)
+    except OSError as e:
+        # The one case worse than a leak is a leak nobody is told about.
+        log("system.trace_leak", path=trace_path, error=f"{reason}; and removal failed: {e}")
 
 
 def _keep_trace(exit_code: int) -> bool:

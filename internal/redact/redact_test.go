@@ -1,9 +1,7 @@
-package main
+package redact
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,7 +37,7 @@ func TestRedactsNamedAndStructuralSecrets(t *testing.T) {
 		{"token value with a slash", `[app] console: access_token=ab/cd+ef==`, "ab/cd+ef=="},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactSecrets(tc.in)
+			got := Line(tc.in)
 			if strings.Contains(got, tc.mustNotContain) {
 				t.Fatalf("secret survived redaction:\n in:  %s\n out: %s", tc.in, got)
 			}
@@ -64,7 +62,7 @@ func TestLeavesOurOwnAuditTrailIntact(t *testing.T) {
 		{"a store socket path", `[store-gateway] listening on unix:/opt/x/state/sentinel-store-868db3496d004a1c.sock`, "868db3496d004a1c"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactSecrets(tc.line)
+			got := Line(tc.line)
 			if !strings.Contains(got, tc.mustSurvive) {
 				t.Fatalf("redaction ate the audit trail:\n in:  %s\n out: %s\n lost: %s", tc.line, got, tc.mustSurvive)
 			}
@@ -76,7 +74,7 @@ func TestLeavesOurOwnAuditTrailIntact(t *testing.T) {
 // configguard.Secretish and is reused rather than reimplemented, so the two cannot drift apart.
 func TestCounterNamesAreNotTreatedAsCredentials(t *testing.T) {
 	line := `[llm] usage: {"max_tokens": 800, "total_tokens": 551, "api_key": "sk-REAL"}`
-	got := redactSecrets(line)
+	got := Line(line)
 	if strings.Contains(got, "sk-REAL") {
 		t.Fatalf("api_key survived: %s", got)
 	}
@@ -91,7 +89,7 @@ func TestCounterNamesAreNotTreatedAsCredentials(t *testing.T) {
 // fix for a secret leak becomes an outage of the diagnostics.
 func TestARedactedJSONRecordStaysParseable(t *testing.T) {
 	line := `{"seq":7,"lvl":"error","cat":"app","code":"app.console_error","msg":"login failed","password":"hunter2","url":"https://x/cb?token=ABC123DEF"}`
-	got := redactSecrets(line)
+	got := Line(line)
 	var m map[string]any
 	if err := json.Unmarshal([]byte(got), &m); err != nil {
 		t.Fatalf("redaction broke the JSON record: %v\n%s", err, got)
@@ -108,44 +106,8 @@ func TestARedactedJSONRecordStaysParseable(t *testing.T) {
 	}
 }
 
-// The choke point: everything the sink writes descends from write(), so a secret must not reach ANY of
-// the three files. Asserting through the sink rather than the pure function is what proves the wiring.
-func TestSinkRedactsEveryFileItWrites(t *testing.T) {
-	dir := t.TempDir()
-	s := newLogSink(dir)
-	if s == nil {
-		t.Fatal("sink not created")
-	}
-	s.write(`[error|app] app.console_error: checkout failed for token=LEAKED-SESSION-VALUE`)
-	s.write(`@@AGUI {"type":"tool.call","data":{"args_summary":"navigate https://x/?access_token=LEAKED-IN-FRAME"}}`)
-	s.close()
-
-	found := map[string]bool{}
-	for _, name := range []string{"run.log", "run.jsonl", "events.jsonl"} {
-		b, err := os.ReadFile(filepath.Join(dir, "logs", name))
-		if err != nil {
-			t.Fatalf("reading %s: %v", name, err)
-		}
-		body := string(b)
-		found[name] = len(strings.TrimSpace(body)) > 0
-		for _, secret := range []string{"LEAKED-SESSION-VALUE", "LEAKED-IN-FRAME"} {
-			if strings.Contains(body, secret) {
-				t.Fatalf("%s contains %s:\n%s", name, secret, body)
-			}
-		}
-	}
-	// Non-emptiness asserted AFTER the fact and BEFORE trusting the absence above: three empty files
-	// would satisfy every "does not contain" check while proving nothing at all.
-	if !found["run.log"] || !found["run.jsonl"] || !found["events.jsonl"] {
-		t.Fatalf("a log file was empty, so the absence checks above are vacuous: %v", found)
-	}
-}
-
-// A credential that both rules catch must read as one redaction, not two. Cosmetic, but a line reading
-// `[REDACTED] [REDACTED]` invites the reader to wonder whether the redactor is broken — and a security
-// control that looks broken gets turned off.
 func TestOverlappingRedactionsCollapse(t *testing.T) {
-	got := redactSecrets(`[app] console: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SIG`)
+	got := Line(`[app] console: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SIG`)
 	if strings.Contains(got, redactedMark+" "+redactedMark) {
 		t.Fatalf("double marker survived: %s", got)
 	}
