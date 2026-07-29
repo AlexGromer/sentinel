@@ -623,6 +623,7 @@ func cmdExportSpec(repo string, args []string) int {
 func cmdImport(repo string, args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests) (required)")
+	mapFile := fs.String("map", "", "optional explore-map JSON to ground imported steps against the real app")
 	artifactDir := fs.String("artifact-dir", "", "where to write import-report.json (default ./runs/<id>)")
 	_ = fs.Parse(args)
 	if *from == "" {
@@ -636,11 +637,13 @@ func cmdImport(repo string, args []string) int {
 	}
 	runID := newRunID()
 	dir := mkArtifactDir(repo, runID, *artifactDir)
-	return spawnBrain(repo, runID, []string{
-		"RUN_MODE=import",
-		"ARTIFACT_DIR=" + dir,
-		"IMPORT_DIR=" + abs,
-	})
+	extra := []string{"RUN_MODE=import", "ARTIFACT_DIR=" + dir, "IMPORT_DIR=" + abs}
+	if *mapFile != "" {
+		if m, err := filepath.Abs(*mapFile); err == nil {
+			extra = append(extra, "IMPORT_MAP="+m)
+		}
+	}
+	return spawnBrain(repo, runID, extra)
 }
 
 func cmdReport(repo string, args []string) int {

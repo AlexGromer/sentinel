@@ -206,6 +206,59 @@ def parse_playwright_spec(src, source="<spec>"):
     return {"tests": tests, "source": source}
 
 
+def ground_imported(parsed, site_map):
+    """Ground the transpiled steps against a real explore map (PROD-IMPORT). This is the second half of
+    the diagnosis the item promises: "does this step still bind to an element the app actually has?"
+
+    An imported locator is checked against the semantic map the explorer produced:
+      - bound        : an element matches (by testid / role+name / label / text) — the control exists,
+                       and the match names the real semantic_id it grounds to.
+      - unmatched    : a SEMANTIC locator (testid/role+name/label/text) that matches nothing — the
+                       element the source test targeted is gone or renamed. This is the finding a team
+                       most needs: a test that references something the app no longer has.
+      - unverifiable : a css/xpath locator — the explore map is a SEMANTIC/a11y model with no DOM
+                       paths, so a structural selector cannot be checked against it here. Said plainly
+                       rather than guessed: it will only be known at replay against the live DOM.
+      - no_locator   : navigate / url-assert steps — nothing to ground.
+
+    Returns a per-test grounding report + totals. Reuses scenario._match for role+name/name/text so the
+    binding rule is the SAME conservative one authoring uses (a >1 match is ambiguous -> not bound),
+    never a second, looser copy.
+    """
+    from .scenario import flatten_site_map, _match
+    flat = flatten_site_map(site_map)
+
+    def _bind(loc):
+        if not loc:
+            return ("no_locator", None, None)
+        if "css" in loc or "xpath" in loc:
+            return ("unverifiable", None, "css" if "css" in loc else "xpath")
+        if "testid" in loc:
+            hits = [e for e in flat if e.get("testid") == loc["testid"]]
+            return ("bound", hits[0]["semantic_id"], "testid") if len(hits) == 1 else ("unmatched", None, "testid")
+        if "label" in loc:  # a label targets a field by its accessible name
+            m = _match({"name": loc["label"]}, flat)
+            return ("bound", m["semantic_id"], "label") if m else ("unmatched", None, "label")
+        if "role" in loc:
+            m = _match({"role": loc.get("role"), "name": loc.get("name")}, flat)
+            return ("bound", m["semantic_id"], "role_name") if m else ("unmatched", None, "role_name")
+        if "text" in loc:
+            m = _match({"text": loc["text"]}, flat)
+            return ("bound", m["semantic_id"], "text") if m else ("unmatched", None, "text")
+        return ("unverifiable", None, None)
+
+    out = {"tests": [], "totals": {"bound": 0, "unmatched": 0, "unverifiable": 0, "no_locator": 0}}
+    for t in parsed["tests"]:
+        steps = []
+        for i, s in enumerate(t["steps"]):
+            status, sid, via = _bind(s.get("locator"))
+            steps.append({"index": i, "verb": s["verb"], "status": status,
+                          "semantic_id": sid, "via": via})
+            out["totals"][status] += 1
+        out["tests"].append({"name": t["name"], "steps": steps})
+    return out
+
+
 def rewrite_report(parsed):
     """The 'состояние вашего тестового хозяйства' summary, in the was->now shape of PROD-HEAL-VERDICT.
     Per source test: how many steps, how many bound, how many by a weak locator, and every dropped or
