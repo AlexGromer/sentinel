@@ -315,6 +315,28 @@ try {
   await page.waitForTimeout(200);
   await page.fill('#capi', `http://127.0.0.1:${PORT}`);
   await page.fill('#capitok', token);
+
+  /* ------------------------------------------- ADR-066 tail: navigation that reaches a dead name */
+  await check('a run in flight can be watched: the button CONNECTS and moves to the live view', async () => {
+    // Watch only renders while a run's state is `running`, so this spawns its own instead of reusing
+    // the two settled runs above. Asserting against a button that is not in the DOM passes vacuously,
+    // which is exactly how a dead control survives a suite.
+    const liveRun = await spawnRun(FIXTURE);
+    await page.click('.rail a[data-nav="library"]');
+    await page.click('[data-innerbar="library"] .subtab-btn[data-sub="runs"]');
+    await page.click('#runs-refresh');
+    await page.waitForSelector(`#runs-list [data-watch="${liveRun}"]`, { timeout: 20000 });
+    await page.click(`#runs-list [data-watch="${liveRun}"]`);
+    await page.waitForTimeout(400);
+    // BOTH halves are asserted because the defect broke both and either assertion alone would have
+    // passed while the other stayed broken: the throw came from the router call, and because it sat
+    // ahead of the connect on the same line it swallowed that too.
+    eq(await page.inputValue('#live-runid'), liveRun,
+      'the connect never ran — connecting to the run is what this button is FOR');
+    eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'live',
+      'the router never moved to the live view');
+  });
+
   await page.click('.rail a[data-nav="logs"]');
   await page.click('#lg-reload');
   await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
