@@ -55,6 +55,21 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
            "models": {"author": author_model}, "tokens": budget.tracker().summary()}
     with open(out / "scenario.json", "w") as f:
         json.dump(obj, f, indent=2)
+    # PROD-VERSIONING (ADR-106): when this scenario is a NAMED test (SENTINEL_TEST_ID set — the CI or
+    # operator re-authoring "the login test"), append it as a revision so its history, diff and
+    # rollback exist. An ad-hoc explore run has no stable test identity and is deliberately NOT
+    # versioned — recording it under a run-scoped id would be noise, not history. The store is
+    # file-based under state/revisions (authoritative, air-gap-friendly; no network service).
+    test_id = os.environ.get("SENTINEL_TEST_ID", "").strip()
+    if test_id:
+        try:
+            from . import revisions
+            root = os.environ.get("SENTINEL_REVISIONS_DIR") or os.path.join("state", "revisions")
+            rev = revisions.save_revision(root, test_id, obj)
+            log("test.revision_saved", test_id=test_id, revision=rev["revision"][:12], new=rev["new"])
+            print(f"REVISION — {test_id} @ {rev['revision'][:12]} ({'new' if rev['new'] else 'unchanged'})")
+        except Exception as e:  # versioning must never fail the authoring run
+            log("test.revision_save_failed", test_id=test_id, error=e)
     if is_describe:
         with open(out / "reconcile-report.json", "w") as f:
             json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
