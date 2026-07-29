@@ -3952,10 +3952,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('capitok') && ge('capitok').addEventListener('input', refresh);
     goBtn.addEventListener('click', async function(){
       var files = Array.prototype.slice.call(fileInput.files || []);
-      // only *.spec.ts is transpiled today; say so rather than silently dropping the others.
-      var specs = files.filter(function(f){ return /\.spec\.ts$/.test(f.name); });
+      // The suffixes the server accepts (control-api importSuffixes). It is NOT a list of engines —
+      // a Cypress <=9 suite is named *.spec.ts, and the engine is decided by content server-side.
+      // Anything else is NAMED as not sent rather than silently dropped.
+      var specs = files.filter(function(f){ return /\.(spec|cy)\.(ts|js)$/.test(f.name); });
       var skipped = files.length - specs.length;
-      if (!specs.length){ out.style.display=''; out.textContent = bi('Нет файлов *.spec.ts.','No *.spec.ts files.'); return; }
+      if (!specs.length){ out.style.display=''; out.textContent = bi('Нет файлов теста (*.spec.ts/.spec.js/.cy.ts/.cy.js).','No test files (*.spec.ts/.spec.js/.cy.ts/.cy.js).'); return; }
       out.style.display=''; out.textContent = bi('Импорт…','Importing…');
       try {
         var payload = { files: await Promise.all(specs.map(async function(f){
@@ -3992,7 +3994,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         + bi('ссылаются на исчезнувший элемент','reference a gone element') + ', ' + (g.unverifiable||0) + ' '
         + bi('непроверяемо','unverifiable') + '</div>');
     }
-    if (skipped) lines.push('<div class="hint">' + skipped + ' ' + bi('файл(ов) не отправлено (не *.spec.ts)','file(s) not sent (not *.spec.ts)') + '</div>');
+    if (skipped) lines.push('<div class="hint">' + skipped + ' ' + bi('файл(ов) не отправлено (не файл теста)','file(s) not sent (not a test file)') + '</div>');
     // Files the SERVER walked and could not read. Rendered as prominently as the totals, and named
     // one by one: showing "imported 0 tests" while staying silent about the file that produced that
     // zero is the exact failure the engine-detection work removed from the CLI, and the UI must not
