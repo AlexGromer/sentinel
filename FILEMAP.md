@@ -251,6 +251,7 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_revisions_offline.py | Tests | — |
 | docs/CRAWL_ANALYSIS.internal.md | Documentation | — |
 | tests/test_crawl_measured_offline.py | Tests | — |
+| testdata/import/site-map.json | Tests | **ADR-105** синтетическая explore-карта для гейта grounding: есть Username/Password/Sign in/Card number/receipt, НЕТ invoice-4471/#pay-now — чтобы отчёт называл исчезнувшие элементы
 ## Directory Structure
 ```
 agent_development/
