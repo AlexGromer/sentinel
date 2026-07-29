@@ -24,9 +24,12 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from brain.importer import parse_selenium_spec, rewrite_report, detect_engine  # noqa: E402
+from brain.importer import (  # noqa: E402
+    parse_selenium_spec, rewrite_report, detect_engine, detect_selenium_lang)
 
 PY_FIXTURE = os.path.join(REPO, "testdata", "import-dialects", "selenium-python", "test_checkout.py")
+JAVA_FIXTURE = os.path.join(REPO, "testdata", "import-dialects", "selenium-java", "CheckoutTest.java")
+CS_FIXTURE = os.path.join(REPO, "testdata", "import-dialects", "selenium-csharp", "CheckoutTests.cs")
 
 JS_SRC = """
 const {Builder, By, until} = require('selenium-webdriver');
@@ -104,17 +107,52 @@ def main():
                if n["kind"] == "dropped"), j["tests"][0]["notes"]
     print("PASS the JS/TS binding yields the same steps, locators, secret and dropped wait")
 
-    # 7 — a Page Object indirection cannot be resolved per line, and says so instead of binding to
-    #     something wrong or vanishing.
-    po = parse_selenium_spec(
-        "def test_x():\n"
-        "    @FindBy(id = \"pay\")\n"
-        "    private WebElement payButton;\n", "PageTest.py")
-    notes = po["tests"][0]["notes"] if po["tests"] else []
-    assert any(n["kind"] == "unmatched" and "@FindBy" in n["why"] for n in notes), notes
-    print("PASS an @FindBy Page Object locator is named as unresolvable, not dropped")
+    # 7 — JAVA and C#: the same model with a different token table, and the Page Object case that is
+    #     the real reason they are their own PR. The locator sits on an ANNOTATION and the element in
+    #     a FIELD, so the acting line carries only a field name.
+    for path, lang, nav in ((JAVA_FIXTURE, "java", "paysWithASavedCard"),
+                            (CS_FIXTURE, "csharp", "PaysWithASavedCard")):
+        s = open(path, encoding="utf-8").read()
+        assert detect_engine(s) == "selenium", (path, detect_engine(s))
+        assert detect_selenium_lang(s) == lang, (path, detect_selenium_lang(s))
+        q = parse_selenium_spec(s, os.path.basename(path))
+        names = [x["name"] for x in q["tests"]]
+        assert names[0] == nav, names
+        # a method WITHOUT the arming annotation is not a test, and its body must not be appended to
+        # the test before it — measured: the helper's click landed inside `signsIn`.
+        assert len(names) == 2, ("a non-annotated method became a test, or a test was lost", names)
+        # ...and the helper's BODY must not have leaked into the test before it. The count alone
+        # cannot see that: the helper is not a test either way, so `len(names)` stays 2 while its
+        # steps quietly join the previous test. Assert the steps.
+        if lang == "java":
+            last = q["tests"][-1]
+            assert len(last["steps"]) == 3, ("the helper's body leaked into the last test", last["steps"])
+            assert all(x.get("locator") != {"css": "#nope"} for x in last["steps"]), (
+                "the imported test contains a step the source test never ran", last["steps"])
+        first = q["tests"][0]["steps"]
+        assert first[0]["verb"] == "navigate", first[0]
+        # the @FindBy/[FindsBy] field DECLARED IN THIS FILE is joined and binds — refusing to resolve
+        # what is plainly in front of us would understate the suite.
+        assert {"css": "#pay-now"} in [x.get("locator") for x in first], (
+            "the Page Object field declared in this very file did not bind", first)
+        # the secret still comes through the language's own env accessor.
+        assert any(x.get("secretRef") == "TEST_CARD" for x in first), first
+        # and the explicit wait is reported in this binding too.
+        assert any(n["construct"] == "WebDriverWait" for t2 in q["tests"] for n in t2["notes"]
+                   if n["kind"] == "dropped"), q["tests"][1]["notes"]
+    print("PASS java and csharp: same model, own token table, helper methods excluded")
 
-    print("ALL PASS (7)")
+    # 8 — the cross-file half of the Page Object: a field whose declaration is NOT here cannot be
+    #     resolved, and is reported BY FIELD NAME so a reader knows which Page Object to open.
+    jq = parse_selenium_spec(open(JAVA_FIXTURE, encoding="utf-8").read(), "CheckoutTest.java")
+    notes = jq["tests"][0]["notes"]
+    un = [n for n in notes if n["kind"] == "unmatched"]
+    assert len(un) == 1, ("one cause must produce one note, not two", un)
+    assert "confirmDialog" in un[0]["why"], un[0]["why"]
+    assert "not in this file" in un[0]["why"], un[0]["why"]
+    print("PASS a cross-file Page Object field is named, once, by field name")
+
+    print("ALL PASS (8)")
     return 0
 
 
