@@ -391,6 +391,7 @@ Production-grade автономный standalone агент UI-тестиров�
 | 2026-07-28 | Каталог возможностей `docs/CAPABILITIES.md`(+en) + машиночитаемый `docs/capabilities.json` + гейт, проверяющий путь доступа каждой фичи в коде и наличие ссылок из README/лендинга — PROD-DISCOVERY | ADR-104 | @AlexGromer |
 | 2026-07-28 | Импорт чужих тестов: транспилятор Playwright→шаги + отчёт (`brain/importer.py`), каналы ФС (`agentctl import`) и HTTP (`POST /v1/import`) — PROD-IMPORT ядро + 2 канала | ADR-105 | @AlexGromer |
 | 2026-07-28 | Версионирование тестов: append-only стор ревизий + step-diff + откат (`brain/revisions.py`), вживлено в заморозку именованного сценария — PROD-VERSIONING ядро | ADR-106 | @AlexGromer |
+| 2026-07-29 | Контекст контейнерной сборки стал проверяемым: `capabilities.json` попал в `//go:embed`, но ни в `COPY` Dockerfile, ни в `!`-возвраты `.dockerignore` — образ не собирался вообще, двумя независимыми причинами с непохожими симптомами. Обе закрыты; `tests/test_container_embed_context_offline.py` воспроизводит контекст `COPY` ЧЕРЕЗ `.dockerignore` и компилирует в нём реальные `./cmd/...`, то есть падает ровно тогда, когда упала бы сборка образа (~6 с в офлайн-наборе против минут в `airgap`). Прежней защитой был комментарий «KEEP IN SYNC with embed.go» после такого же провала 2026-07-23 — заменён механизмом | — | @AlexGromer |
 ## 7. Где живут детали (`docs/`)
 | Файл | Содержимое |
 |------|------------|
