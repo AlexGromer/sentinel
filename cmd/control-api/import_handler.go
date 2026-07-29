@@ -70,12 +70,12 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	wrote := 0
 	for _, f := range req.Files {
-		// Name is reduced to a base name and must be a .spec.ts — a traversal-shaped or foreign name is
-		// refused, never written outside specDir. (Cypress/Selenium dialects arrive as their own
-		// extensions when those parsers land; today only .spec.ts is transpiled.)
+		// Name is reduced to a base name and must carry a known spec suffix — a traversal-shaped or
+		// foreign name is refused, never written outside specDir. Which ENGINE the content is stays
+		// the brain's decision (detect_engine); this only bounds what may become a path.
 		base, ok := validImportName(f.Name)
 		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "each file name must be a plain *.spec.ts (got " + f.Name + ")"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "each file name must be a plain spec file " + strings.Join(importSuffixes, "/") + " (got " + f.Name + ")"})
 			return
 		}
 		total += len(f.Content)
@@ -110,8 +110,16 @@ func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(report) // the import-report.json IS the response — the diagnosis the caller asked for
 }
 
-// validImportName reduces an uploaded file name to a safe base name, or refuses it. It must be a
-// plain *.spec.ts with no path separators and no traversal — a name is the one piece of the upload
+// importSuffixes are the file names this channel accepts. It is NOT the list of engines: the engine
+// is decided by CONTENT on the brain side (importer.detect_engine), because a Cypress <=9 suite is
+// named *.spec.ts and trusting the extension is exactly what let one be parsed as Playwright. This
+// list only answers "which files may become a path on our filesystem", and it grew to include the
+// Cypress >=10 layout when the Cypress dialect gained a parser — accepting a file we cannot read
+// would trade a clear 400 for a confusing skip.
+var importSuffixes = []string{".spec.ts", ".spec.js", ".cy.ts", ".cy.js"}
+
+// validImportName reduces an uploaded file name to a safe base name, or refuses it. It must carry a
+// known spec suffix, with no path separators and no traversal — a name is the one piece of the upload
 // that becomes a filesystem path, so a foreign or traversal-shaped name is rejected before anything
 // is written. Returns (base, true) when safe.
 func validImportName(name string) (string, bool) {
@@ -122,10 +130,12 @@ func validImportName(name string) (string, bool) {
 	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		return "", false // reject the RAW name if it tried to traverse, even though Base() would tame it
 	}
-	if !strings.HasSuffix(base, ".spec.ts") {
-		return "", false
+	for _, s := range importSuffixes {
+		if strings.HasSuffix(base, s) {
+			return base, true
+		}
 	}
-	return base, true
+	return "", false
 }
 
 // lastLine returns the final non-empty line of s (the agentctl error summary), bounded, so a failure

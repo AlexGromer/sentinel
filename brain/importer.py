@@ -310,6 +310,254 @@ def parse_playwright_spec(src, source="<spec>"):
 PARSERS["playwright"] = parse_playwright_spec
 
 
+# --- Cypress ------------------------------------------------------------------------------------
+# Cypress states a test as ONE CHAIN: a subject command (cy.get / cy.contains / cy.url) followed by
+# actions and assertions on that subject. Sentinel has no chain — it has flat steps, each carrying its
+# own locator. So the transpile is a chain WALK, and how many steps come out depends on the chain:
+#
+#   cy.get('.receipt').should('be.visible')                 -> 1 step  (assert)
+#   cy.get('#pay').click().should('be.disabled')            -> 2 steps (action, then assert)
+#   cy.get('.r').should('be.visible').and('have.text','$1')  -> 2 steps (two asserts)
+#
+# The module's original note called `.should()` "assert-over-locator = two steps". That is right about
+# the shape (the assertion is a SEPARATE step from the action, not a modifier on it) and wrong as a
+# constant: a bare `cy.get(...).should(...)` is one step, because there was no action to separate it
+# from. Encoding the constant would have inserted a phantom step into every assertion-only line.
+_CY_IT_RE = re.compile(r"\b(?:it|specify)\s*\(\s*['\"](?P<name>[^'\"]+)['\"]")
+_CY_DESCRIBE_RE = re.compile(r"\b(?:describe|context)\s*\(\s*['\"](?P<name>[^'\"]+)['\"]")
+_CY_VISIT_RE = re.compile(r"\bcy\.visit\(\s*%s" % _Q)
+# NAMED backreference, deliberately — not `_Q`. `_Q` is `(['"])(.*?)\1`, and `\1` is POSITIONAL: the
+# moment it is composed into a pattern that already has a group, it renumbers and points at that other
+# group instead of the quote. Here it silently began matching the empty string, so every subject
+# parsed with NO selector and every step came out locator-less — a quiet quality collapse that no
+# exception reports and that only reading the transpiled output revealed.
+_CY_SUBJECT_RE = re.compile(r"\bcy\.(?P<cmd>get|contains|url)\(\s*(?:(?P<q>['\"])(?P<sel>.*?)(?P=q))?")
+# every `.action(args)` / `.should(args)` / `.and(args)` link, in source order.
+_CY_LINK_RE = re.compile(
+    r"\.(click|type|clear|select|check|uncheck|should|and|first|last|eq|find|within|then|trigger)"
+    r"\(\s*([^)]*)\)")
+# A test-id attribute selector is a TESTID, not css. Reporting `[data-cy=save]` as a weak css locator
+# would understate the suite: the team did use a stable hook, and the diagnosis is what they came for.
+_CY_TESTID_RE = re.compile(r"^\[\s*data-(?:cy|test|testid|test-id)\s*=\s*['\"]?([^'\"\]]+)['\"]?\s*\]$")
+# Cypress assertion vocabulary -> Sentinel's closed condition set. Anything absent here has no
+# equivalent and is REPORTED, never quietly turned into the nearest-looking condition.
+_CY_SHOULD = {
+    "be.visible": ("visible", True), "not.be.visible": ("visible", False),
+    "be.hidden": ("hidden", True), "not.be.hidden": ("hidden", False),
+    "exist": ("visible", True), "not.exist": ("visible", False),
+    "be.enabled": ("enabled", True), "not.be.enabled": ("enabled", False),
+    "be.disabled": ("disabled", True), "not.be.disabled": ("disabled", False),
+    "have.text": ("text_contains", True), "not.have.text": ("text_contains", False),
+    "contain": ("text_contains", True), "not.contain": ("text_contains", False),
+    "contain.text": ("text_contains", True), "not.contain.text": ("text_contains", False),
+    "include": ("text_contains", True), "not.include": ("text_contains", False),
+    "have.value": ("value_equals", True), "not.have.value": ("value_equals", False),
+    "have.length": ("count_equals", True), "not.have.length": ("count_equals", False),
+}
+_CY_NO_EQUIV_LINK = {
+    "first": "picks the first match; Sentinel binds by identity, so the position is DROPPED and the "
+             "step may target a different element",
+    "last": "picks the last match; the position is DROPPED — the step may target a different element",
+    "eq": "picks a match by index; the position is DROPPED — the step may target a different element",
+    "find": "re-scopes the search inside the subject; only the first tier is kept, so the step may "
+            "bind more broadly than the source test intended",
+    "within": "scopes the following commands to the subject; the scope is DROPPED",
+    "then": "arbitrary JavaScript over the subject; nothing in it is transpiled",
+    "trigger": "raw DOM event; Sentinel has no equivalent verb — DROPPED",
+}
+_CY_ACTION_VERB = {"click": "click", "type": "type", "select": "select",
+                   "check": "click", "uncheck": "click", "clear": "clear"}
+
+
+def _cy_value(args):
+    """What a Cypress .type()/.select() argument really is -> (kind, value).
+
+    kind is 'secret' (Cypress.env('NAME') — stays a REF, never a literal, M9.1), 'literal' (a quoted
+    string), or 'unresolved'. The distinction is load-bearing: the link regex stops the argument at
+    the first `)`, so `Cypress.env('PW')` arrives truncated, and treating whatever arrived as a
+    literal would have typed the source fragment `Cypress.env('PW'` into the application under test.
+    """
+    a = args.strip()
+    secret = re.search(r"Cypress\.env\(\s*['\"]([A-Za-z0-9_]+)['\"]", a)
+    if secret:
+        return "secret", secret.group(1)
+    m = re.match(r"""^(['"])(.*)\1$""", a)
+    if m:
+        return "literal", m.group(2)
+    return "unresolved", a
+
+
+def _cy_locator(kind, arg):
+    """(locator, strategy) for a Cypress subject command."""
+    if kind == "url" or arg is None:
+        return None, None
+    if kind == "contains":
+        return {"text": arg}, "text"
+    m = _CY_TESTID_RE.match(arg.strip())
+    if m:
+        return {"testid": m.group(1)}, "testid"
+    return {"css": arg}, "css"
+
+
+def parse_cypress_spec(src, source="<spec>"):
+    """Transpile a Cypress suite into the SAME `parsed` shape parse_playwright_spec produces.
+
+    One dialect, one report: `rewrite_report` and `ground_imported` are untouched by this — the whole
+    point of the contract is that a second engine fills a table rather than forking the pipeline.
+    """
+    tests, cur, suite = [], None, ""
+    # `beforeEach(() => cy.visit('/billing'))` is the idiomatic Cypress setup, and it runs for EVERY
+    # test in the block. Parsed into a test-less accumulator and prepended to each `it` that follows:
+    # ignoring hooks drops the navigation every test depends on, and — measured on the fixture — it
+    # also dropped a `cy.intercept` that sat there, so the report said "0 constructs dropped" about a
+    # file that had one. Hook body = from the hook opener to the next it/describe/hook, which is right
+    # for ordinary formatting and stated here rather than assumed.
+    hook = {"name": "<hook>", "steps": [], "notes": []}
+    for raw in src.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//") or line.startswith("*"):
+            continue
+
+        if re.search(r"\b(afterEach|after)\s*\(", line):
+            # Teardown has no place in a linear plan; named once rather than parsed into steps that
+            # would run in the wrong order.
+            hook["notes"].append({"kind": "dropped", "construct": "afterEach()",
+                                  "why": "teardown hook — Sentinel plans are linear and have no "
+                                         "teardown phase; its body is DROPPED", "line": line})
+            cur = None
+            continue
+        hm = re.search(r"\b(beforeEach|before)\s*\(", line)
+        if hm:
+            cur = hook
+            line = line[hm.end():]     # fall through: the body may be on this same line
+
+        dm = _CY_DESCRIBE_RE.search(line)
+        if dm and not _CY_IT_RE.search(line):
+            # Only the NEAREST preceding describe is carried, not the full nesting path — enough to
+            # keep two identically-named `it`s apart, and said plainly rather than implied.
+            suite = dm.group("name")
+            cur = None
+            continue
+        im = _CY_IT_RE.search(line)
+        if im:
+            name = "%s > %s" % (suite, im.group("name")) if suite else im.group("name")
+            # copies, so a later hook line cannot retroactively mutate an already-emitted test.
+            cur = {"name": name, "steps": list(hook["steps"]), "notes": list(hook["notes"])}
+            tests.append(cur)
+            # A one-line test — `it('a', () => { cy.get(...).click(); });` — is ordinary in Cypress
+            # and in every hand-written example. Skipping the rest of the line after the opener
+            # parsed such a file to ZERO steps, which under PR-1's rule reports as "recognised but
+            # nothing parsed": loud, but wrong. Continue on the REMAINDER instead of dropping it.
+            line = line[im.end():]
+        if cur is None or not line:
+            continue
+
+        vm = _CY_VISIT_RE.search(line)
+        if vm:
+            cur["steps"].append({"verb": "navigate", "target": vm.group(2),
+                                 "intent": "navigate to %s" % vm.group(2)})
+            continue
+
+        # `cy.intercept` / `cy.wait` and any command with no Sentinel class — named with consequence.
+        for token, why in _NO_EQUIV.items():
+            if ("cy.%s(" % token) in line or re.search(r"\.%s\(" % re.escape(token), line):
+                cur["notes"].append({"kind": "dropped", "construct": token, "why": why, "line": line})
+        if re.search(r"\bcy\.wait\(", line):
+            cur["notes"].append({"kind": "dropped", "construct": "cy.wait",
+                                 "why": "explicit wait (a fixed delay, or waiting on an intercept "
+                                        "alias) — Sentinel waits implicitly; the wait is DROPPED and "
+                                        "a test relying on its timing changes meaning",
+                                 "line": line})
+
+        sm = _CY_SUBJECT_RE.search(line)
+        if not sm:
+            # A cy.* command we have no class for at all. Named with its own name so a team can see
+            # exactly which custom command did not survive — "unsupported" without the name is the
+            # silent drop wearing a label.
+            unknown = re.search(r"\bcy\.([a-zA-Z][a-zA-Z0-9_]*)\(", line)
+            if unknown and unknown.group(1) not in ("wait", "intercept", "visit"):
+                cur["notes"].append({
+                    "kind": "dropped", "construct": "cy.%s()" % unknown.group(1),
+                    "why": "no Sentinel equivalent for this Cypress command (a built-in or a custom "
+                           "command defined in support/) — DROPPED",
+                    "line": line})
+            continue
+
+        kind = sm.group("cmd")
+        loc, strat = _cy_locator(kind, sm.group("sel"))
+        emitted = False
+        for lm in _CY_LINK_RE.finditer(line):
+            link, args = lm.group(1), lm.group(2).strip()
+            if link in _CY_NO_EQUIV_LINK:
+                cur["notes"].append({"kind": "dropped", "construct": "." + link + "()",
+                                     "why": _CY_NO_EQUIV_LINK[link], "line": line})
+                continue
+            if link in _CY_ACTION_VERB:
+                verb = _CY_ACTION_VERB[link]
+                step = {"verb": verb, "intent": "%s%s" % (verb, " " + strat if strat else "")}
+                if loc:
+                    step["locator"] = loc
+                if verb in ("type", "select"):
+                    kindv, val = _cy_value(args)
+                    if kindv == "secret":
+                        step["secretRef"] = val
+                    elif kindv == "literal":
+                        step["text" if verb == "type" else "value"] = val
+                    else:
+                        # An expression we cannot resolve — a fixture reference, a variable, an alias.
+                        # It must NOT become a literal: writing `Cypress.env('PW'` into the plan would
+                        # type a fragment of the source code into the application. Reported instead.
+                        cur["notes"].append({
+                            "kind": "dropped", "construct": "%s(%s)" % (link, val),
+                            "why": "the value is an expression this transpiler cannot resolve "
+                                   "(a variable, a fixture or an alias); the step keeps its target "
+                                   "but has NO value — supply one before replaying",
+                            "line": line})
+                cur["steps"].append(step)
+                emitted = True
+                continue
+            if link in ("should", "and"):
+                parts = [p.strip() for p in args.split(",", 1)]
+                cond_raw = _unquote(parts[0]) if parts else ""
+                mapped = _CY_SHOULD.get(cond_raw)
+                if mapped is None:
+                    cur["notes"].append({
+                        "kind": "dropped", "construct": ".should('%s')" % cond_raw,
+                        "why": "Sentinel has no condition for this Cypress assertion; the assertion "
+                               "is DROPPED rather than mapped to a nearby one that checks something "
+                               "else", "line": line})
+                    continue
+                cond, ok = mapped
+                if kind == "url":
+                    cond = "url_contains"
+                step = {"verb": "assert", "condition": cond, "expect_ok": ok,
+                        "intent": "assert %s" % cond}
+                if loc:
+                    step["locator"] = loc
+                if len(parts) > 1:
+                    step["expected"] = _unquote(parts[1])
+                cur["steps"].append(step)
+                emitted = True
+
+        if emitted:
+            cstrat = _strategy_of(loc) if loc else None
+            if cstrat in _WEAK_STRATEGIES:
+                cur["notes"].append({"kind": "weak_locator", "strategy": cstrat,
+                                     "prior": PRIORS[cstrat], "line": line,
+                                     "why": "bound by %s (prior %.2f) — Cypress selects by css/text "
+                                            "by default, so this is what the source test relied on"
+                                            % (cstrat, PRIORS[cstrat])})
+        elif loc is not None:
+            cur["notes"].append({"kind": "unmatched", "line": line,
+                                 "why": "a subject was selected but nothing was done with it that "
+                                        "Sentinel can represent"})
+
+    return {"tests": tests, "source": source}
+
+
+PARSERS["cypress"] = parse_cypress_spec
+
+
 def ground_imported(parsed, site_map):
     """Ground the transpiled steps against a real explore map (PROD-IMPORT). This is the second half of
     the diagnosis the item promises: "does this step still bind to an element the app actually has?"
