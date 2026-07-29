@@ -116,19 +116,21 @@ def main():
     # 2 — an engine with no parser yet returns (None, engine): named, not silently empty. Cypress
     #     HAS a parser now, so Selenium carries this case; the shape being pinned is the contract,
     #     not which dialect happens to be missing this week.
-    parsed, engine = parse_spec(SELENIUM_PY, "test_login.py")
-    assert engine == "selenium" and parsed is None, (parsed, engine)
-    for src, want in ((PLAYWRIGHT_SRC, "playwright"), (CYPRESS_SRC, "cypress")):
+    # Every named engine now HAS a parser, so `unknown` carries the no-parser contract — which is
+    # where it belongs permanently: a file whose engine we cannot name can never have one.
+    parsed, engine = parse_spec(NOT_A_TEST, "helpers.spec.ts")
+    assert engine == "unknown" and parsed is None, (parsed, engine)
+    for src, want in ((PLAYWRIGHT_SRC, "playwright"), (CYPRESS_SRC, "cypress"), (SELENIUM_PY, "selenium")):
         parsed, engine = parse_spec(src, "x")
         assert engine == want and parsed and parsed["tests"], f"the {want} path regressed"
     print("PASS parse_spec — a dialect without a parser is reported, never returned as empty")
 
     # 3 — THE REGRESSION: a Cypress file under the legacy layout must not come back green.
-    rc, report = _run({"selenium/test_login.py": SELENIUM_PY}, "no-parser")
-    assert rc != 0, "import exited 0 over a suite it could not read — the original defect, restored"
+    rc, report = _run({"e2e/helpers.spec.ts": NOT_A_TEST}, "no-parser")
+    assert rc != 0, "import exited 0 over a file it could not read — the original defect, restored"
     assert report["totals"]["tests"] == 0, report["totals"]
-    assert [s["source"] for s in report["skipped"]] == ["selenium/test_login.py"]
-    assert report["skipped"][0]["engine"] == "selenium", report["skipped"][0]
+    assert [s["source"] for s in report["skipped"]] == ["e2e/helpers.spec.ts"]
+    assert report["skipped"][0]["engine"] == "unknown", report["skipped"][0]
     assert report["engines"] == [], (
         "engines must report what was actually imported; nothing was, so it must be empty — the "
         "hardcoded 'playwright' is what made the report claim a successful Playwright import"
@@ -139,7 +141,7 @@ def main():
     rc2, rep2 = _run({"cypress/integration/checkout.spec.ts": CYPRESS_SRC}, "cypress-now-parsed")
     assert rc2 == 0 and rep2["engines"] == ["cypress"], (rc2, rep2.get("engines"))
     assert rep2["totals"]["tests"] == 2 and rep2["skipped"] == [], rep2["totals"]
-    print("PASS unreadable dialect is named and RED; Cypress is now imported as cypress")
+    print("PASS an unrecognised file is named and RED; Cypress is imported as cypress")
 
     # 4 — mixed directory: the readable file still imports fully, the unreadable ones are named, and
     #     the run is red because part of the suite did not make it.
@@ -150,11 +152,10 @@ def main():
         "e2e/helpers.spec.ts": NOT_A_TEST,
     }, "mixed")
     assert rc != 0, "a directory with unreadable files must not be green"
-    assert report["engines"] == ["cypress", "playwright"], report["engines"]
-    assert report["totals"]["tests"] == 4, report["totals"]   # 2 playwright + 2 cypress
-    assert report["totals"]["skipped"] == 2, report["totals"]
+    assert report["engines"] == ["cypress", "playwright", "selenium"], report["engines"]
+    assert report["totals"]["tests"] == 5, report["totals"]   # 2 playwright + 2 cypress + 1 selenium
+    assert report["totals"]["skipped"] == 1, report["totals"]
     by_src = {s["source"]: s for s in report["skipped"]}
-    assert by_src["selenium/test_login.py"]["engine"] == "selenium"
     assert by_src["e2e/helpers.spec.ts"]["engine"] == "unknown"
     # every skipped entry must carry a REASON — "skipped" alone tells a team nothing.
     for s in report["skipped"]:
@@ -193,8 +194,8 @@ def main():
     rc, report = _run({"cypress/e2e/checkout.cy.ts": CYPRESS_SRC}, "cy10")
     assert rc == 0 and report["engines"] == ["cypress"] and report["totals"]["tests"] == 2, (rc, report["totals"])
     rc, report = _run({"tests/test_login.py": SELENIUM_PY}, "selenium")
-    assert rc != 0 and report["skipped"][0]["engine"] == "selenium", (rc, report)
-    print("PASS the walk reaches Cypress >=10 (imported) and Selenium (named), not only *.spec.ts")
+    assert rc == 0 and report["engines"] == ["selenium"] and report["totals"]["tests"] == 1, (rc, report["totals"])
+    print("PASS the walk reaches Cypress >=10 and Selenium layouts, and both import")
 
     print("ALL PASS (8)")
     return 0

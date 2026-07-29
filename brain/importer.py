@@ -558,6 +558,155 @@ def parse_cypress_spec(src, source="<spec>"):
 PARSERS["cypress"] = parse_cypress_spec
 
 
+# --- Selenium -----------------------------------------------------------------------------------
+# FOUR language bindings, ONE model. Selenium is the same WebDriver API in Python, Java, JS/TS and C#;
+# the semantics are identical and only the surface spelling differs. So this is one walker plus a
+# token table per language, not four parsers — and the mismatch classes (below) are the same in all
+# four, which is the real reason the split would have been arbitrary.
+_SEL_LANG = {
+    "python": {"find": r"find_element(?:s)?", "send": r"send_keys", "get": r"\.get\(",
+               "select": r"select_by_(?:visible_text|value|index)", "env": r"os\.environ\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]"},
+    "js":     {"find": r"findElement(?:s)?", "send": r"sendKeys", "get": r"\.get\(",
+               "select": r"selectByVisibleText", "env": r"process\.env\.([A-Za-z0-9_]+)"},
+}
+# By.<X> -> our locator. Selenium has no semantic locator at all: everything it offers is structural
+# or text. That is not a transpiler shortcoming to apologise for — it is the DIAGNOSIS, and the report
+# says it loudly, because "your suite is bound almost entirely by css/xpath" is what a team comes for.
+_SEL_BY = {
+    "ID": lambda v: ({"css": "#" + v}, "css"),
+    "NAME": lambda v: ({"css": "[name=\"%s\"]" % v}, "css"),
+    "CSS_SELECTOR": lambda v: ({"css": v}, "css"),
+    "XPATH": lambda v: ({"xpath": v}, "xpath"),
+    "CLASS_NAME": lambda v: ({"css": "." + v}, "css"),
+    "TAG_NAME": lambda v: ({"css": v}, "css"),
+    "LINK_TEXT": lambda v: ({"text": v}, "text"),
+    "PARTIAL_LINK_TEXT": lambda v: ({"text": v}, "text"),
+}
+_SEL_BY_RE = re.compile(
+    r"\bBy\.(?P<by>ID|NAME|CSS_SELECTOR|XPATH|CLASS_NAME|TAG_NAME|LINK_TEXT|PARTIAL_LINK_TEXT|"
+    # JS/TS and C# spell the same strategies differently, and JS additionally shortens
+    # cssSelector to `css` — a missing alias silently costs the step its locator.
+    r"cssSelector|css|id|name|xpath|className|tagName|linkText|partialLinkText)"
+    r"\s*[(,]\s*(?P<q>['\"])(?P<val>.*?)(?P=q)", re.I)
+_SEL_BY_ALIAS = {"id": "ID", "name": "NAME", "cssselector": "CSS_SELECTOR", "css": "CSS_SELECTOR", "xpath": "XPATH",
+                 "classname": "CLASS_NAME", "tagname": "TAG_NAME", "linktext": "LINK_TEXT",
+                 "partiallinktext": "PARTIAL_LINK_TEXT"}
+_SEL_TEST_RE = re.compile(
+    r"\b(?:def\s+(?P<py>test_[A-Za-z0-9_]+)|it\s*\(\s*['\"](?P<js>[^'\"]+)['\"])")
+_SEL_GET_RE = re.compile(r"\b(?:driver|browser)\s*\.\s*get\(\s*(?P<q>['\"])(?P<url>.*?)(?P=q)")
+
+
+def _sel_locator(line):
+    m = _SEL_BY_RE.search(line)
+    if not m:
+        return None, None
+    by = m.group("by")
+    by = _SEL_BY_ALIAS.get(by.lower(), by.upper())
+    build = _SEL_BY.get(by)
+    return build(m.group("val")) if build else (None, None)
+
+
+def parse_selenium_spec(src, source="<spec>", lang=None):
+    """Transpile a Selenium suite (any of the supported bindings) into the shared `parsed` shape."""
+    lang = lang or ("js" if re.search(r"\b(require\(|import .*selenium-webdriver|await driver)", src)
+                    else "python")
+    tok = _SEL_LANG[lang]
+    tests, cur = [], None
+    for raw in src.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("//"):
+            continue
+
+        tm = _SEL_TEST_RE.search(line)
+        if tm:
+            cur = {"name": tm.group("py") or tm.group("js"), "steps": [], "notes": []}
+            tests.append(cur)
+            continue
+        if cur is None:
+            continue
+
+        # THE Selenium mismatch class, and it is the same in all four bindings: an EXPLICIT wait
+        # disappears under implicit waiting. The test still passes, so nothing announces the loss —
+        # which is exactly why it has to be reported rather than silently absorbed.
+        if re.search(r"\bWebDriverWait\b|\bdriver\.wait\(|\.implicitly_wait\(|implicitlyWait", line):
+            cur["notes"].append({
+                "kind": "dropped", "construct": "WebDriverWait",
+                "why": "an EXPLICIT wait. Sentinel (via Playwright) waits implicitly before every "
+                       "action, so the wait itself is DROPPED — the step that followed it still "
+                       "waits, but any timeout or polling interval the test chose is gone",
+                "line": line})
+            # a wait line often also carries the locator of the thing waited for; nothing to do.
+            continue
+
+        gm = _SEL_GET_RE.search(line)
+        if gm:
+            cur["steps"].append({"verb": "navigate", "target": gm.group("url"),
+                                 "intent": "navigate to %s" % gm.group("url")})
+            continue
+
+        loc, strat = _sel_locator(line)
+        verb = None
+        if re.search(r"\.click\(\s*\)", line):
+            verb = "click"
+        elif re.search(r"\.%s\(" % tok["send"], line):
+            verb = "fill"
+        elif re.search(tok["select"], line):
+            verb = "select"
+
+        if verb is None:
+            # A Page Object indirection (@FindBy / [FindsBy] / a locator held in a field) is a
+            # CROSS-FILE reference a line-based parser cannot resolve. Named, with where it was seen.
+            if re.search(r"@FindBy|FindsBy", line):
+                cur["notes"].append({
+                    "kind": "unmatched", "line": line,
+                    "why": "a Page Object locator declared with @FindBy — it is used in another file, "
+                           "and this transpiler resolves locators per line, so the step that uses it "
+                           "cannot be bound here"})
+            continue
+
+        step = {"verb": verb, "intent": "%s%s" % (verb, " " + strat if strat else "")}
+        if loc:
+            step["locator"] = loc
+        if verb in ("fill", "select"):
+            # The value is the argument of the SEND/SELECT call, and it has to be read from that
+            # call — not from the line. A line is `find_element(By.ID, "username").send_keys("qa")`,
+            # so a lazy "first quoted thing" match yields `username").send_keys("qa`: the LOCATOR's
+            # argument spliced onto the value, which would then be typed into the application.
+            call = tok["send"] if verb == "fill" else tok["select"]
+            secret = re.search(tok["env"], line)
+            vm = re.search(r"(?:%s)\(\s*(['\"])(.*?)\1\s*\)" % call, line)
+            if secret:
+                step["secretRef"] = secret.group(1)
+            elif vm:
+                step["value"] = vm.group(2)
+            else:
+                cur["notes"].append({
+                    "kind": "dropped", "construct": "%s(...)" % verb,
+                    "why": "the value is an expression this transpiler cannot resolve (a variable, a "
+                           "fixture or a data-driven parameter); the step keeps its target but has NO "
+                           "value — supply one before replaying",
+                    "line": line})
+        cur["steps"].append(step)
+        if loc is None:
+            cur["notes"].append({"kind": "unmatched", "line": line,
+                                 "why": "no By.<strategy> locator on this line — the element was "
+                                        "most likely held in a variable, which a per-line parser "
+                                        "cannot follow"})
+        else:
+            cstrat = _strategy_of(loc)
+            if cstrat in _WEAK_STRATEGIES:
+                cur["notes"].append({"kind": "weak_locator", "strategy": cstrat,
+                                     "prior": PRIORS[cstrat], "line": line,
+                                     "why": "bound by %s (prior %.2f) — Selenium has no semantic "
+                                            "locator, so a suite written with it is structurally "
+                                            "weak; this is the diagnosis, not a transpile fault"
+                                            % (cstrat, PRIORS[cstrat])})
+    return {"tests": tests, "source": source}
+
+
+PARSERS["selenium"] = parse_selenium_spec
+
+
 def ground_imported(parsed, site_map):
     """Ground the transpiled steps against a real explore map (PROD-IMPORT). This is the second half of
     the diagnosis the item promises: "does this step still bind to an element the app actually has?"
