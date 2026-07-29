@@ -1861,6 +1861,11 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	m.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	m.HandleFunc("POST /v1/import", s.handleImport) // PROD-IMPORT channel 2 (UI upload / HTTP), ADR-105
+	// PROD-VERSIONING (ADR-106 follow-on): the read surface the store never had.
+	m.HandleFunc("GET /v1/tests/{id}/revisions", s.handleRevisionsList)
+	m.HandleFunc("GET /v1/tests/{id}/revisions/diff", s.handleRevisionsDiff)
+	m.HandleFunc("GET /v1/tests/{id}/revisions/show", s.handleRevisionsShow)
+	m.HandleFunc("POST /v1/tests/{id}/revisions/rollback", s.handleRevisionsRollback)
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)

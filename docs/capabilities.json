@@ -485,6 +485,32 @@
         "kind": "file",
         "ref": "brain/graph.py"
       }
+    },
+    {
+      "id": "revisions-cli",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "История теста, diff и откат",
+      "title_en": "A test's history, diff and rollback",
+      "how_ru": "agentctl revisions list|show|diff|rollback --test <id> — что менялось в тесте, чем ревизии отличаются пошагово, и вернуть прежнюю. Откат ПЕРЕ-добавляет, а не удаляет: история цела (ADR-106).",
+      "how_en": "agentctl revisions list|show|diff|rollback --test <id> — what changed in a test, how two revisions differ step by step, and put a previous one back. Rollback RE-APPENDS rather than deletes: the history stays whole (ADR-106).",
+      "access": {
+        "kind": "cli",
+        "ref": "revisions"
+      }
+    },
+    {
+      "id": "revisions-http",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "История теста через API",
+      "title_en": "Test history over the API",
+      "how_ru": "GET /v1/tests/{id}/revisions · /diff · /show · POST /revisions/rollback?to=<rev> — та же история для UI и внешних инструментов. Цель отката НИКОГДА не подразумевается.",
+      "how_en": "GET /v1/tests/{id}/revisions · /diff · /show · POST /revisions/rollback?to=<rev> — the same history for the UI and outside tools. A rollback target is NEVER assumed.",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/tests/{id}/revisions"
+      }
     }
   ]
 }

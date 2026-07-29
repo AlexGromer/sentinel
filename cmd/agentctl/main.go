@@ -67,6 +67,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
 	fmt.Fprintln(os.Stderr, "  agentctl export-git --spec <f> --to-git <repo> [--push]  # land authored specs in a repository")
+	fmt.Fprintln(os.Stderr, "  agentctl revisions list|show|diff|rollback --test <id>   # a test's history, what changed, put it back")
 	fmt.Fprintln(os.Stderr, "  agentctl import --from <dir>|--from-git <repo> [--verify --target <url>]  # transpile an existing suite")
 	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
 	fmt.Fprintln(os.Stderr, "  agentctl redact-trace --trace <trace.zip>   # strip typed values + credentials from a trace (ADR-098)")
@@ -615,6 +616,41 @@ func cmdExportSpec(repo string, args []string) int {
 	})
 }
 
+// cmdRevisions: agentctl revisions <list|show|diff|rollback> --test <id> [--rev <a>] [--rev-b <b>]
+//
+// PROD-VERSIONING's READ surface. The store has been complete since ADR-106 — append-only history,
+// step-level diff, rollback that re-appends instead of deleting — and until now NOTHING COULD READ IT
+// BACK: no subcommand, no route, no screen. A revision written and unreachable is not history, it is
+// a file. This is deliberately thin and adds no policy of its own.
+func cmdRevisions(repo string, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "error: revisions <list|show|diff|rollback> --test <id>")
+		return 2
+	}
+	op := args[0]
+	fs := flag.NewFlagSet("revisions", flag.ExitOnError)
+	testID := fs.String("test", "", "test id whose history to read (required)")
+	rev := fs.String("rev", "", "revision id (show: which one; diff: the OLDER side; rollback: the target)")
+	revB := fs.String("rev-b", "", "diff: the NEWER side (default: the head)")
+	_ = fs.Parse(args[1:])
+	switch op {
+	case "list", "show", "diff", "rollback":
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown revisions operation %q (want list|show|diff|rollback)\n", op)
+		return 2
+	}
+	if *testID == "" {
+		fmt.Fprintln(os.Stderr, "error: --test <id> is required")
+		return 2
+	}
+	runID := newRunID()
+	dir := mkArtifactDir(repo, runID, "")
+	return spawnBrain(repo, runID, []string{
+		"RUN_MODE=revisions", "ARTIFACT_DIR=" + dir, "REV_OP=" + op,
+		"SENTINEL_TEST_ID=" + *testID, "REV_A=" + *rev, "REV_B=" + *revB,
+	})
+}
+
 // cmdExportGit: agentctl export-git --spec <file>... --to-git <repo> [--branch b] [--subdir d] [--push]
 //
 // The OUTPUT half of the git channel (🟢OSS). It takes specs that already exist — export-spec turns a
@@ -873,6 +909,8 @@ func main() {
 		code = cmdBaseline(repo, os.Args[2:])
 	case "locators":
 		code = cmdLocators(repo, os.Args[2:])
+	case "revisions":
+		code = cmdRevisions(repo, os.Args[2:])
 	case "export-git":
 		code = cmdExportGit(repo, os.Args[2:])
 	case "export-spec":

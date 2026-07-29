@@ -1,6 +1,6 @@
 """Sentinel brain entrypoint — dispatches all modes.
 
-RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | import | report | calibrate | mcp-server | chat.
+RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | import | revisions | report | calibrate | mcp-server | chat.
 Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
@@ -558,6 +558,71 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         store.close()
 
 
+def _revisions_root():
+    return os.environ.get("SENTINEL_REVISIONS_DIR") or os.path.join("state", "revisions")
+
+
+def _run_revisions(out, op, test_id, rev_a, rev_b) -> int:
+    """PROD-VERSIONING: the READ surface over brain/revisions (no browser, no network).
+
+    The store has been complete since ADR-106 — append-only history, step-level diff, rollback that
+    re-appends rather than deletes — and nothing could read it back. A revision written and
+    unreachable is not history; it is a file. So this is deliberately thin: it exposes the existing
+    functions and adds no policy of its own.
+
+    Output is JSON on stdout AND an artifact, because both callers are real: a person reading a
+    terminal, and control-api relaying it to the hub.
+    """
+    from . import revisions as R
+    root = _revisions_root()
+    tid = (test_id or "").strip()
+    if not tid:
+        log("fatal.revisions_no_test_id")
+        return 2
+    try:
+        if op == "list":
+            hist = R.list_revisions(root, tid)
+            payload = {"test_id": tid, "head": R.head(root, tid), "revisions": hist}
+        elif op == "show":
+            rev = rev_a or R.head(root, tid)
+            if not rev:
+                log("fatal.revisions_unknown", test_id=tid, revision=str(rev_a))
+                return 3
+            plan = R.get_plan(root, tid, rev)
+            if plan is None:
+                log("fatal.revisions_unknown", test_id=tid, revision=rev)
+                return 3
+            payload = {"test_id": tid, "revision": rev, "plan": plan}
+        elif op == "diff":
+            hist = R.list_revisions(root, tid)
+            # Defaulting to "the last two" is the question a person actually asks — "what changed?" —
+            # and it is the one moment where guessing is right, because there is exactly one sensible
+            # pair. With fewer than two revisions there is no pair, and that is said rather than
+            # answered with an empty diff that reads as "nothing changed".
+            a = rev_a or (hist[-2]["revision"] if len(hist) > 1 else None)
+            b = rev_b or (hist[-1]["revision"] if hist else None)
+            if not a or not b:
+                log("fatal.revisions_not_enough", test_id=tid, have=len(hist))
+                return 3
+            payload = {"test_id": tid, "a": a, "b": b, "diff": R.diff_revisions(root, tid, a, b)}
+        elif op == "rollback":
+            if not rev_a:
+                log("fatal.revisions_no_target", test_id=tid)
+                return 2
+            payload = {"test_id": tid, "rolled_back_to": rev_a,
+                       "head": R.rollback(root, tid, rev_a)}
+        else:
+            log("fatal.revisions_bad_op", op=str(op))
+            return 2
+    except ValueError as e:
+        log("fatal.revisions_unknown", test_id=tid, revision=str(rev_a), error=e)
+        return 3
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    (out / "revisions.json").write_text(body, encoding="utf-8")
+    print(body)
+    return 0
+
+
 def _run_export_spec(out, plan_file, spec_out) -> int:
     """M4: emit a Playwright .spec.ts from a frozen plan (no browser)."""
     from .exporter import export_spec
@@ -756,6 +821,9 @@ def main() -> int:
         return _run_calibrate()
     if run_mode == "import":
         return _run_import(out, os.environ.get("IMPORT_DIR", ""))
+    if run_mode == "revisions":
+        return _run_revisions(out, os.environ.get("REV_OP", ""), os.environ.get("SENTINEL_TEST_ID", ""),
+                              os.environ.get("REV_A", ""), os.environ.get("REV_B", ""))
 
     # --- browser modes -------------------------------------------------------
     target = os.environ.get("TARGET_URL")
