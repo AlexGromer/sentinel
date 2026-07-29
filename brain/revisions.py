@@ -77,8 +77,18 @@ def list_revisions(root, scenario_id):
     return out
 
 
+def _valid_revision(revision):
+    # a revision id is always a canonical_plan_hash: 64 lowercase hex chars. Validating it before it
+    # becomes a path segment means a crafted id (e.g. "../../etc/x") can never traverse — defence in
+    # depth, since today the id comes from the history log or a computed hash, but get_plan/rollback are
+    # a public surface an API could feed.
+    return isinstance(revision, str) and len(revision) == 64 and all(c in "0123456789abcdef" for c in revision)
+
+
 def get_plan(root, scenario_id, revision):
-    """The plan body of a revision, or None if that revision id was never saved."""
+    """The plan body of a revision, or None if that revision id was never saved (or is malformed)."""
+    if not _valid_revision(revision):
+        return None
     path = _scenario_dir(root, scenario_id) / (revision + ".json")
     if not path.exists():
         return None

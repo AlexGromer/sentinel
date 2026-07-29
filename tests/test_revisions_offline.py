@@ -141,6 +141,23 @@ def test_freeze_scenario_records_a_revision_when_named():
             os.environ.pop("SENTINEL_REVISIONS_DIR", None)
 
 
+# 7 — a crafted revision id cannot become a path: get_plan/rollback validate it is a 64-hex hash
+#     before it is used as a filename, so "../../etc/x" resolves to None, not a traversal.
+def test_revision_id_cannot_traverse():
+    with tempfile.TemporaryDirectory() as d:
+        R.save_revision(d, "login", P1, _Clock())
+        for bad in ["../../etc/passwd", "..", "a/b", "deadbeef", "g" * 64, "A" * 64, ""]:
+            _check(R.get_plan(d, "login", bad) is None, f"a malformed revision id was resolved: {bad!r}")
+            try:
+                R.rollback(d, "login", bad)
+                raise AssertionError(f"rollback accepted a malformed revision id: {bad!r}")
+            except ValueError:
+                pass
+        # a real 64-hex revision still works (the validation does not break the happy path).
+        rev = R.head(d, "login")
+        _check(len(rev) == 64 and R.get_plan(d, "login", rev) == P1, "a valid revision stopped resolving")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

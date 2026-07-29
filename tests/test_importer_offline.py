@@ -134,6 +134,27 @@ def test_fs_channel_writes_report_and_scenarios():
         _check(_run_import(out, os.path.join(d, "nope")) == 3, "a missing import dir must exit 3")
 
 
+# 10 — locator modifiers and chains that change WHICH element a step targets must be NAMED, not
+#      dropped silently — the worst import outcome is a step that quietly binds to a different element.
+def test_locator_modifiers_are_reported():
+    spec = ("import { test, expect } from '@playwright/test';\n"
+            "test('m', async ({ page }) => {\n"
+            "  await page.getByRole('button', { name: 'Delete' }).first().click();\n"
+            "  await page.getByRole('row').nth(3).getByRole('button').click();\n"
+            "  await page.locator('.item').filter({ hasText: 'X' }).click();\n"
+            "});")
+    p = imp.parse_playwright_spec(spec, "m")
+    dropped = {n["construct"] for n in p["tests"][0]["notes"] if n["kind"] == "dropped"}
+    for c in (".first()", ".nth()", ".filter()", "chained-locator"):
+        _check(c in dropped, f"{c} was dropped silently — dropped notes were {dropped}")
+    # the nth+chained line changed which element; it must carry BOTH notes, not lose one.
+    nth_line_notes = [n for n in p["tests"][0]["notes"]
+                      if n["kind"] == "dropped" and "nth" in n["line"]]
+    kinds = {n["construct"] for n in nth_line_notes}
+    _check(".nth()" in kinds and "chained-locator" in kinds,
+           f"the nth+chained line under-reported its rewrite: {kinds}")
+
+
 import json as _json  # noqa: E402
 
 
