@@ -136,8 +136,8 @@ jobs:
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
-          if [ "$n" -lt 38 ]; then
-            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 38"; exit 1
+          if [ "$n" -lt 39 ]; then
+            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 39"; exit 1
           fi
 
       - name: Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)

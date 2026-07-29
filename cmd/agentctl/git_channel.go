@@ -112,8 +112,22 @@ func gitCommitInto(worktree, subdir, message string, files map[string][]byte, pu
 	if out, _ := run(worktree, "git", "status", "--porcelain"); strings.TrimSpace(out) == "" {
 		return "", nil
 	}
-	if out, err := run(worktree, "git", "commit", "-m", message); err != nil {
-		return "", fmt.Errorf("git commit: %s", lastNonEmptyLine(out))
+	// SIGNING IS A PROPERTY OF THE DESTINATION, not of whoever ran the command. We are committing into
+	// someone else's repository on their behalf; inheriting the operator's global `commit.gpgsign`
+	// means the export succeeds or fails depending on whether THAT machine happens to have an unlocked
+	// key — and it failed with `fatal: failed to write commit object`, which names nothing.
+	// So: sign only if the TARGET repository asks for it.
+	commitArgs := []string{"commit", "-m", message}
+	if local, err := run(worktree, "git", "config", "--local", "--get", "commit.gpgsign"); err != nil ||
+		strings.TrimSpace(local) == "" {
+		commitArgs = append([]string{"-c", "commit.gpgsign=false"}, commitArgs...)
+	}
+	if out, err := run(worktree, "git", commitArgs...); err != nil {
+		msg := lastNonEmptyLine(out)
+		if strings.Contains(out, "gpg") || strings.Contains(msg, "failed to write commit object") {
+			msg += " (signing failed — the destination repository asks for signed commits and no usable key was available)"
+		}
+		return "", fmt.Errorf("git commit: %s", msg)
 	}
 	sha, _ := run(worktree, "git", "rev-parse", "HEAD")
 	sha = strings.TrimSpace(sha)

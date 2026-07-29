@@ -511,6 +511,110 @@
         "kind": "http",
         "ref": "GET /v1/tests/{id}/revisions"
       }
+    },
+    {
+      "id": "ui-chat",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Авторинг теста диалогом",
+      "title_en": "Author a test by conversation",
+      "how_ru": "Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048).",
+      "how_en": "Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048).",
+      "access": {
+        "kind": "ui",
+        "ref": "chat"
+      }
+    },
+    {
+      "id": "ui-run",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Запуск прогона из браузера",
+      "title_en": "Start a run from the browser",
+      "how_ru": "Цель, планировщик, бюджеты, авторизация и импорт чужой сюиты — всё поле прогона с подсказкой у каждого поля.",
+      "how_en": "Goal, planner, budgets, auth and importing someone else's suite — the whole run panel, each field with its own hint.",
+      "access": {
+        "kind": "ui",
+        "ref": "run"
+      }
+    },
+    {
+      "id": "ui-live",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Живой таймлайн и перехват прогона",
+      "title_en": "Live timeline and operator takeover",
+      "how_ru": "Смотреть идущий прогон пофазно и перехватить его руками, не останавливая (WS /v1/stream).",
+      "how_en": "Watch a run phase by phase and take it over by hand without stopping it (WS /v1/stream).",
+      "access": {
+        "kind": "ui",
+        "ref": "live"
+      }
+    },
+    {
+      "id": "ui-library",
+      "group": "UI",
+      "severity": "medium",
+      "title_ru": "Библиотека сценариев и тестов",
+      "title_en": "Scenario and test library",
+      "how_ru": "Сохранённые сценарии как переиспользуемые активы, продвижение сценария в именованный тест.",
+      "how_en": "Saved scenarios as reusable assets; promoting a scenario into a named test.",
+      "access": {
+        "kind": "ui",
+        "ref": "library"
+      }
+    },
+    {
+      "id": "ui-results",
+      "group": "UI",
+      "severity": "medium",
+      "title_ru": "Результаты и тренды",
+      "title_en": "Results and trends",
+      "how_ru": "Исходы прогонов и их динамика, нативной SVG-графикой без внешних библиотек (ADR-051).",
+      "how_en": "Run outcomes and how they move over time, in native SVG with no external libraries (ADR-051).",
+      "access": {
+        "kind": "ui",
+        "ref": "results"
+      }
+    },
+    {
+      "id": "ui-logs",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Логи с языком фильтров",
+      "title_en": "Logs with a filter language",
+      "how_ru": "Фильтр по уровню/источнику/категории/модулю/коду; выражение и элементы управления — одно и то же, а не два разных фильтра (ADR-065).",
+      "how_en": "Filter by level/source/category/module/code; the expression and the controls are the same thing, not two filters (ADR-065).",
+      "access": {
+        "kind": "ui",
+        "ref": "logs"
+      }
+    },
+    {
+      "id": "ui-tools",
+      "group": "UI",
+      "severity": "medium",
+      "title_ru": "Каталог возможностей в самом интерфейсе",
+      "title_en": "The capability catalogue inside the UI",
+      "how_ru": "Этот самый список — в хабе, а не только в документации, с переходом к тому, что умеет открыться (ADR-104).",
+      "how_en": "This very list — in the hub, not only in the docs, with a jump to whatever can be opened (ADR-104).",
+      "access": {
+        "kind": "ui",
+        "ref": "tools"
+      }
+    },
+    {
+      "id": "ui-settings",
+      "group": "UI",
+      "severity": "medium",
+      "title_ru": "Подключение и токен",
+      "title_en": "Connection and token",
+      "how_ru": "Один адрес и один токен на всё приложение; токен живёт только в памяти вкладки (ADR-064).",
+      "how_en": "One address and one token for the whole app; the token lives in the tab's memory only (ADR-064).",
+      "access": {
+        "kind": "ui",
+        "ref": "settings"
+      }
     }
   ]
 }
