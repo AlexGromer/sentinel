@@ -134,6 +134,80 @@ def test_fs_channel_writes_report_and_scenarios():
         _check(_run_import(out, os.path.join(d, "nope")) == 3, "a missing import dir must exit 3")
 
 
+# 10 — locator modifiers and chains that change WHICH element a step targets must be NAMED, not
+#      dropped silently — the worst import outcome is a step that quietly binds to a different element.
+def test_locator_modifiers_are_reported():
+    spec = ("import { test, expect } from '@playwright/test';\n"
+            "test('m', async ({ page }) => {\n"
+            "  await page.getByRole('button', { name: 'Delete' }).first().click();\n"
+            "  await page.getByRole('row').nth(3).getByRole('button').click();\n"
+            "  await page.locator('.item').filter({ hasText: 'X' }).click();\n"
+            "});")
+    p = imp.parse_playwright_spec(spec, "m")
+    dropped = {n["construct"] for n in p["tests"][0]["notes"] if n["kind"] == "dropped"}
+    for c in (".first()", ".nth()", ".filter()", "chained-locator"):
+        _check(c in dropped, f"{c} was dropped silently — dropped notes were {dropped}")
+    # the nth+chained line changed which element; it must carry BOTH notes, not lose one.
+    nth_line_notes = [n for n in p["tests"][0]["notes"]
+                      if n["kind"] == "dropped" and "nth" in n["line"]]
+    kinds = {n["construct"] for n in nth_line_notes}
+    _check(".nth()" in kinds and "chained-locator" in kinds,
+           f"the nth+chained line under-reported its rewrite: {kinds}")
+
+
+import json as _json  # noqa: E402
+
+
+def _site_map():
+    with open(os.path.join(REPO, "testdata", "import", "site-map.json"), encoding="utf-8") as fh:
+        return _json.load(fh)
+
+
+# 8 — grounding against a real explore map answers "does this step still bind to an element the app
+#     has?". The map deliberately lacks the invoice-4471 testid and the #pay-now css, so the report
+#     must say so — the finding a team most needs on first contact.
+def test_grounding_classifies_against_the_map():
+    p = _parsed()
+    g = imp.ground_imported(p, _site_map())
+    tot = g["totals"]
+    _check(tot["bound"] == 6, f"bound = {tot['bound']}, want 6")
+    # invoice-4471 (testid gone) and 'Pay now' (text not in map) reference elements the app no longer has.
+    _check(tot["unmatched"] == 2, f"unmatched = {tot['unmatched']}, want 2 (a renamed/gone element)")
+    # #pay-now is a css selector — the a11y map has no DOM paths, so it is honestly unverifiable, not
+    # guessed as bound.
+    _check(tot["unverifiable"] == 1, f"unverifiable = {tot['unverifiable']}, want 1 (the css locator)")
+    _check(tot["no_locator"] == 3, f"no_locator = {tot['no_locator']}, want 3 (navigates + url assert)")
+
+    # a bound step names the REAL semantic_id it grounded to (not a guess) — via the same conservative
+    # matcher authoring uses.
+    pay = [t for t in g["tests"] if t["name"] == "pay an invoice"][0]
+    gone = [s for s in pay["steps"] if s["status"] == "unmatched"]
+    _check(all(s["semantic_id"] is None for s in gone), "an unmatched step claimed a semantic_id")
+    card = [s for s in pay["steps"] if s["via"] == "label"][0]
+    _check(card["status"] == "bound" and card["semantic_id"] == "c1", f"Card number did not bind: {card}")
+
+
+# 9 — the FS channel with a map writes the grounding section into the report.
+def test_fs_channel_grounds_when_given_a_map():
+    import pathlib
+    import tempfile
+    from brain.__main__ import _run_import
+
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d)
+        os.environ["IMPORT_MAP"] = os.path.join(REPO, "testdata", "import", "site-map.json")
+        try:
+            rc = _run_import(out, os.path.join(REPO, "testdata", "import"))
+        finally:
+            os.environ.pop("IMPORT_MAP", None)
+        _check(rc == 0, f"_run_import with a map exit={rc}")
+        rep = _json.loads((out / "import-report.json").read_text())
+        _check(rep.get("grounded") is True, "the report is not marked grounded")
+        gt = rep["grounding_totals"]
+        _check(gt["bound"] == 6 and gt["unmatched"] == 2 and gt["unverifiable"] == 1,
+               f"grounding totals in the report are wrong: {gt}")
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for t in tests:

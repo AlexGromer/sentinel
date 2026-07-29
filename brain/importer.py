@@ -112,6 +112,36 @@ def _unquote(arg):
     return m.group(1) if m else arg.strip()
 
 
+# Locator modifiers and chains that CHANGE WHICH ELEMENT a step targets. The parser keeps the first
+# locator tier; anything that narrowed or re-scoped it is not representable and must be REPORTED, never
+# dropped in silence — a step that quietly targets a different element is the worst import outcome
+# (the module's whole promise). Detected by token, with the consequence spelled out.
+_MODIFIER_RE = re.compile(r"\.(first|last|nth|filter)\(")
+_LOC_CTOR_RE = re.compile(r"(getBy[A-Za-z]+|\blocator)\(")
+
+
+def _modifier_notes(line):
+    notes = []
+    for m in _MODIFIER_RE.finditer(line):
+        tok = m.group(1)
+        why = {"nth": "picks one element by position; Sentinel binds by identity, so the position is "
+                      "DROPPED and the step may target a different match",
+               "first": "picks the first of several matches; the position is DROPPED — the step may "
+                        "target a different element",
+               "last": "picks the last of several matches; the position is DROPPED — the step may "
+                       "target a different element",
+               "filter": "narrows the match by content; the filter is not representable and is DROPPED "
+                         "— the step may bind more broadly than the source test intended"}[tok]
+        notes.append({"kind": "dropped", "construct": "." + tok + "()", "why": why, "line": line})
+    # a chained/scoped locator (more than one constructor) — only the first tier survives.
+    if len(_LOC_CTOR_RE.findall(line)) > 1:
+        notes.append({"kind": "dropped", "construct": "chained-locator",
+                      "why": "a chained/scoped locator (e.g. row.getByRole(...)); only the first tier is "
+                             "kept and the rest is DROPPED, which changes which element the step targets",
+                      "line": line})
+    return notes
+
+
 def parse_playwright_spec(src, source="<spec>"):
     """Transpile @playwright/test source into Sentinel steps + a rewrite report.
 
@@ -162,6 +192,7 @@ def parse_playwright_spec(src, source="<spec>"):
                 rx = re.match(r"^/(.*)/[a-z]*$", arg)
                 step["expected"] = rx.group(1) if rx else _unquote(arg)
             cur["steps"].append(step)
+            cur["notes"].extend(_modifier_notes(line))
             cstrat = _strategy_of(loc) if loc else None
             if cstrat in _WEAK_STRATEGIES:
                 cur["notes"].append({"kind": "weak_locator", "strategy": cstrat,
@@ -191,6 +222,7 @@ def parse_playwright_spec(src, source="<spec>"):
             elif verb == "press":
                 step["key"] = _unquote(arg)
             cur["steps"].append(step)
+            cur["notes"].extend(_modifier_notes(line))
             if loc is None:
                 cur["notes"].append({"kind": "unmatched", "line": line,
                                      "why": "no locator constructor recognised — step imported without a target"})
@@ -204,6 +236,59 @@ def parse_playwright_spec(src, source="<spec>"):
             continue
 
     return {"tests": tests, "source": source}
+
+
+def ground_imported(parsed, site_map):
+    """Ground the transpiled steps against a real explore map (PROD-IMPORT). This is the second half of
+    the diagnosis the item promises: "does this step still bind to an element the app actually has?"
+
+    An imported locator is checked against the semantic map the explorer produced:
+      - bound        : an element matches (by testid / role+name / label / text) — the control exists,
+                       and the match names the real semantic_id it grounds to.
+      - unmatched    : a SEMANTIC locator (testid/role+name/label/text) that matches nothing — the
+                       element the source test targeted is gone or renamed. This is the finding a team
+                       most needs: a test that references something the app no longer has.
+      - unverifiable : a css/xpath locator — the explore map is a SEMANTIC/a11y model with no DOM
+                       paths, so a structural selector cannot be checked against it here. Said plainly
+                       rather than guessed: it will only be known at replay against the live DOM.
+      - no_locator   : navigate / url-assert steps — nothing to ground.
+
+    Returns a per-test grounding report + totals. Reuses scenario._match for role+name/name/text so the
+    binding rule is the SAME conservative one authoring uses (a >1 match is ambiguous -> not bound),
+    never a second, looser copy.
+    """
+    from .scenario import flatten_site_map, _match
+    flat = flatten_site_map(site_map)
+
+    def _bind(loc):
+        if not loc:
+            return ("no_locator", None, None)
+        if "css" in loc or "xpath" in loc:
+            return ("unverifiable", None, "css" if "css" in loc else "xpath")
+        if "testid" in loc:
+            hits = [e for e in flat if e.get("testid") == loc["testid"]]
+            return ("bound", hits[0]["semantic_id"], "testid") if len(hits) == 1 else ("unmatched", None, "testid")
+        if "label" in loc:  # a label targets a field by its accessible name
+            m = _match({"name": loc["label"]}, flat)
+            return ("bound", m["semantic_id"], "label") if m else ("unmatched", None, "label")
+        if "role" in loc:
+            m = _match({"role": loc.get("role"), "name": loc.get("name")}, flat)
+            return ("bound", m["semantic_id"], "role_name") if m else ("unmatched", None, "role_name")
+        if "text" in loc:
+            m = _match({"text": loc["text"]}, flat)
+            return ("bound", m["semantic_id"], "text") if m else ("unmatched", None, "text")
+        return ("unverifiable", None, None)
+
+    out = {"tests": [], "totals": {"bound": 0, "unmatched": 0, "unverifiable": 0, "no_locator": 0}}
+    for t in parsed["tests"]:
+        steps = []
+        for i, s in enumerate(t["steps"]):
+            status, sid, via = _bind(s.get("locator"))
+            steps.append({"index": i, "verb": s["verb"], "status": status,
+                          "semantic_id": sid, "via": via})
+            out["totals"][status] += 1
+        out["tests"].append({"name": t["name"], "steps": steps})
+    return out
 
 
 def rewrite_report(parsed):

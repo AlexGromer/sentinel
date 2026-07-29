@@ -1096,6 +1096,35 @@ try {
                                 document.getElementById('helpall').dispatchEvent(new Event('change')); });
     eq(await openCount(), 0, 'unchecking must fold them all again');
   });
+
+  /* ---------------- PROD-DISCOVERY / PROD-IMPORT: features surfaced IN the UI ---------------- */
+
+  await check('the capabilities catalogue renders IN the hub, not only in the docs', async () => {
+    // served same-origin (CONTROL_API_UI_DIR=docs), so ./capabilities.json is reachable and the panel
+    // populates. A feature nobody can find is a feature that does not exist — the landing UI is where
+    // a new user looks.
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.waitForFunction(() => {
+      const el = document.getElementById('cap-list');
+      return el && /capabilities|каталог/.test(el.textContent);
+    }, { timeout: 5000 });
+    const txt = await page.textContent('#cap-list');
+    ok(/OpenAI/i.test(txt) && /import/i.test(txt),
+      'the capabilities panel does not name real features (OpenAI shim, import)');
+  });
+
+  await check('the import panel is present and its button gates on files + a connection', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    // reveal the run view the way a user does (the nav button), then the panel exists.
+    await page.click('[data-nav="run"]');
+    ok(await page.$('#import'), 'the import panel is missing from the run view');
+    // the button starts disabled and enables only once a connection AND a file are present — a POST
+    // with neither is refused server-side anyway, but the UI should not offer it.
+    const before = await page.evaluate(() => document.getElementById('imp-go').disabled);
+    ok(before === true, 'import button was enabled with no connection and no file');
+  });
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

@@ -240,13 +240,15 @@ its counterpart via a `🌐` banner on line 3. Edit the `.md` first, then mirror
 | tests/test_capabilities_offline.py | Tests | **ADR-104** поведенческий гейт: путь доступа КАЖДОЙ фичи резолвится в реальном коде (не утверждение о форме страницы) · high-severity фичи присутствуют поимённо · README и лендинг линкуют каталог. 3/3 мутации |
 | brain/importer.py | Python | **ADR-105** транспилятор чужой сюиты: @playwright/test → наши шаги + отчёт о переписывании (слабые локаторы с приором, выброшенные конструкции с последствием). Секрет=`secretRef`, фрейм сохраняется, ничего не роняет молча |
 | brain/revisions.py | Python | **ADR-106** авторитетный файловый append-only стор ревизий: тело по `plan_hash`, история JSONL, step-diff (поля), откат ПЕРЕ-добавлением (история цела). Air-gap-дружелюбно, git — адаптер сверху |
+| docs/CRAWL_ANALYSIS.internal.md | Documentation | **PROD-CRAWL** измерение реального состояния краулера (INTERNAL-ONLY, gitignored по  — живёт локально; сам замер закреплён в BACKLOG  и коммите). Что устарело в диагнозе / что реально осталось |
+| tests/test_crawl_measured_offline.py | Tests | **PROD-CRAWL** пиннит `_CLICK_ROLES=(button,tab)`, чтобы измерение в CRAWL_ANALYSIS не разъехалось с кодом молча |
 | tests/test_revisions_offline.py | Tests | **ADR-106** гейт: append-only+идемпотентность · точный step-diff · откат растит историю · неизвестная ревизия → raise · traversal-id отвергнут · ЖИВОЙ вживлённый путь (`_write_scenario` пишет ревизию при `SENTINEL_TEST_ID`). 4 мутации |
 | tests/test_importer_offline.py | Tests | **ADR-105** гейт на реальной `.spec.ts`: все шаги транспилированы · секрет=ref · фрейм сохранён · выброшенные конструкции названы · слабые помечены · ФС-канал `_run_import` пишет отчёт+сценарии. 2 бага пойманы, 4 мутации |
 | testdata/import/playwright-login.spec.ts | Tests | **ADR-105** фикстура импорта: сильные/слабые локаторы, секрет, фрейм, route+waitForTimeout без эквивалента |
 | cmd/control-api/import_handler.go | Go | **ADR-105** HTTP-канал `POST /v1/import`: синхронно спавнит тот же `agentctl import`; граница `validImportName` (traversal), лимиты 200/8МиБ |
 | cmd/control-api/import_handler_test.go | Tests | **ADR-105** юнит-гейт границы: `validImportName` против traversal/сепараторов/расширений · `lastLine` ограничен |
-| brain/revisions.py | Python source | — |
-| tests/test_revisions_offline.py | Tests | — |
+| testdata/import/site-map.json | Tests | **ADR-105** синтетическая explore-карта для гейта grounding: есть Username/Password/Sign in/Card number/receipt, НЕТ invoice-4471/#pay-now — чтобы отчёт называл исчезнувшие элементы
+| tests/test_container_embed_context_offline.py | Tests | Гейт контекста контейнерной сборки: разбирает стадию `go-build` Dockerfile, ВОСПРОИЗВОДИТ контекст его `COPY` **через `.dockerignore`** во временном каталоге и компилирует там реальные `./cmd/...`. Два независимых слоя: не-скопированный файл → ошибка компилятора, исключённый `.dockerignore` → `"…": not found` (у ADR-104 сломались ОБА). Ловит за ~6 с в офлайн-наборе вместо минут в airgap-джобе (класс пойман дважды: index.html 07-23, capabilities.json 07-29). Незнакомая форма `COPY`, отсутствие Go, пустой `.dockerignore` — жёсткий отказ, не пропуск. Сверен с настоящим `docker build` в ОБЕ стороны. 11 мутаций + отрицательный контроль |
 ## Directory Structure
 ```
 agent_development/

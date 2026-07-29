@@ -95,6 +95,18 @@
      "how_en": "agentctl export-spec --plan <plan.json> — a frozen plan -> .spec.ts; the migration path to Playwright.",
      "access": {"kind": "cli", "ref": "export-spec"}},
 
+    {"id": "import-cli", "group": "CLI", "severity": "high",
+     "title_ru": "Импорт чужой тест-сюиты", "title_en": "Import an existing test suite",
+     "how_ru": "agentctl import --from <dir> — транспиляция @playwright/test в наши шаги + отчёт о переписывании (что связалось, что по слабому локатору, что без эквивалента) (ADR-105).",
+     "how_en": "agentctl import --from <dir> — transpile @playwright/test into our steps + a rewrite report (what bound, what by a weak locator, what has no equivalent) (ADR-105).",
+     "access": {"kind": "cli", "ref": "import"}},
+
+    {"id": "import-http", "group": "HTTP", "severity": "medium",
+     "title_ru": "Импорт тестов через API", "title_en": "Import tests over the API",
+     "how_ru": "POST /v1/import — загрузить файлы тестов и получить тот же отчёт о переписывании (канал UI-загрузки, ADR-105).",
+     "how_en": "POST /v1/import — upload test files and get the same rewrite report (the UI-upload channel, ADR-105).",
+     "access": {"kind": "http", "ref": "POST /v1/import"}},
+
     {"id": "report", "group": "CLI", "severity": "medium",
      "title_ru": "Отчёты (html/json/junit/prom)", "title_en": "Reports (html/json/junit/prom)",
      "how_ru": "agentctl report --run <run-dir> — единственный источник report.html, report.json, junit.xml, metrics.prom.",

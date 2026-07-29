@@ -581,7 +581,7 @@ def _run_import(out, import_dir) -> int:
     transpiled steps) to `out`. Grounding against a live explore map is a separate pass the caller runs
     when a map exists; this step is the deterministic transpile + honest report.
     """
-    from .importer import parse_playwright_spec, rewrite_report
+    from .importer import parse_playwright_spec, rewrite_report, ground_imported
     if not import_dir or not pathlib.Path(import_dir).is_dir():
         log("fatal.import_dir_missing", path=import_dir)
         return 3
@@ -589,22 +589,45 @@ def _run_import(out, import_dir) -> int:
     if not specs:
         log("fatal.import_no_specs", path=import_dir)
         return 3
-    all_tests, reports = [], []
+    # PROD-IMPORT: an optional explore map grounds the imported steps against the real app — "does this
+    # step still bind to an element the app has?". Passed as a file so import stays browser-less; a live
+    # explore that produces the map is the caller's separate step.
+    site_map = None
+    map_file = os.environ.get("IMPORT_MAP", "")
+    if map_file:
+        try:
+            site_map = json.loads(pathlib.Path(map_file).read_text(encoding="utf-8"))
+        except Exception as e:
+            log("fatal.import_map_invalid", path=map_file, error=e)
+            return 3
+    all_tests, reports, groundings = [], [], []
     for spec in specs:
         parsed = parse_playwright_spec(spec.read_text(encoding="utf-8"), str(spec.relative_to(import_dir)))
         all_tests.extend(parsed["tests"])
         reports.append(rewrite_report(parsed))
+        if site_map is not None:
+            groundings.append({"source": parsed["source"], **ground_imported(parsed, site_map)})
     # one aggregate report across the suite — the totals a team sees on first contact.
     agg = {"engine": "playwright", "sources": [r["source"] for r in reports],
            "totals": {k: sum(r["totals"][k] for r in reports)
                       for k in ("tests", "steps", "bound", "weak", "dropped", "unmatched")},
            "reports": reports}
+    if site_map is not None:
+        agg["grounded"] = True
+        agg["grounding_totals"] = {k: sum(g["totals"][k] for g in groundings)
+                                   for k in ("bound", "unmatched", "unverifiable", "no_locator")}
+        agg["groundings"] = groundings
     (out / "import-report.json").write_text(json.dumps(agg, ensure_ascii=False, indent=2))
     (out / "imported-scenarios.json").write_text(json.dumps({"tests": all_tests}, ensure_ascii=False, indent=2))
     t = agg["totals"]
-    print(f"imported {t['tests']} test(s), {t['steps']} step(s): {t['bound']} bound, "
-          f"{t['weak']} by a weak locator, {t['dropped']} construct(s) dropped, "
-          f"{t['unmatched']} unmatched -> {out}/import-report.json")
+    msg = (f"imported {t['tests']} test(s), {t['steps']} step(s): {t['bound']} bound, "
+           f"{t['weak']} by a weak locator, {t['dropped']} construct(s) dropped, "
+           f"{t['unmatched']} unmatched")
+    if site_map is not None:
+        gt = agg["grounding_totals"]
+        msg += (f"; grounded vs the app: {gt['bound']} bind, {gt['unmatched']} reference a gone element, "
+                f"{gt['unverifiable']} unverifiable (css/xpath)")
+    print(msg + f" -> {out}/import-report.json")
     return 0
 
 
