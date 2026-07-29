@@ -17,196 +17,474 @@
     "  file    : a path that exists in the repo"
   ],
   "capabilities": [
-    {"id": "openai-shim", "group": "Integrations", "severity": "high",
-     "title_ru": "OpenAI-совместимый эндпоинт", "title_en": "OpenAI-compatible endpoint",
-     "how_ru": "POST /v1/chat/completions — подключите любой OpenAI-клиент (Open WebUI, SDK, curl) к продукту.",
-     "how_en": "POST /v1/chat/completions — point any OpenAI client (Open WebUI, SDK, curl) at the product.",
-     "access": {"kind": "http", "ref": "POST /v1/chat/completions"}},
-
-    {"id": "helm-chart", "group": "Deployment", "severity": "high",
-     "title_ru": "Готовый Helm-чарт", "title_en": "A working Helm chart",
-     "how_ru": "deploy/sentinel/ — разверните в Kubernetes; шаблоны, values и секреты уже написаны.",
-     "how_en": "deploy/sentinel/ — deploy to Kubernetes; templates, values and secrets are written.",
-     "access": {"kind": "file", "ref": "deploy/sentinel/templates/configmap.yaml"}},
-
-    {"id": "install-sh", "group": "Deployment", "severity": "high",
-     "title_ru": "Установка без чекаута", "title_en": "Install without a checkout",
-     "how_ru": "install.sh — ставит агент по checksum + cosign, без клонирования репозитория.",
-     "how_en": "install.sh — installs the agent by checksum + cosign, no repository clone.",
-     "access": {"kind": "file", "ref": "install.sh"}},
-
-    {"id": "install-ps1", "group": "Deployment", "severity": "medium",
-     "title_ru": "Установка на Windows", "title_en": "Windows install",
-     "how_ru": "install.ps1 — тот же путь установки для Windows/PowerShell.",
-     "how_en": "install.ps1 — the same install path for Windows/PowerShell.",
-     "access": {"kind": "file", "ref": "install.ps1"}},
-
-    {"id": "airgap-bundle", "group": "Deployment", "severity": "high",
-     "title_ru": "Air-gapped-бандл со всем UI", "title_en": "Air-gapped bundle with the whole UI",
-     "how_ru": "scripts/build-airgap-bundle.sh — поставка кладёт весь браузерный UI, работает без сети.",
-     "how_en": "scripts/build-airgap-bundle.sh — the bundle ships the whole browser UI, runs with no network.",
-     "access": {"kind": "file", "ref": "scripts/build-airgap-bundle.sh"}},
-
-    {"id": "cdp-attach", "group": "Runtime", "severity": "high",
-     "title_ru": "Подключение к вашему Chrome (CDP)", "title_en": "Attach to your own Chrome (CDP)",
-     "how_ru": "PW_CDP_ENDPOINT=http://localhost:9222 — инструмент водит ВАШ уже открытый Chrome (ADR-037).",
-     "how_en": "PW_CDP_ENDPOINT=http://localhost:9222 — the tool drives YOUR already-open Chrome (ADR-037).",
-     "access": {"kind": "env", "ref": "PW_CDP_ENDPOINT"}},
-
-    {"id": "takeover", "group": "Runtime", "severity": "high",
-     "title_ru": "Перехват живого прогона руками", "title_en": "Take over a live run by hand",
-     "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление.",
-     "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back.",
-     "access": {"kind": "http", "ref": "GET /v1/stream"}},
-
-    {"id": "mcp-server", "group": "Runtime", "severity": "high",
-     "title_ru": "Мозг как MCP-сервер", "title_en": "The brain as an MCP server",
-     "how_ru": "RUN_MODE=mcp-server — поднять мозг как MCP-сервер (tools/list + sampling).",
-     "how_en": "RUN_MODE=mcp-server — run the brain as an MCP server (tools/list + sampling).",
-     "access": {"kind": "mode", "ref": "mcp-server"}},
-
-    {"id": "chat-mode", "group": "Runtime", "severity": "medium",
-     "title_ru": "Многоходовой чат-авторинг", "title_en": "Multi-turn chat authoring",
-     "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом.",
-     "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation.",
-     "access": {"kind": "mode", "ref": "chat"}},
-
-    {"id": "browser-tabs", "group": "Runtime", "severity": "medium",
-     "title_ru": "Управление вкладками", "title_en": "Tab control",
-     "how_ru": "browser.tabs / switchTab — многовкладочные и мультистраничные сценарии (M9.4).",
-     "how_en": "browser.tabs / switchTab — multi-tab and multi-page scenarios (M9.4).",
-     "access": {"kind": "code", "ref": "browser.tabs", "file": "pw-executor/src/server.ts"}},
-
-    {"id": "login-as-test", "group": "Runtime", "severity": "high",
-     "title_ru": "Вход один раз (login-as-test)", "title_en": "Log in once (login-as-test)",
-     "how_ru": "STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef.",
-     "how_en": "STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef.",
-     "access": {"kind": "env", "ref": "STORAGE_STATE"}},
-
-    {"id": "trace-download", "group": "Runtime", "severity": "medium",
-     "title_ru": "Скачивание трейса прогона", "title_en": "Download a run's trace",
-     "how_ru": "GET /v1/runs/{id}/artifact?name=trace.zip — трейс упавшего прогона доступен без доступа к серверу (ADR-099).",
-     "how_en": "GET /v1/runs/{id}/artifact?name=trace.zip — a failed run's trace is reachable without server access (ADR-099).",
-     "access": {"kind": "http", "ref": "GET /v1/runs/{id}/artifact"}},
-
-    {"id": "export-spec", "group": "CLI", "severity": "high",
-     "title_ru": "Экспорт в @playwright/test", "title_en": "Export to @playwright/test",
-     "how_ru": "agentctl export-spec --plan <plan.json> — замороженный план -> .spec.ts; путь миграции к Playwright.",
-     "how_en": "agentctl export-spec --plan <plan.json> — a frozen plan -> .spec.ts; the migration path to Playwright.",
-     "access": {"kind": "cli", "ref": "export-spec"}},
-
-    {"id": "import-cli", "group": "CLI", "severity": "high",
-     "title_ru": "Импорт чужой тест-сюиты", "title_en": "Import an existing test suite",
-     "how_ru": "agentctl import --from <dir> — транспиляция @playwright/test в наши шаги + отчёт о переписывании (что связалось, что по слабому локатору, что без эквивалента) (ADR-105).",
-     "how_en": "agentctl import --from <dir> — transpile @playwright/test into our steps + a rewrite report (what bound, what by a weak locator, what has no equivalent) (ADR-105).",
-     "access": {"kind": "cli", "ref": "import"}},
-
-    {"id": "import-http", "group": "HTTP", "severity": "medium",
-     "title_ru": "Импорт тестов через API", "title_en": "Import tests over the API",
-     "how_ru": "POST /v1/import — загрузить файлы тестов и получить тот же отчёт о переписывании (канал UI-загрузки, ADR-105).",
-     "how_en": "POST /v1/import — upload test files and get the same rewrite report (the UI-upload channel, ADR-105).",
-     "access": {"kind": "http", "ref": "POST /v1/import"}},
-
-    {"id": "report", "group": "CLI", "severity": "medium",
-     "title_ru": "Отчёты (html/json/junit/prom)", "title_en": "Reports (html/json/junit/prom)",
-     "how_ru": "agentctl report --run <run-dir> — единственный источник report.html, report.json, junit.xml, metrics.prom.",
-     "how_en": "agentctl report --run <run-dir> — the sole source of report.html, report.json, junit.xml, metrics.prom.",
-     "access": {"kind": "cli", "ref": "report"}},
-
-    {"id": "calibrate", "group": "CLI", "severity": "medium",
-     "title_ru": "Калибровка самопочинки", "title_en": "Healing calibration",
-     "how_ru": "agentctl calibrate — точность самопочинки по стратегиям + вердикты тождества.",
-     "how_en": "agentctl calibrate — heal precision by strategy + identity verdicts.",
-     "access": {"kind": "cli", "ref": "calibrate"}},
-
-    {"id": "purge-store", "group": "CLI", "severity": "medium",
-     "title_ru": "Зачистка чужого текста из БД", "title_en": "Purge foreign text from the DB",
-     "how_ru": "agentctl purge-store --tables <..> --yes — явная зачистка накопленного чужого текста (ADR-100).",
-     "how_en": "agentctl purge-store --tables <..> --yes — explicit cleanup of accumulated foreign text (ADR-100).",
-     "access": {"kind": "cli", "ref": "purge-store"}},
-
-    {"id": "redact-trace", "group": "CLI", "severity": "medium",
-     "title_ru": "Редакция трейса", "title_en": "Redact a trace",
-     "how_ru": "agentctl redact-trace --trace <trace.zip> — вычистить введённые значения и секреты из трейса (ADR-098).",
-     "how_en": "agentctl redact-trace --trace <trace.zip> — strip typed values and secrets from a trace (ADR-098).",
-     "access": {"kind": "cli", "ref": "redact-trace"}},
-
-    {"id": "scenarios-library", "group": "HTTP", "severity": "medium",
-     "title_ru": "Библиотека сценариев", "title_en": "Scenario library",
-     "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы.",
-     "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets.",
-     "access": {"kind": "http", "ref": "GET /v1/scenarios"}},
-
-    {"id": "promote-test", "group": "HTTP", "severity": "medium",
-     "title_ru": "Продвижение сценария в тест", "title_en": "Promote a scenario to a test",
-     "how_ru": "POST /v1/tests/promote — превратить сценарий в именованный тест.",
-     "how_en": "POST /v1/tests/promote — turn a scenario into a named test.",
-     "access": {"kind": "http", "ref": "POST /v1/tests/promote"}},
-
-    {"id": "metrics-trends", "group": "HTTP", "severity": "medium",
-     "title_ru": "Метрики и тренды", "title_en": "Metrics and trends",
-     "how_ru": "GET /v1/results, GET /v1/trends — исходы прогонов и их динамика, нативно в UI (ADR-051).",
-     "how_en": "GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051).",
-     "access": {"kind": "http", "ref": "GET /v1/trends"}},
-
-    {"id": "log-filter", "group": "HTTP", "severity": "medium",
-     "title_ru": "Серверная фильтрация логов", "title_en": "Server-side log filtering",
-     "how_ru": "GET /v1/runs/{id}/logs — фильтр по уровню/источнику/категории/модулю/коду.",
-     "how_en": "GET /v1/runs/{id}/logs — filter by level/source/category/module/code.",
-     "access": {"kind": "http", "ref": "GET /v1/runs/{id}/logs"}},
-
-    {"id": "config-domain", "group": "HTTP", "severity": "medium",
-     "title_ru": "Конфиг через API + схема", "title_en": "Config over the API + schema",
-     "how_ru": "GET/PUT /v1/config, GET /v1/config-schema — служебная конфигурация и её схема (ADR-060/062).",
-     "how_en": "GET/PUT /v1/config, GET /v1/config-schema — service config and its schema (ADR-060/062).",
-     "access": {"kind": "http", "ref": "GET /v1/config-schema"}},
-
-    {"id": "ollama-profile", "group": "Deployment", "severity": "medium",
-     "title_ru": "Локальная модель (ollama)", "title_en": "Local model (ollama)",
-     "how_ru": "docker compose --profile ollama up -d ollama — локальный OpenAI-совместимый эндпоинт моделей.",
-     "how_en": "docker compose --profile ollama up -d ollama — a local OpenAI-compatible model endpoint.",
-     "access": {"kind": "profile", "ref": "ollama"}},
-
-    {"id": "litellm-profile", "group": "Deployment", "severity": "medium",
-     "title_ru": "Роутер моделей (LiteLLM)", "title_en": "Model router (LiteLLM)",
-     "how_ru": "docker compose --profile litellm up -d litellm — роутер поверх многих провайдеров за LLM_BASE_URL (ADR-045).",
-     "how_en": "docker compose --profile litellm up -d litellm — a router over many providers behind LLM_BASE_URL (ADR-045).",
-     "access": {"kind": "profile", "ref": "litellm"}},
-
-    {"id": "webui-profile", "group": "Deployment", "severity": "medium",
-     "title_ru": "Браузерный UI (webui)", "title_en": "Browser UI (webui)",
-     "how_ru": "docker compose --profile webui up — раздать хаб и мастер локально.",
-     "how_en": "docker compose --profile webui up — serve the hub and wizard locally.",
-     "access": {"kind": "profile", "ref": "webui"}},
-
-    {"id": "store-profile", "group": "Deployment", "severity": "medium",
-     "title_ru": "Постоянное хранилище (store)", "title_en": "Persistent store",
-     "how_ru": "docker compose --profile store up — store-gateway для персистентности прогонов/сценариев/метрик (ADR-050).",
-     "how_en": "docker compose --profile store up — the store-gateway for persisting runs/scenarios/metrics (ADR-050).",
-     "access": {"kind": "profile", "ref": "store"}},
-
-    {"id": "env-allowlist", "group": "Runtime", "severity": "medium",
-     "title_ru": "Аллоулист окружения", "title_en": "Environment allowlist",
-     "how_ru": "SENTINEL_ENV_ALLOWLIST — что из окружения хоста доходит до мозга; активен по умолчанию (ADR-035).",
-     "how_en": "SENTINEL_ENV_ALLOWLIST — which host env reaches the brain; on by default (ADR-035).",
-     "access": {"kind": "env", "ref": "SENTINEL_ENV_ALLOWLIST"}},
-
-    {"id": "token-budgets", "group": "Runtime", "severity": "medium",
-     "title_ru": "Токен-бюджеты", "title_en": "Token budgets",
-     "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат; исчерпание = мягкая деградация, не отказ (ADR-021).",
-     "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings; running out degrades gracefully, not fails (ADR-021).",
-     "access": {"kind": "env", "ref": "PLAN_TOKEN_LIMIT"}},
-
-    {"id": "trace-screenshots-off", "group": "Runtime", "severity": "medium",
-     "title_ru": "Отключить скриншоты трейса", "title_en": "Disable trace screenshots",
-     "how_ru": "SENTINEL_TRACE_SCREENSHOTS=0 — не записывать кадры (ADR-098 чистит текст, но не пиксели).",
-     "how_en": "SENTINEL_TRACE_SCREENSHOTS=0 — do not record frames (ADR-098 redacts text, not pixels).",
-     "access": {"kind": "env", "ref": "SENTINEL_TRACE_SCREENSHOTS"}},
-
-    {"id": "fixtures", "group": "Runtime", "severity": "low",
-     "title_ru": "Готовые фикстуры «попробовать сейчас»", "title_en": "Ready fixtures to try now",
-     "how_ru": "testdata/fixtures/l1..l7 — прогнать против встроенной страницы без сети (file://).",
-     "how_en": "testdata/fixtures/l1..l7 — run against a built-in page with no network (file://).",
-     "access": {"kind": "file", "ref": "testdata/fixtures/l2.html"}}
+    {
+      "id": "openai-shim",
+      "group": "Integrations",
+      "severity": "high",
+      "title_ru": "OpenAI-совместимый эндпоинт",
+      "title_en": "OpenAI-compatible endpoint",
+      "how_ru": "POST /v1/chat/completions — подключите любой OpenAI-клиент (Open WebUI, SDK, curl) к продукту.",
+      "how_en": "POST /v1/chat/completions — point any OpenAI client (Open WebUI, SDK, curl) at the product.",
+      "access": {
+        "kind": "http",
+        "ref": "POST /v1/chat/completions"
+      }
+    },
+    {
+      "id": "helm-chart",
+      "group": "Deployment",
+      "severity": "high",
+      "title_ru": "Готовый Helm-чарт",
+      "title_en": "A working Helm chart",
+      "how_ru": "deploy/sentinel/ — разверните в Kubernetes; шаблоны, values и секреты уже написаны.",
+      "how_en": "deploy/sentinel/ — deploy to Kubernetes; templates, values and secrets are written.",
+      "access": {
+        "kind": "file",
+        "ref": "deploy/sentinel/templates/configmap.yaml"
+      }
+    },
+    {
+      "id": "install-sh",
+      "group": "Deployment",
+      "severity": "high",
+      "title_ru": "Установка без чекаута",
+      "title_en": "Install without a checkout",
+      "how_ru": "install.sh — ставит агент по checksum + cosign, без клонирования репозитория.",
+      "how_en": "install.sh — installs the agent by checksum + cosign, no repository clone.",
+      "access": {
+        "kind": "file",
+        "ref": "install.sh"
+      }
+    },
+    {
+      "id": "install-ps1",
+      "group": "Deployment",
+      "severity": "medium",
+      "title_ru": "Установка на Windows",
+      "title_en": "Windows install",
+      "how_ru": "install.ps1 — тот же путь установки для Windows/PowerShell.",
+      "how_en": "install.ps1 — the same install path for Windows/PowerShell.",
+      "access": {
+        "kind": "file",
+        "ref": "install.ps1"
+      }
+    },
+    {
+      "id": "airgap-bundle",
+      "group": "Deployment",
+      "severity": "high",
+      "title_ru": "Air-gapped-бандл со всем UI",
+      "title_en": "Air-gapped bundle with the whole UI",
+      "how_ru": "scripts/build-airgap-bundle.sh — поставка кладёт весь браузерный UI, работает без сети.",
+      "how_en": "scripts/build-airgap-bundle.sh — the bundle ships the whole browser UI, runs with no network.",
+      "access": {
+        "kind": "file",
+        "ref": "scripts/build-airgap-bundle.sh"
+      }
+    },
+    {
+      "id": "cdp-attach",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Подключение к вашему Chrome (CDP)",
+      "title_en": "Attach to your own Chrome (CDP)",
+      "how_ru": "PW_CDP_ENDPOINT=http://localhost:9222 — инструмент водит ВАШ уже открытый Chrome (ADR-037).",
+      "how_en": "PW_CDP_ENDPOINT=http://localhost:9222 — the tool drives YOUR already-open Chrome (ADR-037).",
+      "access": {
+        "kind": "env",
+        "ref": "PW_CDP_ENDPOINT"
+      }
+    },
+    {
+      "id": "takeover",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Перехват живого прогона руками",
+      "title_en": "Take over a live run by hand",
+      "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление.",
+      "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back.",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/stream"
+      }
+    },
+    {
+      "id": "mcp-server",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Мозг как MCP-сервер",
+      "title_en": "The brain as an MCP server",
+      "how_ru": "RUN_MODE=mcp-server — поднять мозг как MCP-сервер (tools/list + sampling).",
+      "how_en": "RUN_MODE=mcp-server — run the brain as an MCP server (tools/list + sampling).",
+      "access": {
+        "kind": "mode",
+        "ref": "mcp-server"
+      }
+    },
+    {
+      "id": "chat-mode",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Многоходовой чат-авторинг",
+      "title_en": "Multi-turn chat authoring",
+      "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом.",
+      "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation.",
+      "access": {
+        "kind": "mode",
+        "ref": "chat"
+      }
+    },
+    {
+      "id": "browser-tabs",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Управление вкладками",
+      "title_en": "Tab control",
+      "how_ru": "browser.tabs / switchTab — многовкладочные и мультистраничные сценарии (M9.4).",
+      "how_en": "browser.tabs / switchTab — multi-tab and multi-page scenarios (M9.4).",
+      "access": {
+        "kind": "code",
+        "ref": "browser.tabs",
+        "file": "pw-executor/src/server.ts"
+      }
+    },
+    {
+      "id": "login-as-test",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Вход один раз (login-as-test)",
+      "title_en": "Log in once (login-as-test)",
+      "how_ru": "STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef.",
+      "how_en": "STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef.",
+      "access": {
+        "kind": "env",
+        "ref": "STORAGE_STATE"
+      }
+    },
+    {
+      "id": "trace-download",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Скачивание трейса прогона",
+      "title_en": "Download a run's trace",
+      "how_ru": "GET /v1/runs/{id}/artifact?name=trace.zip — трейс упавшего прогона доступен без доступа к серверу (ADR-099).",
+      "how_en": "GET /v1/runs/{id}/artifact?name=trace.zip — a failed run's trace is reachable without server access (ADR-099).",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/runs/{id}/artifact"
+      }
+    },
+    {
+      "id": "export-spec",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "Экспорт в @playwright/test",
+      "title_en": "Export to @playwright/test",
+      "how_ru": "agentctl export-spec --plan <plan.json> — замороженный план -> .spec.ts; путь миграции к Playwright.",
+      "how_en": "agentctl export-spec --plan <plan.json> — a frozen plan -> .spec.ts; the migration path to Playwright.",
+      "access": {
+        "kind": "cli",
+        "ref": "export-spec"
+      }
+    },
+    {
+      "id": "import-cli",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "Импорт чужой тест-сюиты",
+      "title_en": "Import an existing test suite",
+      "how_ru": "agentctl import --from <dir> — транспиляция @playwright/test в наши шаги + отчёт о переписывании (что связалось, что по слабому локатору, что без эквивалента) (ADR-105).",
+      "how_en": "agentctl import --from <dir> — transpile @playwright/test into our steps + a rewrite report (what bound, what by a weak locator, what has no equivalent) (ADR-105).",
+      "access": {
+        "kind": "cli",
+        "ref": "import"
+      }
+    },
+    {
+      "id": "import-http",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Импорт тестов через API",
+      "title_en": "Import tests over the API",
+      "how_ru": "POST /v1/import — загрузить файлы тестов и получить тот же отчёт о переписывании (канал UI-загрузки, ADR-105).",
+      "how_en": "POST /v1/import — upload test files and get the same rewrite report (the UI-upload channel, ADR-105).",
+      "access": {
+        "kind": "http",
+        "ref": "POST /v1/import"
+      }
+    },
+    {
+      "id": "report",
+      "group": "CLI",
+      "severity": "medium",
+      "title_ru": "Отчёты (html/json/junit/prom)",
+      "title_en": "Reports (html/json/junit/prom)",
+      "how_ru": "agentctl report --run <run-dir> — единственный источник report.html, report.json, junit.xml, metrics.prom.",
+      "how_en": "agentctl report --run <run-dir> — the sole source of report.html, report.json, junit.xml, metrics.prom.",
+      "access": {
+        "kind": "cli",
+        "ref": "report"
+      }
+    },
+    {
+      "id": "calibrate",
+      "group": "CLI",
+      "severity": "medium",
+      "title_ru": "Калибровка самопочинки",
+      "title_en": "Healing calibration",
+      "how_ru": "agentctl calibrate — точность самопочинки по стратегиям + вердикты тождества.",
+      "how_en": "agentctl calibrate — heal precision by strategy + identity verdicts.",
+      "access": {
+        "kind": "cli",
+        "ref": "calibrate"
+      }
+    },
+    {
+      "id": "purge-store",
+      "group": "CLI",
+      "severity": "medium",
+      "title_ru": "Зачистка чужого текста из БД",
+      "title_en": "Purge foreign text from the DB",
+      "how_ru": "agentctl purge-store --tables <..> --yes — явная зачистка накопленного чужого текста (ADR-100).",
+      "how_en": "agentctl purge-store --tables <..> --yes — explicit cleanup of accumulated foreign text (ADR-100).",
+      "access": {
+        "kind": "cli",
+        "ref": "purge-store"
+      }
+    },
+    {
+      "id": "redact-trace",
+      "group": "CLI",
+      "severity": "medium",
+      "title_ru": "Редакция трейса",
+      "title_en": "Redact a trace",
+      "how_ru": "agentctl redact-trace --trace <trace.zip> — вычистить введённые значения и секреты из трейса (ADR-098).",
+      "how_en": "agentctl redact-trace --trace <trace.zip> — strip typed values and secrets from a trace (ADR-098).",
+      "access": {
+        "kind": "cli",
+        "ref": "redact-trace"
+      }
+    },
+    {
+      "id": "scenarios-library",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Библиотека сценариев",
+      "title_en": "Scenario library",
+      "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы.",
+      "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets.",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/scenarios"
+      }
+    },
+    {
+      "id": "promote-test",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Продвижение сценария в тест",
+      "title_en": "Promote a scenario to a test",
+      "how_ru": "POST /v1/tests/promote — превратить сценарий в именованный тест.",
+      "how_en": "POST /v1/tests/promote — turn a scenario into a named test.",
+      "access": {
+        "kind": "http",
+        "ref": "POST /v1/tests/promote"
+      }
+    },
+    {
+      "id": "metrics-trends",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Метрики и тренды",
+      "title_en": "Metrics and trends",
+      "how_ru": "GET /v1/results, GET /v1/trends — исходы прогонов и их динамика, нативно в UI (ADR-051).",
+      "how_en": "GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051).",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/trends"
+      }
+    },
+    {
+      "id": "log-filter",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Серверная фильтрация логов",
+      "title_en": "Server-side log filtering",
+      "how_ru": "GET /v1/runs/{id}/logs — фильтр по уровню/источнику/категории/модулю/коду.",
+      "how_en": "GET /v1/runs/{id}/logs — filter by level/source/category/module/code.",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/runs/{id}/logs"
+      }
+    },
+    {
+      "id": "config-domain",
+      "group": "HTTP",
+      "severity": "medium",
+      "title_ru": "Конфиг через API + схема",
+      "title_en": "Config over the API + schema",
+      "how_ru": "GET/PUT /v1/config, GET /v1/config-schema — служебная конфигурация и её схема (ADR-060/062).",
+      "how_en": "GET/PUT /v1/config, GET /v1/config-schema — service config and its schema (ADR-060/062).",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/config-schema"
+      }
+    },
+    {
+      "id": "ollama-profile",
+      "group": "Deployment",
+      "severity": "medium",
+      "title_ru": "Локальная модель (ollama)",
+      "title_en": "Local model (ollama)",
+      "how_ru": "docker compose --profile ollama up -d ollama — локальный OpenAI-совместимый эндпоинт моделей.",
+      "how_en": "docker compose --profile ollama up -d ollama — a local OpenAI-compatible model endpoint.",
+      "access": {
+        "kind": "profile",
+        "ref": "ollama"
+      }
+    },
+    {
+      "id": "litellm-profile",
+      "group": "Deployment",
+      "severity": "medium",
+      "title_ru": "Роутер моделей (LiteLLM)",
+      "title_en": "Model router (LiteLLM)",
+      "how_ru": "docker compose --profile litellm up -d litellm — роутер поверх многих провайдеров за LLM_BASE_URL (ADR-045).",
+      "how_en": "docker compose --profile litellm up -d litellm — a router over many providers behind LLM_BASE_URL (ADR-045).",
+      "access": {
+        "kind": "profile",
+        "ref": "litellm"
+      }
+    },
+    {
+      "id": "webui-profile",
+      "group": "Deployment",
+      "severity": "medium",
+      "title_ru": "Браузерный UI (webui)",
+      "title_en": "Browser UI (webui)",
+      "how_ru": "docker compose --profile webui up — раздать хаб и мастер локально.",
+      "how_en": "docker compose --profile webui up — serve the hub and wizard locally.",
+      "access": {
+        "kind": "profile",
+        "ref": "webui"
+      }
+    },
+    {
+      "id": "store-profile",
+      "group": "Deployment",
+      "severity": "medium",
+      "title_ru": "Постоянное хранилище (store)",
+      "title_en": "Persistent store",
+      "how_ru": "docker compose --profile store up — store-gateway для персистентности прогонов/сценариев/метрик (ADR-050).",
+      "how_en": "docker compose --profile store up — the store-gateway for persisting runs/scenarios/metrics (ADR-050).",
+      "access": {
+        "kind": "profile",
+        "ref": "store"
+      }
+    },
+    {
+      "id": "env-allowlist",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Аллоулист окружения",
+      "title_en": "Environment allowlist",
+      "how_ru": "SENTINEL_ENV_ALLOWLIST — что из окружения хоста доходит до мозга; активен по умолчанию (ADR-035).",
+      "how_en": "SENTINEL_ENV_ALLOWLIST — which host env reaches the brain; on by default (ADR-035).",
+      "access": {
+        "kind": "env",
+        "ref": "SENTINEL_ENV_ALLOWLIST"
+      }
+    },
+    {
+      "id": "token-budgets",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Токен-бюджеты",
+      "title_en": "Token budgets",
+      "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат; исчерпание = мягкая деградация, не отказ (ADR-021).",
+      "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings; running out degrades gracefully, not fails (ADR-021).",
+      "access": {
+        "kind": "env",
+        "ref": "PLAN_TOKEN_LIMIT"
+      }
+    },
+    {
+      "id": "trace-screenshots-off",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Отключить скриншоты трейса",
+      "title_en": "Disable trace screenshots",
+      "how_ru": "SENTINEL_TRACE_SCREENSHOTS=0 — не записывать кадры (ADR-098 чистит текст, но не пиксели).",
+      "how_en": "SENTINEL_TRACE_SCREENSHOTS=0 — do not record frames (ADR-098 redacts text, not pixels).",
+      "access": {
+        "kind": "env",
+        "ref": "SENTINEL_TRACE_SCREENSHOTS"
+      }
+    },
+    {
+      "id": "fixtures",
+      "group": "Runtime",
+      "severity": "low",
+      "title_ru": "Готовые фикстуры «попробовать сейчас»",
+      "title_en": "Ready fixtures to try now",
+      "how_ru": "testdata/fixtures/l1..l7 — прогнать против встроенной страницы без сети (file://).",
+      "how_en": "testdata/fixtures/l1..l7 — run against a built-in page with no network (file://).",
+      "access": {
+        "kind": "file",
+        "ref": "testdata/fixtures/l2.html"
+      }
+    },
+    {
+      "id": "import-git",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "Импорт тестов прямо из git",
+      "title_en": "Import tests straight from git",
+      "how_ru": "agentctl import --from-git <url|путь> [--ref <ветка>] — клонирует репозиторий и импортирует его сюиту. Локальный путь работает БЕЗ сети, поэтому канал пригоден в air-gapped-установке.",
+      "how_en": "agentctl import --from-git <url|path> [--ref <branch>] — clone a repository and import its suite. A local path works with NO network, so the channel is usable in an air-gapped install.",
+      "access": {
+        "kind": "cli",
+        "ref": "import"
+      }
+    },
+    {
+      "id": "export-git",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "Экспорт тестов в ваш репозиторий",
+      "title_en": "Export tests into your repository",
+      "how_ru": "agentctl export-git --spec <файл> --to-git <url|путь> [--branch] [--subdir] [--push] — кладёт авторские тесты туда, где живёт код. Push ТОЛЬКО по явному флагу; локальный checkout пишется на месте.",
+      "how_en": "agentctl export-git --spec <file> --to-git <url|path> [--branch] [--subdir] [--push] — put authored tests where the code lives. Push only on the explicit flag; a local checkout is written in place.",
+      "access": {
+        "kind": "cli",
+        "ref": "export-git"
+      }
+    },
+    {
+      "id": "import-verify",
+      "group": "CLI",
+      "severity": "high",
+      "title_ru": "Проверка импорта против живого приложения",
+      "title_en": "Verify an import against the live application",
+      "how_ru": "agentctl import --from <dir> --verify --target <url> — разведает настоящее приложение и заземлит импортированные шаги против ЕГО карты: что связалось, что ссылается на исчезнувший элемент. Выключено по умолчанию, чтобы импорт оставался офлайновым.",
+      "how_en": "agentctl import --from <dir> --verify --target <url> — explore the real application and ground the imported steps against ITS map: what binds, what references a gone element. Off by default so import stays offline.",
+      "access": {
+        "kind": "cli",
+        "ref": "import"
+      }
+    },
+    {
+      "id": "site-map-artifact",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Карта приложения как артефакт",
+      "title_en": "The explore map as an artifact",
+      "how_ru": "site-map.json рядом с plan.json — что разведка нашла на приложении (роли, имена, semantic_id). Вход для заземления импорта; скачивается как обычный артефакт прогона.",
+      "how_en": "site-map.json beside plan.json — what the explore found in the application (roles, names, semantic_ids). The input grounding needs; fetched like any run artifact.",
+      "access": {
+        "kind": "file",
+        "ref": "brain/graph.py"
+      }
+    }
   ]
 }

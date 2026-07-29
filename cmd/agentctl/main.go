@@ -66,7 +66,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
-	fmt.Fprintln(os.Stderr, "  agentctl import --from <dir>                 # transpile existing tests -> steps + rewrite report (ADR-105)")
+	fmt.Fprintln(os.Stderr, "  agentctl export-git --spec <f> --to-git <repo> [--push]  # land authored specs in a repository")
+	fmt.Fprintln(os.Stderr, "  agentctl import --from <dir>|--from-git <repo> [--verify --target <url>]  # transpile an existing suite")
 	fmt.Fprintln(os.Stderr, "  agentctl calibrate                          # heal outcomes by strategy + identity verdicts")
 	fmt.Fprintln(os.Stderr, "  agentctl redact-trace --trace <trace.zip>   # strip typed values + credentials from a trace (ADR-098)")
 	fmt.Fprintln(os.Stderr, "  agentctl purge-store --tables <a,b> --yes [--older-than 720h] [--vacuum]")
@@ -614,6 +615,98 @@ func cmdExportSpec(repo string, args []string) int {
 	})
 }
 
+// cmdExportGit: agentctl export-git --spec <file>... --to-git <repo> [--branch b] [--subdir d] [--push]
+//
+// The OUTPUT half of the git channel (🟢OSS). It takes specs that already exist — export-spec turns a
+// frozen plan into a .spec.ts — and lands them in a repository, so a team's authored tests live where
+// their code lives instead of only in a run directory (runs/ and state/ are gitignored, so today the
+// authored tests are outside version control entirely).
+//
+// PUSH IS OPT-IN. Committing into a local working tree is recoverable; pushing to a remote is an
+// outward, irreversible act, and it happens only when asked for by name.
+func cmdExportGit(repo string, args []string) int {
+	fs := flag.NewFlagSet("export-git", flag.ExitOnError)
+	toGit := fs.String("to-git", "", "git repository (URL or local path) to write the specs into (required)")
+	branch := fs.String("branch", "", "branch to commit on (created or reset)")
+	subdir := fs.String("subdir", "", "directory inside the repository to write into (e.g. e2e)")
+	message := fs.String("message", "", "commit message (default names the specs)")
+	push := fs.Bool("push", false, "push after committing — OFF by default: writing to a remote is outward and irreversible")
+	var specs multiFlag
+	fs.Var(&specs, "spec", "path to a .spec.ts to export (repeatable) (required)")
+	_ = fs.Parse(args)
+	if *toGit == "" || len(specs) == 0 {
+		fmt.Fprintln(os.Stderr, "error: --to-git <repo> and at least one --spec <file> are required")
+		return 2
+	}
+	files := map[string][]byte{}
+	for _, s := range specs {
+		b, err := os.ReadFile(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "export-git: %v\n", err)
+			return 3
+		}
+		files[filepath.Base(s)] = b
+	}
+	// WHERE the commit lands decides whether it survives, and getting this wrong makes the command
+	// silently do nothing. A clone is a TEMPORARY directory: committing into it and not pushing
+	// throws the commit away the moment the command exits, while still printing "committed <sha>".
+	// Measured — the first version did exactly that, twice in a row, reporting success both times.
+	//
+	// So: a local WORKING TREE is written in place (that is what "put the tests in my checkout"
+	// means), and anything else must be pushed or it is refused outright.
+	worktree, cleanup := *toGit, false
+	if st, err := os.Stat(*toGit); err != nil || !st.IsDir() || isBareOrNotAWorktree(*toGit) {
+		if !*push {
+			fmt.Fprintf(os.Stderr, "error: %s is not a local working tree, so the commit would only "+
+				"exist in a temporary clone and be discarded. Pass --push to send it, or point "+
+				"--to-git at a checkout to write in place.\n", *toGit)
+			return 2
+		}
+		clone, err := gitClone(*toGit, *branch)
+		if err != nil {
+			// A branch that does not exist yet is ordinary for an export; clone the default and let
+			// -B create it, rather than refusing the first export a repository ever receives.
+			clone, err = gitClone(*toGit, "")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "export-git: %v\n", err)
+				return 3
+			}
+		}
+		worktree, cleanup = clone, true
+	}
+	if cleanup {
+		defer os.RemoveAll(worktree)
+	}
+	clone := worktree
+	msg := *message
+	if msg == "" {
+		names := make([]string, 0, len(files))
+		for n := range files {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		msg = "test(sentinel): export " + strings.Join(names, ", ")
+	}
+	sha, err := gitCommitInto(clone, *subdir, msg, files, *push, *branch)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "export-git: %v\n", err)
+		return 1
+	}
+	if sha == "" {
+		fmt.Printf("export-git: no change — the repository already holds these %d spec(s)\n", len(files))
+		return 0
+	}
+	fmt.Printf("export-git: committed %s (%d spec(s))%s\n", sha[:8], len(files),
+		map[bool]string{true: " and pushed", false: " — not pushed (use --push)"}[*push])
+	return 0
+}
+
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
 // cmdReport: agentctl report --run <dir>  (M4) — HTML+JSON report + Prometheus metrics
 // cmdImport: agentctl import --from <dir>  (PROD-IMPORT, ADR-105)
 //
@@ -622,15 +715,30 @@ func cmdExportSpec(repo string, args []string) int {
 // existing suite and writes the rewrite report (import-report.json). No browser, no LLM, no network.
 func cmdImport(repo string, args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests) (required)")
+	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests)")
+	fromGit := fs.String("from-git", "", "git repository (URL or local path) to clone and import from")
+	ref := fs.String("ref", "", "branch/tag to clone with --from-git (default: the repository's default)")
 	mapFile := fs.String("map", "", "optional explore-map JSON to ground imported steps against the real app")
 	verify := fs.Bool("verify", false, "explore --target first and ground the import against THAT map (needs a browser; off by default so import stays offline)")
 	target := fs.String("target", "", "URL to explore when --verify is set")
 	artifactDir := fs.String("artifact-dir", "", "where to write import-report.json (default ./runs/<id>)")
 	_ = fs.Parse(args)
-	if *from == "" {
-		fmt.Fprintln(os.Stderr, "error: --from <dir> is required")
+	if (*from == "") == (*fromGit == "") {
+		fmt.Fprintln(os.Stderr, "error: give exactly one of --from <dir> or --from-git <repo>")
 		return 2
+	}
+	if *fromGit != "" {
+		// git is a way to REACH the files; the filesystem channel then does the actual work. A local
+		// path clones with no network at all, which is what keeps this usable in an air-gapped
+		// install and what lets the gate run against a bare repo in a temp dir.
+		clone, err := gitClone(*fromGit, *ref)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "import: %v\n", err)
+			return 3
+		}
+		defer os.RemoveAll(clone)
+		fmt.Fprintf(os.Stderr, "cloned %s -> %s\n", *fromGit, clone)
+		*from = clone
 	}
 	if *verify && *target == "" {
 		fmt.Fprintln(os.Stderr, "error: --verify needs --target <url> — there is nothing to verify against otherwise")
@@ -765,6 +873,8 @@ func main() {
 		code = cmdBaseline(repo, os.Args[2:])
 	case "locators":
 		code = cmdLocators(repo, os.Args[2:])
+	case "export-git":
+		code = cmdExportGit(repo, os.Args[2:])
 	case "export-spec":
 		code = cmdExportSpec(repo, os.Args[2:])
 	case "import":
