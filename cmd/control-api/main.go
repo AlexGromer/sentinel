@@ -1187,6 +1187,11 @@ var artifactWhitelist = map[string]bool{
 	"junit.xml":             true, // ADR-073: the machine contract every CI consumes
 	"executed-plan.json":    true, // ADR-047 follow-on: the plan a replay ran, so the replay is replayable
 	"metrics.prom":          true, // ADR-089: Prometheus textfile — the run's numbers, now that a UI run produces them
+	// PROD-IMPORT: the explore map. It is what makes "does this imported step still bind to an element
+	// the app HAS?" answerable — grounding could always compute it, but nothing produced the map, so
+	// the capability was unreachable outside a synthetic fixture. Same class of foreign text as the
+	// role+name locators plan.json already carries, and governed by the same retention.
+	"site-map.json": true,
 	// ADR-099: the trace. Until now the one artifact a person could not reach without shell access to
 	// the server — which meant the post-mortem of a failed run was unavailable to exactly the person
 	// the product is for.

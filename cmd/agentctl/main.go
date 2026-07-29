@@ -624,10 +624,22 @@ func cmdImport(repo string, args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	from := fs.String("from", "", "directory of existing tests to import (e.g. ./tests) (required)")
 	mapFile := fs.String("map", "", "optional explore-map JSON to ground imported steps against the real app")
+	verify := fs.Bool("verify", false, "explore --target first and ground the import against THAT map (needs a browser; off by default so import stays offline)")
+	target := fs.String("target", "", "URL to explore when --verify is set")
 	artifactDir := fs.String("artifact-dir", "", "where to write import-report.json (default ./runs/<id>)")
 	_ = fs.Parse(args)
 	if *from == "" {
 		fmt.Fprintln(os.Stderr, "error: --from <dir> is required")
+		return 2
+	}
+	if *verify && *target == "" {
+		fmt.Fprintln(os.Stderr, "error: --verify needs --target <url> — there is nothing to verify against otherwise")
+		return 2
+	}
+	if *verify && *mapFile != "" {
+		// Both would silently pick one. Refuse: "grounded against the app" and "grounded against this
+		// file" are different claims, and the report must not be ambiguous about which it made.
+		fmt.Fprintln(os.Stderr, "error: --verify and --map are mutually exclusive (one explores the app, the other reads a file)")
 		return 2
 	}
 	abs, err := filepath.Abs(*from)
@@ -637,9 +649,38 @@ func cmdImport(repo string, args []string) int {
 	}
 	runID := newRunID()
 	dir := mkArtifactDir(repo, runID, *artifactDir)
+
+	resolvedMap := *mapFile
+	if *verify {
+		// The two halves of the diagnosis in one command: EXPLORE the real application to learn what
+		// it actually has, then ground the imported suite against THAT. Until the explore map became
+		// an artifact this could not be written at all — grounding could compute the answer and
+		// nothing could produce its input, so the only map in existence was a test fixture.
+		//
+		// A separate run directory on purpose: the explore is its own run with its own trace and its
+		// own retention, and folding it into the import's directory would put a browser run's
+		// artifacts under a report that claims to be browser-less.
+		exploreID := newRunID()
+		exploreDir := mkArtifactDir(repo, exploreID, "")
+		fmt.Fprintf(os.Stderr, "verify: exploring %s -> %s\n", *target, exploreDir)
+		if rc := spawnBrain(repo, exploreID, []string{
+			"RUN_MODE=explore", "ARTIFACT_DIR=" + exploreDir, "TARGET_URL=" + *target,
+		}); rc > 1 {
+			// exit 1 means the explore found a problem in the APPLICATION, which is a result, not a
+			// failure to explore — the map is still written. Anything above that is a real failure.
+			fmt.Fprintf(os.Stderr, "verify: explore failed (exit %d); nothing to ground against\n", rc)
+			return rc
+		}
+		resolvedMap = filepath.Join(exploreDir, "site-map.json")
+		if _, err := os.Stat(resolvedMap); err != nil {
+			fmt.Fprintf(os.Stderr, "verify: the explore produced no site-map.json (%v) — the target may have no interactive elements\n", err)
+			return 3
+		}
+	}
+
 	extra := []string{"RUN_MODE=import", "ARTIFACT_DIR=" + dir, "IMPORT_DIR=" + abs}
-	if *mapFile != "" {
-		if m, err := filepath.Abs(*mapFile); err == nil {
+	if resolvedMap != "" {
+		if m, err := filepath.Abs(resolvedMap); err == nil {
 			extra = append(extra, "IMPORT_MAP="+m)
 		}
 	}
