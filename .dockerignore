@@ -25,5 +25,11 @@ docs/**
 # hub's live-pricing seeds. Without these the `webui` profile serves pages whose fetch() 404s.
 !docs/backend-presets.json
 !docs/prices.json
+# ADR-104: the capabilities catalogue. Needed TWICE over — docs/embed.go names it, so the Go build
+# inside the image cannot compile without it; and the hub panel fetch()es it at runtime, so the
+# webui profile would serve a page whose catalogue 404s. Both are covered by
+# tests/test_container_embed_context_offline.py, which applies THIS file when it reconstructs the
+# build context — an exclusion here is as fatal as a missing COPY, and looks nothing like it.
+!docs/capabilities.json
 memory
 **/__pycache__

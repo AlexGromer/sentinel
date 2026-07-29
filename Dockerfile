@@ -12,8 +12,12 @@ COPY internal/ internal/
 # ADR-064: control-api embeds the browser UI, so `package webui` (docs/embed.go) must be present at
 # compile time. Only the embedded allowlist is copied — `COPY docs/ docs/` would invalidate this
 # layer, and rebuild every Go binary, on every prose edit. KEEP IN SYNC WITH docs/embed.go: widening
-# the go:embed patterns without adding the file here fails this build loudly, which is the intent.
-COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json docs/
+# the go:embed patterns without adding the file here breaks this build. That sync is no longer left
+# to a reader of this comment — tests/test_container_embed_context_offline.py reconstructs exactly
+# the context these COPY lines produce and compiles against it, so the drift surfaces in the fast
+# offline suite instead of minutes later in the airgap image build (which is how it was caught
+# twice: 2026-07-23 for index.html, 2026-07-29 for capabilities.json).
+COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json docs/capabilities.json docs/
 COPY docs/setup/ docs/setup/
 COPY docs/chat/ docs/chat/
 COPY docs/calculators/ docs/calculators/
