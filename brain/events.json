@@ -1497,6 +1497,56 @@
       "modules": [
         "__main__"
       ]
+    },
+    "fatal.revisions_no_test_id": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 2,
+      "ru": "Ревизии: не указан тест (--test <id>)",
+      "en": "Revisions: no test given (--test <id>)",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.revisions_unknown": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 3,
+      "ru": "Ревизии: у теста {test_id} нет ревизии {revision}",
+      "en": "Revisions: test {test_id} has no revision {revision}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.revisions_not_enough": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 3,
+      "ru": "Ревизии: у теста {test_id} всего {have} — сравнивать нечего",
+      "en": "Revisions: test {test_id} has only {have} — nothing to compare",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.revisions_no_target": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 2,
+      "ru": "Ревизии: откат требует явную ревизию (--rev <id>)",
+      "en": "Revisions: rollback needs an explicit revision (--rev <id>)",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.revisions_bad_op": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 2,
+      "ru": "Ревизии: неизвестная операция {op}",
+      "en": "Revisions: unknown operation {op}",
+      "modules": [
+        "__main__"
+      ]
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
