@@ -588,6 +588,24 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                               "explore": _explore_model, "author": _author_model}
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:
             json.dump(plan_obj, f, indent=2)
+        # PROD-IMPORT: the explore map, written as an artifact. `ground_imported` has always been able
+        # to answer "does this imported step still bind to an element the app HAS?" — but nothing ever
+        # produced the map it needs. It lived only in graph state and in the per-run checkpoint.db,
+        # which ADR-099 deletes in `finally`, so the capability was real in code and unreachable in
+        # practice: the only file of this shape in the repository was a synthetic test fixture.
+        #
+        # It carries the application's accessible names, so it is foreign text — but the SAME foreign
+        # text plan.json already carries in its role+name locators (ADR-100's distinction: inherent to
+        # the function, not incidental). More of it, not a new class of it, and it lands in the same
+        # artifact directory the retention and redaction machinery already governs.
+        site_map = state.get("site_map") or {}
+        # `any(values)`, not `if site_map`: perceive records a key for every path it visited, so a page
+        # with nothing interactive yields {path: []} — a NON-EMPTY dict describing NO elements. Writing
+        # that produces a map against which every imported step grounds as "gone": a confident wrong
+        # diagnosis, which is worse than no diagnosis. Caught by running the graph, not by reading it.
+        if any(site_map.values()):
+            with open(os.path.join(state.get("artifact_dir", "."), "site-map.json"), "w") as f:
+                json.dump(site_map, f, ensure_ascii=False, indent=2)
         # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen
         # during explore) — NOT the true process exit code, which __main__.py computes after
         # app.invoke() returns (outside this graph); that final code is out of scope here.
