@@ -87,10 +87,13 @@ def test_weak_locators_are_flagged():
     p = _parsed()
     weak = [n for t in p["tests"] for n in t["notes"] if n["kind"] == "weak_locator"]
     strategies = {n["strategy"] for n in weak}
+    # canonical strategy names from brain/strategies (single source): css and text_role are drift-prone.
     _check("css" in strategies, "the #pay-now css locator was not flagged as weak")
-    _check("text" in strategies, "a getByText locator was not flagged as weak")
+    _check("text_role" in strategies, "a getByText locator was not flagged as weak")
+    # a stable label (0.88) is NOT flagged weak — only the drift-prone strategies are.
+    _check("label" not in strategies, "a getByLabel locator (prior 0.88) was wrongly flagged weak")
     for n in weak:
-        _check(n["prior"] < 0.95, f"a 'weak' note carries a strong prior: {n}")
+        _check(n["prior"] < 0.85, f"a 'weak' note carries a non-weak prior: {n}")
 
 
 # 6 — the report totals add up and match the steps, so the 'state of your suite' summary is true.
@@ -101,7 +104,7 @@ def test_report_totals_are_consistent():
     _check(tot["tests"] == 2 and tot["steps"] == 12, f"totals off: {tot}")
     _check(tot["bound"] == 11, f"bound = {tot['bound']}, want 11 (the toHaveURL assert has no locator)")
     _check(tot["dropped"] == 2, f"dropped = {tot['dropped']}, want 2")
-    _check(tot["weak"] >= 4, f"weak = {tot['weak']}, want >= 4")
+    _check(tot["weak"] == 3, f"weak = {tot['weak']}, want 3 (text_role x2 + css x1; label is not weak)")
     # per-test bound never exceeds its step count — a report that over-counts is worse than none.
     for t in rep["tests"]:
         _check(t["bound"] <= t["steps"], f"{t['name']}: bound {t['bound']} > steps {t['steps']}")

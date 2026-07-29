@@ -27,12 +27,23 @@ named here so adding them is filling a table, not reopening the design.
 """
 import re
 
-# Locator prior by strategy — mirrors the healing corpus: a stable hook (testid) or an accessible
-# (role, name) pair is strong; visible text or a label is medium (text drifts with copy); a css/xpath
-# path is weak (it breaks on the first restructure). The report flags anything below STRONG so a team
-# sees which of its tests rest on a locator that will rot.
-_PRIOR = {"testid": 0.95, "role_name": 0.95, "label": 0.85, "text": 0.85, "css": 0.80, "xpath": 0.80}
-_STRONG = 0.95
+# The locator-strategy vocabulary and priors come from the ONE place that owns them (brain/strategies,
+# ADR-083) — an importer that kept its own copy is exactly how that vocabulary drifted before, and the
+# offline gate forbids a private copy. A locator is WEAK when its strategy is one that drifts: text
+# moves with copy, css/xpath break on the first restructure. testid/role_name/label are stable enough
+# not to warn on. The prior reported for each is the canonical one, so an imported suite is ranked by
+# the same numbers a heal would use.
+from .strategies import PRIORS, STRATEGY_BY_LOCATOR_KEY, canonical, TEXT_ROLE, CSS, XPATH  # noqa: E402
+
+_WEAK_STRATEGIES = frozenset({TEXT_ROLE, CSS, XPATH})
+
+
+def _strategy_of(locator):
+    """The canonical strategy name for a parsed locator dict, via the shared locator-key map."""
+    for key in ("testid", "role", "label", "text", "css", "xpath"):
+        if key in locator:
+            return STRATEGY_BY_LOCATOR_KEY.get(key)
+    return None
 
 # A quoted argument that may contain the OTHER quote inside it — a css/frame selector like
 # 'iframe[name="stripe"]' has double quotes within single quotes. `(['"])(.*?)\1` matches the opening
@@ -151,11 +162,12 @@ def parse_playwright_spec(src, source="<spec>"):
                 rx = re.match(r"^/(.*)/[a-z]*$", arg)
                 step["expected"] = rx.group(1) if rx else _unquote(arg)
             cur["steps"].append(step)
-            if loc and strat and _PRIOR.get(strat, 1.0) < _STRONG:
-                cur["notes"].append({"kind": "weak_locator", "strategy": strat,
-                                     "prior": _PRIOR[strat], "line": line,
+            cstrat = _strategy_of(loc) if loc else None
+            if cstrat in _WEAK_STRATEGIES:
+                cur["notes"].append({"kind": "weak_locator", "strategy": cstrat,
+                                     "prior": PRIORS[cstrat], "line": line,
                                      "why": "assert bound by %s (prior %.2f) — drifts with copy/markup"
-                                            % (strat, _PRIOR[strat])})
+                                            % (cstrat, PRIORS[cstrat])})
             continue
 
         acm = _ACTION_RE.search(line)
@@ -182,10 +194,13 @@ def parse_playwright_spec(src, source="<spec>"):
             if loc is None:
                 cur["notes"].append({"kind": "unmatched", "line": line,
                                      "why": "no locator constructor recognised — step imported without a target"})
-            elif strat and _PRIOR.get(strat, 1.0) < _STRONG:
-                cur["notes"].append({"kind": "weak_locator", "strategy": strat,
-                                     "prior": _PRIOR[strat], "line": line,
-                                     "why": "%s bound by %s (prior %.2f) — prefer a testid" % (verb, strat, _PRIOR[strat])})
+            else:
+                cstrat = _strategy_of(loc)
+                if cstrat in _WEAK_STRATEGIES:
+                    cur["notes"].append({"kind": "weak_locator", "strategy": cstrat,
+                                         "prior": PRIORS[cstrat], "line": line,
+                                         "why": "%s bound by %s (prior %.2f) — prefer a testid"
+                                                % (verb, cstrat, PRIORS[cstrat])})
             continue
 
     return {"tests": tests, "source": source}
