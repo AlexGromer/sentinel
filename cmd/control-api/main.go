@@ -1855,6 +1855,7 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("PUT /v1/config", s.handlePutConfig)
 	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
 	m.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
+	m.HandleFunc("POST /v1/import", s.handleImport) // PROD-IMPORT channel 2 (UI upload / HTTP), ADR-105
 	m.HandleFunc("GET /v1/runs", s.handleListRuns)
 	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
 	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)

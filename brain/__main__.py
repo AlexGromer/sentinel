@@ -1,6 +1,6 @@
 """Sentinel brain entrypoint — dispatches all modes.
 
-RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | report | calibrate | mcp-server | chat.
+RUN_MODE: explore | replay | baseline | clear-quarantine | export-spec | import | report | calibrate | mcp-server | chat.
 Config via env (set by agentctl). See docs/M1–M4_CONTRACT.md.
 Exit codes (M3): 0 pass · 1 step failure · 2 golden regression · 3 plan integrity / bad invocation.
 """
@@ -557,6 +557,42 @@ def _run_export_spec(out, plan_file, spec_out) -> int:
     return 0
 
 
+def _run_import(out, import_dir) -> int:
+    """PROD-IMPORT (ADR-105): transpile a directory of existing tests into Sentinel steps + a rewrite
+    report (no browser, no LLM, no network). Channel 1 — the filesystem path — because in CI the repo
+    is already checked out; the other channels (UI upload, git clone, chat paste) feed the same code.
+
+    Writes import-report.json (the 'state of your suite' diagnosis) and imported-scenarios.json (the
+    transpiled steps) to `out`. Grounding against a live explore map is a separate pass the caller runs
+    when a map exists; this step is the deterministic transpile + honest report.
+    """
+    from .importer import parse_playwright_spec, rewrite_report
+    if not import_dir or not pathlib.Path(import_dir).is_dir():
+        log("fatal.import_dir_missing", path=import_dir)
+        return 3
+    specs = sorted(pathlib.Path(import_dir).rglob("*.spec.ts"))
+    if not specs:
+        log("fatal.import_no_specs", path=import_dir)
+        return 3
+    all_tests, reports = [], []
+    for spec in specs:
+        parsed = parse_playwright_spec(spec.read_text(encoding="utf-8"), str(spec.relative_to(import_dir)))
+        all_tests.extend(parsed["tests"])
+        reports.append(rewrite_report(parsed))
+    # one aggregate report across the suite — the totals a team sees on first contact.
+    agg = {"engine": "playwright", "sources": [r["source"] for r in reports],
+           "totals": {k: sum(r["totals"][k] for r in reports)
+                      for k in ("tests", "steps", "bound", "weak", "dropped", "unmatched")},
+           "reports": reports}
+    (out / "import-report.json").write_text(json.dumps(agg, ensure_ascii=False, indent=2))
+    (out / "imported-scenarios.json").write_text(json.dumps({"tests": all_tests}, ensure_ascii=False, indent=2))
+    t = agg["totals"]
+    print(f"imported {t['tests']} test(s), {t['steps']} step(s): {t['bound']} bound, "
+          f"{t['weak']} by a weak locator, {t['dropped']} construct(s) dropped, "
+          f"{t['unmatched']} unmatched -> {out}/import-report.json")
+    return 0
+
+
 def _run_report(run_dir) -> int:
     """M4: generate report.html + report.json + metrics.prom from a run's heal-report.json."""
     from .report import generate
@@ -637,6 +673,8 @@ def main() -> int:
         return _run_report(os.environ.get("REPORT_DIR", str(out)))
     if run_mode == "calibrate":
         return _run_calibrate()
+    if run_mode == "import":
+        return _run_import(out, os.environ.get("IMPORT_DIR", ""))
 
     # --- browser modes -------------------------------------------------------
     target = os.environ.get("TARGET_URL")
