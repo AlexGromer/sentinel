@@ -63,7 +63,7 @@ func uiPathAllowed(name string) bool {
 		}
 	}
 	switch name {
-	case "index.html", "prices.json", "backend-presets.json":
+	case "index.html", "prices.json", "backend-presets.json", "capabilities.json":
 		return true
 	}
 	return false

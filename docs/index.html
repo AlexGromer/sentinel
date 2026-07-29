@@ -583,6 +583,18 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   </section>
 
   <!-- ============================ DOCS ============================ -->
+  <!-- PROD-DISCOVERY (ADR-104): the capabilities catalogue, rendered IN the UI — not only in the docs.
+       A feature nobody can find is a feature that does not exist, and the landing page is where a new
+       user actually looks. Fetches ./capabilities.json (the same source of truth the gate checks). -->
+  <section class="card" id="capabilities" data-view="tools">
+    <h2><span class="ric">✦</span><span data-lang="ru">Что этот инструмент умеет</span><span data-lang="en">What this tool can do</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Каталог работающих возможностей с путём доступа к каждой. ⭐ — то, что чаще всего искали и не находили. Полностью — в <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/CAPABILITIES.md">CAPABILITIES.md</a>.</span>
+      <span data-lang="en">A catalogue of working features, each with how to reach it. ⭐ — the ones most often looked for and not found. Full text in <a href="https://github.com/AlexGromer/sentinel/blob/main/docs/CAPABILITIES.md">CAPABILITIES.md</a>.</span>
+    </p>
+    <div id="cap-list"><p class="hint" data-lang="ru">Загрузка каталога…</p><p class="hint" data-lang="en">Loading the catalogue…</p></div>
+  </section>
+
   <section class="card" id="docs" data-view="tools">
     <h2><span class="n">6</span><span data-lang="ru">Документация</span><span data-lang="en">Documentation</span></h2>
     <div class="links">
@@ -835,6 +847,22 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div id="b-phases" style="margin-top:.5rem"></div>
     <div id="b-steps" style="margin-top:.5rem"></div>
     <div id="b-arts" class="ctl-row" style="margin-top:.3rem"></div>
+  </section>
+
+  <!-- PROD-IMPORT (ADR-105): the UI-upload channel. Bring an existing @playwright/test suite in and see
+       the rewrite report — what bound, what by a weak locator, what has no equivalent — before adopting
+       anything. Posts to /v1/import (needs the connection above). -->
+  <section class="card" id="import" data-view="run">
+    <h2><span class="ric">⇪</span><span data-lang="ru">Импорт существующих тестов</span><span data-lang="en">Import existing tests</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Загрузите файлы <code>*.spec.ts</code> — получите отчёт о переписывании: что связалось, что по слабому локатору, какая конструкция не имеет эквивалента. Ничего не выполняется, только транспиляция и диагноз.</span>
+      <span data-lang="en">Upload <code>*.spec.ts</code> files — get the rewrite report: what bound, what by a weak locator, which construct has no equivalent. Nothing runs; it transpiles and diagnoses.</span>
+    </p>
+    <div class="ctl-row">
+      <input type="file" id="imp-files" accept=".ts" multiple style="font-size:.82rem">
+      <button type="button" class="btn" id="imp-go" disabled><span data-lang="ru">Импортировать</span><span data-lang="en">Import</span></button>
+    </div>
+    <div id="imp-out" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem;font-size:.85rem"></div>
   </section>
   </div><!-- /panel-settings -->
 
@@ -1563,6 +1591,42 @@ function init(){
   });
   renderAll();
   loadPricesJson();   // best-effort override; never blocks initial render
+  loadCapabilities(); // PROD-DISCOVERY: render the feature catalogue in the UI (best-effort)
+}
+
+// PROD-DISCOVERY (ADR-104): fetch ./capabilities.json and render the grouped catalogue. Best-effort
+// like prices.json — silently skipped on file:// where the fetch is blocked; on Pages it populates.
+function loadCapabilities(){
+  var box = document.getElementById('cap-list');
+  if (!box) return;
+  fetch('capabilities.json').then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+    if (!j || !j.capabilities) return;
+    var order = ['Integrations','CLI','HTTP','Runtime','Deployment'];
+    var byGroup = {};
+    j.capabilities.forEach(function(c){ (byGroup[c.group] = byGroup[c.group] || []).push(c); });
+    var sev = { high:0, medium:1, low:2 };
+    var html = '';
+    order.forEach(function(g){
+      var list = byGroup[g]; if (!list) return;
+      list.sort(function(a,b){ return (sev[a.severity]||1) - (sev[b.severity]||1); });
+      html += '<div style="margin:.6rem 0 .2rem;font-weight:600;color:var(--acc2)">' + esc(g) + '</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr;gap:.25rem">';
+      list.forEach(function(c){
+        var star = c.severity === 'high' ? '⭐ ' : '';
+        // both languages in the DOM, toggled by the body class like everything else.
+        html += '<div style="font-size:.86rem;border-left:2px solid var(--line);padding-left:.5rem">'
+              + '<b>' + star
+              + '<span data-lang="ru">' + esc(c.title_ru) + '</span><span data-lang="en">' + esc(c.title_en) + '</span></b>'
+              + '<div class="hint" style="margin-top:.1rem">'
+              + '<span data-lang="ru">' + esc(c.how_ru) + '</span><span data-lang="en">' + esc(c.how_en) + '</span></div>'
+              + '</div>';
+      });
+      html += '</div>';
+    });
+    var n = j.capabilities.length;
+    box.innerHTML = '<div class="hint" style="margin-bottom:.4rem"><span data-lang="ru">'
+      + n + ' возможностей в каталоге</span><span data-lang="en">' + n + ' capabilities</span></div>' + html;
+  }).catch(function(){ /* file:// or offline — leave the loading hint */ });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
@@ -3873,6 +3937,70 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      that way: this object exists for pure functions only, and if it grows a stateful member that is
      the signal the gate has started testing the wrong thing. */
   window.__gate = { perceptionBlock: perceptionBlock };
+
+  /* ---- PROD-IMPORT (ADR-105): the UI-upload channel to POST /v1/import ---- */
+  (function importPanel(){
+    var fileInput = ge('imp-files'), goBtn = ge('imp-go'), out = ge('imp-out');
+    if (!fileInput || !goBtn) return;
+    function refresh(){ goBtn.disabled = !(capiBase() && fileInput.files && fileInput.files.length); }
+    fileInput.addEventListener('change', refresh);
+    ge('capi') && ge('capi').addEventListener('input', refresh);
+    ge('capitok') && ge('capitok').addEventListener('input', refresh);
+    goBtn.addEventListener('click', async function(){
+      var files = Array.prototype.slice.call(fileInput.files || []);
+      // only *.spec.ts is transpiled today; say so rather than silently dropping the others.
+      var specs = files.filter(function(f){ return /\.spec\.ts$/.test(f.name); });
+      var skipped = files.length - specs.length;
+      if (!specs.length){ out.style.display=''; out.textContent = bi('Нет файлов *.spec.ts.','No *.spec.ts files.'); return; }
+      out.style.display=''; out.textContent = bi('Импорт…','Importing…');
+      try {
+        var payload = { files: await Promise.all(specs.map(async function(f){
+          return { name: f.name, content: await f.text() };
+        })) };
+        var r = await fetch(capiBase()+'/v1/import', {
+          method:'POST', headers: Object.assign({'Content-Type':'application/json'}, authHdr()),
+          body: JSON.stringify(payload) });
+        if (!r.ok){ out.textContent = bi('Ошибка импорта: ','Import failed: ') + r.status + ' ' + (await r.text()).slice(0,200); return; }
+        renderImportReport(out, await r.json(), skipped);
+      } catch(e){ out.textContent = bi('Ошибка: ','Error: ') + e.message; }
+    });
+    refresh();
+  })();
+
+  function renderImportReport(box, rep, skipped){
+    var t = rep.totals || {};
+    var lines = [];
+    lines.push('<div style="font-weight:600;margin-bottom:.3rem">'
+      + bi('Отчёт о переписывании','Rewrite report') + ' — <span class="mono">' + esc(rep.engine||'') + '</span></div>');
+    lines.push('<div class="hint">' + bi('Тестов','Tests') + ': <b>' + (t.tests||0) + '</b> · '
+      + bi('шагов','steps') + ': <b>' + (t.steps||0) + '</b> · '
+      + bi('связано','bound') + ': <b>' + (t.bound||0) + '</b> · '
+      + bi('слабый локатор','weak locator') + ': <b style="color:var(--warn)">' + (t.weak||0) + '</b> · '
+      + bi('без эквивалента','no equivalent') + ': <b style="color:var(--warn)">' + (t.dropped||0) + '</b></div>');
+    if (rep.grounded && rep.grounding_totals){
+      var g = rep.grounding_totals;
+      lines.push('<div class="hint">' + bi('Против приложения','Vs the app') + ': '
+        + (g.bound||0) + ' ' + bi('связалось','bind') + ', <b style="color:var(--no)">' + (g.unmatched||0) + '</b> '
+        + bi('ссылаются на исчезнувший элемент','reference a gone element') + ', ' + (g.unverifiable||0) + ' '
+        + bi('непроверяемо','unverifiable') + '</div>');
+    }
+    if (skipped) lines.push('<div class="hint">' + skipped + ' ' + bi('файл(ов) пропущено (не *.spec.ts)','file(s) skipped (not *.spec.ts)') + '</div>');
+    // per-test notes: the honest diagnosis is the dropped/weak constructs, named.
+    (rep.reports||[]).forEach(function(rp){
+      (rp.tests||[]).forEach(function(tst){
+        var notes = (tst.notes||[]);
+        if (!notes.length) return;
+        lines.push('<div style="margin-top:.4rem;border-left:2px solid var(--line);padding-left:.5rem">'
+          + '<div style="font-size:.84rem"><b>' + esc(tst.name) + '</b></div>'
+          + notes.map(function(n){
+              var col = n.kind==='dropped' ? 'var(--no)' : (n.kind==='weak_locator' ? 'var(--warn)' : 'var(--mut)');
+              var what = n.construct || n.strategy || n.kind;
+              return '<div class="hint" style="color:' + col + '">' + esc(n.kind) + ': ' + esc(what) + ' — ' + esc((n.why||'').slice(0,120)) + '</div>';
+            }).join('') + '</div>');
+      });
+    });
+    box.innerHTML = lines.join('');
+  }
 
 })(); /* end m12 */
 
