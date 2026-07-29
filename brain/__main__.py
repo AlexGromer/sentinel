@@ -590,7 +590,8 @@ def _run_import(out, import_dir) -> int:
     # arrives with: @playwright/test, Cypress (<=9 `cypress/integration/**/*.spec.ts`, >=10
     # `**/*.cy.ts`), and Selenium's four language bindings.
     patterns = ("*.spec.ts", "*.spec.js", "*.cy.ts", "*.cy.js",
-                "test_*.py", "*_test.py", "*Test.java", "*Tests.cs")
+                "test_*.py", "*_test.py",
+                "*Test.java", "*Tests.java", "*Test.cs", "*Tests.cs")
     specs = sorted({p for pat in patterns for p in pathlib.Path(import_dir).rglob(pat)})
     if not specs:
         log("fatal.import_no_specs", path=import_dir)

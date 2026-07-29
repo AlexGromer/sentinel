@@ -564,11 +564,71 @@ PARSERS["cypress"] = parse_cypress_spec
 # token table per language, not four parsers — and the mismatch classes (below) are the same in all
 # four, which is the real reason the split would have been arbitrary.
 _SEL_LANG = {
-    "python": {"find": r"find_element(?:s)?", "send": r"send_keys", "get": r"\.get\(",
-               "select": r"select_by_(?:visible_text|value|index)", "env": r"os\.environ\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]"},
-    "js":     {"find": r"findElement(?:s)?", "send": r"sendKeys", "get": r"\.get\(",
-               "select": r"selectByVisibleText", "env": r"process\.env\.([A-Za-z0-9_]+)"},
+    "python": {"find": r"find_element(?:s)?", "send": r"send_keys",
+               "select": r"select_by_(?:visible_text|value|index)",
+               "env": r"os\.environ\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]",
+               "click": r"\.click\(\s*\)", "nav": r"\b(?:driver|browser)\s*\.\s*get\(",
+               "test": r"\bdef\s+(?P<name>test_[A-Za-z0-9_]+)", "anno": None},
+    "js":     {"find": r"findElement(?:s)?", "send": r"sendKeys",
+               "select": r"selectByVisibleText", "env": r"process\.env\.([A-Za-z0-9_]+)",
+               "click": r"\.click\(\s*\)", "nav": r"\b(?:driver|browser)\s*\.\s*get\(",
+               "test": r"\b(?:it|test)\s*\(\s*['\"](?P<name>[^'\"]+)['\"]", "anno": None},
+    # Java and C# name a test with an ANNOTATION on the line before the method, so the test name is
+    # not on the line that identifies it. `anno` marks the annotation; `test` then matches the next
+    # method signature. Matching bare `void x()` without the annotation would turn every helper into
+    # a test.
+    "java":   {"find": r"findElement(?:s)?", "send": r"sendKeys",
+               "select": r"selectBy(?:VisibleText|Value|Index)",
+               "env": r"System\.getenv\(\s*['\"]([A-Za-z0-9_]+)['\"]\s*\)",
+               "click": r"\.click\(\s*\)", "nav": r"\bdriver\s*\.\s*get\(",
+               "test": r"\bvoid\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", "anno": r"@Test\b"},
+    "csharp": {"find": r"FindElement(?:s)?", "send": r"SendKeys",
+               "select": r"SelectBy(?:Text|Value|Index)",
+               "env": r"Environment\.GetEnvironmentVariable\(\s*['\"]([A-Za-z0-9_]+)['\"]\s*\)",
+               "click": r"\.Click\(\s*\)", "nav": r"\bNavigate\(\s*\)\s*\.\s*GoToUrl\(",
+               "test": r"\bvoid\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+               "anno": r"\[(?:Test|Fact|TestMethod)\]"},
 }
+# Page Object field declarations. Java's @FindBy and C#'s [FindsBy] put the locator on an ANNOTATION
+# and the element in a FIELD, so the locator and its use are never on the same line — and often not
+# even in the same file. Within one file they can be joined, and are; across files they cannot, and
+# the step says so by name instead of binding to something else.
+_SEL_FINDBY_JAVA = re.compile(
+    r"@FindBy\s*\(\s*(?P<how>id|name|css|className|xpath|linkText|partialLinkText|tagName)\s*=\s*"
+    r"(?P<q>['\"])(?P<val>.*?)(?P=q)", re.I)
+_SEL_FINDBY_CS = re.compile(
+    r"\[\s*FindsBy\s*\(\s*How\s*=\s*How\.(?P<how>Id|Name|CssSelector|ClassName|XPath|LinkText|"
+    r"PartialLinkText|TagName)\s*,\s*Using\s*=\s*(?P<q>['\"])(?P<val>.*?)(?P=q)", re.I)
+_SEL_FIELD_RE = re.compile(
+    r"\b(?:private|public|protected|internal)?\s*(?:readonly\s+)?I?WebElement\s+(?P<field>[A-Za-z_][A-Za-z0-9_]*)")
+# `css` is Java's @FindBy spelling of a css selector; the By.<x> table keys on CSS_SELECTOR.
+_SEL_HOW_ALIAS = {"css": "CSS_SELECTOR", "cssselector": "CSS_SELECTOR", "id": "ID", "name": "NAME",
+                  "classname": "CLASS_NAME", "xpath": "XPATH", "linktext": "LINK_TEXT",
+                  "partiallinktext": "PARTIAL_LINK_TEXT", "tagname": "TAG_NAME"}
+
+
+def _sel_page_object_fields(src):
+    """{fieldName: (locator, strategy)} for every @FindBy / [FindsBy] declared IN THIS FILE.
+
+    The annotation and the field are on consecutive lines, so this is a two-line join; a field whose
+    annotation lives in another file simply will not be here, which is exactly the case the walker
+    then reports as unresolvable rather than guessing at.
+    """
+    out, pending = {}, None
+    for raw in src.splitlines():
+        line = raw.strip()
+        m = _SEL_FINDBY_JAVA.search(line) or _SEL_FINDBY_CS.search(line)
+        if m:
+            how = _SEL_HOW_ALIAS.get(m.group("how").lower())
+            build = _SEL_BY.get(how)
+            pending = build(m.group("val")) if build else None
+            continue
+        if pending:
+            f = _SEL_FIELD_RE.search(line)
+            if f:
+                out[f.group("field")] = pending
+            pending = None
+    return out
 # By.<X> -> our locator. Selenium has no semantic locator at all: everything it offers is structural
 # or text. That is not a transpiler shortcoming to apologise for — it is the DIAGNOSIS, and the report
 # says it loudly, because "your suite is bound almost entirely by css/xpath" is what a team comes for.
@@ -606,21 +666,44 @@ def _sel_locator(line):
     return build(m.group("val")) if build else (None, None)
 
 
+def detect_selenium_lang(src):
+    """Which binding wrote this Selenium file? The four share the API, not the spelling."""
+    if re.search(r"\busing OpenQA\.Selenium|\[(?:Test|Fact|TestMethod)\]|IWebDriver|IWebElement", src):
+        return "csharp"
+    if re.search(r"\bimport org\.openqa\.selenium|@Test\b|\bpublic\s+class\b|WebElement\b", src):
+        return "java"
+    if re.search(r"\brequire\(|from ['\"]selenium-webdriver|await driver", src):
+        return "js"
+    return "python"
+
+
 def parse_selenium_spec(src, source="<spec>", lang=None):
     """Transpile a Selenium suite (any of the supported bindings) into the shared `parsed` shape."""
-    lang = lang or ("js" if re.search(r"\b(require\(|import .*selenium-webdriver|await driver)", src)
-                    else "python")
+    lang = lang or detect_selenium_lang(src)
     tok = _SEL_LANG[lang]
-    tests, cur = [], None
+    # Page Object fields declared in THIS file — resolvable; anything else is reported by name.
+    fields = _sel_page_object_fields(src) if tok["anno"] else {}
+    tests, cur, armed = [], None, tok["anno"] is None
     for raw in src.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or line.startswith("//"):
             continue
 
-        tm = _SEL_TEST_RE.search(line)
+        if tok["anno"] and re.search(tok["anno"], line):
+            armed = True          # the NEXT method signature is a test
+            continue
+        tm = re.search(tok["test"], line)
         if tm:
-            cur = {"name": tm.group("py") or tm.group("js"), "steps": [], "notes": []}
-            tests.append(cur)
+            if armed:
+                cur = {"name": tm.group("name"), "steps": [], "notes": []}
+                tests.append(cur)
+                if tok["anno"]:
+                    armed = False     # one annotation arms exactly one method
+            else:
+                # A method signature WITHOUT the arming annotation ends the previous test. Without
+                # this, a plain helper's body was appended to whichever test came before it — the
+                # imported test then contained steps the source test never ran.
+                cur = None
             continue
         if cur is None:
             continue
@@ -638,7 +721,7 @@ def parse_selenium_spec(src, source="<spec>", lang=None):
             # a wait line often also carries the locator of the thing waited for; nothing to do.
             continue
 
-        gm = _SEL_GET_RE.search(line)
+        gm = re.search(r"(?:%s)\s*(['\"])(?P<url>.*?)\1" % tok["nav"], line)
         if gm:
             cur["steps"].append({"verb": "navigate", "target": gm.group("url"),
                                  "intent": "navigate to %s" % gm.group("url")})
@@ -646,7 +729,7 @@ def parse_selenium_spec(src, source="<spec>", lang=None):
 
         loc, strat = _sel_locator(line)
         verb = None
-        if re.search(r"\.click\(\s*\)", line):
+        if re.search(tok["click"], line):
             verb = "click"
         elif re.search(r"\.%s\(" % tok["send"], line):
             verb = "fill"
@@ -654,15 +737,25 @@ def parse_selenium_spec(src, source="<spec>", lang=None):
             verb = "select"
 
         if verb is None:
-            # A Page Object indirection (@FindBy / [FindsBy] / a locator held in a field) is a
-            # CROSS-FILE reference a line-based parser cannot resolve. Named, with where it was seen.
-            if re.search(r"@FindBy|FindsBy", line):
-                cur["notes"].append({
-                    "kind": "unmatched", "line": line,
-                    "why": "a Page Object locator declared with @FindBy — it is used in another file, "
-                           "and this transpiler resolves locators per line, so the step that uses it "
-                           "cannot be bound here"})
             continue
+
+        # PAGE OBJECT. Java/C# put the locator on an annotation and the element in a field, so the
+        # line that ACTS carries only the field name. When the annotation is in this file, the two are
+        # joined and the step binds normally — refusing to resolve what is plainly in front of us
+        # would understate the suite. When it is not, the step is reported BY FIELD NAME, so a reader
+        # knows which Page Object to look in, rather than being told "unresolvable" about nothing.
+        if loc is None and tok["anno"]:
+            recv = re.match(r"(?:this\s*\.\s*)?(?P<f>[A-Za-z_][A-Za-z0-9_]*)\s*\.", line)
+            if recv:
+                f = recv.group("f")
+                if f in fields:
+                    loc, strat = fields[f]
+                elif f not in ("driver", "wait", "Assert", "assertThat", "System", "new"):
+                    cur["notes"].append({
+                        "kind": "unmatched", "line": line,
+                        "why": "the element `%s` comes from a Page Object whose @FindBy/[FindsBy] "
+                               "declaration is not in this file; a per-file transpiler cannot follow "
+                               "that reference, so the step is imported WITHOUT a target" % f})
 
         step = {"verb": verb, "intent": "%s%s" % (verb, " " + strat if strat else "")}
         if loc:
@@ -688,10 +781,14 @@ def parse_selenium_spec(src, source="<spec>", lang=None):
                     "line": line})
         cur["steps"].append(step)
         if loc is None:
-            cur["notes"].append({"kind": "unmatched", "line": line,
-                                 "why": "no By.<strategy> locator on this line — the element was "
-                                        "most likely held in a variable, which a per-line parser "
-                                        "cannot follow"})
+            # ...unless the Page Object branch above already said WHY, by field name. Two notes for
+            # one cause reads as two problems.
+            if not (cur["notes"] and cur["notes"][-1].get("line") == line
+                    and cur["notes"][-1]["kind"] == "unmatched"):
+                cur["notes"].append({"kind": "unmatched", "line": line,
+                                     "why": "no By.<strategy> locator on this line — the element was "
+                                            "most likely held in a variable, which a per-line parser "
+                                            "cannot follow"})
         else:
             cstrat = _strategy_of(loc)
             if cstrat in _WEAK_STRATEGIES:
