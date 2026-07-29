@@ -124,7 +124,11 @@ def test_fs_channel_writes_report_and_scenarios():
         rc = _run_import(out, os.path.join(REPO, "testdata", "import"))
         _check(rc == 0, f"_run_import exit={rc}, want 0")
         rep = _json.loads((out / "import-report.json").read_text())
-        _check(rep["engine"] == "playwright", "report does not name the source engine")
+        # `engines` (a list of what was actually imported), not the old hardcoded `engine` string —
+        # the constant is what let a Cypress suite be reported as a successful Playwright import.
+        _check(rep["engines"] == ["playwright"], f"report does not name the source engines: {rep.get('engines')}")
+        _check(rep["skipped"] == [] and rep["totals"]["skipped"] == 0,
+               f"a pure Playwright fixture dir must skip nothing: {rep.get('skipped')}")
         _check(rep["totals"]["tests"] == 2 and rep["totals"]["steps"] == 12,
                f"aggregate totals wrong: {rep['totals']}")
         _check(rep["totals"]["dropped"] == 2, "the aggregate lost the dropped-construct count")
