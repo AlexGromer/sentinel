@@ -1153,6 +1153,31 @@ try {
     // and the header must not claim an engine when nothing was imported.
     ok(!/playwright/i.test(txt), 'the panel named an engine although nothing was imported');
   });
+  await check('the catalogue OPENS a tool, and says plainly when it cannot', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.click('[data-nav="tools"]');
+    await page.waitForFunction(() => {
+      const b = document.getElementById('cap-list');
+      return b && /Open|Открыть/.test(b.textContent);
+    }, { timeout: 15000 });
+    // A UI capability offers a button; a CLI-only one says so instead of offering a dead control.
+    const n = await page.evaluate(() => document.querySelectorAll('#cap-list .cap-open').length);
+    ok(n >= 5, `only ${n} capabilities offer a way in — the catalogue is inert again`);
+    const txt = await page.textContent('#cap-list');
+    ok(/CLI only|только CLI/.test(txt),
+      'a CLI-only capability offers no button and does not say it is CLI-only — the reader is left hunting');
+    // Pressing it must actually navigate. A button that names a view and does not go there is the
+    // same broken promise the catalogue exists to prevent, moved from prose into a control.
+    const before = await page.evaluate(() => document.body.className);
+    await page.click('#cap-list .cap-open[data-goto="logs"]');
+    const view = await page.evaluate(() => {
+      const el = document.querySelector('[data-view="logs"]');
+      return el ? getComputedStyle(el).display : 'missing';
+    });
+    ok(view !== 'none' && view !== 'missing', `the Open button did not reach the logs view (${view}, was ${before})`);
+  });
+
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

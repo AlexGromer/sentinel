@@ -1601,7 +1601,9 @@ function loadCapabilities(){
   if (!box) return;
   fetch('capabilities.json').then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
     if (!j || !j.capabilities) return;
-    var order = ['Integrations','CLI','HTTP','Runtime','Deployment'];
+    // UI first: the surface the reader is looking at while reading this is the one the catalogue was
+    // silent about, and it is the only group whose entries can be OPENED from here.
+    var order = ['UI','Integrations','CLI','HTTP','Runtime','Deployment'];
     var byGroup = {};
     j.capabilities.forEach(function(c){ (byGroup[c.group] = byGroup[c.group] || []).push(c); });
     var sev = { high:0, medium:1, low:2 };
@@ -1614,9 +1616,33 @@ function loadCapabilities(){
       list.forEach(function(c){
         var star = c.severity === 'high' ? '⭐ ' : '';
         // both languages in the DOM, toggled by the body class like everything else.
+        // A catalogue that only NAMES a feature is half the fix: the reader still has to go and find
+        // it. So an entry the hub can actually open carries a button that opens it. Everything else
+        // says plainly HOW it is reached — "CLI only", "HTTP", "deployment" — because offering a
+        // button the server cannot honour is the same lie in a nicer shape, and ADR-104 exists
+        // precisely to stop the page promising what the product does not do.
+        var acc = c.access || {}, reach = '';
+        if (acc.kind === 'ui' && acc.ref) {
+          reach = '<button type="button" class="cap-open" data-goto="' + esc(acc.ref) + '"'
+                + ' style="margin-left:.4rem;font-size:.75rem;padding:.05rem .4rem">'
+                + bi('Открыть','Open') + '</button>';
+        } else if (acc.kind === 'cli') {
+          reach = '<span class="hint" style="margin-left:.4rem">' + bi('только CLI','CLI only')
+                + ' · <span class="mono">' + esc(acc.ref || '') + '</span></span>';
+        } else if (acc.kind === 'http') {
+          reach = '<span class="hint" style="margin-left:.4rem">API · <span class="mono">'
+                + esc(acc.ref || '') + '</span></span>';
+        } else if (acc.kind === 'profile' || acc.kind === 'file') {
+          reach = '<span class="hint" style="margin-left:.4rem">' + bi('развёртывание','deployment')
+                + '</span>';
+        } else if (acc.kind === 'env') {
+          reach = '<span class="hint" style="margin-left:.4rem">' + bi('переменная окружения','environment')
+                + ' · <span class="mono">' + esc(acc.ref || '') + '</span></span>';
+        }
         html += '<div style="font-size:.86rem;border-left:2px solid var(--line);padding-left:.5rem">'
               + '<b>' + star
               + '<span data-lang="ru">' + esc(c.title_ru) + '</span><span data-lang="en">' + esc(c.title_en) + '</span></b>'
+              + reach
               + '<div class="hint" style="margin-top:.1rem">'
               + '<span data-lang="ru">' + esc(c.how_ru) + '</span><span data-lang="en">' + esc(c.how_en) + '</span></div>'
               + '</div>';
@@ -1626,6 +1652,15 @@ function loadCapabilities(){
     var n = j.capabilities.length;
     box.innerHTML = '<div class="hint" style="margin-bottom:.4rem"><span data-lang="ru">'
       + n + ' возможностей в каталоге</span><span data-lang="en">' + n + ' capabilities</span></div>' + html;
+    // One delegated handler rather than one per row: the list is re-rendered on every load, and
+    // per-row listeners would accumulate on a page that never reloads.
+    box.addEventListener('click', function(ev){
+      var b = ev.target.closest && ev.target.closest('.cap-open');
+      if (!b) return;
+      ev.preventDefault();
+      var go = window.setView || (typeof setView === 'function' ? setView : null);
+      if (go) go(b.getAttribute('data-goto'));
+    });
   }).catch(function(){ /* file:// or offline — leave the loading hint */ });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
@@ -3846,6 +3881,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
     vwLoaders(v, sub);
   }
+
+  // The router is ADDRESSABLE, not merely in scope. Three call sites already guarded it with
+  // `typeof setView === 'function'` — a guard that turns an unreachable router into a SILENT
+  // no-op, which is what a navigation button did until this line existed: the click fired, the
+  // handler ran, and nothing moved, with no error to notice. Naming it on `window` is how a
+  // control in one part of a 4000-line page reaches the router defined in another.
+  window.setView = setView;
 
   function setInnerSub(view, sub){
     if (!GROUPED[view] || GROUPED[view].indexOf(sub) < 0) return;

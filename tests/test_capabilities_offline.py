@@ -92,6 +92,18 @@ def main() -> int:
             assert ref in src, f"{cid}: token {ref!r} not found in {acc['file']}"
         elif kind == "file":
             assert os.path.exists(os.path.join(REPO, ref)), f"{cid}: file {ref!r} does not exist"
+        elif kind == "ui":
+            # A `ui` ref names a VIEW of the hub, and the catalogue offers a button that navigates to
+            # it. The ref must therefore resolve to a real view — otherwise the button is a promise
+            # the page cannot keep, which is the exact failure the catalogue exists to prevent, moved
+            # from prose into a control. Both halves are required: the view must EXIST as a
+            # data-view section, and setView must accept it (VIEWS is what it validates against).
+            hub = _read(os.path.join("docs", "index.html"))
+            assert f'data-view="{ref}"' in hub or f'data-view="{ref} ' in hub, (
+                f"{cid}: ui view {ref!r} has no data-view section in docs/index.html")
+            assert re.search(rf"VIEWS\s*=\s*\[[^\]]*'{re.escape(ref)}'", hub) or \
+                   re.search(rf'VIEWS\s*=\s*\[[^\]]*"{re.escape(ref)}"', hub), (
+                f"{cid}: ui view {ref!r} is not in VIEWS, so setView would refuse to open it")
         else:
             raise AssertionError(f"{cid}: unknown access.kind {kind!r}")
 
