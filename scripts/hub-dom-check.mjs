@@ -1125,6 +1125,34 @@ try {
     const before = await page.evaluate(() => document.getElementById('imp-go').disabled);
     ok(before === true, 'import button was enabled with no connection and no file');
   });
+
+  await check('the import report NAMES files the server could not read, it does not just count them', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.click('[data-nav="run"]');
+    // Drive the real renderer with the real server report shape. The CLI was fixed so a file it
+    // cannot read is named and the run goes red; the panel must not undo that by showing only
+    // "imported 0 tests" — a UI that stays silent about the skipped file reintroduces the same
+    // silent-drop one layer up.
+    const txt = await page.evaluate(() => {
+      const box = document.createElement('div');
+      document.body.appendChild(box);
+      window.__gate.renderImportReport(box, {
+        engines: [],
+        totals: { tests: 0, steps: 0, bound: 0, weak: 0, dropped: 0, skipped: 1 },
+        skipped: [{ source: 'cypress/integration/checkout.spec.ts', engine: 'cypress',
+                    why: 'engine detected but no parser for this dialect yet' }],
+        reports: [],
+      }, 0);
+      return box.textContent;
+    });
+    ok(/checkout\.spec\.ts/.test(txt), 'the panel did not name the file the server refused to import');
+    ok(/cypress/i.test(txt), 'the panel did not say WHICH engine was detected in the skipped file');
+    ok(!/^\s*$/.test(txt) && /(НЕ импортировано|NOT imported)/.test(txt),
+      'the panel did not state that the file was not imported');
+    // and the header must not claim an engine when nothing was imported.
+    ok(!/playwright/i.test(txt), 'the panel named an engine although nothing was imported');
+  });
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

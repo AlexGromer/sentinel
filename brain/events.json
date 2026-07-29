@@ -1458,6 +1458,16 @@
         "__main__"
       ]
     },
+    "import.files_skipped": {
+      "lvl": "error",
+      "cat": "plan",
+      "exit": 1,
+      "ru": "Импорт: {count} файл(ов) НЕ прочитаны и не импортированы: {sources}. Прогон краснеет намеренно — молча пропущенный файл выглядел бы успехом",
+      "en": "Import: {count} file(s) were NOT read and not imported: {sources}. The run is red on purpose — a silently skipped file would have looked like success",
+      "modules": [
+        "__main__"
+      ]
+    },
     "test.revision_saved": {
       "lvl": "info",
       "cat": "test",

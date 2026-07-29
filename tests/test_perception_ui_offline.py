@@ -23,6 +23,7 @@ What this pins:
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -138,8 +139,14 @@ def test_the_hub_actually_renders_the_block_it_defines():
         "the block is built into a string that is never written to the DOM")
     # And the seam stays a seam: it exists for pure functions, and a stateful member would be the
     # signal the gate has started testing the wrong thing (the comment beside it says so).
-    assert "window.__gate = { perceptionBlock: perceptionBlock };" in src, \
-        "the test seam changed shape; the DOM gate reaches the formatter through exactly this name"
+    # The property that matters is that the seam EXISTS and still exposes this formatter under this
+    # name — that is what the DOM gate reaches through. Pinning the whole literal line additionally
+    # forbade any other pure formatter from ever joining it, which is not what the rule beside it
+    # says (it forbids STATEFUL members, not more members).
+    seam = re.search(r"window\.__gate\s*=\s*\{(?P<body>[^}]*)\}", src)
+    assert seam, "the window.__gate test seam is gone; the DOM gate reaches the formatter through it"
+    assert "perceptionBlock: perceptionBlock" in seam.group("body"), \
+        "the seam no longer exposes perceptionBlock under that name"
 
 
 def test_seen_and_usable_are_different_numbers():

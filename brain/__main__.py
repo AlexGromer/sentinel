@@ -581,11 +581,17 @@ def _run_import(out, import_dir) -> int:
     transpiled steps) to `out`. Grounding against a live explore map is a separate pass the caller runs
     when a map exists; this step is the deterministic transpile + honest report.
     """
-    from .importer import parse_playwright_spec, rewrite_report, ground_imported
+    from .importer import parse_spec, detect_engine, rewrite_report, ground_imported
     if not import_dir or not pathlib.Path(import_dir).is_dir():
         log("fatal.import_dir_missing", path=import_dir)
         return 3
-    specs = sorted(pathlib.Path(import_dir).rglob("*.spec.ts"))
+    # The extension is only a PREFILTER for which files to open — the engine is decided by content
+    # (importer.detect_engine). These globs cover the default layouts of the engines a team actually
+    # arrives with: @playwright/test, Cypress (<=9 `cypress/integration/**/*.spec.ts`, >=10
+    # `**/*.cy.ts`), and Selenium's four language bindings.
+    patterns = ("*.spec.ts", "*.spec.js", "*.cy.ts", "*.cy.js",
+                "test_*.py", "*_test.py", "*Test.java", "*Tests.cs")
+    specs = sorted({p for pat in patterns for p in pathlib.Path(import_dir).rglob(pat)})
     if not specs:
         log("fatal.import_no_specs", path=import_dir)
         return 3
@@ -600,18 +606,42 @@ def _run_import(out, import_dir) -> int:
         except Exception as e:
             log("fatal.import_map_invalid", path=map_file, error=e)
             return 3
-    all_tests, reports, groundings = [], [], []
+    all_tests, reports, groundings, skipped = [], [], [], []
     for spec in specs:
-        parsed = parse_playwright_spec(spec.read_text(encoding="utf-8"), str(spec.relative_to(import_dir)))
+        rel = str(spec.relative_to(import_dir))
+        src = spec.read_text(encoding="utf-8", errors="replace")
+        parsed, engine = parse_spec(src, rel)
+        if parsed is None:
+            # DETECTED but no parser for that dialect yet. Named with its engine — "we saw a Cypress
+            # suite and cannot read it" is a useful answer; silence is not.
+            skipped.append({"source": rel, "engine": engine,
+                            "why": "engine detected but no parser for this dialect yet"
+                                   if engine != "unknown"
+                                   else "no test engine recognised in the file's content"})
+            continue
+        if not parsed["tests"]:
+            # Parsed by the right dialect and still yielded nothing. Either it is not a test file
+            # despite its name, or the parser failed on it. Both are findings about the suite, and
+            # both used to be reported as success.
+            skipped.append({"source": rel, "engine": engine,
+                            "why": "recognised as %s but no test was parsed out of it" % engine})
+            continue
         all_tests.extend(parsed["tests"])
-        reports.append(rewrite_report(parsed))
+        r = rewrite_report(parsed)
+        r["engine"] = engine
+        reports.append(r)
         if site_map is not None:
             groundings.append({"source": parsed["source"], **ground_imported(parsed, site_map)})
     # one aggregate report across the suite — the totals a team sees on first contact.
-    agg = {"engine": "playwright", "sources": [r["source"] for r in reports],
+    # `engines` is what was actually SEEN, never a constant: the hardcoded "playwright" is what let a
+    # Cypress suite be reported as a successfully imported Playwright one.
+    agg = {"engines": sorted({r["engine"] for r in reports}),
+           "sources": [r["source"] for r in reports],
+           "skipped": skipped,
            "totals": {k: sum(r["totals"][k] for r in reports)
                       for k in ("tests", "steps", "bound", "weak", "dropped", "unmatched")},
            "reports": reports}
+    agg["totals"]["skipped"] = len(skipped)
     if site_map is not None:
         agg["grounded"] = True
         agg["grounding_totals"] = {k: sum(g["totals"][k] for g in groundings)
@@ -628,6 +658,18 @@ def _run_import(out, import_dir) -> int:
         msg += (f"; grounded vs the app: {gt['bound']} bind, {gt['unmatched']} reference a gone element, "
                 f"{gt['unverifiable']} unverifiable (css/xpath)")
     print(msg + f" -> {out}/import-report.json")
+    if skipped:
+        # CONTRACT CHANGE, deliberate: a file we could not read is a FINDING about the suite, which is
+        # the product of import — so it exits 1 ("the test found a problem"), never 0. A mixed
+        # directory that used to come back green did so by reporting success over files it had
+        # silently dropped, which is the defect this replaces. Named per file, on stderr so it is
+        # visible even when stdout is being captured.
+        print("SKIPPED %d file(s) — NOT imported:" % len(skipped), file=sys.stderr)
+        for s in skipped:
+            print("  %s — engine=%s, %s" % (s["source"], s["engine"], s["why"]), file=sys.stderr)
+        log("import.files_skipped", count=len(skipped),
+            sources=", ".join(s["source"] for s in skipped))
+        return 1
     return 0
 
 

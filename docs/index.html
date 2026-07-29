@@ -3936,7 +3936,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      than the wording. Everything else in this file is reached by driving the DOM, and should stay
      that way: this object exists for pure functions only, and if it grows a stateful member that is
      the signal the gate has started testing the wrong thing. */
-  window.__gate = { perceptionBlock: perceptionBlock };
+  // `renderImportReport` belongs here by the same rule: a pure formatter of the server's report into
+  // a box, where what matters is the WORDING — specifically that a file the server refused to import
+  // is NAMED rather than folded into a count. Driving the upload path to assert that would test the
+  // file input and the fetch, not the sentence. It holds no state.
+  window.__gate = { perceptionBlock: perceptionBlock, renderImportReport: renderImportReport };
 
   /* ---- PROD-IMPORT (ADR-105): the UI-upload channel to POST /v1/import ---- */
   (function importPanel(){
@@ -3970,8 +3974,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function renderImportReport(box, rep, skipped){
     var t = rep.totals || {};
     var lines = [];
+    // `engines` is what was actually imported — a LIST, because a directory can hold more than one
+    // engine and because the old single hardcoded value is what let a Cypress suite be presented as
+    // a successfully imported Playwright one.
+    var engines = (rep.engines || []).join(', ') || bi('ничего не импортировано','nothing imported');
     lines.push('<div style="font-weight:600;margin-bottom:.3rem">'
-      + bi('Отчёт о переписывании','Rewrite report') + ' — <span class="mono">' + esc(rep.engine||'') + '</span></div>');
+      + bi('Отчёт о переписывании','Rewrite report') + ' — <span class="mono">' + esc(engines) + '</span></div>');
     lines.push('<div class="hint">' + bi('Тестов','Tests') + ': <b>' + (t.tests||0) + '</b> · '
       + bi('шагов','steps') + ': <b>' + (t.steps||0) + '</b> · '
       + bi('связано','bound') + ': <b>' + (t.bound||0) + '</b> · '
@@ -3984,7 +3992,20 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         + bi('ссылаются на исчезнувший элемент','reference a gone element') + ', ' + (g.unverifiable||0) + ' '
         + bi('непроверяемо','unverifiable') + '</div>');
     }
-    if (skipped) lines.push('<div class="hint">' + skipped + ' ' + bi('файл(ов) пропущено (не *.spec.ts)','file(s) skipped (not *.spec.ts)') + '</div>');
+    if (skipped) lines.push('<div class="hint">' + skipped + ' ' + bi('файл(ов) не отправлено (не *.spec.ts)','file(s) not sent (not *.spec.ts)') + '</div>');
+    // Files the SERVER walked and could not read. Rendered as prominently as the totals, and named
+    // one by one: showing "imported 0 tests" while staying silent about the file that produced that
+    // zero is the exact failure the engine-detection work removed from the CLI, and the UI must not
+    // reintroduce it one layer up.
+    if ((rep.skipped || []).length){
+      lines.push('<div id="import-skipped" style="margin-top:.4rem;border-left:2px solid var(--no);padding-left:.5rem">'
+        + '<div style="font-size:.84rem;color:var(--no)"><b>' + rep.skipped.length + ' '
+        + bi('файл(ов) НЕ импортировано','file(s) NOT imported') + '</b></div>'
+        + rep.skipped.map(function(s){
+            return '<div class="hint"><span class="mono">' + esc(s.source) + '</span> — '
+                 + esc(s.engine || 'unknown') + ': ' + esc(s.why || ''); }).join('</div>')
+        + '</div></div>');
+    }
     // per-test notes: the honest diagnosis is the dropped/weak constructs, named.
     (rep.reports||[]).forEach(function(rp){
       (rp.tests||[]).forEach(function(tst){

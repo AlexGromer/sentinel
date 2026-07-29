@@ -89,6 +89,75 @@ _ASSERT_COND = {
 }
 
 
+# --- engine detection -------------------------------------------------------------------------
+# By CONTENT, never by extension. The extension cannot decide this: Cypress <=9's default layout is
+# cypress/integration/**/*.spec.ts, so a Cypress suite arrives under the very glob that used to be
+# treated as proof of Playwright — the file was then parsed by the Playwright parser, yielded nothing
+# (Cypress uses it(), the parser looks for test()), and the run reported success over a suite that had
+# silently vanished. Measured with the real binary before this existed.
+#
+# Scored rather than first-match: a real file carries several signals, and picking the first token
+# seen makes the answer depend on line order. Ties and zero evidence are `unknown` — which is a
+# reportable outcome here, not a default to fall through on.
+_ENGINE_SIGNALS = {
+    "playwright": [
+        r"@playwright/test",
+        r"\bpage\.(goto|getBy|locator|frameLocator|click|fill)\(",
+        r"\btest\s*\(\s*['\"].*?['\"]\s*,\s*async",
+        r"\bexpect\s*\(\s*page",
+    ],
+    "cypress": [
+        r"\bcy\.[a-zA-Z]",
+        r"types=[\"']cypress[\"']",
+        r"\bCypress\.",
+        r"\.should\(\s*['\"]",
+    ],
+    "selenium": [
+        r"\bwebdriver\b",
+        r"\bBy\.[A-Za-z_]",
+        r"\bWebDriverWait\b",
+        r"\b(find_element|findElement|FindElement)s?\b",
+        r"\bExpectedConditions\b|\bEC\.[a-z_]",
+        r"\bFindsBy\b|@FindBy\b",
+    ],
+}
+
+
+def detect_engine(src):
+    """Which test engine wrote this file? -> playwright | cypress | selenium | unknown.
+
+    Returns the engine with the most distinct signals present. `unknown` on a tie or no evidence: a
+    guess here would put the file through the wrong parser and produce exactly the silent
+    zero-test success this function exists to prevent.
+    """
+    scores = {
+        engine: sum(1 for rx in pats if re.search(rx, src))
+        for engine, pats in _ENGINE_SIGNALS.items()
+    }
+    best = max(scores.values())
+    if best == 0:
+        return "unknown"
+    winners = [e for e, n in scores.items() if n == best]
+    return winners[0] if len(winners) == 1 else "unknown"
+
+
+# Dialects with a parser today. An engine that is DETECTED but absent here is reported by name with
+# "no parser yet" — a different and far more useful message than silence.
+PARSERS = {}
+
+
+def parse_spec(src, source="<spec>", engine=None):
+    """Transpile a spec of ANY supported engine. Returns (parsed, engine).
+
+    `parsed` is None when the engine has no parser — the caller must report the file, never drop it.
+    """
+    engine = engine or detect_engine(src)
+    fn = PARSERS.get(engine)
+    if fn is None:
+        return None, engine
+    return fn(src, source), engine
+
+
 def _parse_locator(expr):
     """Return (locator_dict, strategy) for the FIRST locator constructor in a Playwright expression,
     or (None, None). A frameLocator(...) scope becomes our `frame` axis (ADR-095), preserved rather
@@ -236,6 +305,9 @@ def parse_playwright_spec(src, source="<spec>"):
             continue
 
     return {"tests": tests, "source": source}
+
+
+PARSERS["playwright"] = parse_playwright_spec
 
 
 def ground_imported(parsed, site_map):
