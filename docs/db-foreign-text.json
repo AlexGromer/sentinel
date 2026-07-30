@@ -22,145 +22,411 @@
     "healed_locators": {
       "db": "locators.db",
       "columns": {
-        "page_path": {"foreign": "inherent", "note": "scheme+host+PATH of the page under test; normalize_url (brain/state.py:72-77) drops query and fragment, so ?token= does NOT reach this column. Part of the primary key."},
-        "semantic_id": {"foreign": "none", "note": "sha1(f'{path}|{role}|{name}')[:12] — measured in the live DB as 07ece0d2c1a9"},
-        "strategy": {"foreign": "none", "note": "enum: testid|text_role|llm_pick|css|xpath|none"},
-        "value": {"foreign": "inherent", "note": "THE LOCATOR ITSELF. Measured live: {\"role\":\"button\",\"name\":\"Start now\"}, {\"text\":\"Pay now\"}. This is the live cache read by every run and it never expires — it holds page text longer than the audit history does."},
-        "confidence": {"foreign": "none"},
-        "dom_subtree_hash": {"foreign": "none"},
-        "status": {"foreign": "none", "note": "active|deprecated|flagged"},
-        "times_used": {"foreign": "none"},
-        "created_at": {"foreign": "none", "note": "REAL epoch — the age column purge filters on"}
+        "page_path": {
+          "foreign": "inherent",
+          "note": "scheme+host+PATH of the page under test; normalize_url (brain/state.py:72-77) drops query and fragment, so ?token= does NOT reach this column. Part of the primary key."
+        },
+        "semantic_id": {
+          "foreign": "none",
+          "note": "sha1(f'{path}|{role}|{name}')[:12] — measured in the live DB as 07ece0d2c1a9"
+        },
+        "strategy": {
+          "foreign": "none",
+          "note": "enum: testid|text_role|llm_pick|css|xpath|none"
+        },
+        "value": {
+          "foreign": "inherent",
+          "note": "THE LOCATOR ITSELF. Measured live: {\"role\":\"button\",\"name\":\"Start now\"}, {\"text\":\"Pay now\"}. This is the live cache read by every run and it never expires — it holds page text longer than the audit history does."
+        },
+        "confidence": {
+          "foreign": "none"
+        },
+        "dom_subtree_hash": {
+          "foreign": "none"
+        },
+        "status": {
+          "foreign": "none",
+          "note": "active|deprecated|flagged"
+        },
+        "times_used": {
+          "foreign": "none"
+        },
+        "created_at": {
+          "foreign": "none",
+          "note": "REAL epoch — the age column purge filters on"
+        }
       }
     },
     "healing_audit": {
       "db": "locators.db",
       "columns": {
-        "run_id": {"foreign": "none"},
-        "step": {"foreign": "none"},
-        "semantic_id": {"foreign": "none", "note": "same sha1[:12] as healed_locators"},
-        "page_path": {"foreign": "inherent", "note": "as healed_locators.page_path"},
-        "strategy": {"foreign": "none"},
-        "original": {"foreign": "inherent", "note": "the locator that stopped working. Measured live: {\"role\":\"textbox\",\"name\":\"Card number\"}"},
-        "healed": {"foreign": "inherent", "note": "the locator that replaced it. Measured live: {\"role\":\"button\",\"name\":\"Complete order\"}"},
-        "confidence": {"foreign": "none"},
-        "outcome": {"foreign": "none", "note": "auto_healed|flagged|failed|cache_hit"},
-        "dom_hash": {"foreign": "none"},
-        "ts": {"foreign": "none", "note": "REAL epoch — the age column purge filters on"},
-        "identity": {"foreign": "none", "note": "ADR-082 identity claim; empty when there was none to claim"}
+        "run_id": {
+          "foreign": "none"
+        },
+        "step": {
+          "foreign": "none"
+        },
+        "semantic_id": {
+          "foreign": "none",
+          "note": "same sha1[:12] as healed_locators"
+        },
+        "page_path": {
+          "foreign": "inherent",
+          "note": "as healed_locators.page_path"
+        },
+        "strategy": {
+          "foreign": "none"
+        },
+        "original": {
+          "foreign": "inherent",
+          "note": "the locator that stopped working. Measured live: {\"role\":\"textbox\",\"name\":\"Card number\"}"
+        },
+        "healed": {
+          "foreign": "inherent",
+          "note": "the locator that replaced it. Measured live: {\"role\":\"button\",\"name\":\"Complete order\"}"
+        },
+        "confidence": {
+          "foreign": "none"
+        },
+        "outcome": {
+          "foreign": "none",
+          "note": "auto_healed|flagged|failed|cache_hit"
+        },
+        "dom_hash": {
+          "foreign": "none"
+        },
+        "ts": {
+          "foreign": "none",
+          "note": "REAL epoch — the age column purge filters on"
+        },
+        "identity": {
+          "foreign": "none",
+          "note": "ADR-082 identity claim; empty when there was none to claim"
+        }
       }
     },
     "golden_snapshots": {
       "db": "locators.db",
       "columns": {
-        "page_key": {"foreign": "inherent", "note": "last path segment of the page URL (brain/replay.py:65-67) — an order id or tenant slug in a real deployment"},
-        "a11y_hash": {"foreign": "none", "note": "sha256"},
-        "screenshot_hash": {"foreign": "none", "note": "sha256"},
-        "created_at": {"foreign": "none", "note": "REAL epoch"},
-        "mac": {"foreign": "none", "note": "HMAC over the integrity-bearing fields (#24)"}
+        "page_key": {
+          "foreign": "inherent",
+          "note": "last path segment of the page URL (brain/replay.py:65-67) — an order id or tenant slug in a real deployment"
+        },
+        "a11y_hash": {
+          "foreign": "none",
+          "note": "sha256"
+        },
+        "screenshot_hash": {
+          "foreign": "none",
+          "note": "sha256"
+        },
+        "created_at": {
+          "foreign": "none",
+          "note": "REAL epoch"
+        },
+        "mac": {
+          "foreign": "none",
+          "note": "HMAC over the integrity-bearing fields (#24)"
+        }
       }
     },
     "step_failures": {
       "db": "locators.db",
       "columns": {
-        "plan_id": {"foreign": "none", "note": "measured live: 68e9ff30af99b7e4. An operator-authored plan file could name it freely, but no product path writes prose here."},
-        "step_key": {"foreign": "none", "note": "measured live across 45 rows: hashes only (030865c5f663)"},
-        "last5": {"foreign": "none", "note": "measured live: a counter pair, [1,1]"},
-        "last_aut_sha": {"foreign": "none"},
-        "quarantined": {"foreign": "none"}
+        "plan_id": {
+          "foreign": "none",
+          "note": "measured live: 68e9ff30af99b7e4. An operator-authored plan file could name it freely, but no product path writes prose here."
+        },
+        "step_key": {
+          "foreign": "none",
+          "note": "measured live across 45 rows: hashes only (030865c5f663)"
+        },
+        "last5": {
+          "foreign": "none",
+          "note": "measured live: a counter pair, [1,1]"
+        },
+        "last_aut_sha": {
+          "foreign": "none"
+        },
+        "quarantined": {
+          "foreign": "none"
+        }
       }
     },
     "runs": {
       "db": "control-store.db",
       "columns": {
-        "run_id": {"foreign": "none"},
-        "conversation_id": {"foreign": "none", "note": "caller-supplied free text, but no product path derives it from page or goal"},
-        "mode": {"foreign": "none", "note": "explore|goal|replay|baseline|chat"},
-        "target": {"foreign": "inherent", "note": "validTarget (cmd/control-api/main.go:501-503) checks only the http(s):// prefix, so user:pass@host and ?token= pass through intact"},
-        "planner": {"foreign": "none", "note": "heuristic|llm|goal"},
-        "state": {"foreign": "none"},
-        "exit_code": {"foreign": "none"},
-        "artifact_dir": {"foreign": "none", "note": "runs/<id>"},
-        "error": {"foreign": "none", "note": "VERIFIED CLEAN, and worth the words: only os/exec spawn errors reach it (cmd/control-api/main.go:623,655). Its cleanliness rests on lineWriter.Write always returning (len(p), nil), which is a property of the implementation rather than a guarded invariant — see SEC-RUNS-ERROR-UNGUARDED."},
-        "started_at": {"foreign": "none", "note": "RFC3339 TEXT — the age column purge filters on"},
-        "finished_at": {"foreign": "none"}
+        "run_id": {
+          "foreign": "none"
+        },
+        "conversation_id": {
+          "foreign": "none",
+          "note": "caller-supplied free text, but no product path derives it from page or goal"
+        },
+        "mode": {
+          "foreign": "none",
+          "note": "explore|goal|replay|baseline|chat"
+        },
+        "target": {
+          "foreign": "inherent",
+          "note": "validTarget (cmd/control-api/main.go:501-503) checks only the http(s):// prefix, so user:pass@host and ?token= pass through intact"
+        },
+        "planner": {
+          "foreign": "none",
+          "note": "heuristic|llm|goal"
+        },
+        "state": {
+          "foreign": "none"
+        },
+        "exit_code": {
+          "foreign": "none"
+        },
+        "artifact_dir": {
+          "foreign": "none",
+          "note": "runs/<id>"
+        },
+        "error": {
+          "foreign": "none",
+          "note": "VERIFIED CLEAN, and worth the words: only os/exec spawn errors reach it (cmd/control-api/main.go:623,655). Its cleanliness rests on lineWriter.Write always returning (len(p), nil), which is a property of the implementation rather than a guarded invariant — see SEC-RUNS-ERROR-UNGUARDED."
+        },
+        "started_at": {
+          "foreign": "none",
+          "note": "RFC3339 TEXT — the age column purge filters on"
+        },
+        "finished_at": {
+          "foreign": "none"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        }
       }
     },
     "scenarios": {
       "db": "control-store.db",
       "columns": {
-        "scenario_id": {"foreign": "none"},
-        "name": {"foreign": "inherent", "note": "defaults to the target URL (cmd/control-api/main.go:774-781)"},
-        "target": {"foreign": "inherent", "note": "as runs.target"},
-        "run_mode": {"foreign": "none"},
-        "plan_hash": {"foreign": "none"},
-        "steps_json": {"foreign": "inherent", "note": "locators, alternatives, assert `expected` and `intent` all carry page text by necessity. ONE MEMBER IS DIFFERENT: steps[].value / .text hold the TYPED VALUE — a password or card number — in the clear, and that member is INCIDENTAL, not inherent. scripts/collect-live-run.sh:255 already blanks it when a scenario leaves in a support bundle; the database does not. Root cause is not here: the LLM step schema (brain/planner.py:66-79) has `value` and no `secretRef`, while the recorder path carries secretRef fine. Tracked as SEC-SCENARIO-SECRETREF."},
-        "unmatched": {"foreign": "none"},
-        "tags": {"foreign": "incidental", "note": "operator-supplied free text"},
-        "source_run_id": {"foreign": "none"},
-        "created_at": {"foreign": "none", "note": "RFC3339 TEXT — the age column purge filters on"}
+        "scenario_id": {
+          "foreign": "none"
+        },
+        "name": {
+          "foreign": "inherent",
+          "note": "defaults to the target URL (cmd/control-api/main.go:774-781)"
+        },
+        "target": {
+          "foreign": "inherent",
+          "note": "as runs.target"
+        },
+        "run_mode": {
+          "foreign": "none"
+        },
+        "plan_hash": {
+          "foreign": "none"
+        },
+        "steps_json": {
+          "foreign": "inherent",
+          "note": "locators, alternatives, assert `expected` and `intent` all carry page text by necessity. ONE MEMBER IS DIFFERENT: steps[].value / .text hold the TYPED VALUE — a password or card number — in the clear, and that member is INCIDENTAL, not inherent. scripts/collect-live-run.sh:255 already blanks it when a scenario leaves in a support bundle; the database does not. Root cause is not here: the LLM step schema (brain/planner.py:66-79) has `value` and no `secretRef`, while the recorder path carries secretRef fine. Tracked as SEC-SCENARIO-SECRETREF."
+        },
+        "unmatched": {
+          "foreign": "none"
+        },
+        "tags": {
+          "foreign": "incidental",
+          "note": "operator-supplied free text"
+        },
+        "source_run_id": {
+          "foreign": "none"
+        },
+        "created_at": {
+          "foreign": "none",
+          "note": "RFC3339 TEXT — the age column purge filters on"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        }
       }
     },
     "tests": {
       "db": "control-store.db",
       "columns": {
-        "test_id": {"foreign": "none"},
-        "scenario_id": {"foreign": "none"},
-        "plan_hash": {"foreign": "none"},
-        "name": {"foreign": "incidental", "note": "operator types it; nothing derives it from the page"},
-        "schedule": {"foreign": "none", "note": "a cron expression. Nothing in the codebase constructs this value from page content, LLM output or run state — checked, because 'it is a TEXT column' is a claim about the type, not about the write path."},
-        "enabled": {"foreign": "none"},
-        "last_status": {"foreign": "none"},
-        "last_run_id": {"foreign": "none"},
-        "created_at": {"foreign": "none", "note": "RFC3339 TEXT"}
+        "test_id": {
+          "foreign": "none"
+        },
+        "scenario_id": {
+          "foreign": "none"
+        },
+        "plan_hash": {
+          "foreign": "none"
+        },
+        "name": {
+          "foreign": "incidental",
+          "note": "operator types it; nothing derives it from the page"
+        },
+        "schedule": {
+          "foreign": "none",
+          "note": "a cron expression. Nothing in the codebase constructs this value from page content, LLM output or run state — checked, because 'it is a TEXT column' is a claim about the type, not about the write path."
+        },
+        "enabled": {
+          "foreign": "none"
+        },
+        "last_status": {
+          "foreign": "none"
+        },
+        "last_run_id": {
+          "foreign": "none"
+        },
+        "created_at": {
+          "foreign": "none",
+          "note": "RFC3339 TEXT"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        }
       }
     },
     "chats": {
       "db": "control-store.db",
       "columns": {
-        "conversation_id": {"foreign": "none"},
-        "last_target": {"foreign": "inherent", "note": "as runs.target"},
-        "turn_count": {"foreign": "none"},
-        "last_active": {"foreign": "none"},
-        "last_goal": {"foreign": "inherent", "note": "the operator's instruction, verbatim and untransformed"},
-        "summary": {"foreign": "none", "note": "NOT an LLM summary — a deterministic f-string bounded at 80 chars of the first turn (brain/graph.py:213). Also UNREACHABLE today: ChatProjector needs STORE_ADDR, which agentctl never sets for --mode chat. Fix that wiring and this column immediately starts holding operator goals verbatim — see SEC-CHATS-WIRING-GAP."},
-        "updated_at": {"foreign": "none", "note": "RFC3339 TEXT — the age column purge filters on"}
+        "conversation_id": {
+          "foreign": "none"
+        },
+        "last_target": {
+          "foreign": "inherent",
+          "note": "as runs.target"
+        },
+        "turn_count": {
+          "foreign": "none"
+        },
+        "last_active": {
+          "foreign": "none"
+        },
+        "last_goal": {
+          "foreign": "inherent",
+          "note": "the operator's instruction, verbatim and untransformed"
+        },
+        "summary": {
+          "foreign": "none",
+          "note": "NOT an LLM summary — a deterministic f-string bounded at 80 chars of the first turn (brain/graph.py:213). Also UNREACHABLE today: ChatProjector needs STORE_ADDR, which agentctl never sets for --mode chat. Fix that wiring and this column immediately starts holding operator goals verbatim — see SEC-CHATS-WIRING-GAP."
+        },
+        "updated_at": {
+          "foreign": "none",
+          "note": "RFC3339 TEXT — the age column purge filters on"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        }
       }
     },
     "results": {
       "db": "control-store.db",
       "columns": {
-        "run_id": {"foreign": "none"},
-        "plan_id": {"foreign": "none"},
-        "mode": {"foreign": "none"},
-        "verdict": {"foreign": "none"},
-        "exit_code": {"foreign": "none"},
-        "healed": {"foreign": "none"},
-        "failed": {"foreign": "none"},
-        "regressions_json": {"foreign": "inherent", "note": "page names derived from the URL path"},
-        "steps_json": {"foreign": "inherent", "note": "per-step locator, heal.from/heal.to, url and golden. Two members are INCIDENTAL: .error carries the driver's raw message with the locator quoted inside it, and .assert.actual carries the observed value."},
-        "coverage": {"foreign": "none"},
-        "duration_ms": {"foreign": "none"},
-        "created_at": {"foreign": "none", "note": "RFC3339 TEXT — the age column purge filters on"}
+        "run_id": {
+          "foreign": "none"
+        },
+        "plan_id": {
+          "foreign": "none"
+        },
+        "mode": {
+          "foreign": "none"
+        },
+        "verdict": {
+          "foreign": "none"
+        },
+        "exit_code": {
+          "foreign": "none"
+        },
+        "healed": {
+          "foreign": "none"
+        },
+        "failed": {
+          "foreign": "none"
+        },
+        "regressions_json": {
+          "foreign": "inherent",
+          "note": "page names derived from the URL path"
+        },
+        "steps_json": {
+          "foreign": "inherent",
+          "note": "per-step locator, heal.from/heal.to, url and golden. Two members are INCIDENTAL: .error carries the driver's raw message with the locator quoted inside it, and .assert.actual carries the observed value."
+        },
+        "coverage": {
+          "foreign": "none"
+        },
+        "duration_ms": {
+          "foreign": "none"
+        },
+        "created_at": {
+          "foreign": "none",
+          "note": "RFC3339 TEXT — the age column purge filters on"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        }
       }
     },
     "metrics": {
       "db": "control-store.db",
       "columns": {
-        "run_id": {"foreign": "none"},
-        "ts": {"foreign": "none", "note": "REAL epoch — the age column purge filters on"},
-        "name": {"foreign": "none"},
-        "value": {"foreign": "none"},
-        "labels_json": {"foreign": "inherent", "note": "carries the target URL on EVERY metric point (cmd/control-api/main.go:943,1047-1052)"}
+        "run_id": {
+          "foreign": "none"
+        },
+        "ts": {
+          "foreign": "none",
+          "note": "REAL epoch — the age column purge filters on"
+        },
+        "name": {
+          "foreign": "none"
+        },
+        "value": {
+          "foreign": "none"
+        },
+        "labels_json": {
+          "foreign": "inherent",
+          "note": "carries the target URL on EVERY metric point (cmd/control-api/main.go:943,1047-1052)"
+        }
       }
     },
     "config": {
       "db": "control-store.db",
       "not_purgeable": "live configuration, not accumulated history — emptying it breaks a running deployment. Its foreign text is a reason to stop putting a target and goal in config, not a reason to let a cleanup tool delete the service's settings.",
       "columns": {
-        "key": {"foreign": "none"},
-        "value_json": {"foreign": "incidental", "note": "run.target and run.goal can be set through the setup wizard (docs/setup/index.html:1316-1317). Secrets are refused outright by configguard, but a goal phrase is not a secret and is not refused."},
-        "updated_at": {"foreign": "none"}
+        "key": {
+          "foreign": "none"
+        },
+        "value_json": {
+          "foreign": "incidental",
+          "note": "run.target and run.goal can be set through the setup wizard (docs/setup/index.html:1316-1317). Secrets are refused outright by configguard, but a goal phrase is not a secret and is not refused."
+        },
+        "updated_at": {
+          "foreign": "none"
+        }
+      }
+    },
+    "users": {
+      "db": "control-store.db",
+      "columns": {
+        "user_id": {
+          "foreign": "none",
+          "note": "ADR-109: minted by control-api; opaque id, never derived from anything the tested application shows"
+        },
+        "name": {
+          "foreign": "none",
+          "note": "the login handle an operator chose for themselves — a person naming their own account, not text read off a page"
+        },
+        "pw_hash": {
+          "foreign": "none",
+          "note": "internal/identity PBKDF2-HMAC-SHA256 credential (scheme$iterations$salt$key). NOT foreign text, so a foreign-text purge must leave it alone: sweeping it would delete the account rather than sanitise it. Never a plaintext password and never reversible"
+        },
+        "is_admin": {
+          "foreign": "none",
+          "note": "may create and remove other accounts"
+        },
+        "created_at": {
+          "foreign": "none"
+        }
       }
     }
   }

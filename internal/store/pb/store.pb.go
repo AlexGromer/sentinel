@@ -42,8 +42,14 @@ type RunRecord struct {
 	StartedAt      string                 `protobuf:"bytes,10,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`    // RFC3339
 	FinishedAt     string                 `protobuf:"bytes,11,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"` // RFC3339 ("" while running)
 	Found          bool                   `protobuf:"varint,12,opt,name=found,proto3" json:"found,omitempty"`                            // false => no such run (GetRun)
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ADR-109: the local account that owns this row. EMPTY means unowned, which is what every row
+	// written before identity existed carries — and what a single-team install keeps carrying, because
+	// identity is OPT-IN: with no users created, nothing is scoped and the deployment behaves exactly
+	// as it did. Scoping a store that has no subjects would break the one-team install that open-core
+	// exists to serve.
+	Owner         string `protobuf:"bytes,13,opt,name=owner,proto3" json:"owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunRecord) Reset() {
@@ -160,6 +166,13 @@ func (x *RunRecord) GetFound() bool {
 	return false
 }
 
+func (x *RunRecord) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type RunId struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
@@ -209,6 +222,7 @@ type ListRunsReq struct {
 	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"` // 0 => a sane default cap
 	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"` // "" => any
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109: "" => every row (a machine token); otherwise only this account's
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -260,6 +274,13 @@ func (x *ListRunsReq) GetOffset() int64 {
 func (x *ListRunsReq) GetState() string {
 	if x != nil {
 		return x.State
+	}
+	return ""
+}
+
+func (x *ListRunsReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
 	}
 	return ""
 }
@@ -330,6 +351,7 @@ type Scenario struct {
 	SourceRunId   string                 `protobuf:"bytes,9,opt,name=source_run_id,json=sourceRunId,proto3" json:"source_run_id,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Found         bool                   `protobuf:"varint,11,opt,name=found,proto3" json:"found,omitempty"`
+	Owner         string                 `protobuf:"bytes,12,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -441,6 +463,13 @@ func (x *Scenario) GetFound() bool {
 	return false
 }
 
+func (x *Scenario) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type ScenarioId struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ScenarioId    string                 `protobuf:"bytes,1,opt,name=scenario_id,json=scenarioId,proto3" json:"scenario_id,omitempty"`
@@ -490,6 +519,7 @@ type ListScenariosReq struct {
 	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
 	Target        string                 `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -541,6 +571,13 @@ func (x *ListScenariosReq) GetOffset() int64 {
 func (x *ListScenariosReq) GetTarget() string {
 	if x != nil {
 		return x.Target
+	}
+	return ""
+}
+
+func (x *ListScenariosReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
 	}
 	return ""
 }
@@ -602,6 +639,7 @@ type PromoteReq struct {
 	ScenarioId    string                 `protobuf:"bytes,1,opt,name=scenario_id,json=scenarioId,proto3" json:"scenario_id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Schedule      string                 `protobuf:"bytes,3,opt,name=schedule,proto3" json:"schedule,omitempty"` // reserved: stored, NOT executed (no scheduler in M13)
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`       // ADR-109: the promoted test inherits the promoter, not the scenario
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -657,6 +695,13 @@ func (x *PromoteReq) GetSchedule() string {
 	return ""
 }
 
+func (x *PromoteReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type TestRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TestId        string                 `protobuf:"bytes,1,opt,name=test_id,json=testId,proto3" json:"test_id,omitempty"`
@@ -669,6 +714,7 @@ type TestRecord struct {
 	LastRunId     string                 `protobuf:"bytes,8,opt,name=last_run_id,json=lastRunId,proto3" json:"last_run_id,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Found         bool                   `protobuf:"varint,10,opt,name=found,proto3" json:"found,omitempty"`
+	Owner         string                 `protobuf:"bytes,11,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -773,6 +819,13 @@ func (x *TestRecord) GetFound() bool {
 	return false
 }
 
+func (x *TestRecord) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type TestId struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TestId        string                 `protobuf:"bytes,1,opt,name=test_id,json=testId,proto3" json:"test_id,omitempty"`
@@ -821,6 +874,7 @@ type ListTestsReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Owner         string                 `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -867,6 +921,13 @@ func (x *ListTestsReq) GetOffset() int64 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *ListTestsReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type TestList struct {
@@ -931,6 +992,7 @@ type ChatProjection struct {
 	LastGoal       string                 `protobuf:"bytes,5,opt,name=last_goal,json=lastGoal,proto3" json:"last_goal,omitempty"`
 	Summary        string                 `protobuf:"bytes,6,opt,name=summary,proto3" json:"summary,omitempty"` // rolling summary (GAP-M9-20)
 	Found          bool                   `protobuf:"varint,7,opt,name=found,proto3" json:"found,omitempty"`
+	Owner          string                 `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1014,6 +1076,13 @@ func (x *ChatProjection) GetFound() bool {
 	return false
 }
 
+func (x *ChatProjection) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type ConversationId struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
@@ -1062,6 +1131,7 @@ type ListChatsReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Owner         string                 `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1108,6 +1178,13 @@ func (x *ListChatsReq) GetOffset() int64 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *ListChatsReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type ChatList struct {
@@ -1178,6 +1255,7 @@ type ResultRecord struct {
 	DurationMs      int64                  `protobuf:"varint,11,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
 	CreatedAt       string                 `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Found           bool                   `protobuf:"varint,13,opt,name=found,proto3" json:"found,omitempty"`
+	Owner           string                 `protobuf:"bytes,14,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1303,10 +1381,18 @@ func (x *ResultRecord) GetFound() bool {
 	return false
 }
 
+func (x *ResultRecord) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type ListResultsReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
 	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Owner         string                 `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1353,6 +1439,13 @@ func (x *ListResultsReq) GetOffset() int64 {
 		return x.Offset
 	}
 	return 0
+}
+
+func (x *ListResultsReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type ResultList struct {
@@ -1407,6 +1500,199 @@ func (x *ResultList) GetTotal() int64 {
 	return 0
 }
 
+// --- users (ADR-109: LOCAL accounts; OIDC/SSO/RBAC stay commercial per ADR-056) ---
+// The gateway STORES a credential and never judges one: verification lives in control-api, which is
+// already the authentication boundary and already holds the KDF (internal/identity). Putting the KDF
+// here too would give one rule two implementations, which is the drift this milestone exists to remove.
+type User struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                       // unique, the login handle
+	PwHash        string                 `protobuf:"bytes,3,opt,name=pw_hash,json=pwHash,proto3" json:"pw_hash,omitempty"`     // internal/identity format; opaque to the gateway
+	IsAdmin       bool                   `protobuf:"varint,4,opt,name=is_admin,json=isAdmin,proto3" json:"is_admin,omitempty"` // may create and remove other accounts
+	CreatedAt     string                 `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Found         bool                   `protobuf:"varint,6,opt,name=found,proto3" json:"found,omitempty"` // false => no such user (GetUser)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *User) Reset() {
+	*x = User{}
+	mi := &file_store_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *User) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*User) ProtoMessage() {}
+
+func (x *User) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use User.ProtoReflect.Descriptor instead.
+func (*User) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *User) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *User) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *User) GetPwHash() string {
+	if x != nil {
+		return x.PwHash
+	}
+	return ""
+}
+
+func (x *User) GetIsAdmin() bool {
+	if x != nil {
+		return x.IsAdmin
+	}
+	return false
+}
+
+func (x *User) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *User) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+// Either field identifies: login has a name, everything else has an id.
+type UserRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserRef) Reset() {
+	*x = UserRef{}
+	mi := &file_store_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserRef) ProtoMessage() {}
+
+func (x *UserRef) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserRef.ProtoReflect.Descriptor instead.
+func (*UserRef) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *UserRef) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserRef) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type UserList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Users         []*User                `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	Total         int64                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserList) Reset() {
+	*x = UserList{}
+	mi := &file_store_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserList) ProtoMessage() {}
+
+func (x *UserList) ProtoReflect() protoreflect.Message {
+	mi := &file_store_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserList.ProtoReflect.Descriptor instead.
+func (*UserList) Descriptor() ([]byte, []int) {
+	return file_store_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *UserList) GetUsers() []*User {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
+func (x *UserList) GetTotal() int64 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
 // --- metrics (time-series ingested from results; trends for M15) -------------
 type MetricPoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1421,7 +1707,7 @@ type MetricPoint struct {
 
 func (x *MetricPoint) Reset() {
 	*x = MetricPoint{}
-	mi := &file_store_proto_msgTypes[20]
+	mi := &file_store_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1433,7 +1719,7 @@ func (x *MetricPoint) String() string {
 func (*MetricPoint) ProtoMessage() {}
 
 func (x *MetricPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[20]
+	mi := &file_store_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1446,7 +1732,7 @@ func (x *MetricPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricPoint.ProtoReflect.Descriptor instead.
 func (*MetricPoint) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{20}
+	return file_store_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *MetricPoint) GetRunId() string {
@@ -1493,7 +1779,7 @@ type MetricsBatch struct {
 
 func (x *MetricsBatch) Reset() {
 	*x = MetricsBatch{}
-	mi := &file_store_proto_msgTypes[21]
+	mi := &file_store_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1505,7 +1791,7 @@ func (x *MetricsBatch) String() string {
 func (*MetricsBatch) ProtoMessage() {}
 
 func (x *MetricsBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[21]
+	mi := &file_store_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1518,7 +1804,7 @@ func (x *MetricsBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricsBatch.ProtoReflect.Descriptor instead.
 func (*MetricsBatch) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{21}
+	return file_store_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *MetricsBatch) GetPoints() []*MetricPoint {
@@ -1540,7 +1826,7 @@ type MetricsQuery struct {
 
 func (x *MetricsQuery) Reset() {
 	*x = MetricsQuery{}
-	mi := &file_store_proto_msgTypes[22]
+	mi := &file_store_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1552,7 +1838,7 @@ func (x *MetricsQuery) String() string {
 func (*MetricsQuery) ProtoMessage() {}
 
 func (x *MetricsQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[22]
+	mi := &file_store_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1565,7 +1851,7 @@ func (x *MetricsQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricsQuery.ProtoReflect.Descriptor instead.
 func (*MetricsQuery) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{22}
+	return file_store_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *MetricsQuery) GetName() string {
@@ -1605,7 +1891,7 @@ type MetricsSeries struct {
 
 func (x *MetricsSeries) Reset() {
 	*x = MetricsSeries{}
-	mi := &file_store_proto_msgTypes[23]
+	mi := &file_store_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1617,7 +1903,7 @@ func (x *MetricsSeries) String() string {
 func (*MetricsSeries) ProtoMessage() {}
 
 func (x *MetricsSeries) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[23]
+	mi := &file_store_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1630,7 +1916,7 @@ func (x *MetricsSeries) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricsSeries.ProtoReflect.Descriptor instead.
 func (*MetricsSeries) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{23}
+	return file_store_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MetricsSeries) GetPoints() []*MetricPoint {
@@ -1650,7 +1936,7 @@ type TrendReq struct {
 
 func (x *TrendReq) Reset() {
 	*x = TrendReq{}
-	mi := &file_store_proto_msgTypes[24]
+	mi := &file_store_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1662,7 +1948,7 @@ func (x *TrendReq) String() string {
 func (*TrendReq) ProtoMessage() {}
 
 func (x *TrendReq) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[24]
+	mi := &file_store_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1675,7 +1961,7 @@ func (x *TrendReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrendReq.ProtoReflect.Descriptor instead.
 func (*TrendReq) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{24}
+	return file_store_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TrendReq) GetMetric() string {
@@ -1703,7 +1989,7 @@ type TrendPoint struct {
 
 func (x *TrendPoint) Reset() {
 	*x = TrendPoint{}
-	mi := &file_store_proto_msgTypes[25]
+	mi := &file_store_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1715,7 +2001,7 @@ func (x *TrendPoint) String() string {
 func (*TrendPoint) ProtoMessage() {}
 
 func (x *TrendPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[25]
+	mi := &file_store_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1728,7 +2014,7 @@ func (x *TrendPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrendPoint.ProtoReflect.Descriptor instead.
 func (*TrendPoint) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{25}
+	return file_store_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TrendPoint) GetRunId() string {
@@ -1761,7 +2047,7 @@ type TrendReply struct {
 
 func (x *TrendReply) Reset() {
 	*x = TrendReply{}
-	mi := &file_store_proto_msgTypes[26]
+	mi := &file_store_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1773,7 +2059,7 @@ func (x *TrendReply) String() string {
 func (*TrendReply) ProtoMessage() {}
 
 func (x *TrendReply) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[26]
+	mi := &file_store_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1786,7 +2072,7 @@ func (x *TrendReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrendReply.ProtoReflect.Descriptor instead.
 func (*TrendReply) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{26}
+	return file_store_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TrendReply) GetPoints() []*TrendPoint {
@@ -1813,7 +2099,7 @@ type ConfigRecord struct {
 
 func (x *ConfigRecord) Reset() {
 	*x = ConfigRecord{}
-	mi := &file_store_proto_msgTypes[27]
+	mi := &file_store_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1825,7 +2111,7 @@ func (x *ConfigRecord) String() string {
 func (*ConfigRecord) ProtoMessage() {}
 
 func (x *ConfigRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[27]
+	mi := &file_store_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1838,7 +2124,7 @@ func (x *ConfigRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigRecord.ProtoReflect.Descriptor instead.
 func (*ConfigRecord) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{27}
+	return file_store_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ConfigRecord) GetKey() string {
@@ -1878,7 +2164,7 @@ type ConfigKey struct {
 
 func (x *ConfigKey) Reset() {
 	*x = ConfigKey{}
-	mi := &file_store_proto_msgTypes[28]
+	mi := &file_store_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1890,7 +2176,7 @@ func (x *ConfigKey) String() string {
 func (*ConfigKey) ProtoMessage() {}
 
 func (x *ConfigKey) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[28]
+	mi := &file_store_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1903,7 +2189,7 @@ func (x *ConfigKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigKey.ProtoReflect.Descriptor instead.
 func (*ConfigKey) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{28}
+	return file_store_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ConfigKey) GetKey() string {
@@ -1922,7 +2208,7 @@ type ConfigList struct {
 
 func (x *ConfigList) Reset() {
 	*x = ConfigList{}
-	mi := &file_store_proto_msgTypes[29]
+	mi := &file_store_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1934,7 +2220,7 @@ func (x *ConfigList) String() string {
 func (*ConfigList) ProtoMessage() {}
 
 func (x *ConfigList) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[29]
+	mi := &file_store_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1947,7 +2233,7 @@ func (x *ConfigList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigList.ProtoReflect.Descriptor instead.
 func (*ConfigList) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{29}
+	return file_store_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ConfigList) GetItems() []*ConfigRecord {
@@ -1987,7 +2273,7 @@ type PurgeReq struct {
 
 func (x *PurgeReq) Reset() {
 	*x = PurgeReq{}
-	mi := &file_store_proto_msgTypes[30]
+	mi := &file_store_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1999,7 +2285,7 @@ func (x *PurgeReq) String() string {
 func (*PurgeReq) ProtoMessage() {}
 
 func (x *PurgeReq) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[30]
+	mi := &file_store_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2012,7 +2298,7 @@ func (x *PurgeReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeReq.ProtoReflect.Descriptor instead.
 func (*PurgeReq) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{30}
+	return file_store_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *PurgeReq) GetTables() []string {
@@ -2046,7 +2332,7 @@ type PurgeTableCount struct {
 
 func (x *PurgeTableCount) Reset() {
 	*x = PurgeTableCount{}
-	mi := &file_store_proto_msgTypes[31]
+	mi := &file_store_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2058,7 +2344,7 @@ func (x *PurgeTableCount) String() string {
 func (*PurgeTableCount) ProtoMessage() {}
 
 func (x *PurgeTableCount) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[31]
+	mi := &file_store_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2071,7 +2357,7 @@ func (x *PurgeTableCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeTableCount.ProtoReflect.Descriptor instead.
 func (*PurgeTableCount) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{31}
+	return file_store_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PurgeTableCount) GetTable() string {
@@ -2103,7 +2389,7 @@ type PurgeReport struct {
 
 func (x *PurgeReport) Reset() {
 	*x = PurgeReport{}
-	mi := &file_store_proto_msgTypes[32]
+	mi := &file_store_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2115,7 +2401,7 @@ func (x *PurgeReport) String() string {
 func (*PurgeReport) ProtoMessage() {}
 
 func (x *PurgeReport) ProtoReflect() protoreflect.Message {
-	mi := &file_store_proto_msgTypes[32]
+	mi := &file_store_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2128,7 +2414,7 @@ func (x *PurgeReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PurgeReport.ProtoReflect.Descriptor instead.
 func (*PurgeReport) Descriptor() ([]byte, []int) {
-	return file_store_proto_rawDescGZIP(), []int{32}
+	return file_store_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PurgeReport) GetCounts() []*PurgeTableCount {
@@ -2163,7 +2449,7 @@ var File_store_proto protoreflect.FileDescriptor
 
 const file_store_proto_rawDesc = "" +
 	"\n" +
-	"\vstore.proto\x12\x17sentinel.persistence.v1\x1a\x11persistence.proto\"\xd3\x02\n" +
+	"\vstore.proto\x12\x17sentinel.persistence.v1\x1a\x11persistence.proto\"\xe9\x02\n" +
 	"\tRunRecord\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x12\n" +
@@ -2179,16 +2465,18 @@ const file_store_proto_rawDesc = "" +
 	" \x01(\tR\tstartedAt\x12\x1f\n" +
 	"\vfinished_at\x18\v \x01(\tR\n" +
 	"finishedAt\x12\x14\n" +
-	"\x05found\x18\f \x01(\bR\x05found\"\x1e\n" +
+	"\x05found\x18\f \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\r \x01(\tR\x05owner\"\x1e\n" +
 	"\x05RunId\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"Q\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"g\n" +
 	"\vListRunsReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\tR\x05state\"W\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12\x14\n" +
+	"\x05owner\x18\x04 \x01(\tR\x05owner\"W\n" +
 	"\aRunList\x126\n" +
 	"\x04runs\x18\x01 \x03(\v2\".sentinel.persistence.v1.RunRecordR\x04runs\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\xb9\x02\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\xcf\x02\n" +
 	"\bScenario\x12\x1f\n" +
 	"\vscenario_id\x18\x01 \x01(\tR\n" +
 	"scenarioId\x12\x12\n" +
@@ -2204,24 +2492,27 @@ const file_store_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\n" +
 	" \x01(\tR\tcreatedAt\x12\x14\n" +
-	"\x05found\x18\v \x01(\bR\x05found\"-\n" +
+	"\x05found\x18\v \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\f \x01(\tR\x05owner\"-\n" +
 	"\n" +
 	"ScenarioId\x12\x1f\n" +
 	"\vscenario_id\x18\x01 \x01(\tR\n" +
-	"scenarioId\"X\n" +
+	"scenarioId\"n\n" +
 	"\x10ListScenariosReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x16\n" +
-	"\x06target\x18\x03 \x01(\tR\x06target\"e\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\x12\x14\n" +
+	"\x05owner\x18\x04 \x01(\tR\x05owner\"e\n" +
 	"\fScenarioList\x12?\n" +
 	"\tscenarios\x18\x01 \x03(\v2!.sentinel.persistence.v1.ScenarioR\tscenarios\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"]\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"s\n" +
 	"\n" +
 	"PromoteReq\x12\x1f\n" +
 	"\vscenario_id\x18\x01 \x01(\tR\n" +
 	"scenarioId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
-	"\bschedule\x18\x03 \x01(\tR\bschedule\"\xa3\x02\n" +
+	"\bschedule\x18\x03 \x01(\tR\bschedule\x12\x14\n" +
+	"\x05owner\x18\x04 \x01(\tR\x05owner\"\xb9\x02\n" +
 	"\n" +
 	"TestRecord\x12\x17\n" +
 	"\atest_id\x18\x01 \x01(\tR\x06testId\x12\x1f\n" +
@@ -2237,15 +2528,17 @@ const file_store_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\t \x01(\tR\tcreatedAt\x12\x14\n" +
 	"\x05found\x18\n" +
-	" \x01(\bR\x05found\"!\n" +
+	" \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\v \x01(\tR\x05owner\"!\n" +
 	"\x06TestId\x12\x17\n" +
-	"\atest_id\x18\x01 \x01(\tR\x06testId\"<\n" +
+	"\atest_id\x18\x01 \x01(\tR\x06testId\"R\n" +
 	"\fListTestsReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x03R\x06offset\"[\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x14\n" +
+	"\x05owner\x18\x03 \x01(\tR\x05owner\"[\n" +
 	"\bTestList\x129\n" +
 	"\x05tests\x18\x01 \x03(\v2#.sentinel.persistence.v1.TestRecordR\x05tests\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\xe7\x01\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\xfd\x01\n" +
 	"\x0eChatProjection\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x1f\n" +
 	"\vlast_target\x18\x02 \x01(\tR\n" +
@@ -2256,15 +2549,17 @@ const file_store_proto_rawDesc = "" +
 	"lastActive\x12\x1b\n" +
 	"\tlast_goal\x18\x05 \x01(\tR\blastGoal\x12\x18\n" +
 	"\asummary\x18\x06 \x01(\tR\asummary\x12\x14\n" +
-	"\x05found\x18\a \x01(\bR\x05found\"9\n" +
+	"\x05found\x18\a \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\b \x01(\tR\x05owner\"9\n" +
 	"\x0eConversationId\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"<\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"R\n" +
 	"\fListChatsReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x03R\x06offset\"_\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x14\n" +
+	"\x05owner\x18\x03 \x01(\tR\x05owner\"_\n" +
 	"\bChatList\x12=\n" +
 	"\x05chats\x18\x01 \x03(\v2'.sentinel.persistence.v1.ChatProjectionR\x05chats\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\xf5\x02\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x8b\x03\n" +
 	"\fResultRecord\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12\x12\n" +
@@ -2282,13 +2577,29 @@ const file_store_proto_rawDesc = "" +
 	"durationMs\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\f \x01(\tR\tcreatedAt\x12\x14\n" +
-	"\x05found\x18\r \x01(\bR\x05found\">\n" +
+	"\x05found\x18\r \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\x0e \x01(\tR\x05owner\"T\n" +
 	"\x0eListResultsReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x03R\x06offset\"c\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x14\n" +
+	"\x05owner\x18\x03 \x01(\tR\x05owner\"c\n" +
 	"\n" +
 	"ResultList\x12?\n" +
 	"\aresults\x18\x01 \x03(\v2%.sentinel.persistence.v1.ResultRecordR\aresults\x12\x14\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x9c\x01\n" +
+	"\x04User\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x17\n" +
+	"\apw_hash\x18\x03 \x01(\tR\x06pwHash\x12\x19\n" +
+	"\bis_admin\x18\x04 \x01(\bR\aisAdmin\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\x05 \x01(\tR\tcreatedAt\x12\x14\n" +
+	"\x05found\x18\x06 \x01(\bR\x05found\"6\n" +
+	"\aUserRef\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"U\n" +
+	"\bUserList\x123\n" +
+	"\x05users\x18\x01 \x03(\v2\x1d.sentinel.persistence.v1.UserR\x05users\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\"\x7f\n" +
 	"\vMetricPoint\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x0e\n" +
@@ -2340,7 +2651,7 @@ const file_store_proto_rawDesc = "" +
 	"\x06counts\x18\x01 \x03(\v2(.sentinel.persistence.v1.PurgeTableCountR\x06counts\x12\x1a\n" +
 	"\bvacuumed\x18\x02 \x01(\bR\bvacuumed\x12%\n" +
 	"\x0evacuum_skipped\x18\x03 \x01(\tR\rvacuumSkipped\x12+\n" +
-	"\x11capabilities_lost\x18\x04 \x03(\tR\x10capabilitiesLost2\xd0\x11\n" +
+	"\x11capabilities_lost\x18\x04 \x03(\tR\x10capabilitiesLost2\x89\x14\n" +
 	"\fStoreService\x12O\n" +
 	"\tUpsertRun\x12\".sentinel.persistence.v1.RunRecord\x1a\x1e.sentinel.persistence.v1.Empty\x12L\n" +
 	"\x06GetRun\x12\x1e.sentinel.persistence.v1.RunId\x1a\".sentinel.persistence.v1.RunRecord\x12R\n" +
@@ -2373,7 +2684,13 @@ const file_store_proto_rawDesc = "" +
 	"ListConfig\x12\x1e.sentinel.persistence.v1.Empty\x1a#.sentinel.persistence.v1.ConfigList\x12R\n" +
 	"\fDeleteConfig\x12\".sentinel.persistence.v1.ConfigKey\x1a\x1e.sentinel.persistence.v1.Empty\x12U\n" +
 	"\n" +
-	"PurgeStore\x12!.sentinel.persistence.v1.PurgeReq\x1a$.sentinel.persistence.v1.PurgeReportB5Z3github.com/AlexGromer/sentinel/internal/store/pb;pbb\x06proto3"
+	"PurgeStore\x12!.sentinel.persistence.v1.PurgeReq\x1a$.sentinel.persistence.v1.PurgeReport\x12K\n" +
+	"\n" +
+	"UpsertUser\x12\x1d.sentinel.persistence.v1.User\x1a\x1e.sentinel.persistence.v1.Empty\x12J\n" +
+	"\aGetUser\x12 .sentinel.persistence.v1.UserRef\x1a\x1d.sentinel.persistence.v1.User\x12N\n" +
+	"\tListUsers\x12\x1e.sentinel.persistence.v1.Empty\x1a!.sentinel.persistence.v1.UserList\x12N\n" +
+	"\n" +
+	"DeleteUser\x12 .sentinel.persistence.v1.UserRef\x1a\x1e.sentinel.persistence.v1.EmptyB5Z3github.com/AlexGromer/sentinel/internal/store/pb;pbb\x06proto3"
 
 var (
 	file_store_proto_rawDescOnce sync.Once
@@ -2387,7 +2704,7 @@ func file_store_proto_rawDescGZIP() []byte {
 	return file_store_proto_rawDescData
 }
 
-var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_store_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_store_proto_goTypes = []any{
 	(*RunRecord)(nil),        // 0: sentinel.persistence.v1.RunRecord
 	(*RunId)(nil),            // 1: sentinel.persistence.v1.RunId
@@ -2409,20 +2726,23 @@ var file_store_proto_goTypes = []any{
 	(*ResultRecord)(nil),     // 17: sentinel.persistence.v1.ResultRecord
 	(*ListResultsReq)(nil),   // 18: sentinel.persistence.v1.ListResultsReq
 	(*ResultList)(nil),       // 19: sentinel.persistence.v1.ResultList
-	(*MetricPoint)(nil),      // 20: sentinel.persistence.v1.MetricPoint
-	(*MetricsBatch)(nil),     // 21: sentinel.persistence.v1.MetricsBatch
-	(*MetricsQuery)(nil),     // 22: sentinel.persistence.v1.MetricsQuery
-	(*MetricsSeries)(nil),    // 23: sentinel.persistence.v1.MetricsSeries
-	(*TrendReq)(nil),         // 24: sentinel.persistence.v1.TrendReq
-	(*TrendPoint)(nil),       // 25: sentinel.persistence.v1.TrendPoint
-	(*TrendReply)(nil),       // 26: sentinel.persistence.v1.TrendReply
-	(*ConfigRecord)(nil),     // 27: sentinel.persistence.v1.ConfigRecord
-	(*ConfigKey)(nil),        // 28: sentinel.persistence.v1.ConfigKey
-	(*ConfigList)(nil),       // 29: sentinel.persistence.v1.ConfigList
-	(*PurgeReq)(nil),         // 30: sentinel.persistence.v1.PurgeReq
-	(*PurgeTableCount)(nil),  // 31: sentinel.persistence.v1.PurgeTableCount
-	(*PurgeReport)(nil),      // 32: sentinel.persistence.v1.PurgeReport
-	(*Empty)(nil),            // 33: sentinel.persistence.v1.Empty
+	(*User)(nil),             // 20: sentinel.persistence.v1.User
+	(*UserRef)(nil),          // 21: sentinel.persistence.v1.UserRef
+	(*UserList)(nil),         // 22: sentinel.persistence.v1.UserList
+	(*MetricPoint)(nil),      // 23: sentinel.persistence.v1.MetricPoint
+	(*MetricsBatch)(nil),     // 24: sentinel.persistence.v1.MetricsBatch
+	(*MetricsQuery)(nil),     // 25: sentinel.persistence.v1.MetricsQuery
+	(*MetricsSeries)(nil),    // 26: sentinel.persistence.v1.MetricsSeries
+	(*TrendReq)(nil),         // 27: sentinel.persistence.v1.TrendReq
+	(*TrendPoint)(nil),       // 28: sentinel.persistence.v1.TrendPoint
+	(*TrendReply)(nil),       // 29: sentinel.persistence.v1.TrendReply
+	(*ConfigRecord)(nil),     // 30: sentinel.persistence.v1.ConfigRecord
+	(*ConfigKey)(nil),        // 31: sentinel.persistence.v1.ConfigKey
+	(*ConfigList)(nil),       // 32: sentinel.persistence.v1.ConfigList
+	(*PurgeReq)(nil),         // 33: sentinel.persistence.v1.PurgeReq
+	(*PurgeTableCount)(nil),  // 34: sentinel.persistence.v1.PurgeTableCount
+	(*PurgeReport)(nil),      // 35: sentinel.persistence.v1.PurgeReport
+	(*Empty)(nil),            // 36: sentinel.persistence.v1.Empty
 }
 var file_store_proto_depIdxs = []int32{
 	0,  // 0: sentinel.persistence.v1.RunList.runs:type_name -> sentinel.persistence.v1.RunRecord
@@ -2430,68 +2750,77 @@ var file_store_proto_depIdxs = []int32{
 	9,  // 2: sentinel.persistence.v1.TestList.tests:type_name -> sentinel.persistence.v1.TestRecord
 	13, // 3: sentinel.persistence.v1.ChatList.chats:type_name -> sentinel.persistence.v1.ChatProjection
 	17, // 4: sentinel.persistence.v1.ResultList.results:type_name -> sentinel.persistence.v1.ResultRecord
-	20, // 5: sentinel.persistence.v1.MetricsBatch.points:type_name -> sentinel.persistence.v1.MetricPoint
-	20, // 6: sentinel.persistence.v1.MetricsSeries.points:type_name -> sentinel.persistence.v1.MetricPoint
-	25, // 7: sentinel.persistence.v1.TrendReply.points:type_name -> sentinel.persistence.v1.TrendPoint
-	27, // 8: sentinel.persistence.v1.ConfigList.items:type_name -> sentinel.persistence.v1.ConfigRecord
-	31, // 9: sentinel.persistence.v1.PurgeReport.counts:type_name -> sentinel.persistence.v1.PurgeTableCount
-	0,  // 10: sentinel.persistence.v1.StoreService.UpsertRun:input_type -> sentinel.persistence.v1.RunRecord
-	1,  // 11: sentinel.persistence.v1.StoreService.GetRun:input_type -> sentinel.persistence.v1.RunId
-	2,  // 12: sentinel.persistence.v1.StoreService.ListRuns:input_type -> sentinel.persistence.v1.ListRunsReq
-	4,  // 13: sentinel.persistence.v1.StoreService.SaveScenario:input_type -> sentinel.persistence.v1.Scenario
-	5,  // 14: sentinel.persistence.v1.StoreService.GetScenario:input_type -> sentinel.persistence.v1.ScenarioId
-	6,  // 15: sentinel.persistence.v1.StoreService.ListScenarios:input_type -> sentinel.persistence.v1.ListScenariosReq
-	5,  // 16: sentinel.persistence.v1.StoreService.DeleteScenario:input_type -> sentinel.persistence.v1.ScenarioId
-	8,  // 17: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
-	10, // 18: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
-	11, // 19: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
-	10, // 20: sentinel.persistence.v1.StoreService.DeleteTest:input_type -> sentinel.persistence.v1.TestId
-	13, // 21: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
-	14, // 22: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
-	15, // 23: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
-	14, // 24: sentinel.persistence.v1.StoreService.DeleteChat:input_type -> sentinel.persistence.v1.ConversationId
-	17, // 25: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
-	1,  // 26: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
-	18, // 27: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
-	21, // 28: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
-	22, // 29: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
-	24, // 30: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
-	27, // 31: sentinel.persistence.v1.StoreService.PutConfig:input_type -> sentinel.persistence.v1.ConfigRecord
-	28, // 32: sentinel.persistence.v1.StoreService.GetConfig:input_type -> sentinel.persistence.v1.ConfigKey
-	33, // 33: sentinel.persistence.v1.StoreService.ListConfig:input_type -> sentinel.persistence.v1.Empty
-	28, // 34: sentinel.persistence.v1.StoreService.DeleteConfig:input_type -> sentinel.persistence.v1.ConfigKey
-	30, // 35: sentinel.persistence.v1.StoreService.PurgeStore:input_type -> sentinel.persistence.v1.PurgeReq
-	33, // 36: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
-	0,  // 37: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
-	3,  // 38: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
-	33, // 39: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
-	4,  // 40: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
-	7,  // 41: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
-	33, // 42: sentinel.persistence.v1.StoreService.DeleteScenario:output_type -> sentinel.persistence.v1.Empty
-	9,  // 43: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
-	9,  // 44: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
-	12, // 45: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
-	33, // 46: sentinel.persistence.v1.StoreService.DeleteTest:output_type -> sentinel.persistence.v1.Empty
-	33, // 47: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
-	13, // 48: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
-	16, // 49: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
-	33, // 50: sentinel.persistence.v1.StoreService.DeleteChat:output_type -> sentinel.persistence.v1.Empty
-	33, // 51: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
-	17, // 52: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
-	19, // 53: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
-	33, // 54: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
-	23, // 55: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
-	26, // 56: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
-	33, // 57: sentinel.persistence.v1.StoreService.PutConfig:output_type -> sentinel.persistence.v1.Empty
-	27, // 58: sentinel.persistence.v1.StoreService.GetConfig:output_type -> sentinel.persistence.v1.ConfigRecord
-	29, // 59: sentinel.persistence.v1.StoreService.ListConfig:output_type -> sentinel.persistence.v1.ConfigList
-	33, // 60: sentinel.persistence.v1.StoreService.DeleteConfig:output_type -> sentinel.persistence.v1.Empty
-	32, // 61: sentinel.persistence.v1.StoreService.PurgeStore:output_type -> sentinel.persistence.v1.PurgeReport
-	36, // [36:62] is the sub-list for method output_type
-	10, // [10:36] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	20, // 5: sentinel.persistence.v1.UserList.users:type_name -> sentinel.persistence.v1.User
+	23, // 6: sentinel.persistence.v1.MetricsBatch.points:type_name -> sentinel.persistence.v1.MetricPoint
+	23, // 7: sentinel.persistence.v1.MetricsSeries.points:type_name -> sentinel.persistence.v1.MetricPoint
+	28, // 8: sentinel.persistence.v1.TrendReply.points:type_name -> sentinel.persistence.v1.TrendPoint
+	30, // 9: sentinel.persistence.v1.ConfigList.items:type_name -> sentinel.persistence.v1.ConfigRecord
+	34, // 10: sentinel.persistence.v1.PurgeReport.counts:type_name -> sentinel.persistence.v1.PurgeTableCount
+	0,  // 11: sentinel.persistence.v1.StoreService.UpsertRun:input_type -> sentinel.persistence.v1.RunRecord
+	1,  // 12: sentinel.persistence.v1.StoreService.GetRun:input_type -> sentinel.persistence.v1.RunId
+	2,  // 13: sentinel.persistence.v1.StoreService.ListRuns:input_type -> sentinel.persistence.v1.ListRunsReq
+	4,  // 14: sentinel.persistence.v1.StoreService.SaveScenario:input_type -> sentinel.persistence.v1.Scenario
+	5,  // 15: sentinel.persistence.v1.StoreService.GetScenario:input_type -> sentinel.persistence.v1.ScenarioId
+	6,  // 16: sentinel.persistence.v1.StoreService.ListScenarios:input_type -> sentinel.persistence.v1.ListScenariosReq
+	5,  // 17: sentinel.persistence.v1.StoreService.DeleteScenario:input_type -> sentinel.persistence.v1.ScenarioId
+	8,  // 18: sentinel.persistence.v1.StoreService.PromoteTest:input_type -> sentinel.persistence.v1.PromoteReq
+	10, // 19: sentinel.persistence.v1.StoreService.GetTest:input_type -> sentinel.persistence.v1.TestId
+	11, // 20: sentinel.persistence.v1.StoreService.ListTests:input_type -> sentinel.persistence.v1.ListTestsReq
+	10, // 21: sentinel.persistence.v1.StoreService.DeleteTest:input_type -> sentinel.persistence.v1.TestId
+	13, // 22: sentinel.persistence.v1.StoreService.UpsertChat:input_type -> sentinel.persistence.v1.ChatProjection
+	14, // 23: sentinel.persistence.v1.StoreService.GetChat:input_type -> sentinel.persistence.v1.ConversationId
+	15, // 24: sentinel.persistence.v1.StoreService.ListChats:input_type -> sentinel.persistence.v1.ListChatsReq
+	14, // 25: sentinel.persistence.v1.StoreService.DeleteChat:input_type -> sentinel.persistence.v1.ConversationId
+	17, // 26: sentinel.persistence.v1.StoreService.SaveResult:input_type -> sentinel.persistence.v1.ResultRecord
+	1,  // 27: sentinel.persistence.v1.StoreService.GetResult:input_type -> sentinel.persistence.v1.RunId
+	18, // 28: sentinel.persistence.v1.StoreService.ListResults:input_type -> sentinel.persistence.v1.ListResultsReq
+	24, // 29: sentinel.persistence.v1.StoreService.IngestMetrics:input_type -> sentinel.persistence.v1.MetricsBatch
+	25, // 30: sentinel.persistence.v1.StoreService.QueryMetrics:input_type -> sentinel.persistence.v1.MetricsQuery
+	27, // 31: sentinel.persistence.v1.StoreService.Trends:input_type -> sentinel.persistence.v1.TrendReq
+	30, // 32: sentinel.persistence.v1.StoreService.PutConfig:input_type -> sentinel.persistence.v1.ConfigRecord
+	31, // 33: sentinel.persistence.v1.StoreService.GetConfig:input_type -> sentinel.persistence.v1.ConfigKey
+	36, // 34: sentinel.persistence.v1.StoreService.ListConfig:input_type -> sentinel.persistence.v1.Empty
+	31, // 35: sentinel.persistence.v1.StoreService.DeleteConfig:input_type -> sentinel.persistence.v1.ConfigKey
+	33, // 36: sentinel.persistence.v1.StoreService.PurgeStore:input_type -> sentinel.persistence.v1.PurgeReq
+	20, // 37: sentinel.persistence.v1.StoreService.UpsertUser:input_type -> sentinel.persistence.v1.User
+	21, // 38: sentinel.persistence.v1.StoreService.GetUser:input_type -> sentinel.persistence.v1.UserRef
+	36, // 39: sentinel.persistence.v1.StoreService.ListUsers:input_type -> sentinel.persistence.v1.Empty
+	21, // 40: sentinel.persistence.v1.StoreService.DeleteUser:input_type -> sentinel.persistence.v1.UserRef
+	36, // 41: sentinel.persistence.v1.StoreService.UpsertRun:output_type -> sentinel.persistence.v1.Empty
+	0,  // 42: sentinel.persistence.v1.StoreService.GetRun:output_type -> sentinel.persistence.v1.RunRecord
+	3,  // 43: sentinel.persistence.v1.StoreService.ListRuns:output_type -> sentinel.persistence.v1.RunList
+	36, // 44: sentinel.persistence.v1.StoreService.SaveScenario:output_type -> sentinel.persistence.v1.Empty
+	4,  // 45: sentinel.persistence.v1.StoreService.GetScenario:output_type -> sentinel.persistence.v1.Scenario
+	7,  // 46: sentinel.persistence.v1.StoreService.ListScenarios:output_type -> sentinel.persistence.v1.ScenarioList
+	36, // 47: sentinel.persistence.v1.StoreService.DeleteScenario:output_type -> sentinel.persistence.v1.Empty
+	9,  // 48: sentinel.persistence.v1.StoreService.PromoteTest:output_type -> sentinel.persistence.v1.TestRecord
+	9,  // 49: sentinel.persistence.v1.StoreService.GetTest:output_type -> sentinel.persistence.v1.TestRecord
+	12, // 50: sentinel.persistence.v1.StoreService.ListTests:output_type -> sentinel.persistence.v1.TestList
+	36, // 51: sentinel.persistence.v1.StoreService.DeleteTest:output_type -> sentinel.persistence.v1.Empty
+	36, // 52: sentinel.persistence.v1.StoreService.UpsertChat:output_type -> sentinel.persistence.v1.Empty
+	13, // 53: sentinel.persistence.v1.StoreService.GetChat:output_type -> sentinel.persistence.v1.ChatProjection
+	16, // 54: sentinel.persistence.v1.StoreService.ListChats:output_type -> sentinel.persistence.v1.ChatList
+	36, // 55: sentinel.persistence.v1.StoreService.DeleteChat:output_type -> sentinel.persistence.v1.Empty
+	36, // 56: sentinel.persistence.v1.StoreService.SaveResult:output_type -> sentinel.persistence.v1.Empty
+	17, // 57: sentinel.persistence.v1.StoreService.GetResult:output_type -> sentinel.persistence.v1.ResultRecord
+	19, // 58: sentinel.persistence.v1.StoreService.ListResults:output_type -> sentinel.persistence.v1.ResultList
+	36, // 59: sentinel.persistence.v1.StoreService.IngestMetrics:output_type -> sentinel.persistence.v1.Empty
+	26, // 60: sentinel.persistence.v1.StoreService.QueryMetrics:output_type -> sentinel.persistence.v1.MetricsSeries
+	29, // 61: sentinel.persistence.v1.StoreService.Trends:output_type -> sentinel.persistence.v1.TrendReply
+	36, // 62: sentinel.persistence.v1.StoreService.PutConfig:output_type -> sentinel.persistence.v1.Empty
+	30, // 63: sentinel.persistence.v1.StoreService.GetConfig:output_type -> sentinel.persistence.v1.ConfigRecord
+	32, // 64: sentinel.persistence.v1.StoreService.ListConfig:output_type -> sentinel.persistence.v1.ConfigList
+	36, // 65: sentinel.persistence.v1.StoreService.DeleteConfig:output_type -> sentinel.persistence.v1.Empty
+	35, // 66: sentinel.persistence.v1.StoreService.PurgeStore:output_type -> sentinel.persistence.v1.PurgeReport
+	36, // 67: sentinel.persistence.v1.StoreService.UpsertUser:output_type -> sentinel.persistence.v1.Empty
+	20, // 68: sentinel.persistence.v1.StoreService.GetUser:output_type -> sentinel.persistence.v1.User
+	22, // 69: sentinel.persistence.v1.StoreService.ListUsers:output_type -> sentinel.persistence.v1.UserList
+	36, // 70: sentinel.persistence.v1.StoreService.DeleteUser:output_type -> sentinel.persistence.v1.Empty
+	41, // [41:71] is the sub-list for method output_type
+	11, // [11:41] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_store_proto_init() }
@@ -2506,7 +2835,7 @@ func file_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_store_proto_rawDesc), len(file_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   33,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

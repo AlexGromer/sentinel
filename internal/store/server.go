@@ -48,27 +48,31 @@ CREATE TABLE IF NOT EXISTS step_failures (
 const storeSchema = `
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, conversation_id TEXT, mode TEXT, target TEXT, planner TEXT,
-  state TEXT, exit_code INTEGER, artifact_dir TEXT, error TEXT, started_at TEXT, finished_at TEXT
+  state TEXT, exit_code INTEGER, artifact_dir TEXT, error TEXT, started_at TEXT, finished_at TEXT,
+  owner TEXT
 );
 CREATE TABLE IF NOT EXISTS scenarios (
   scenario_id TEXT PRIMARY KEY, name TEXT, target TEXT, run_mode TEXT, plan_hash TEXT,
-  steps_json TEXT, unmatched INTEGER, tags TEXT, source_run_id TEXT, created_at TEXT
+  steps_json TEXT, unmatched INTEGER, tags TEXT, source_run_id TEXT, created_at TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS tests (
   test_id TEXT PRIMARY KEY, scenario_id TEXT, plan_hash TEXT, name TEXT, schedule TEXT,
-  enabled INTEGER, last_status TEXT, last_run_id TEXT, created_at TEXT
+  enabled INTEGER, last_status TEXT, last_run_id TEXT, created_at TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS chats (
   conversation_id TEXT PRIMARY KEY, last_target TEXT, turn_count INTEGER, last_active TEXT,
-  last_goal TEXT, summary TEXT, updated_at TEXT
+  last_goal TEXT, summary TEXT, updated_at TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS results (
   run_id TEXT PRIMARY KEY, plan_id TEXT, mode TEXT, verdict TEXT, exit_code INTEGER,
   healed INTEGER, failed INTEGER, regressions_json TEXT, steps_json TEXT, coverage REAL,
-  duration_ms INTEGER, created_at TEXT
+  duration_ms INTEGER, created_at TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS metrics (
   run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT
+);
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY, name TEXT UNIQUE, pw_hash TEXT, is_admin INTEGER, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS config (
   key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT
@@ -76,7 +80,9 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
 CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
-CREATE INDEX IF NOT EXISTS idx_scenarios_target ON scenarios(target);`
+CREATE INDEX IF NOT EXISTS idx_scenarios_target ON scenarios(target);
+CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs(owner);
+CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);`
 
 func now() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
@@ -113,6 +119,13 @@ func New(path string) (*Server, error) {
 	}
 	if err = ensureColumn(db, "healing_audit", "identity"); err != nil { // ADR-082: pre-identity DBs
 		return nil, err
+	}
+	// ADR-109: pre-identity DBs get the owner column. Empty for every existing row, which is what
+	// "unowned" means and what keeps a single-team install behaving exactly as it did.
+	for _, t := range []string{"runs", "scenarios", "tests", "chats", "results"} {
+		if err = ensureColumn(db, t, "owner"); err != nil {
+			return nil, err
+		}
 	}
 	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)
 		return nil, err
