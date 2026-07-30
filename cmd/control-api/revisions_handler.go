@@ -39,10 +39,6 @@ func validTestID(s string) bool {
 }
 
 func (s *server) revisions(w http.ResponseWriter, r *http.Request, op string) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	id := r.PathValue("id")
 	if !validTestID(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{

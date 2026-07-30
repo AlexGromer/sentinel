@@ -36,10 +36,6 @@ const (
 )
 
 func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var req importRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxImportBytes+(1<<20))).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})

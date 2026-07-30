@@ -246,10 +246,6 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 // internal hosts and models — deployment shape an anonymous caller has no business reading.
 
 func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
-		return
-	}
 	switch s.configTier() {
 	case tierUnavailable:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": storeUnavailableMsg, "tier": tierUnavailable})
@@ -291,10 +287,6 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
-		return
-	}
 	// ADR-075: the tier decision comes AFTER validation, not before. The old order returned 501 without
 	// ever reading the body, so a malformed document and a perfectly good one were refused identically —
 	// and the refusal named a file tier that did not exist.

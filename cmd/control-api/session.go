@@ -229,10 +229,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.requireCaller(w, r)
-	if !ok {
-		return
-	}
+	c, _ := s.callerOf(r)
 	if c.machine {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"machine": true, "scoped": false,
@@ -258,15 +255,7 @@ type createUserReq struct {
 // endpoint that creates an admin without a credential would be an open door on any reachable
 // deployment for exactly as long as nobody had used it.
 func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.requireCaller(w, r)
-	if !ok {
-		return
-	}
-	if !c.machine && !c.admin {
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "only the machine token or an admin account may create accounts"})
-		return
-	}
+	// guard() has already required the machine token or an admin session (access.go: accessAdmin).
 	// The REQUEST is judged before the deployment is. A 503 about a missing store, sent in answer to a
 	// body that was invalid anyway, hides the thing the caller can actually fix.
 	var req createUserReq
@@ -303,19 +292,17 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the store did not accept the account"})
 		return
 	}
+	// The FIRST account is the moment identity starts to mean something: from here the pre-identity
+	// open reads require a credential (access.go, legacyOpen). Dropping the memo makes that true on the
+	// very next request rather than up to accountsMemoTTL later — a window in which a just-created
+	// account's rows would still be readable by an anonymous caller.
+	s.forgetAccounts()
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin})
 }
 
 func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.requireCaller(w, r)
-	if !ok {
-		return
-	}
-	if !c.machine && !c.admin {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the machine token or an admin may list accounts"})
-		return
-	}
+	_, _ = s.callerOf(r) // guard(): machine token or admin session only
 	if s.store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"users": []any{}, "total": 0,
 			"store": false, "store_reason": storeAbsentReason})
@@ -336,14 +323,7 @@ func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.requireCaller(w, r)
-	if !ok {
-		return
-	}
-	if !c.machine && !c.admin {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the machine token or an admin may remove accounts"})
-		return
-	}
+	c, _ := s.callerOf(r) // guard(): machine token or admin session only
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no user id"})
@@ -364,6 +344,7 @@ func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// The rows the account owned are LEFT (internal/store: unowned, not deleted). Its sessions are not:
 	// a live token for an account that no longer exists is access nobody can revoke.
 	s.sessions.dropUser(id)
+	s.forgetAccounts() // removing the LAST account re-opens the legacyOpen reads; see handleCreateUser
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "user_id": id})
 }
 

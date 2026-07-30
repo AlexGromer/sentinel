@@ -252,6 +252,27 @@ def _trace_interceptor():
     return _Interceptor()
 
 
+def store_target(addr: str) -> str:
+    """Normalise STORE_ADDR into a gRPC target.
+
+    Two conventions are alive and BOTH are legitimate. `agentctl` hands the brain a BARE unix socket
+    path (cmd/agentctl/main.go startGateway; see cmd/agentctl/purge_cli_test.go, which pins that
+    contract), while control-api configures its own gateway as a full gRPC target
+    (CONTROL_API_STORE_ADDR=`unix:/abs/path`, or `host:port`) and now passes that same value down so a
+    UI-launched run writes into the store the UI reads.
+
+    Prefixing blindly, as this code did, turned the second form into `unix:unix:/abs/path` — a target
+    that never connects. The failure was invisible on the chats path because the projection is
+    best-effort: the exception was swallowed and the conversation simply never appeared.
+    """
+    a = (addr or "").strip()
+    if not a:
+        return a
+    if a.startswith("/"):  # our bare-socket-path convention
+        return "unix:" + a
+    return a  # already a gRPC target: unix:…, unix-abstract:…, dns:…, host:port
+
+
 def _token_interceptor(token: str):
     """gRPC client interceptor that attaches the per-run store token (#23) to every call's metadata
     so the Go store-gateway's TokenAuthInterceptor admits it. Mirrors _trace_interceptor's shape."""
@@ -279,7 +300,7 @@ class GrpcStore:
         import grpc
         from .pb import persistence_pb2 as pbmsg, persistence_pb2_grpc as pbgrpc
         self._pb = pbmsg
-        base = grpc.insecure_channel(f"unix:{addr}")
+        base = grpc.insecure_channel(store_target(addr))
         interceptors = [_trace_interceptor()]            # M8: W3C trace propagation
         token = os.environ.get("STORE_TOKEN", "")
         if token:
@@ -364,7 +385,7 @@ class ChatProjector:
         import grpc
         from .pb import store_pb2 as pbmsg, store_pb2_grpc as pbgrpc
         self._pb = pbmsg
-        base = grpc.insecure_channel(f"unix:{addr}")
+        base = grpc.insecure_channel(store_target(addr))
         interceptors = [_trace_interceptor()]                # M8: W3C trace propagation
         token = os.environ.get("STORE_TOKEN", "")
         if token:

@@ -209,6 +209,9 @@ type server struct {
 	// correct for a tool whose machine token is already per-process, and persisting them would mean a
 	// second credential store to protect, expire and purge.
 	sessions *sessionStore
+	// accounts memoizes "does this deployment have any account?" — the question that decides whether
+	// the pre-identity open reads still answer without a credential (cmd/control-api/access.go).
+	accounts accountsMemo
 	mu       sync.RWMutex
 	runs     map[string]*run
 
@@ -792,6 +795,15 @@ func (s *server) spawnRun(req runRequest) *run {
 	// ADR-063: layer the LLM connection into the spawn env — process env > per-run > persisted config.
 	// os.Environ() (operator-controlled) still wins; resolveRunEnv only fills LLM_* it does not already set.
 	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.mergedPersistedEnv())
+	// ONE store for the whole deployment. agentctl starts its own gateway over repo/state/locators.db
+	// when it inherits no address, so a run launched from here used to persist into a database this
+	// process never reads — the `chats` projection the brain writes landed there, and GET /v1/chats
+	// answered 0 about a conversation that plainly existed. Passing our own address makes the run write
+	// where the API reads. Only when the gateway actually answered at boot (s.store != nil): handing
+	// down an address that did not dial would replace a working local fallback with a dead one.
+	if s.store != nil && s.storeAddr != "" {
+		cmd.Env = append(cmd.Env, "STORE_ADDR="+s.storeAddr)
+	}
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
@@ -1245,10 +1257,6 @@ func (s *server) persistResult(rec *run) {
 }
 
 func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var req runRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -1435,10 +1443,6 @@ var artifactWhitelist = map[string]bool{
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
 // Token-gated like mutations: logs are more sensitive than a bare status poll.
 func (s *server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	id := r.PathValue("id")
 	s.mu.RLock()
 	rec, ok := s.runs[id]
@@ -1500,14 +1504,21 @@ func (s *server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 // handleRunArtifact serves a whitelisted artifact from a run's artifact dir (token-gated,
 // path-traversal-guarded) so the chat-front can display/download scenario.json / report.
 func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	id := r.PathValue("id")
 	s.mu.RLock()
 	rec, ok := s.runs[id]
 	s.mu.RUnlock()
+	// A run from a PREVIOUS control-API process is gone from the in-memory map but alive in the store,
+	// with its artifact_dir recorded — which is exactly why handleGetRun already falls back this way.
+	// Without the same fallback here, every artifact of every run became unreachable at restart: the
+	// hub could list the run, show its verdict, and answer "no such run" to the report it had just
+	// named. The whitelist below still bounds WHICH file, and the dir comes from the record, never
+	// from the request.
+	if !ok && s.store != nil {
+		if hist, found := s.store.getRun(id); found {
+			rec, ok = hist, true
+		}
+	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
 		return
@@ -1609,10 +1620,6 @@ func (s *server) withStore(body map[string]any) map[string]any {
 }
 
 func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var scenarios []*storepb.Scenario
 	var total int64
 	if s.store != nil {
@@ -1625,10 +1632,6 @@ func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetScenario(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var sc *storepb.Scenario
 	var ok bool
 	if s.store != nil {
@@ -1642,10 +1645,6 @@ func (s *server) handleGetScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteScenario(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	if s.store != nil {
 		s.store.deleteScenario(r.PathValue("id"))
 	}
@@ -1653,10 +1652,6 @@ func (s *server) handleDeleteScenario(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var tests []*storepb.TestRecord
 	var total int64
 	if s.store != nil {
@@ -1669,10 +1664,6 @@ func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetTest(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var t *storepb.TestRecord
 	var ok bool
 	if s.store != nil {
@@ -1686,10 +1677,6 @@ func (s *server) handleGetTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteTest(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	if s.store != nil {
 		s.store.deleteTest(r.PathValue("id"))
 	}
@@ -1706,10 +1693,6 @@ type promoteRequest struct {
 // a brand-new test record, so an unreachable/absent store surfaces as 404 (same "404-ish, not 503"
 // fail-open shape as the reads above), same as promoting an unknown scenario_id.
 func (s *server) handlePromoteTest(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var req promoteRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -1737,10 +1720,6 @@ func (s *server) handlePromoteTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleListChats(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var chats []*storepb.ChatProjection
 	var total int64
 	if s.store != nil {
@@ -1753,10 +1732,6 @@ func (s *server) handleListChats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var c *storepb.ChatProjection
 	var ok bool
 	if s.store != nil {
@@ -1770,10 +1745,6 @@ func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	if s.store != nil {
 		s.store.deleteChat(r.PathValue("id"))
 	}
@@ -1902,10 +1873,6 @@ func chatCompletion(id string, created int64, model, content string) map[string]
 
 // handleChatCompletions is the OpenAI-compatible shim, token-gated like other mutations.
 func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
@@ -2035,10 +2002,6 @@ func parseIntQuery(r *http.Request, key string, def int64) int64 {
 // in-memory fallback — a gateway error / no store degrades to an empty list, never a 503.
 
 func (s *server) handleListResults(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var results []*storepb.ResultRecord
 	var total int64
 	if s.store != nil {
@@ -2051,10 +2014,6 @@ func (s *server) handleListResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetResult(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	var rr *storepb.ResultRecord
 	var ok bool
 	if s.store != nil {
@@ -2068,10 +2027,6 @@ func (s *server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	metric := r.URL.Query().Get("metric")
 	if metric == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "metric query param required (e.g. pass, coverage, duration_ms, healed, failed, regressions, steps)"})
@@ -2087,54 +2042,14 @@ func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.withStore(map[string]any{"metric": metric, "points": points}))
 }
 
+// mux registers every route from its declaration in routes() (cmd/control-api/access.go) and from
+// nowhere else. That is what makes the access gate exhaustive: a route that forgot to state what it
+// requires is not a route that quietly serves anonymously — it is a route that does not exist.
 func (s *server) mux() http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("GET /healthz", s.handleHealthz)
-	m.HandleFunc("GET /readyz", s.handleReadyz) // M11.5 PR-5 (ADR-062): unauth like /healthz, but probes real deps
-	m.HandleFunc("GET /v1/config-schema", s.handleConfigSchema)
-	// ADR-109 local accounts. /v1/login is UNAUTHENTICATED by necessity — it is where a credential is
-	// first presented — and answers identically for a wrong name and a wrong password so it cannot be
-	// used to enumerate who has an account here.
-	m.HandleFunc("POST /v1/login", s.handleLogin)
-	m.HandleFunc("POST /v1/logout", s.handleLogout)
-	m.HandleFunc("GET /v1/me", s.handleMe)
-	m.HandleFunc("POST /v1/users", s.handleCreateUser)
-	m.HandleFunc("GET /v1/users", s.handleListUsers)
-	m.HandleFunc("DELETE /v1/users/{id}", s.handleDeleteUser)
-	// M11.5 PR-5: the service tier of the tiered config (ADR-049). Token-gated both ways.
-	m.HandleFunc("GET /v1/config", s.handleGetConfig)
-	m.HandleFunc("PUT /v1/config", s.handlePutConfig)
-	m.HandleFunc("POST /v1/runs", s.handleCreateRun)
-	m.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
-	m.HandleFunc("POST /v1/import", s.handleImport) // PROD-IMPORT channel 2 (UI upload / HTTP), ADR-105
-	// PROD-VERSIONING (ADR-106 follow-on): the read surface the store never had.
-	m.HandleFunc("GET /v1/tests/{id}/revisions", s.handleRevisionsList)
-	m.HandleFunc("GET /v1/tests/{id}/revisions/diff", s.handleRevisionsDiff)
-	m.HandleFunc("GET /v1/tests/{id}/revisions/show", s.handleRevisionsShow)
-	m.HandleFunc("POST /v1/tests/{id}/revisions/rollback", s.handleRevisionsRollback)
-	m.HandleFunc("GET /v1/runs", s.handleListRuns)
-	m.HandleFunc("GET /v1/runs/{id}", s.handleGetRun)
-	m.HandleFunc("GET /v1/runs/{id}/events", s.handleRunEvents)
-	m.HandleFunc("GET /v1/runs/{id}/logs", s.handleRunLogs)       // M9-LIVE: structured diagnostics
-	m.HandleFunc("POST /v1/runs/{id}/cancel", s.handleCancelRun)  // M9-LIVE: stop a running run
-	m.HandleFunc("GET /v1/events-catalog", s.handleEventsCatalog) // M9-LIVE: bilingual message list
-	m.HandleFunc("GET /v1/runs/{id}/artifact", s.handleRunArtifact)
-	m.HandleFunc("GET /v1/stream", s.handleStream)
-	// M14 wave W3: scenarios/tests/chats HTTP surface (library + conversation management)
-	m.HandleFunc("GET /v1/scenarios", s.handleListScenarios)
-	m.HandleFunc("GET /v1/scenarios/{id}", s.handleGetScenario)
-	m.HandleFunc("DELETE /v1/scenarios/{id}", s.handleDeleteScenario)
-	m.HandleFunc("GET /v1/tests", s.handleListTests)
-	m.HandleFunc("GET /v1/tests/{id}", s.handleGetTest)
-	m.HandleFunc("POST /v1/tests/promote", s.handlePromoteTest)
-	m.HandleFunc("DELETE /v1/tests/{id}", s.handleDeleteTest)
-	m.HandleFunc("GET /v1/chats", s.handleListChats)
-	m.HandleFunc("GET /v1/chats/{id}", s.handleGetChat)
-	m.HandleFunc("DELETE /v1/chats/{id}", s.handleDeleteChat)
-	// M15 (ADR-051): results + metrics-trends surface for the SPA native charts
-	m.HandleFunc("GET /v1/results", s.handleListResults)
-	m.HandleFunc("GET /v1/results/{id}", s.handleGetResult)
-	m.HandleFunc("GET /v1/trends", s.handleTrends)
+	for _, sp := range s.routes() {
+		m.HandleFunc(sp.pattern, s.guard(sp))
+	}
 	// ADR-064 Mode 3 — registered only when the UI is actually served, so Modes 1/2 keep exactly the
 	// mux they had. Order does not matter: net/http picks the most specific pattern, so "/v1/" only
 	// ever sees paths no real endpoint claimed, and "GET /" only what is neither /v1/ nor /healthz.
