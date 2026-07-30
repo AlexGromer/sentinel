@@ -180,6 +180,82 @@ func TestAppendRunFlagsPassesEveryFlaggedField(t *testing.T) {
 	}
 }
 
+// TestEverySettingIsPersistable: every knob settingsSchema advertises can be SAVED in the config
+// document and reaches a run as the environment variable the schema names.
+//
+// This is the ADR-107 half that was missing entirely rather than merely partial. The schema advertised
+// sixteen settings with their env names, defaults, groups and bilingual hints; the wizard rendered them
+// and exported them as shell lines; and the config document had no `settings` member, so nothing read
+// one. A knob a person can see, fill in and save, which then does nothing, is worse than one never
+// offered — it spends their trust instead of their time.
+//
+// Walks the schema, so a knob added without a persistence path fails in the commit that adds it.
+func TestEverySettingIsPersistable(t *testing.T) {
+	doc := map[string]any{"settings": map[string]any{}}
+	sec := doc["settings"].(map[string]any)
+	wantEnv := map[string]string{}
+
+	for key, rawSpec := range settingsSchema {
+		spec, ok := rawSpec.(map[string]any)
+		if !ok {
+			t.Fatalf("settingsSchema[%q] is not an object", key)
+		}
+		env, _ := spec["env"].(string)
+		if env == "" {
+			t.Errorf("setting %q names no env var — nothing could carry it into a run", key)
+			continue
+		}
+		// A value DIFFERENT from the default, so a passing assertion cannot be explained by the run
+		// having inherited the default anyway.
+		switch typ, _ := spec["type"].(string); typ {
+		case "bool":
+			def, _ := spec["default"].(bool)
+			sec[key] = !def
+			wantEnv[env] = map[bool]string{true: "1", false: "0"}[!def]
+		case "int":
+			sec[key] = float64(4321)
+			wantEnv[env] = "4321"
+		case "number":
+			sec[key] = 0.4321
+			wantEnv[env] = "0.4321"
+		case "string":
+			sec[key] = "x-" + key
+			wantEnv[env] = "x-" + key
+		default:
+			t.Errorf("setting %q has type %q, which persistedSettingsEnv cannot render", key, typ)
+		}
+	}
+
+	got := persistedSettingsEnv(doc)
+	for env, want := range wantEnv {
+		if got[env] != want {
+			t.Errorf("setting env %s: persisted %q, want %q — the value was saved and did not reach the run",
+				env, got[env], want)
+		}
+	}
+	if len(got) != len(wantEnv) {
+		t.Errorf("persistedSettingsEnv produced %d vars for %d settings", len(got), len(wantEnv))
+	}
+}
+
+// TestPersistedSettingsRejectsMalformedValues: a wrong-typed value is DROPPED rather than rendered as
+// whatever Go's default formatting makes of it. A `heal_auto` of "yes" reaching the brain as the string
+// "yes" would parse as 0 and silently disable automatic healing.
+func TestPersistedSettingsRejectsMalformedValues(t *testing.T) {
+	got := persistedSettingsEnv(map[string]any{"settings": map[string]any{
+		"heal_auto":    "yes",  // number knob given a string
+		"trace_keep":   1.5,    // int knob given a fraction
+		"trace_always": "true", // bool knob given a string
+	}})
+	for env := range got {
+		t.Errorf("a malformed value was rendered as %s=%q", env, got[env])
+	}
+	// And an absent section is not an error, just nothing.
+	if s := persistedSettingsEnv(map[string]any{"llm": map[string]any{}}); s != nil {
+		t.Errorf("a document with no settings section produced %v", s)
+	}
+}
+
 // TestCIAndForceReplayRejectedTogether: the pair is refused with a 400 rather than spawning a run that
 // agentctl kills at startup.
 func TestCIAndForceReplayRejectedTogether(t *testing.T) {
