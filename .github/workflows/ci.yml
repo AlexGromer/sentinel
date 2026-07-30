@@ -136,8 +136,8 @@ jobs:
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
-          if [ "$n" -lt 39 ]; then
-            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 39"; exit 1
+          if [ "$n" -lt 40 ]; then
+            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 40"; exit 1
           fi
 
       - name: Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)
@@ -470,7 +470,18 @@ jobs:
           tar -C "$stage/$tag" -czf "$stage/$tag/$out.tar.gz" "$out"
           ( cd "$stage/$tag" && rm -rf "$out" && sha256sum "$out.tar.gz" > checksums.sha256 )
           ( cd "$stage" && python3 -m http.server 8099 >/dev/null 2>&1 & echo $! > "$stage/srv.pid" )
-          sleep 1
+          # Same race as the Windows peer below, same reason for polling rather than sleeping: a refused
+          # connection here is reported by install.sh as a download failure, so the symptom points at the
+          # installer instead of at a server that had not bound yet.
+          for i in $(seq 1 60); do
+            curl -fsS -o /dev/null "http://localhost:8099/" && break
+            sleep 0.5
+          done
+          curl -fsS -o /dev/null "http://localhost:8099/" || {
+            kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
+            echo "::error::the local release server never answered on :8099 within 30s — this is the harness, not install.sh"
+            exit 1
+          }
           # positive: download -> checksum -> install -> --version
           SENTINEL_VERSION="$tag" SENTINEL_BASE_URL="http://localhost:8099" SENTINEL_BIN_DIR="$stage/bin" sh install.sh
           test -x "$stage/bin/agentctl"
@@ -586,7 +597,23 @@ jobs:
           "$hash  $out.tar.gz" | Out-File -Encoding ascii -NoNewline checksums.sha256
           Pop-Location
           $srv = Start-Process python -ArgumentList '-m','http.server','8099' -WorkingDirectory $stage -PassThru
-          Start-Sleep -Seconds 2
+          # A fixed sleep is a bet that the runner finishes binding a socket inside two seconds, and it
+          # loses often enough to have reddened PRs that touch nothing near the installer. The loss also
+          # LIES about where the fault is: install.ps1 reports "target machine actively refused it
+          # (localhost:8099)", which reads as a broken installer rather than a server that had not
+          # finished starting. Poll for the port instead, and say so plainly when it truly never comes up.
+          $ready = $false
+          foreach ($i in 1..60) {
+            try {
+              if ((Invoke-WebRequest -Uri 'http://localhost:8099/' -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) {
+                $ready = $true; break
+              }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $ready) {
+            Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+            throw "the local release server never answered on :8099 within 30s — this is the harness, not install.ps1"
+          }
           try {
             $env:SENTINEL_VERSION = $tag
             $env:SENTINEL_BASE_URL = 'http://localhost:8099'
