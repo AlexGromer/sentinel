@@ -147,6 +147,29 @@ def test_reverify_forces_reexplore_on_warm_thread():
     budget.reset()
 
 
+def test_store_target_accepts_both_address_conventions():
+    """ADR-109 second half. Two conventions for STORE_ADDR are alive and both are legitimate:
+    `agentctl` hands the brain a BARE unix socket path, while control-api now passes its own
+    CONTROL_API_STORE_ADDR down so a UI-launched run writes into the store the UI reads — and that one
+    already carries a scheme.
+
+    Prefixing blindly, as this code did, turned the second form into `unix:unix:/abs/path`. Nothing
+    reported it: the chats projection is best-effort, so the connection error was swallowed and the
+    conversation simply never appeared — the same silence that hid the projection defect before it.
+    """
+    from brain.store import store_target
+
+    assert store_target("/run/state/s.sock") == "unix:/run/state/s.sock"    # agentctl's bare path
+    assert store_target("unix:/run/state/s.sock") == "unix:/run/state/s.sock"  # already a target: untouched
+    assert store_target("unix-abstract:sentinel") == "unix-abstract:sentinel"
+    assert store_target("127.0.0.1:9090") == "127.0.0.1:9090"               # a TCP gateway stays TCP
+    assert store_target("") == ""                                           # no address = no store
+    # The property, not the four cases: prefixing is idempotent, so passing an address through twice
+    # cannot produce a target that differs from passing it once.
+    for a in ("/x/y.sock", "unix:/x/y.sock", "127.0.0.1:9090", "dns:///store:9090"):
+        assert store_target(store_target(a)) == store_target(a), a
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
