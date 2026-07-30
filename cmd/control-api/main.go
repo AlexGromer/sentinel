@@ -311,16 +311,38 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		"planner":  []string{"heuristic", "llm", "goal"},
 		"backends": backends,
 		"roles":    []string{"planner", "heal"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
+		// ADR-107: `fields` is the per-run half of the one configuration model, and every key here is
+		// settable on POST /v1/runs — asserted by TestRunRequestCoversEverySchemaField, which walks this
+		// map rather than listing what it expects to find.
+		//
+		// `group` answers the question the field belongs to, exactly as `settings` does, so a UI can lay
+		// the form out from the schema instead of hard-coding which input sits under which heading. The
+		// hub used to hard-code that, which is why nine of these fields existed as inputs the submit
+		// handler never read.
 		"fields": map[string]any{
-			"target":          map[string]any{"type": "string", "required": true},
-			"goal":            map[string]any{"type": "string"},
-			"describe":        map[string]any{"type": "string"},
-			"conversation_id": map[string]any{"type": "string"}, // M9.10: multi-turn chat thread key (resume by conversation_id)
-			"coverage_target": map[string]any{"type": "number", "default": 0.85},
-			"max_steps":       map[string]any{"type": "int", "default": 40},
-			"plan_budget":     map[string]any{"type": "int", "default": 50000},
-			"heal_budget":     map[string]any{"type": "int", "default": 20000},
-			"total_budget":    map[string]any{"type": "int", "default": 0},
+			"target":          map[string]any{"type": "string", "required": true, "group": "run"},
+			"goal":            map[string]any{"type": "string", "group": "run"},
+			"describe":        map[string]any{"type": "string", "group": "run"},
+			"conversation_id": map[string]any{"type": "string", "group": "run"}, // M9.10: multi-turn chat thread key (resume by conversation_id)
+			"coverage_target": map[string]any{"type": "number", "default": 0.85, "group": "run"},
+			"max_steps":       map[string]any{"type": "int", "default": 40, "group": "run"},
+			"scenario":        map[string]any{"type": "string", "group": "run"}, // --scenario: select a named scenario out of the RunConfig
+			"plan_budget":     map[string]any{"type": "int", "default": 50000, "group": "budgets"},
+			"heal_budget":     map[string]any{"type": "int", "default": 20000, "group": "budgets"},
+			"total_budget":    map[string]any{"type": "int", "default": 0, "group": "budgets"},
+			// Session reuse. These reach the brain through the RunConfig `auth:` block (writeRunConfig),
+			// never as environment: PLAN_FILE does not survive agentctl's env allowlist, and widening that
+			// allowlist to carry a convenience would spend a security boundary.
+			"storage_state":      map[string]any{"type": "string", "group": "auth"},
+			"storage_state_save": map[string]any{"type": "string", "group": "auth"},
+			"login_plan":         map[string]any{"type": "string", "group": "auth"},
+			"pw_no_trace":        map[string]any{"type": "bool", "default": false, "group": "auth"},
+			// Determinism guards. `ci` forbids `force_replay`; the rule lives in agentctl and the API
+			// rejects the pair early so a person gets a 400 instead of a run that dies at startup.
+			"ci":           map[string]any{"type": "bool", "default": false, "group": "gates"},
+			"force_replay": map[string]any{"type": "bool", "default": false, "group": "gates"},
+			"aut_version":  map[string]any{"type": "string", "group": "gates"},
+			"heal_llm":     map[string]any{"type": "bool", "default": false, "group": "healing"},
 		},
 		// M11.5 PR-3 (ADR-060): LLM-backend descriptors from brain/llm.py make_backend. Descriptors ONLY —
 		// api_key is flagged secret and NEVER valued here. role_split: field also honours LLM_<KEY>_PLANNER/_HEAL.
@@ -498,12 +520,123 @@ type runRequest struct {
 	Message string `json:"message"`
 	LLM            json.RawMessage `json:"llm"`             // ADR-063: per-run LLM override (backend/base_url/model/vision); validated+parsed into `llm` below
 
+	// ADR-107: everything below used to be expressible ONLY as a CLI flag or a hand-written RunConfig
+	// file. The hub rendered inputs for the budgets and the auth block and then wrote them into a
+	// downloadable run.yaml with "Pass via: --run-config <file>" — a form that assembled a file and
+	// sent the person back to the console, because the API had nowhere to put the values.
+	Scenario         string `json:"scenario"`      // --scenario: pick a named scenario out of the RunConfig
+	AutVersion       string `json:"aut_version"`   // --aut-version: app-under-test sha, keys flake quarantine
+	CI               bool   `json:"ci"`            // --ci: forbids --force-replay
+	ForceReplay      bool   `json:"force_replay"`  // --force-replay: bypass the plan_hash hard-abort
+	HealLLM          bool   `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
+	PlanBudget       string `json:"plan_budget"`   // RunConfig only — no flag exists
+	HealBudget       string `json:"heal_budget"`   // RunConfig only
+	TotalBudget      string `json:"total_budget"`  // RunConfig only
+	StorageState     string `json:"storage_state"` // RunConfig auth.* — reuse a saved session
+	StorageStateSave string `json:"storage_state_save"`
+	LoginPlan        string `json:"login_plan"`
+	PWNoTrace        bool   `json:"pw_no_trace"`
+
 	plan string        // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
 	llm  *llmRunConfig // ADR-063: parsed+validated per-run LLM config; unexported → never client-settable
 }
 
 func validTarget(t string) bool {
 	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "file://")
+}
+
+// appendRunFlags adds the `agentctl run` flags that ADR-107 brought onto the HTTP contract. It is shared
+// by the replay and the explore/goal/describe/chat arms so a flag cannot be wired into one and silently
+// forgotten in the other — which is how `--aut-version` would have gone missing from exactly the mode
+// (replay) whose flake quarantine it keys.
+//
+// `--ci` and `--force-replay` are BOTH passed when both are set, and agentctl refuses that combination
+// itself (it is the one place that rule lives). handleCreateRun rejects it earlier with a 400 so a
+// person gets an answer instead of a failed run; this stays permissive so the rule has a single owner.
+func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string {
+	if req.Scenario != "" {
+		args = append(args, "--scenario", req.Scenario)
+	}
+	if req.AutVersion != "" {
+		args = append(args, "--aut-version", req.AutVersion)
+	}
+	if req.CI {
+		args = append(args, "--ci")
+	}
+	if req.ForceReplay {
+		args = append(args, "--force-replay")
+	}
+	if req.HealLLM {
+		args = append(args, "--heal-llm")
+	}
+	if runCfgPath != "" {
+		args = append(args, "--run-config", runCfgPath)
+	}
+	return args
+}
+
+// writeRunConfig materialises the request's budget and auth values as a RunConfig YAML inside the run's
+// own artifact dir, and returns its path ("" when the request carries none of them).
+//
+// Why a file and not environment. The brain reads budgets as PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT /
+// TOTAL_TOKEN_LIMIT and the login plan as PLAN_FILE, and NONE of those names survives agentctl's
+// env allowlist (cmd/agentctl/main.go filteredEnv: they match neither the exact set nor the LLM_/OTEL_/
+// PW_/PLAYWRIGHT_/SENTINEL_ prefixes). Passing them as environment would mean widening the allowlist
+// that exists to stop host secrets reaching the brain — paying in a security boundary for a plumbing
+// convenience. `--run-config` already carries exactly these keys, already has tested precedence
+// (brain/runconfig.py: an explicit flag beats the file, tracked through SENTINEL_EXPLICIT), and
+// already parses them with validation. So the server writes the file the operator used to write.
+//
+// Living in the artifact dir also makes the run self-describing: the config it actually ran under is
+// beside the plan it produced, rather than in a temp file nobody can find afterwards.
+func writeRunConfig(artDir string, req *runRequest) (string, error) {
+	var body, authLines []string
+	num := func(k, v string) {
+		if v != "" {
+			body = append(body, fmt.Sprintf("%s: %s", k, v))
+		}
+	}
+	num("plan_budget", req.PlanBudget)
+	num("heal_budget", req.HealBudget)
+	num("total_budget", req.TotalBudget)
+
+	for _, kv := range [][2]string{
+		{"storage_state", req.StorageState},
+		{"storage_state_save", req.StorageStateSave},
+		{"login_plan", req.LoginPlan},
+	} {
+		if kv[1] != "" {
+			// %q is Go's quoting, which is a valid YAML double-quoted scalar — so a Windows path or a
+			// value containing a colon cannot silently restructure the document.
+			authLines = append(authLines, fmt.Sprintf("  %s: %q", kv[0], kv[1]))
+		}
+	}
+	if req.PWNoTrace {
+		authLines = append(authLines, "  pw_no_trace: true")
+	}
+
+	// Nothing this file exists to carry -> no file, and `--run-config` stays off the argv, so a run
+	// without budgets spawns exactly the command it spawned before ADR-107. Deciding that from the
+	// COLLECTED VALUES rather than by searching the rendered text keeps the emptiness test independent
+	// of how the text happens to be formatted.
+	if len(body) == 0 && len(authLines) == 0 {
+		return "", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("# Written by control-api from POST /v1/runs (ADR-107). This is the configuration the\n")
+	b.WriteString("# run actually used — it is an artifact of the run, not an input a human edited.\n")
+	for _, l := range body {
+		b.WriteString(l + "\n")
+	}
+	if len(authLines) > 0 {
+		b.WriteString("auth:\n" + strings.Join(authLines, "\n") + "\n")
+	}
+	p := filepath.Join(artDir, "run.yaml")
+	if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return p, nil
 }
 
 // validConversationID guards the M9.10 multi-turn thread key (ADR-048). It is NOT used in a filesystem
@@ -575,11 +708,30 @@ func (s *server) spawnRun(req runRequest) *run {
 	// Build agentctl args from the request (no shell — args are passed directly, no injection).
 	// req.plan is server-resolved (resolveFromRun); req.Target for replay/baseline is the effective
 	// target (request target, else the prior plan's target_url) decided in handleCreateRun.
+	// ADR-107: budgets and the auth block have no flags at all — they reach the brain only through a
+	// RunConfig file. The dir has to exist before the file lands in it; agentctl would create it later,
+	// which is too late for us. A write failure is not fatal: the run proceeds without the file rather
+	// than being refused over a value it can default, and the reason is logged into the run's own stream
+	// below (a silent downgrade would look like the budget was honoured).
+	var runCfgPath string
+	if err := os.MkdirAll(artDir, 0o755); err == nil {
+		var cfgErr error
+		if runCfgPath, cfgErr = writeRunConfig(artDir, &req); cfgErr != nil {
+			runCfgPath = ""
+			fmt.Fprintf(os.Stderr, "control-api: run %s: could not write run.yaml (budgets/auth NOT applied): %v\n", id, cfgErr)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "control-api: run %s: could not create %s (budgets/auth NOT applied): %v\n", id, artDir, err)
+	}
+
 	var args []string
 	switch req.Mode {
 	case "replay": // M9.9: re-run a prior frozen plan, healing locators — `agentctl run --replay --plan`
 		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir, "--replay", "--plan", req.plan}
+		args = appendRunFlags(args, &req, runCfgPath)
 	case "baseline": // M9.9: update golden baseline from a prior frozen plan (the only golden-write path)
+		// `baseline update` is a different subcommand with its own small flag set — the run flags below
+		// do not exist on it, so they are deliberately NOT appended here.
 		args = []string{"baseline", "update", "--plan", req.plan, "--artifact-dir", artDir}
 		if req.Target != "" {
 			args = append(args, "--target", req.Target)
@@ -610,6 +762,7 @@ func (s *server) spawnRun(req runRequest) *run {
 		if req.MaxSteps != "" {
 			args = append(args, "--max-steps", req.MaxSteps)
 		}
+		args = appendRunFlags(args, &req, runCfgPath)
 	}
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
@@ -1113,6 +1266,15 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ADR-107: agentctl owns this rule and refuses the pair itself, but it does so after the process is
+	// up — which surfaces to a caller as a run that started and died rather than as a rejected request.
+	// Checked for EVERY mode, not just replay: `--ci` reaches the argv in the explore arm too, so a pair
+	// rejected only under replay would still be spawnable.
+	if req.CI && req.ForceReplay {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "ci and force_replay are mutually exclusive: --force-replay bypasses the plan_hash hard-abort, which CI mode exists to enforce"})
+		return
+	}
 	rec := s.spawnRun(req)
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"})
 }
@@ -1216,6 +1378,16 @@ var artifactWhitelist = map[string]bool{
 	// The hub reads it to distinguish "the trace was removed" from "this run never had one" — without
 	// it, both look identical (no trace.zip), and a swept trace reads as a run that was never traced.
 	"trace-removed.json": true,
+	// ADR-107: the RunConfig the server materialised for this run (budgets + the auth block). It is
+	// what the hub's "⬇ run.yaml" button used to FABRICATE client-side from form values that never
+	// reached the API — so the file a person downloaded described a run that had not happened. Serving
+	// the real one makes the download an artifact of the run instead of a guess about it, and it is the
+	// only way to answer "what budget did this run actually run under?" after the fact.
+	//
+	// It carries paths a person typed (storage_state, login_plan), which is the same class of foreign
+	// text plan.json already holds, under the same retention. It carries no secret: credentials travel
+	// as secretRef, never as a value (ADR-098).
+	"run.yaml": true,
 }
 
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
