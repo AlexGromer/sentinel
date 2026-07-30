@@ -335,6 +335,24 @@ try {
       'the connect never ran — connecting to the run is what this button is FOR');
     eq(await page.locator('.rail a[aria-current="page"]').getAttribute('data-nav'), 'live',
       'the router never moved to the live view');
+
+    // Leave no run in flight. The Logs checks below pick the NEWEST run, so an unfinished one becomes
+    // the run they read — and its log has only the control-API's own opening lines, no brain output at
+    // all. That made `unchecking DEBUG changed nothing (7 -> 7)` and a disabled #lg-debug, two failures
+    // whose text points at the Logs view and whose cause is this check. It is a RACE, so it passed here
+    // and failed in CI, which is the worst way for a gate to be wrong.
+    // Cancelled rather than waited out: it settles in about a second instead of twenty-five, and it
+    // exercises POST /v1/runs/{id}/cancel on the way.
+    await fetch(`http://127.0.0.1:${PORT}/v1/runs/${liveRun}/cancel`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    });
+    for (let i = 0; i < 60; i++) {
+      const r = await fetch(`http://127.0.0.1:${PORT}/v1/runs/${liveRun}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok && (await r.json()).state !== 'running') break;
+      await page.waitForTimeout(500);
+    }
   });
 
   await page.click('.rail a[data-nav="logs"]');

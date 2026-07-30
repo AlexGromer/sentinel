@@ -109,7 +109,7 @@ jobs:
         # the current count: raising it on every added check would make it a maintenance tax
         # rather than a tripwire.
         run: |
-          out=$(node scripts/wizard-dom-check.mjs 2>&1); echo "$out"
+          out=$(node scripts/wizard-dom-check.mjs 2>&1) || true; echo "$out"   # see the hub gate below for why `|| true`
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
@@ -132,7 +132,11 @@ jobs:
         # the current count: raising it on every added check would make it a maintenance tax
         # rather than a tripwire.
         run: |
-          out=$(node scripts/hub-dom-check.mjs 2>&1); echo "$out"
+          # `out=$(cmd)` under `bash -e` aborts the STEP when cmd fails, so the gate's own output
+          # was discarded exactly when it was needed: a red run showed the step definition and
+          # nothing else. `|| true` keeps the assignment from killing the step; the greps below
+          # still decide pass/fail, so the gate is no weaker — only legible when it fails.
+          out=$(node scripts/hub-dom-check.mjs 2>&1) || true; echo "$out"
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
