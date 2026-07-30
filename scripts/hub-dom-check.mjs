@@ -1218,6 +1218,143 @@ try {
     ok(view !== 'none' && view !== 'missing', `the Open button did not reach the logs view (${view}, was ${before})`);
   });
 
+  /* ------------------------------------------- ADR-107c: the UI as a projection of the schema */
+
+  /* Re-establish the connection fields rather than inheriting them. Several checks above reload the
+     page, and the token is deliberately never persisted, so by here #capitok is empty — a check that
+     assumed otherwise would fail for a reason that has nothing to do with what it tests. */
+  await page.click('.rail a[data-nav="settings"]');
+  await page.waitForTimeout(200);
+  await page.fill('#capi', `http://127.0.0.1:${PORT}`);
+  await page.fill('#capitok', token);
+
+  // A fresh instance has never saved a config, and GET /v1/config answers 404 to say exactly that —
+  // a deliberate contract (configfile_test.go) that distinguishes "never saved" from "corrupt file".
+  // The browser logs the 404 regardless of how the page handles it, so it is named as output that is
+  // CORRECT for this scenario rather than silently tolerated everywhere.
+  const freshConfig404 = /404 \(Not Found\)/;
+
+  await check('settings: one control per schema setting, and the schema is what says how many', async () => {
+    await page.click('.rail a[data-nav="settings"]');
+    await page.waitForSelector('#cfg-groups input', { timeout: 15000 });
+    // The SCHEMA is the authority on the expected count. A hard-coded 16 would be satisfied by a page
+    // that renders sixteen of something, and would have to be edited by whoever adds the seventeenth.
+    const declared = await page.evaluate(async () => {
+      const r = await fetch('/v1/config-schema');
+      return Object.keys((await r.json()).settings || {}).length;
+    });
+    ok(declared > 0, 'the schema declares no settings — this check would pass vacuously');
+    eq(await page.locator('#cfg-groups input').count(), declared,
+      'the settings view does not render one control per schema setting');
+    ok(await page.locator('#cfg-groups h3').count() > 1,
+      'every setting landed in one group — the schema\'s `group` is not being read');
+    // The env name has to be visible: it is the SAME setting by file, by environment and by
+    // `agentctl config set`, and a person who cannot see the name cannot use the other two ways.
+    eq(await page.locator('#cfg-groups code').count(), declared, 'not every setting shows its env var name');
+  }, { allowConsole: freshConfig404 });
+
+  await check('settings: hints survive the language switch instead of freezing at first render', async () => {
+    // The page switches language with CSS over data-lang pairs. A hint rendered as one chosen string
+    // would freeze in whichever language was active when the view first opened — the defect the Logs
+    // view already had.
+    const ru = await page.locator('#cfg-groups .hint [data-lang="ru"]').count();
+    const en = await page.locator('#cfg-groups .hint [data-lang="en"]').count();
+    ok(ru > 0, 'no bilingual hint pairs were rendered at all');
+    eq(en, ru, 'hints are not emitted as data-lang PAIRS, so one language will be missing after a switch');
+  }, { allowConsole: freshConfig404 });
+
+  await check('every schema run-field has a control, or a recorded reason for living elsewhere', async () => {
+    // Walks the schema against the page's own map. This is the gate for the defect ADR-107 exists to
+    // fix: nine inputs were rendered whose values the submit handler never read, because the form and
+    // the handler were two lists that had to agree and did not.
+    const missing = await page.evaluate(async () => {
+      const r = await fetch('/v1/config-schema');
+      const fields = Object.keys((await r.json()).fields || {});
+      const map = window.cfgFieldIds || {};
+      const bad = [];
+      for (const name of fields) {
+        const v = map[name];
+        if (typeof v === 'string') {
+          if (!document.getElementById(v)) bad.push(`${name} -> #${v} (no such element)`);
+        } else if (v && typeof v.elsewhere === 'string' && v.elsewhere.trim()) {
+          continue;                        // deliberately not in this form, reason recorded
+        } else {
+          bad.push(`${name} (absent from cfgFieldIds)`);
+        }
+      }
+      return bad;
+    });
+    eq(missing.length, 0, `schema fields with no control: ${missing.join(', ')}`);
+  }, { allowConsole: freshConfig404 });
+
+  await check('the Run button SENDS the budgets and the auth block, not just renders them', async () => {
+    // The behavioural half. Before ADR-107 every one of these values was collected by the form and
+    // dropped by the handler, which no assertion about the DOM could have noticed.
+    // ▶ Run ships disabled and only capUnlock() enables it, which the connection check calls. Driving
+    // the app the way a person does — press Проверить first — rather than reaching in to clear the
+    // attribute, so the check also proves the unlock path still works.
+    await page.click('.rail a[data-nav="settings"]');
+    await page.click('#cap-check');
+    await page.waitForTimeout(700);
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    ok(!(await page.locator('#b-run').isDisabled()), 'the connection check did not enable ▶ Run');
+    await page.fill('#b-target', 'http://127.0.0.1:1/never');
+    await page.fill('#b-planbud', '1234');
+    await page.fill('#b-healbud', '2345');
+    await page.fill('#b-totbud', '3456');
+    await page.fill('#b-ss', 'state/auth.json');
+    await page.fill('#b-loginplan', 'runs/login/plan.json');
+    await page.fill('#b-scenario', 'checkout');
+    await page.fill('#b-autversion', 'deadbeef');
+    await page.check('#b-healllm');
+
+    let body = null;
+    await page.route('**/v1/runs', async (route) => {
+      body = route.request().postDataJSON();
+      // Answered here rather than let through: the assertion is about what the page SENDS, and a real
+      // run would spend 25 seconds and a browser to tell us nothing more.
+      await route.fulfill({ status: 202, contentType: 'application/json',
+        body: JSON.stringify({ run_id: 'gate', artifact_dir: '/tmp/gate', state: 'running' }) });
+    });
+    await page.click('#b-run');
+    await page.waitForTimeout(600);
+    await page.unroute('**/v1/runs');
+
+    ok(body, 'the Run button sent no request at all');
+    const want = {
+      plan_budget: '1234', heal_budget: '2345', total_budget: '3456',
+      storage_state: 'state/auth.json', login_plan: 'runs/login/plan.json',
+      scenario: 'checkout', aut_version: 'deadbeef', heal_llm: true,
+    };
+    for (const [k, v] of Object.entries(want)) {
+      eq(JSON.stringify(body[k]), JSON.stringify(v), `POST /v1/runs is missing ${k}`);
+    }
+  }, { allowConsole: freshConfig404 });
+
+  await check('ci + force_replay is refused beside the checkboxes, not in a run log', async () => {
+    // The previous check left ▶ Run disabled: bSubmit disables the controls for the duration of a run,
+    // and the run it started was answered by a route interceptor, so the flow never reached its end.
+    // Re-checking the connection is how a person would get the button back.
+    await page.click('.rail a[data-nav="settings"]');
+    await page.click('#cap-check');
+    await page.waitForTimeout(700);
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    ok(!(await page.locator('#b-run').isDisabled()), 'the connection check did not re-enable ▶ Run');
+    await page.check('#b-ci');
+    await page.check('#b-forcereplay');
+    let sent = false;
+    await page.route('**/v1/runs', async (route) => { sent = true; await route.abort(); });
+    await page.click('#b-run');
+    await page.waitForTimeout(400);
+    await page.unroute('**/v1/runs');
+    ok(!sent, 'the incompatible pair was sent to the server instead of being refused in the form');
+    ok(await page.locator('#b-cifr-warn').isVisible(), 'nothing on screen said why the run did not start');
+    await page.uncheck('#b-ci');
+    await page.uncheck('#b-forcereplay');
+  }, { allowConsole: freshConfig404 });
+
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

@@ -1569,13 +1569,25 @@ $('run').addEventListener('click', function () {
   var target = $('target').value.trim(), mode = $('mode').value;
   var broken = firstBrokenStep();
   if (broken) { clearErrors(); paintErrors(allErrors()); showStep(broken); return; }
-  startRun({
+  /* ADR-107c: this used to send seven fields, so the budgets and the auth block the wizard renders
+     were dropped exactly as the hub dropped them — the same defect on the other surface, and the
+     reason was the same: a hand-written literal beside a schema-driven form. Built from the schema
+     now, so a field the server adds arrives here without an edit. */
+  var body = {
     target: target, mode: mode, planner: $('planner').value,
     goal: mode === 'goal' ? $('goal').value.trim() : '',
-    describe: mode === 'describe' ? $('describe').value.trim() : '',
-    coverage_target: ($(fieldId('coverage_target')) || {}).value || '',
-    max_steps: ($(fieldId('max_steps')) || {}).value || ''
+    describe: mode === 'describe' ? $('describe').value.trim() : ''
+  };
+  numericFields().forEach(function (k) {
+    var el = $(fieldId(k));
+    if (el && el.value !== '') body[k] = el.value;
   });
+  [['ss', 'storage_state'], ['sss', 'storage_state_save'], ['loginplan', 'login_plan']].forEach(function (p) {
+    var el = $(p[0]);
+    if (el && el.value.trim()) body[p[1]] = el.value.trim();
+  });
+  if ($('pwnotrace') && $('pwnotrace').checked) body.pw_no_trace = true;
+  startRun(body);
 });
 $('rerun').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'replay', from_run: lastRunId }, '🔁 replay from_run=' + lastRunId); });
 $('baseline').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'baseline', from_run: lastRunId }, '📌 baseline from_run=' + lastRunId); });

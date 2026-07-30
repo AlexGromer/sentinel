@@ -21,7 +21,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	eventcatalog "github.com/AlexGromer/sentinel/brain"
@@ -147,20 +149,114 @@ func (s *server) getPersistedLogging() map[string]string {
 	return persistedLoggingEnv(doc)
 }
 
+// settingValueToEnv renders one persisted setting as the string its environment variable takes, using
+// the schema's declared type. Returns false for a value the type cannot accept, which this path DROPS
+// (see persistedSettingsEnv) rather than surfacing.
+func settingValueToEnv(spec map[string]any, raw any) (string, bool) {
+	switch t, _ := spec["type"].(string); t {
+	case "bool":
+		b, ok := raw.(bool)
+		if !ok {
+			return "", false
+		}
+		// "1"/"0", not "true"/"false": every reader of these vars is boolEnv's counterpart in the brain
+		// and in agentctl, and both parse the digits.
+		if b {
+			return "1", true
+		}
+		return "0", true
+	case "int":
+		f, ok := raw.(float64) // JSON has one number type; an int knob still arrives as float64
+		if !ok || f != math.Trunc(f) {
+			return "", false
+		}
+		return strconv.FormatInt(int64(f), 10), true
+	case "number":
+		f, ok := raw.(float64)
+		if !ok {
+			return "", false
+		}
+		return strconv.FormatFloat(f, 'g', -1, 64), true
+	case "string":
+		str, ok := raw.(string)
+		return str, ok
+	}
+	return "", false
+}
+
+// persistedSettingsEnv turns the config document's `settings` section into the environment variables
+// settingsSchema names — the ADR-107 completion of a surface that was only ever half-built.
+//
+// Before this, the sixteen operator settings were advertised by GET /v1/config-schema (each with its
+// env name, default, group and bilingual hint), RENDERED by the setup wizard, and EXPORTED by it as
+// shell lines — but the config document had no `settings` member and nothing read one. So they were
+// reachable exactly one way, by exporting a variable before starting the process, while the schema and
+// the wizard both implied otherwise. A knob you can see, fill in and save, that then does nothing, is
+// worse than one that was never offered.
+//
+// Driven BY THE SCHEMA, not by a list of keys: a knob added to settingsSchema becomes persistable in
+// the same commit that adds it, and TestEverySettingIsPersistable asserts exactly that by walking the
+// schema rather than naming what it expects.
+func persistedSettingsEnv(cfg map[string]any) map[string]string {
+	sec, ok := cfg["settings"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]string{}
+	for key, rawSpec := range settingsSchema {
+		spec, ok := rawSpec.(map[string]any)
+		if !ok {
+			continue
+		}
+		env, _ := spec["env"].(string)
+		if env == "" {
+			continue
+		}
+		raw, present := sec[key]
+		if !present {
+			continue
+		}
+		// Malformed values are dropped here and reported by the PUT path, for the same reason the
+		// logging section does it: this code runs while SPAWNING a run, where failing costs the operator
+		// a test result over a value the run can default.
+		if v, ok := settingValueToEnv(spec, raw); ok {
+			out[env] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (s *server) getPersistedSettings() map[string]string {
+	if s.store == nil {
+		return nil
+	}
+	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	if err != nil || rec == nil {
+		return nil
+	}
+	var doc map[string]any
+	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+		return nil
+	}
+	return persistedSettingsEnv(doc)
+}
+
 // mergedPersistedEnv is the single lowest-precedence layer handed to resolveRunEnv: the LLM connection
-// (ADR-063) plus the logging levels. Both are plain env vars with identical precedence, so they share
-// one map and resolveRunEnv needs no knowledge of either.
+// (ADR-063), the logging levels, and the operator settings (ADR-107). All are plain env vars with
+// identical precedence, so they share one map and resolveRunEnv needs no knowledge of any of them.
 func (s *server) mergedPersistedEnv() map[string]string {
-	llm, logging := s.getPersistedLLM(), s.getPersistedLogging()
-	if len(logging) == 0 {
-		return llm
+	layers := []map[string]string{s.getPersistedLLM(), s.getPersistedLogging(), s.getPersistedSettings()}
+	out := map[string]string{}
+	for _, l := range layers {
+		for k, v := range l {
+			out[k] = v
+		}
 	}
-	out := make(map[string]string, len(llm)+len(logging))
-	for k, v := range llm {
-		out[k] = v
-	}
-	for k, v := range logging {
-		out[k] = v
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

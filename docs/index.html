@@ -658,12 +658,33 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </p>
   </section>
 
+  <!-- ==================== SETTINGS (ADR-107c) ====================
+       The sixteen operator knobs were reachable exactly one way: export an environment variable before
+       starting the process. GET /v1/config-schema had described every one of them — env name, type,
+       default, group and a bilingual hint — for two milestones, and nothing in the hub rendered it.
+       This section is GENERATED from that schema rather than written out, so a knob added to the
+       schema appears here without anyone editing this file; the hub DOM gate asserts that by walking
+       the schema against what the page rendered. -->
+  <section class="card" id="cfg" data-view="settings">
+    <h2><span class="ric">⚙</span><span data-lang="ru">Настройки прогонов</span><span data-lang="en">Run settings</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Поведение инструмента: гейты, самопочинка, участие человека, сроки хранения. Сохраняются на сервере и действуют на <b>последующие</b> прогоны. Каждая настройка — это переменная окружения; её имя подписано, поэтому то же самое можно задать файлом, окружением или через <code>agentctl config set</code>.</span>
+      <span data-lang="en">How the tool behaves: gates, self-healing, human involvement, retention. Saved on the server and applied to <b>subsequent</b> runs. Every setting is an environment variable and its name is shown, so the same thing can be set by file, by environment, or with <code>agentctl config set</code>.</span>
+    </p>
+    <div id="cfg-groups"><p class="hint" data-lang="ru">подключитесь к control-API выше — настройки читаются из его схемы</p><p class="hint" data-lang="en">connect to the control-API above — the settings are read from its schema</p></div>
+    <div class="ctl-row" style="margin-top:.7rem">
+      <button type="button" class="btn" id="cfg-save" style="background:var(--acc);color:#0b0b10;font-weight:700">💾 <span data-lang="ru">Сохранить на сервер</span><span data-lang="en">Save to server</span></button>
+      <button type="button" class="btn" id="cfg-reload">⟳ <span data-lang="ru">Перечитать</span><span data-lang="en">Reload</span></button>
+      <span id="cfg-status" class="libmeta"></span>
+    </div>
+  </section>
+
   <!-- ============================ BUILD ============================ -->
   <section class="card" id="build" data-view="run">
     <h2><span class="ric">▶</span><span data-lang="ru">Новый прогон</span><span data-lang="en">New run</span></h2>
     <p class="sub">
-      <span data-lang="ru">Сборка <code>run.yaml</code> / env / команды из проверенной поверхности конфигурации (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Скачай файлы или нажми «▶ Запустить» для прямого вызова control-API (нужно подключение выше).</span>
-      <span data-lang="en">Build a valid <code>run.yaml</code> / env block / launch command from the verified config surface (<code>brain/runconfig.py</code> · <code>cmd/agentctl</code>). Download the files or press «▶ Run» to call the control-API directly (connection above required).</span>
+      <span data-lang="ru">Все поля ниже уезжают в прогон по HTTP — <b>ничего скачивать не нужно</b>. Кнопки <code>⬇</code> — это <b>экспорт</b> той же конфигурации, чтобы повторить прогон в CI или из терминала; сам прогон запускается кнопкой «▶ Запустить».</span>
+      <span data-lang="en">Every field below travels to the run over HTTP — <b>nothing needs downloading</b>. The <code>⬇</code> buttons <b>export</b> the same configuration so you can reproduce the run in CI or from a terminal; the run itself starts with «▶ Run».</span>
     </p>
     <!-- ADR-101: host for the "show all help" switch. Every label below carries a folded "?" whose
          text says what CHANGES if you touch the field — the labels here are literally environment
@@ -768,6 +789,24 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
             <input id="b-pwnotrace" type="checkbox" checked style="width:auto">PW_NO_TRACE (<span data-lang="ru">откл. трейсинг при вводе пароля</span><span data-lang="en">disable tracing with password</span>)
           </label>
+          <!-- ADR-107c: the determinism guards and the scenario selector had no control at all, so
+               `--ci`, `--force-replay`, `--aut-version`, `--heal-llm` and `--scenario` were CLI-only.
+               They sit beside auth because the question they answer is the same one — "under what
+               conditions does this run count?" — not because they share an implementation. -->
+          <label for="b-scenario" style="margin-top:.55rem">scenario (<span data-lang="ru">имя из конфига</span><span data-lang="en">name from the config</span>)</label>
+          <input id="b-scenario" placeholder="checkout">
+          <label for="b-autversion" style="margin-top:.4rem">aut_version (<span data-lang="ru">sha приложения — ключ карантина флейка</span><span data-lang="en">app sha — keys flake quarantine</span>)</label>
+          <input id="b-autversion" placeholder="deadbeef">
+          <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-ci" type="checkbox" style="width:auto">CI (<span data-lang="ru">запрещает обход plan_hash</span><span data-lang="en">forbids bypassing plan_hash</span>)
+          </label>
+          <label style="margin-top:.35rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-forcereplay" type="checkbox" style="width:auto">force_replay (<span data-lang="ru">обойти hard-abort по plan_hash</span><span data-lang="en">bypass the plan_hash hard-abort</span>)
+          </label>
+          <label style="margin-top:.35rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-healllm" type="checkbox" style="width:auto">heal_llm (<span data-lang="ru">LLM-перепривязка при починке</span><span data-lang="en">LLM re-grounding during heal</span>)
+          </label>
+          <div id="b-cifr-warn" class="warnbox" style="display:none;margin-top:.4rem"></div>
         </div>
         <div>
           <label for="b-backend">Backend</label>
@@ -1714,6 +1753,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function capUnlock(ok){
     ge('b-run').disabled=!ok;
     ge('ch-send').disabled=!ok;
+    /* ADR-107c: a successful check is the moment the settings become readable — the token that was
+       missing a second ago is what the saved document needs. Re-reading here is why entering a token
+       populates the panel instead of leaving whatever the first, unauthenticated attempt produced. */
+    if (ok && typeof cfgInit === 'function'){
+      cfgLoaded = false;
+      if (typeof vwActive !== 'undefined' && vwActive === 'settings') cfgInit();
+    }
   }
 
   /* ---- SSE reader: fetch+reader because EventSource cannot send Authorization ---- */
@@ -1796,7 +1842,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function renderBuild(){
     var mode=bVal('b-mode'), target=bVal('b-target').trim();
     /* YAML */
-    var lines=['# Sentinel RunConfig — generated by docs/index.html (M12 builder). Pass via: --run-config <file>'];
+    /* ADR-107c: this text used to be the ONLY way the budgets and the auth block reached a run — the
+       form collected them and the submit handler did not, so a person had to download this and pass
+       `--run-config`. `POST /v1/runs` now carries every one of those values, and control-api writes the
+       real RunConfig into the run's own artifact dir. So this block changed meaning: it is an EXPORT,
+       for reproducing the same run in CI or from a terminal, not a step anyone is required to take. */
+    var lines=['# Sentinel RunConfig — exported by docs/index.html for reuse in CI or a terminal.',
+               '# Pressing ▶ Run does NOT need this file: control-api receives these values over HTTP',
+               '# and writes the RunConfig the run actually used into that run\'s artifact dir.'];
     lines.push('mode: '+mode);
     if (mode==='goal'&&ge('b-goal').value.trim())     lines.push('goal: '+bq(ge('b-goal').value.trim()));
     if (mode==='describe'&&ge('b-describe').value.trim()) lines.push('describe: '+bq(ge('b-describe').value.trim()));
@@ -2297,17 +2350,62 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (ge('b-vision').checked) o.vision=true;
     return Object.keys(o).length ? o : null;   // nothing set -> null (no per-run override)
   }
-  ge('b-run').addEventListener('click', function(){
-    var target=bVal('b-target').trim(), mode=bVal('b-mode');
-    if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
-    bSubmit({
-      target:target, mode:mode, planner:bVal('b-planner'),
-      goal:     mode==='goal'     ? ge('b-goal').value.trim()     : '',
-      describe: mode==='describe' ? ge('b-describe').value.trim() : '',
-      coverage_target: bVal('b-coverage'),
-      max_steps:       bVal('b-maxsteps'),
-      llm:             bLLM()
+  /* ADR-107c: schema field name -> the control that carries it. THE one place the correspondence
+     lives, and the hub DOM gate walks GET /v1/config-schema against it, so a field added to the schema
+     with no control here fails a test instead of quietly appearing in no interface.
+
+     This map exists because the previous arrangement was two lists that had to agree and did not: the
+     form was HTML and the submit body was a literal object, and nine inputs — three budgets and the
+     four auth values — were rendered, filled in by people, and never read. Their values went into a
+     downloadable run.yaml instead, so the form assembled a file and sent the person to a terminal.
+
+     A value of {elsewhere:…} means the field is deliberately NOT in this form, with the reason
+     recorded — the same discipline as the CLI's route exemptions. */
+  var cfgFieldIds = {
+    target: 'b-target', goal: 'b-goal', describe: 'b-describe',
+    coverage_target: 'b-coverage', max_steps: 'b-maxsteps', scenario: 'b-scenario',
+    plan_budget: 'b-planbud', heal_budget: 'b-healbud', total_budget: 'b-totbud',
+    storage_state: 'b-ss', storage_state_save: 'b-sss', login_plan: 'b-loginplan',
+    pw_no_trace: 'b-pwnotrace',
+    ci: 'b-ci', force_replay: 'b-forcereplay', aut_version: 'b-autversion', heal_llm: 'b-healllm',
+    conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key; typing one into a run form would let a person graft a run onto someone else’s conversation' }
+  };
+  window.cfgFieldIds = cfgFieldIds;   // named so the DOM gate can walk it (see setView on addressability)
+
+  /* Builds the POST /v1/runs body by WALKING cfgFieldIds rather than restating the fields. */
+  function bBody(){
+    var mode = bVal('b-mode');
+    var body = { mode: mode, planner: bVal('b-planner'), llm: bLLM() };
+    Object.keys(cfgFieldIds).forEach(function(name){
+      var id = cfgFieldIds[name];
+      if (typeof id !== 'string') return;            // recorded as living elsewhere
+      var el = ge(id);
+      if (!el) return;
+      if (el.type === 'checkbox'){ if (el.checked) body[name] = true; return; }
+      var v = (el.value || '').trim();
+      if (v !== '') body[name] = v;
     });
+    /* goal and describe are mutually exclusive and mode decides which one is meant. Sending the other
+       one's leftover text would author against a stale instruction the person can no longer see. */
+    if (mode !== 'goal') delete body.goal;
+    if (mode !== 'describe') delete body.describe;
+    return body;
+  }
+
+  ge('b-run').addEventListener('click', function(){
+    var target=bVal('b-target').trim();
+    if (!target){ bRunLog(bi('укажите Target URL.','Set a Target URL.')); return; }
+    /* The server refuses this pair with a 400 (it is the rule agentctl owns), but saying so here means
+       the person reads it beside the two checkboxes they just ticked rather than in a run log. */
+    if (ge('b-ci').checked && ge('b-forcereplay').checked){
+      var w=ge('b-cifr-warn');
+      if (w){ w.style.display='block';
+        w.textContent=bi('CI и force_replay несовместимы: force_replay обходит hard-abort по plan_hash, который CI существует чтобы соблюдать.',
+                         'CI and force_replay are mutually exclusive: force_replay bypasses the plan_hash hard-abort that CI mode exists to enforce.'); }
+      return;
+    }
+    var w2=ge('b-cifr-warn'); if (w2) w2.style.display='none';
+    bSubmit(bBody());
   });
   ge('b-rerun').addEventListener('click', function(){ if (bLastRunId) bSubmit({ mode:'replay', from_run:bLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' from_run='+esc(bLastRunId)); });
   ge('b-baseline').addEventListener('click', function(){ if (bLastRunId) bSubmit({ mode:'baseline', from_run:bLastRunId }, '📌 '+bi('Эталон','Baseline')+' from_run='+esc(bLastRunId)); });
@@ -3862,6 +3960,159 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   var vwActive = 'chat';
   var vwSub = { library: 'library', results: 'results' };
 
+  /* =========================================================================
+     ADR-107c — SETTINGS AS A PROJECTION OF THE SCHEMA
+     Rendered from GET /v1/config-schema, saved through PUT /v1/config. Not written out by hand: the
+     schema has described these sixteen knobs (env name, type, default, group, bilingual hint) since
+     ADR-085, and the only surface that ever rendered them was the separate setup wizard — which
+     exported them as shell lines and could not save them at all, because the config document had no
+     `settings` member and nothing read one.
+     ========================================================================= */
+  var cfgLoaded = false, cfgSchema = null, cfgDoc = null;
+  function cfgId(k){ return 'cfg-s-' + k.replace(/_/g, '-'); }
+  function cfgSetStatus(html){ var el = ge('cfg-status'); if (el) el.innerHTML = html; }
+
+  /* Group headings are the QUESTION each group answers, not the name of the code that reads it —
+     "how long do artifacts live" is one decision even though logs are pruned by agentctl and traces by
+     the brain. An unknown group falls back to its own key rather than being hidden. */
+  var CFG_GROUP_LABELS = {
+    gates:     ['Гейты — что считать провалом',        'Gates — what counts as a failure'],
+    healing:   ['Самопочинка',                          'Self-healing'],
+    hitl:      ['Участие человека',                     'Human involvement'],
+    retention: ['Сроки хранения',                       'Retention'],
+    logging:   ['Логирование',                          'Logging']
+  };
+
+  function cfgRender(){
+    var box = ge('cfg-groups'); if (!box || !cfgSchema) return;
+    var settings = cfgSchema.settings || {};
+    var saved = (cfgDoc && cfgDoc.settings) || {};
+    var groups = {};
+    Object.keys(settings).sort().forEach(function(k){
+      var g = settings[k].group || 'other';
+      (groups[g] = groups[g] || []).push(k);
+    });
+    var names = Object.keys(groups).sort();
+    if (!names.length){ box.innerHTML = '<p class="hint">'+bi('схема не вернула настроек','the schema returned no settings')+'</p>'; return; }
+
+    var html = '';
+    names.forEach(function(g){
+      var lab = CFG_GROUP_LABELS[g] || [g, g];
+      html += '<div style="margin-top:.8rem"><h3 style="font-size:.92rem;margin:.2rem 0 .45rem">'
+            + '<span data-lang="ru">'+esc(lab[0])+'</span><span data-lang="en">'+esc(lab[1])+'</span></h3>';
+      groups[g].forEach(function(k){
+        var d = settings[k] || {};
+        var id = cfgId(k);
+        /* The hint is emitted as a data-lang PAIR, not as one language picked at render time: this page
+           switches language with CSS alone, so a string chosen here would freeze in whichever language
+           was active when the settings view first opened. The Logs view already learned that lesson. */
+        var hint = (d.hint && (d.hint.ru || d.hint.en)) ? bi(esc(d.hint.ru || d.hint.en), esc(d.hint.en || d.hint.ru)) : '';
+        /* The env name is shown, not hidden: it is the SAME setting by file, by environment and by
+           `agentctl config set`, and a person who cannot see the name cannot use the other two ways. */
+        var envTag = d.env ? ' <code style="font-size:.72rem;opacity:.72">'+esc(d.env)+'</code>' : '';
+        var cur = Object.prototype.hasOwnProperty.call(saved, k) ? saved[k] : d['default'];
+        if (d.type === 'bool'){
+          html += '<label style="display:flex;align-items:center;gap:.4rem;margin-top:.35rem;color:var(--tx)">'
+                + '<input id="'+id+'" type="checkbox" style="width:auto"'+(cur ? ' checked' : '')+'>'
+                + esc(k)+envTag+'</label>';
+        } else {
+          var attrs = (d.type === 'int' || d.type === 'number') ? ' type="number"' : '';
+          if (d.min !== undefined)  attrs += ' min="'+esc(String(d.min))+'"';
+          if (d.step !== undefined) attrs += ' step="'+esc(String(d.step))+'"';
+          html += '<label for="'+id+'" style="margin-top:.4rem">'+esc(k)+envTag+'</label>'
+                + '<input id="'+id+'"'+attrs+' value="'+esc(cur === undefined || cur === null ? '' : String(cur))+'">';
+        }
+        if (hint) html += '<div class="hint" style="margin-top:.15rem">'+hint+'</div>';
+      });
+      html += '</div>';
+    });
+    box.innerHTML = html;   /* data-lang pairs inside are carried by the CSS language switch */
+  }
+
+  async function cfgInit(){
+    /* cfgLoaded is set only on SUCCESS, and that is the whole point. Marking it up front turned a
+       first visit made before the token was entered into a permanently empty panel: the load failed
+       with 403, the flag said "done", and nothing ever tried again. A settings page that is blank
+       forever because of the order someone clicked in is exactly the silent dead end this milestone
+       exists to remove. */
+    var base = capiBase();
+    if (!base){ cfgSetStatus(bi('нет адреса control-API','no control-API URL')); return; }
+    try {
+      var rs = await fetch(base + '/v1/config-schema');   // unauthenticated, like the wizard's
+      if (!rs.ok) throw new Error('HTTP ' + rs.status);
+      cfgSchema = await rs.json();
+    } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); return; }
+    /* The saved document is token-gated, so with no token this request cannot succeed — and asking
+       anyway would put a 403 in the console on every visit made before someone pastes a token, which
+       is noise that teaches a reader to ignore the console. The schema alone renders every knob at its
+       default; the values arrive when a token does (capUnlock re-reads).
+
+       A missing document is also the NORMAL state of a fresh instance, and the server says so with a
+       404 (never saved) as distinct from a 500 (corrupt). Neither is a reason to refuse to render. */
+    cfgDoc = {};
+    if (capiTok()){
+      try {
+        var rc = await fetch(base + '/v1/config', { headers: authHdr() });
+        var j = await rc.json().catch(function(){ return {}; });
+        if (rc.ok && j && j.config) cfgDoc = j.config;
+        else if (!rc.ok && rc.status !== 404){
+          cfgSetStatus(bi('показаны значения по умолчанию — сохранённый конфиг не прочитан (HTTP '+rc.status+')',
+                          'showing defaults — the saved config could not be read (HTTP '+rc.status+')'));
+        }
+      } catch(e2){ /* offline / CORS — defaults are still worth showing */ }
+    } else {
+      cfgSetStatus(bi('значения по умолчанию · впишите токен выше и нажмите «Проверить», чтобы увидеть сохранённые',
+                      'defaults · enter a token above and press Check to see the saved values'));
+    }
+    cfgLoaded = true;
+    cfgRender();
+  }
+
+  async function cfgSave(){
+    var base = capiBase(); if (!base || !cfgSchema) return;
+    var settings = {};
+    var spec = cfgSchema.settings || {};
+    Object.keys(spec).forEach(function(k){
+      var d = spec[k], el = ge(cfgId(k));
+      if (!el) return;
+      if (d.type === 'bool'){ settings[k] = !!el.checked; return; }
+      var v = (el.value || '').trim();
+      if (v === '') return;                       // left blank -> the server keeps its default
+      if (d.type === 'int' || d.type === 'number'){
+        var n = Number(v);
+        if (!isFinite(n)) return;
+        settings[k] = (d.type === 'int') ? Math.trunc(n) : n;
+        return;
+      }
+      settings[k] = v;
+    });
+    /* PUT replaces the WHOLE document, so the save has to carry forward what the setup wizard wrote
+       (llm / run / auth). Sending only `settings` would silently delete the LLM connection — a save
+       button that erases a different page's work is worse than one that does nothing. */
+    var doc = {};
+    Object.keys(cfgDoc || {}).forEach(function(k){ doc[k] = cfgDoc[k]; });
+    doc.settings = settings;
+
+    cfgSetStatus(bi('сохраняю…','saving…'));
+    try {
+      var hdr = { 'Content-Type': 'application/json' }, ah = authHdr();
+      if (ah.Authorization) hdr.Authorization = ah.Authorization;
+      var r = await fetch(base + '/v1/config', { method: 'PUT', headers: hdr, body: JSON.stringify(doc) });
+      var j = await r.json().catch(function(){ return {}; });
+      if (!r.ok){ cfgSetStatus('<span class="fail">✗ HTTP '+r.status+(j.error ? ': '+esc(j.error) : '')+'</span>'); return; }
+      cfgDoc = doc;
+      /* Naming the medium, because "saved" alone cannot tell a store write from a file write, and the
+         two have different consequences for anyone else reading the same config. */
+      cfgSetStatus('<span class="ok">✓ '+bi('сохранено','saved')+' · '+esc(j.tier === 'file' ? (j.path || 'file') : 'store-gateway')
+                 + ' · '+bi('действует на следующие прогоны','applies to subsequent runs')+'</span>');
+    } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
+  }
+
+  ge('cfg-save').addEventListener('click', cfgSave);
+  /* Reload re-reads BOTH the schema and the saved document: a knob added on the server should appear
+     without a page reload, which is the whole point of rendering from the schema. */
+  ge('cfg-reload').addEventListener('click', function(){ cfgLoaded = false; cfgInit(); });
+
   function vwLoaders(view, sub){
     /* Data is fetched on first reveal, exactly as the old subtab switcher did. */
     if (view==='library' && sub==='library' && !tLibLoaded)  tLoadLibrary();
@@ -3870,6 +4121,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (view==='results' && sub==='results' && !tResultsLoaded) tLoadResults();
     if (view==='results' && sub==='metrics' && !tMetricsLoaded) tLoadMetrics();
     if (view==='logs'    && !lgLoaded)      lgInit();
+    if (view==='settings' && !cfgLoaded)    cfgInit();   // ADR-107c: settings are rendered from the schema
   }
 
   function setView(v, opts){

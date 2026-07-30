@@ -1,0 +1,332 @@
+package main
+
+// ADR-107, the CLI projection. `agentctl` was a run-and-artifact tool: everything about the STORE and
+// the CONFIG existed on HTTP alone. The M16 measurement found 16 capabilities reachable only from the
+// UI, and every one of them had `cli = none` — listing or deleting a scenario, promoting a test,
+// reading results or trends, filtering a run's logs, reading or writing the config, asking whether the
+// service is ready. A person who prefers a terminal simply could not do half the product.
+//
+// These are THIN clients over the routes control-api already serves. Not one of them reimplements a
+// behaviour: a second implementation is how two surfaces come to disagree about what a capability
+// means, which is the defect this whole milestone exists to remove.
+//
+// One table, `apiVerbs`, is both the implementation and the thing the completeness gate walks
+// (api_projection_test.go). It cannot drift from what the CLI does, because it IS what the CLI does.
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// apiVerb projects one control-api route onto a CLI verb.
+type apiVerb struct {
+	Verb   string   // words the user types, e.g. "scenarios list"
+	Method string   // HTTP method
+	Path   string   // route, with {id} where a positional argument goes
+	Arg    string   // name of the positional argument filling {id} ("" when the path has none)
+	Query  []string // flags forwarded as query parameters
+	Body   []string // flags sent as a JSON object (POST/PUT)
+	Stdin  bool     // read the request body from a file/stdin instead of flags (config set)
+	Stream bool     // copy the response through instead of parsing it (SSE)
+	Help   string
+}
+
+// apiVerbs is the CLI half of the one configuration/data model. Ordered as a person would look for
+// things, not as the mux registers them.
+var apiVerbs = []apiVerb{
+	{Verb: "health", Method: "GET", Path: "/readyz", Help: "readiness: store, LLM endpoint, config"},
+	{Verb: "health live", Method: "GET", Path: "/healthz", Help: "liveness only (no dependency probes)"},
+
+	{Verb: "config schema", Method: "GET", Path: "/v1/config-schema", Help: "every knob the product has, with its env name and default"},
+	{Verb: "config get", Method: "GET", Path: "/v1/config", Help: "the persisted config document"},
+	{Verb: "config set", Method: "PUT", Path: "/v1/config", Stdin: true, Help: "replace the persisted config from a JSON file (--file, or - for stdin)"},
+
+	{Verb: "runs list", Method: "GET", Path: "/v1/runs", Query: []string{"limit", "offset"}, Help: "runs, newest first"},
+	{Verb: "runs show", Method: "GET", Path: "/v1/runs/{id}", Arg: "run_id", Help: "one run's record"},
+	{Verb: "runs cancel", Method: "POST", Path: "/v1/runs/{id}/cancel", Arg: "run_id", Help: "stop a running run"},
+	{Verb: "runs events", Method: "GET", Path: "/v1/runs/{id}/events", Arg: "run_id", Stream: true, Help: "follow a run's event stream (SSE) until it ends"},
+	{Verb: "runs artifact", Method: "GET", Path: "/v1/runs/{id}/artifact", Arg: "run_id", Query: []string{"name"}, Stream: true, Help: "fetch one whitelisted artifact to stdout (--name plan.json)"},
+
+	{Verb: "logs", Method: "GET", Path: "/v1/runs/{id}/logs", Arg: "run_id",
+		Query: []string{"lvl", "cat", "mod", "code", "src", "step", "q", "after", "limit"},
+		Help:  "a run's structured diagnostics; --src takes a source OR an audience name (business|tool)"},
+	{Verb: "events-catalog", Method: "GET", Path: "/v1/events-catalog", Help: "every event the brain can emit, with its bilingual phrasing"},
+
+	{Verb: "scenarios list", Method: "GET", Path: "/v1/scenarios", Query: []string{"limit", "offset"}, Help: "saved scenarios"},
+	{Verb: "scenarios show", Method: "GET", Path: "/v1/scenarios/{id}", Arg: "scenario_id", Help: "one scenario"},
+	{Verb: "scenarios delete", Method: "DELETE", Path: "/v1/scenarios/{id}", Arg: "scenario_id", Help: "delete a scenario"},
+
+	{Verb: "tests list", Method: "GET", Path: "/v1/tests", Query: []string{"limit", "offset"}, Help: "promoted tests"},
+	{Verb: "tests show", Method: "GET", Path: "/v1/tests/{id}", Arg: "test_id", Help: "one test"},
+	{Verb: "tests promote", Method: "POST", Path: "/v1/tests/promote", Body: []string{"scenario_id", "name"}, Help: "promote a scenario into a durable named test"},
+	{Verb: "tests delete", Method: "DELETE", Path: "/v1/tests/{id}", Arg: "test_id", Help: "delete a test"},
+
+	{Verb: "chats list", Method: "GET", Path: "/v1/chats", Query: []string{"limit", "offset"}, Help: "conversations"},
+	{Verb: "chats show", Method: "GET", Path: "/v1/chats/{id}", Arg: "conversation_id", Help: "one conversation's projection"},
+	{Verb: "chats delete", Method: "DELETE", Path: "/v1/chats/{id}", Arg: "conversation_id", Help: "delete a conversation's index row (the thread itself is untouched)"},
+
+	{Verb: "results list", Method: "GET", Path: "/v1/results", Query: []string{"limit", "offset"}, Help: "run verdicts"},
+	{Verb: "results show", Method: "GET", Path: "/v1/results/{id}", Arg: "run_id", Help: "one result record"},
+	{Verb: "trends", Method: "GET", Path: "/v1/trends", Query: []string{"metric", "window"}, Help: "a metric over time (--metric coverage --window 50)"},
+}
+
+// apiRoutesWithoutCLI names routes that deliberately have no CLI verb, each with the reason. The
+// completeness gate reads this list, so an exemption is a recorded decision rather than an omission
+// nobody noticed.
+var apiRoutesWithoutCLI = map[string]string{
+	"POST /v1/runs":             "`agentctl run` IS this route's local equivalent — it spawns the same brain directly, without a server",
+	"POST /v1/chat/completions": "the OpenAI-compat shim exists for foreign clients; `agentctl run --mode chat --conversation-id` is the local form",
+	"POST /v1/import":           "`agentctl import` IS the implementation — the route spawns this binary, so a CLI verb would call itself",
+	"GET /v1/stream":            "a WebSocket with a takeover/return control channel; `runs events` covers the read side over SSE, and driving a takeover from a terminal has no meaning",
+	"GET /v1/ui-token":          "hands a browser tab its token during bootstrap; a CLI already has the token it would be asking for",
+	"GET /v1/":                  "the catch-all 404 for unknown /v1 paths, not a capability",
+
+	// The four revision routes ARE reachable from a terminal: `agentctl revisions list|show|diff|rollback`
+	// (cmdRevisions) predates them and reads the store DIRECTLY rather than through a server. That is the
+	// better local form — a person inspecting a test's history on the machine that holds it should not
+	// need control-api running. Adding table verbs beside them would give one capability two spellings
+	// with different prerequisites, which is how two surfaces begin to disagree.
+	"GET /v1/tests/{id}/revisions":           "local `agentctl revisions list` reads the store directly — no server required",
+	"GET /v1/tests/{id}/revisions/show":      "local `agentctl revisions show`",
+	"GET /v1/tests/{id}/revisions/diff":      "local `agentctl revisions diff`",
+	"POST /v1/tests/{id}/revisions/rollback": "local `agentctl revisions rollback`",
+}
+
+// controlAPIBase resolves the control-api this CLI talks to.
+func controlAPIBase() string {
+	if v := strings.TrimRight(os.Getenv("CONTROL_API_URL"), "/"); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:8090"
+}
+
+// controlAPIToken finds the bearer token: the environment first, then the file control-api persists
+// (ADR-064). Reading the file is what makes the CLI usable against a locally started server without
+// the person having to copy a token out of a log line.
+func controlAPIToken(repo string) string {
+	if v := os.Getenv("CONTROL_API_TOKEN"); v != "" {
+		return v
+	}
+	if b, err := os.ReadFile(filepath.Join(repo, "state", "control-api.token")); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	return ""
+}
+
+// findAPIVerb matches the longest verb phrase against the leading arguments, so "config get" wins over
+// a hypothetical "config". Returns the verb and the arguments left after it.
+func findAPIVerb(args []string) (*apiVerb, []string) {
+	best := -1
+	bestWords := 0
+	for i := range apiVerbs {
+		w := strings.Fields(apiVerbs[i].Verb)
+		if len(w) > len(args) || len(w) <= bestWords {
+			continue
+		}
+		match := true
+		for j, word := range w {
+			if args[j] != word {
+				match = false
+				break
+			}
+		}
+		if match {
+			best, bestWords = i, len(w)
+		}
+	}
+	if best < 0 {
+		return nil, nil
+	}
+	return &apiVerbs[best], args[bestWords:]
+}
+
+// apiUsage prints every verb, grouped by its first word.
+func apiUsage(w io.Writer) {
+	fmt.Fprintln(w, "control-api verbs (set CONTROL_API_URL / CONTROL_API_TOKEN, or run against a local server):")
+	var last string
+	for _, v := range apiVerbs {
+		head := strings.Fields(v.Verb)[0]
+		if head != last {
+			fmt.Fprintln(w)
+			last = head
+		}
+		arg := ""
+		if v.Arg != "" {
+			arg = " <" + v.Arg + ">"
+		}
+		flags := ""
+		for _, q := range v.Query {
+			flags += " [--" + q + " …]"
+		}
+		for _, b := range v.Body {
+			flags += " --" + b + " …"
+		}
+		if v.Stdin {
+			flags += " --file <f>|-"
+		}
+		fmt.Fprintf(w, "  agentctl %s%s%s\n      %s\n", v.Verb, arg, flags, v.Help)
+	}
+}
+
+// cmdAPI runs one apiVerb. Flags are parsed by hand rather than through flag.FlagSet because the
+// accepted set is data (v.Query / v.Body), not a compile-time list — the same reason the completeness
+// gate can walk it.
+func cmdAPI(repo string, v *apiVerb, rest []string) int {
+	path := v.Path
+	if v.Arg != "" {
+		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+			fmt.Fprintf(os.Stderr, "error: %s needs a <%s>\n", v.Verb, v.Arg)
+			return 2
+		}
+		path = strings.Replace(path, "{id}", url.PathEscape(rest[0]), 1)
+		rest = rest[1:]
+	}
+
+	allowed := map[string]bool{}
+	for _, q := range v.Query {
+		allowed[q] = true
+	}
+	for _, b := range v.Body {
+		allowed[b] = true
+	}
+	if v.Stdin {
+		allowed["file"] = true
+	}
+
+	vals := map[string]string{}
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		if !strings.HasPrefix(a, "--") {
+			fmt.Fprintf(os.Stderr, "error: unexpected argument %q for %s\n", a, v.Verb)
+			return 2
+		}
+		name, val := strings.TrimPrefix(a, "--"), ""
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name, val = name[:eq], name[eq+1:]
+		} else {
+			if i+1 >= len(rest) {
+				fmt.Fprintf(os.Stderr, "error: --%s needs a value\n", name)
+				return 2
+			}
+			i++
+			val = rest[i]
+		}
+		if !allowed[name] {
+			// Naming what IS accepted, because a rejected flag with no alternatives listed sends the
+			// reader to the source of a CLI they were hoping not to read.
+			var ok []string
+			for k := range allowed {
+				ok = append(ok, "--"+k)
+			}
+			fmt.Fprintf(os.Stderr, "error: %s does not accept --%s (accepts: %s)\n", v.Verb, name, strings.Join(ok, " "))
+			return 2
+		}
+		vals[name] = val
+	}
+
+	q := url.Values{}
+	for _, k := range v.Query {
+		if val, ok := vals[k]; ok {
+			q.Set(k, val)
+		}
+	}
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+
+	var body io.Reader
+	if len(v.Body) > 0 {
+		obj := map[string]string{}
+		for _, k := range v.Body {
+			if val, ok := vals[k]; ok {
+				obj[k] = val
+			}
+		}
+		raw, _ := json.Marshal(obj)
+		body = strings.NewReader(string(raw))
+	}
+	if v.Stdin {
+		src := vals["file"]
+		if src == "" {
+			fmt.Fprintf(os.Stderr, "error: %s needs --file <path> (or --file - to read stdin)\n", v.Verb)
+			return 2
+		}
+		var raw []byte
+		var err error
+		if src == "-" {
+			raw, err = io.ReadAll(os.Stdin)
+		} else {
+			raw, err = os.ReadFile(src)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read %s: %v\n", src, err)
+			return 2
+		}
+		// Parsed before sending so a typo fails here, naming the offset, instead of arriving at the
+		// server as a 400 whose message is about the wire format rather than the file.
+		if !json.Valid(raw) {
+			fmt.Fprintf(os.Stderr, "error: %s is not valid JSON\n", src)
+			return 2
+		}
+		body = strings.NewReader(string(raw))
+	}
+
+	req, err := http.NewRequest(v.Method, controlAPIBase()+path, body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
+	if tok := controlAPIToken(repo); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// No timeout on a stream: `runs events` follows a run to its end, which is as long as the run.
+	client := &http.Client{}
+	if !v.Stream {
+		client.Timeout = 30 * time.Second
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s %s: %v\n  (control-api at %s — set CONTROL_API_URL if it listens elsewhere)\n",
+			v.Method, path, err, controlAPIBase())
+		return 4
+	}
+	defer resp.Body.Close()
+
+	if v.Stream && resp.StatusCode == http.StatusOK {
+		if _, err := io.Copy(os.Stdout, resp.Body); err != nil {
+			fmt.Fprintf(os.Stderr, "error: stream: %v\n", err)
+			return 4
+		}
+		return 0
+	}
+
+	raw, _ := io.ReadAll(resp.Body)
+	// Re-indent JSON so a person reading a terminal sees structure; anything else is passed through
+	// byte-for-byte rather than mangled into a quoted string.
+	var pretty any
+	if json.Unmarshal(raw, &pretty) == nil {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(pretty)
+	} else if len(raw) > 0 {
+		os.Stdout.Write(raw)
+		if raw[len(raw)-1] != '\n' {
+			fmt.Println()
+		}
+	}
+	if resp.StatusCode >= 400 {
+		fmt.Fprintf(os.Stderr, "error: %s %s -> %d\n", v.Method, v.Path, resp.StatusCode)
+		return 1
+	}
+	return 0
+}
