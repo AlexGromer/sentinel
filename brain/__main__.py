@@ -258,16 +258,20 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
     budget.tracker().reset()
     goal = os.environ.get("GOAL", "").strip()
     describe = os.environ.get("DESCRIBE", "").strip()
+    # ADR-108a: MESSAGE is this turn's text; GOAL/DESCRIBE declare the conversation's objective. They
+    # used to be the same thing — every turn arrived as GOAL — so a follow-up was indistinguishable
+    # from a new objective and "one goal per conversation" could not be said, never mind enforced.
+    message = os.environ.get("MESSAGE", "").strip()
     if goal and describe:
         log("fatal.goal_describe_conflict")
         return 3
-    if not goal and not describe:
+    if not goal and not describe and not message:
         log("fatal.chat_no_intent")
         return 3
     from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
-    scenario_head = GoalPlanner(goal) if goal else DescribePlanner(describe)
     planner = HeuristicPlanner()    # the explore walk stays deterministic; authoring is the scenario head
-    user_msg = {"role": "user", "content": goal or describe}
+    # scenario_head and the turn's message are resolved AFTER the thread is peeked: on a warm turn the
+    # objective comes from the pinned chat_intent, not from this request, so neither can be chosen yet.
     cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": conversation_id}}
     rc = runcontrol.make_client()  # M9.8 F4: shared by the graph's checkpoint gate + the cold-turn resume loop
     tx = open(out / "llm-transcript.jsonl", "w")
@@ -283,9 +287,44 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 # Peek the thread WITHOUT a browser: a warm turn already has a persisted site_map.
                 # get_state always returns a StateSnapshot — on a brand-new thread its .values is {} (not
                 # None), so the guard + .get keep a cold turn-1 from being mistaken for a resume.
-                probe = build_graph(_NoBrowser(), planner, tx_write,
-                                    scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
-                snap = probe.get_state(cfg)
+                # Peeked with NO scenario head: this compile only reads state, and choosing a head here
+                # would mean choosing it from a request that may not carry the objective at all.
+                snap = build_graph(_NoBrowser(), planner, tx_write,
+                                   scenario_head=None, rc=rc).compile(checkpointer=saver).get_state(cfg)
+
+                # ---- ADR-108a: the objective belongs to the CONVERSATION ----
+                pinned = (snap.values.get("chat_intent") if snap and snap.values else None) or None
+                if pinned:
+                    # A request may RESTATE the objective (idempotent) but never replace it. Rejected
+                    # before any browser or model work, so the refusal costs nothing and says why.
+                    if goal and (pinned.get("kind") != "goal" or pinned.get("text") != goal):
+                        log("fatal.chat_goal_changed", pinned_kind=pinned.get("kind"),
+                            pinned=pinned.get("text"), requested_kind="goal", requested=goal)
+                        return 3
+                    if describe and (pinned.get("kind") != "describe" or pinned.get("text") != describe):
+                        log("fatal.chat_goal_changed", pinned_kind=pinned.get("kind"),
+                            pinned=pinned.get("text"), requested_kind="describe", requested=describe)
+                        return 3
+                    kind, objective = pinned.get("kind", "goal"), pinned.get("text", "")
+                else:
+                    # First turn — or a conversation started before chat_intent existed, which pins on
+                    # the first turn that carries an objective rather than being refused retroactively.
+                    if not goal and not describe:
+                        log("fatal.chat_no_objective")
+                        return 3
+                    kind, objective = ("goal", goal) if goal else ("describe", describe)
+                intent = {"kind": kind, "text": objective}
+                # The turn's instruction is its MESSAGE; a turn that sends none is restating the
+                # objective, which is what every turn did before the two were separated.
+                turn_text = message or objective
+                scenario_head = GoalPlanner(turn_text) if kind == "goal" else DescribePlanner(turn_text)
+                user_msg = {"role": "user", "content": turn_text}
+                # The authoring head reads state["goal"]/["describe"], so the TURN's text goes there and
+                # the objective stays in chat_intent. That keeps authoring byte-identical to before for a
+                # turn whose message equals its objective — i.e. every turn that exists today.
+                turn_goal = turn_text if kind == "goal" else ""
+                turn_describe = turn_text if kind == "describe" else ""
+
                 has_map = bool(snap and snap.values and snap.values.get("site_map"))
                 # GAP-M9-19: a warm refine reuses the PERSISTED site map without re-checking the target.
                 # SENTINEL_REFINE_REVERIFY=1 forces a re-explore (cold path, with the browser) so a stale
@@ -297,8 +336,13 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 warm = has_map and not reverify
                 if warm:
                     log("run.chat_resume", conversation_id=conversation_id)
-                    final = probe.invoke({"messages": [user_msg], "goal": goal, "describe": describe,
-                                          "run_id": run_id, "artifact_dir": str(out)}, config=cfg)
+                    # Compiled with the head chosen from the PINNED objective, which is why the peek
+                    # above used none: this is the first point at which the right head is known.
+                    warm_app = build_graph(_NoBrowser(), planner, tx_write,
+                                           scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
+                    final = warm_app.invoke({"messages": [user_msg], "goal": turn_goal,
+                                             "describe": turn_describe, "chat_intent": intent,
+                                             "run_id": run_id, "artifact_dir": str(out)}, config=cfg)
                 else:
                     if not target:
                         log("fatal.chat_no_target")
@@ -314,7 +358,8 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                             "run_id": run_id, "run_mode": "chat", "target_url": target,
                             "base_origin": base_origin, "coverage_target": coverage_target,
                             "max_steps": max_steps, "artifact_dir": str(out),
-                            "goal": goal, "describe": describe, "messages": [user_msg],
+                            "goal": turn_goal, "describe": turn_describe, "messages": [user_msg],
+                            "chat_intent": intent,   # ADR-108a: pinned here, on the first turn, for good
                             "site_map": {}, "phase": "explore", "scenario_steps": [],
                             "scenario_unmatched": [], "current_url": target, "page_model": {},
                             "exploration_plan": [{"step_id": 1, "intent": f"navigate to target {target}",

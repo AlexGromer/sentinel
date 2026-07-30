@@ -23,6 +23,18 @@ class RunState(TypedDict, total=False):
     # turns, persisted by the shared checkpointer (thread_id=conversation_id). Empty/absent for one-shot
     # explore/goal/describe runs — so their behavior (and plan_hash) is unchanged.
     messages: Annotated[list, add_messages]
+    # ADR-108a: the conversation's OBJECTIVE, pinned on the first turn and never rewritten —
+    # {"kind": "goal"|"describe", "text": str}.
+    #
+    # It exists because `goal` was doing two jobs at once. control-api sent each turn's text AS the
+    # goal, so "what this conversation is for" and "what the person just typed" were the same field,
+    # and nothing could tell a refinement from a new objective. That made the rule "a conversation has
+    # one goal; for a new goal start a new chat" unstateable, let alone enforceable.
+    #
+    # Lives in the checkpointer (thread_id=conversation_id), which is the conversation's real state —
+    # NOT in the `chats` SQL row, which ADR-050 defines as a browsable projection and whose `last_goal`
+    # column keeps meaning exactly what its name says: the most recent turn.
+    chat_intent: dict
     # M9.2b two-phase authoring (ADR-028): a site-wide element map built during the explore walk, then
     # a one-shot scenario head grounds the goal/describe into replayable steps.
     site_map: dict                # page_path -> [element {semantic_id,role,name,testid,locator,alternatives,page}]

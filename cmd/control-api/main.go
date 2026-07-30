@@ -527,6 +527,10 @@ type runRequest struct {
 	MaxSteps       string          `json:"max_steps"`
 	FromRun        string          `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
 	ConversationID string          `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
+	// ADR-108a: this turn's text. `goal`/`describe` DECLARE the conversation's objective; `message`
+	// carries a follow-up. They were one field, so every turn arrived as a new goal and the rule "a
+	// conversation has one goal — for a new goal, start a new chat" had nothing to attach to.
+	Message string `json:"message"`
 	LLM            json.RawMessage `json:"llm"`             // ADR-063: per-run LLM override (backend/base_url/model/vision); validated+parsed into `llm` below
 
 	// ADR-107: everything below used to be expressible ONLY as a CLI flag or a hand-written RunConfig
@@ -762,6 +766,12 @@ func (s *server) spawnRun(req runRequest) *run {
 		}
 		if req.Describe != "" {
 			args = append(args, "--describe", req.Describe)
+		}
+		// ADR-108a: only meaningful on a chat turn, and passed unconditionally rather than gated on
+		// ConversationID so a client that sends one without the other gets the brain's error naming the
+		// real problem, instead of a silently dropped message.
+		if req.Message != "" {
+			args = append(args, "--message", req.Message)
 		}
 		if req.CoverageTarget != "" {
 			args = append(args, "--coverage-target", req.CoverageTarget)

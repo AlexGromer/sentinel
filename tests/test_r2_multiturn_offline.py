@@ -237,6 +237,168 @@ def test_run_chat_needs_goal_or_describe_exit3():
         os.environ.update(saved)
 
 
+# --- ADR-108a: the objective belongs to the CONVERSATION -----------------------
+def _seed_pinned_thread(db, conv, objective):
+    """Run a real cold turn through _run_chat's own pinning path, so the thread carries chat_intent the
+    way a first turn actually writes it — not a hand-built dict that could agree with a wrong reader."""
+    import brain.__main__ as m
+    import brain.llm as llm
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    budget.reset(plan_limit=10**6, heal_limit=10**6)
+    fb = QueuedFakeBackend([_reply([{"ref": _USER_SID, "verb": "fill", "value": "alice"}])])
+    ex = WalkEx()
+    ex.call("browser.navigate", url=_LOGIN)
+    with SqliteSaver.from_conn_string(db) as saver:
+        app = build_graph(ex, HeuristicPlanner(), lambda r: None,
+                          scenario_head=GoalPlanner(goal=objective, backend=fb)).compile(checkpointer=saver)
+        init = _explore_init(goal=objective, messages=[{"role": "user", "content": objective}])
+        init["chat_intent"] = {"kind": "goal", "text": objective}
+        app.invoke(init, config={"recursion_limit": 200, "configurable": {"thread_id": conv}})
+    budget.reset()
+
+
+def _chat_turn(db, conv, env, run="t2"):
+    """Drive one warm _run_chat turn with `env` overlaid, returning (exit_code, out_dir)."""
+    import brain.__main__ as m
+    import brain.llm as llm
+
+    budget.reset(plan_limit=10**6, heal_limit=10**6)
+    out = pathlib.Path(tempfile.mkdtemp())
+    fb = QueuedFakeBackend([_reply([{"ref": _USER_SID, "verb": "fill", "value": "bob"}])])
+    saved, orig_mb = dict(os.environ), llm.make_backend
+    base = {"GOAL": "", "DESCRIBE": "", "MESSAGE": "", "CHECKPOINT_DSN": "",
+            "SENTINEL_CONVERSATIONS_DB": db, "SENTINEL_CONVERSATION_ID": conv}
+    base.update(env)
+    os.environ.update(base)
+    llm.make_backend = lambda role: fb
+    try:
+        return m._run_chat(run, out, conv, None, 0.85, 40), out
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        llm.make_backend = orig_mb
+        budget.reset()
+
+
+def test_pinned_goal_cannot_be_replaced():
+    """A second turn declaring a DIFFERENT goal is refused — 'one conversation, one goal'.
+
+    Refused BEFORE any browser or model work: _run_chat returns 3 from the peek, so the cost of the
+    refusal is nothing and the reason is in the log rather than in a half-authored scenario.
+    """
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    _seed_pinned_thread(db, "conv-pin", "log in")
+    rc, out = _chat_turn(db, "conv-pin", {"GOAL": "delete the account"})
+    assert rc == 3, f"a changed goal must exit 3, got {rc}"
+    assert not (out / "scenario.json").exists(), "a refused turn must not author anything"
+
+
+def test_pinned_goal_may_be_restated():
+    """Sending the SAME goal again is idempotent, not a violation — a client that always includes the
+    objective (and every client did before `message` existed) must keep working."""
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    _seed_pinned_thread(db, "conv-same", "log in")
+    rc, out = _chat_turn(db, "conv-same", {"GOAL": "log in"})
+    assert rc == 0, f"restating the pinned goal must be accepted, got {rc}"
+    assert (out / "scenario.json").exists(), "an accepted turn should author"
+
+
+def test_switching_kind_is_also_a_change():
+    """goal -> describe is a different objective even when the text is identical: the two are authored
+    by different heads, so accepting it would silently change what the conversation means."""
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    _seed_pinned_thread(db, "conv-kind", "log in")
+    rc, _ = _chat_turn(db, "conv-kind", {"DESCRIBE": "log in"})
+    assert rc == 3, f"switching goal->describe must exit 3, got {rc}"
+
+
+def test_message_carries_the_turn_and_leaves_the_objective_alone():
+    """A follow-up sends MESSAGE only. It authors from the message, and the pinned objective survives —
+    which is what makes a correction distinguishable from a new goal at all."""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    _seed_pinned_thread(db, "conv-msg", "log in")
+    rc, out = _chat_turn(db, "conv-msg", {"MESSAGE": "use bob instead of alice"})
+    assert rc == 0, f"a message-only turn must be accepted, got {rc}"
+    sc = json.loads((out / "scenario.json").read_text())
+    fills = [s for s in sc["steps"] if s["action_type"] == "fill"]
+    assert fills and fills[0]["value"] == "bob", sc      # authored from the MESSAGE, over the persisted map
+
+    # The objective is still the one pinned on turn 1 — asserted by reading the thread, not by trusting
+    # that nothing wrote to it.
+    import brain.__main__ as m
+    with SqliteSaver.from_conn_string(db) as saver:
+        snap = build_graph(_NoBrowserProbe(), HeuristicPlanner(), lambda r: None,
+                           scenario_head=None).compile(checkpointer=saver).get_state(
+            {"configurable": {"thread_id": "conv-msg"}})
+    assert snap.values.get("chat_intent") == {"kind": "goal", "text": "log in"}, snap.values.get("chat_intent")
+
+
+class _NoBrowserProbe:
+    """Raises on any browser call, so a probe that accidentally drives the executor fails loudly."""
+
+    def call(self, name, **kw):
+        raise AssertionError(f"probe must not touch the browser, got {name}")
+
+    def close(self):
+        pass
+
+
+def test_cold_turn_pins_the_objective_into_the_thread():
+    """The COLD path must write chat_intent, and this drives the real _run_chat to prove it.
+
+    Added because a mutation SURVIVED: deleting `chat_intent` from the cold-turn init broke nothing,
+    since every other test seeds a thread it built itself and so agreed with a reader that never had
+    to read anything real. The pin is the foundation the whole rule stands on, and it was the one part
+    with no test on it.
+    """
+    import brain.__main__ as m
+    import brain.llm as llm
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    out = pathlib.Path(tempfile.mkdtemp())
+    budget.reset(plan_limit=10**6, heal_limit=10**6)
+    fb = QueuedFakeBackend([_reply([{"ref": _USER_SID, "verb": "fill", "value": "alice"}])])
+    ex = WalkEx()
+    saved, orig_mb, orig_me = dict(os.environ), llm.make_backend, m.make_executor
+    os.environ.update({"GOAL": "log in", "DESCRIBE": "", "MESSAGE": "", "CHECKPOINT_DSN": "",
+                       "SENTINEL_CONVERSATIONS_DB": db, "SENTINEL_CONVERSATION_ID": "conv-cold",
+                       "PW_EXECUTOR_CMD": "unused-because-make_executor-is-patched"})
+    llm.make_backend = lambda role: fb
+    m.make_executor = lambda cmd: ex          # a cold turn spawns a browser; this is the seam
+    try:
+        rc = m._run_chat("cold1", out, "conv-cold", _LOGIN, 0.85, 40)
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        llm.make_backend, m.make_executor = orig_mb, orig_me
+        budget.reset()
+
+    assert rc == 0, f"a cold chat turn should author and exit 0, got {rc}"
+    with SqliteSaver.from_conn_string(db) as saver:
+        snap = build_graph(_NoBrowserProbe(), HeuristicPlanner(), lambda r: None,
+                           scenario_head=None).compile(checkpointer=saver).get_state(
+            {"configurable": {"thread_id": "conv-cold"}})
+    assert snap.values.get("chat_intent") == {"kind": "goal", "text": "log in"}, \
+        f"the cold turn did not pin the objective: {snap.values.get('chat_intent')!r}"
+
+    # And the pin is load-bearing end to end: a SECOND turn with a different goal is now refused
+    # against a thread this test never hand-seeded.
+    rc2, _ = _chat_turn(db, "conv-cold", {"GOAL": "delete the account"})
+    assert rc2 == 3, f"the pin written by the cold turn must be enforced on the next one, got {rc2}"
+
+
+def test_first_turn_must_declare_an_objective():
+    """A brand-new conversation whose only content is a MESSAGE has nothing to pin, and is refused
+    rather than pinning the follow-up as though it were the goal."""
+    db = os.path.join(tempfile.mkdtemp(), "conversations.db")
+    rc, _ = _chat_turn(db, "conv-empty", {"MESSAGE": "and also check the footer"})
+    assert rc == 3, f"a first turn with only a message must exit 3, got {rc}"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
