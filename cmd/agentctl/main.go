@@ -77,6 +77,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")
+	fmt.Fprintln(os.Stderr, "")
+	apiUsage(os.Stderr) // ADR-107: the store/config half — thin clients over control-api (api.go)
 }
 
 func boolEnv(b bool) string {
@@ -928,8 +930,16 @@ func main() {
 	case "sweep-downloaded":
 		code = cmdSweepDownloaded(repo, os.Args[2:])
 	default:
-		usage()
-		code = 2
+		// ADR-107: the store/config half of the product, projected onto the CLI as thin clients over the
+		// routes control-api already serves (api.go). Matched LAST so a locally-implemented subcommand
+		// always wins over a same-named remote verb — a `run` that quietly needed a server would be a
+		// different tool wearing the same name.
+		if v, rest := findAPIVerb(os.Args[1:]); v != nil {
+			code = cmdAPI(repo, v, rest)
+		} else {
+			usage()
+			code = 2
+		}
 	}
 	os.Exit(code)
 }
