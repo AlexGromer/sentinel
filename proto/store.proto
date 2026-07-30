@@ -25,12 +25,19 @@ message RunRecord {
   string started_at = 10;     // RFC3339
   string finished_at = 11;    // RFC3339 ("" while running)
   bool found = 12;            // false => no such run (GetRun)
+  // ADR-109: the local account that owns this row. EMPTY means unowned, which is what every row
+  // written before identity existed carries — and what a single-team install keeps carrying, because
+  // identity is OPT-IN: with no users created, nothing is scoped and the deployment behaves exactly
+  // as it did. Scoping a store that has no subjects would break the one-team install that open-core
+  // exists to serve.
+  string owner = 13;
 }
 message RunId { string run_id = 1; }
 message ListRunsReq {
   int64 limit = 1;   // 0 => a sane default cap
   int64 offset = 2;
   string state = 3;  // "" => any
+  string owner = 4;  // ADR-109: "" => every row (a machine token); otherwise only this account's
 }
 message RunList { repeated RunRecord runs = 1; int64 total = 2; }
 
@@ -47,14 +54,16 @@ message Scenario {
   string source_run_id = 9;
   string created_at = 10;
   bool found = 11;
+  string owner = 12;   // ADR-109
 }
 message ScenarioId { string scenario_id = 1; }
-message ListScenariosReq { int64 limit = 1; int64 offset = 2; string target = 3; }
+message ListScenariosReq { int64 limit = 1; int64 offset = 2; string target = 3; string owner = 4; }
 message ScenarioList { repeated Scenario scenarios = 1; int64 total = 2; }
 message PromoteReq {
   string scenario_id = 1;
   string name = 2;
   string schedule = 3; // reserved: stored, NOT executed (no scheduler in M13)
+  string owner = 4;    // ADR-109: the promoted test inherits the promoter, not the scenario
 }
 message TestRecord {
   string test_id = 1;
@@ -67,9 +76,10 @@ message TestRecord {
   string last_run_id = 8;
   string created_at = 9;
   bool found = 10;
+  string owner = 11;   // ADR-109
 }
 message TestId { string test_id = 1; }
-message ListTestsReq { int64 limit = 1; int64 offset = 2; }
+message ListTestsReq { int64 limit = 1; int64 offset = 2; string owner = 3; }
 message TestList { repeated TestRecord tests = 1; int64 total = 2; }
 
 // --- chats (BROWSABLE PROJECTION of state/conversations.db, NOT a duplicate) -
@@ -81,9 +91,10 @@ message ChatProjection {
   string last_goal = 5;
   string summary = 6;     // rolling summary (GAP-M9-20)
   bool found = 7;
+  string owner = 8;       // ADR-109
 }
 message ConversationId { string conversation_id = 1; }
-message ListChatsReq { int64 limit = 1; int64 offset = 2; }
+message ListChatsReq { int64 limit = 1; int64 offset = 2; string owner = 3; }
 message ChatList { repeated ChatProjection chats = 1; int64 total = 2; }
 
 // --- results (index heal-report.json / report.json) --------------------------
@@ -101,9 +112,26 @@ message ResultRecord {
   int64 duration_ms = 11;
   string created_at = 12;
   bool found = 13;
+  string owner = 14;          // ADR-109
 }
-message ListResultsReq { int64 limit = 1; int64 offset = 2; }
+message ListResultsReq { int64 limit = 1; int64 offset = 2; string owner = 3; }
 message ResultList { repeated ResultRecord results = 1; int64 total = 2; }
+
+// --- users (ADR-109: LOCAL accounts; OIDC/SSO/RBAC stay commercial per ADR-056) ---
+// The gateway STORES a credential and never judges one: verification lives in control-api, which is
+// already the authentication boundary and already holds the KDF (internal/identity). Putting the KDF
+// here too would give one rule two implementations, which is the drift this milestone exists to remove.
+message User {
+  string user_id = 1;
+  string name = 2;       // unique, the login handle
+  string pw_hash = 3;    // internal/identity format; opaque to the gateway
+  bool is_admin = 4;     // may create and remove other accounts
+  string created_at = 5;
+  bool found = 6;        // false => no such user (GetUser)
+}
+// Either field identifies: login has a name, everything else has an id.
+message UserRef { string user_id = 1; string name = 2; }
+message UserList { repeated User users = 1; int64 total = 2; }
 
 // --- metrics (time-series ingested from results; trends for M15) -------------
 message MetricPoint {
@@ -213,4 +241,10 @@ service StoreService {
   rpc DeleteConfig(ConfigKey) returns (Empty);   // idempotent, like DeleteScenario/DeleteTest/DeleteChat
   // purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
   rpc PurgeStore(PurgeReq) returns (PurgeReport);
+
+  // ADR-109 local accounts.
+  rpc UpsertUser(User) returns (Empty);
+  rpc GetUser(UserRef) returns (User);
+  rpc ListUsers(Empty) returns (UserList);
+  rpc DeleteUser(UserRef) returns (Empty);
 }

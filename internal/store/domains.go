@@ -50,24 +50,25 @@ func (s *Server) UpsertRun(_ context.Context, r *pb.RunRecord) (*pb.Empty, error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO runs(run_id,conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO runs(run_id,conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at,owner)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(run_id) DO UPDATE SET conversation_id=excluded.conversation_id,mode=excluded.mode,
 		   target=excluded.target,planner=excluded.planner,state=excluded.state,exit_code=excluded.exit_code,
 		   artifact_dir=excluded.artifact_dir,error=excluded.error,started_at=excluded.started_at,
-		   finished_at=excluded.finished_at`,
+		   finished_at=excluded.finished_at,owner=excluded.owner`,
 		r.RunId, r.ConversationId, r.Mode, r.Target, r.Planner, r.State, r.ExitCode, r.ArtifactDir,
-		r.Error, nowRFC3339(r.StartedAt), r.FinishedAt)
+		r.Error, nowRFC3339(r.StartedAt), r.FinishedAt, r.Owner)
 	return &pb.Empty{}, err
 }
 
 func (s *Server) GetRun(_ context.Context, id *pb.RunId) (*pb.RunRecord, error) {
 	r := &pb.RunRecord{RunId: id.RunId}
 	err := s.db.QueryRow(
-		`SELECT conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at
+		`SELECT conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at,
+		        COALESCE(owner,'')
 		 FROM runs WHERE run_id=?`, id.RunId).Scan(
 		&r.ConversationId, &r.Mode, &r.Target, &r.Planner, &r.State, &r.ExitCode, &r.ArtifactDir,
-		&r.Error, &r.StartedAt, &r.FinishedAt)
+		&r.Error, &r.StartedAt, &r.FinishedAt, &r.Owner)
 	if err == sql.ErrNoRows {
 		return &pb.RunRecord{Found: false}, nil
 	}
@@ -79,16 +80,17 @@ func (s *Server) GetRun(_ context.Context, id *pb.RunId) (*pb.RunRecord, error) 
 }
 
 func (s *Server) ListRuns(_ context.Context, q *pb.ListRunsReq) (*pb.RunList, error) {
-	where, args := "", []any{}
+	where, args := ownerWhere(q.Owner)
 	if q.State != "" {
-		where, args = " WHERE state=?", append(args, q.State)
+		where, args = and(where, "state=?"), append(args, q.State)
 	}
 	out := &pb.RunList{}
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM runs"+where, args...).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT run_id,conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at
+		`SELECT run_id,conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,started_at,finished_at,
+		        COALESCE(owner,'')
 		 FROM runs`+where+` ORDER BY started_at DESC LIMIT ? OFFSET ?`,
 		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
@@ -98,12 +100,34 @@ func (s *Server) ListRuns(_ context.Context, q *pb.ListRunsReq) (*pb.RunList, er
 	for rows.Next() {
 		r := &pb.RunRecord{Found: true}
 		if err := rows.Scan(&r.RunId, &r.ConversationId, &r.Mode, &r.Target, &r.Planner, &r.State,
-			&r.ExitCode, &r.ArtifactDir, &r.Error, &r.StartedAt, &r.FinishedAt); err != nil {
+			&r.ExitCode, &r.ArtifactDir, &r.Error, &r.StartedAt, &r.FinishedAt, &r.Owner); err != nil {
 			return nil, err
 		}
 		out.Runs = append(out.Runs, r)
 	}
 	return out, rows.Err()
+}
+
+// ownerWhere starts a WHERE clause scoped to one account, or an unscoped one when owner is "".
+//
+// ADR-109 makes identity OPT-IN: an empty owner means "every row", which is what a machine token gets
+// and what a deployment with no accounts always gets. A store with no subjects must behave exactly as
+// it did before subjects existed, or adding identity would break the single-team install open-core is
+// for. Rows written before the column existed carry NULL, which COALESCE reads as "" — so an unowned
+// row belongs to nobody rather than accidentally matching the first account created.
+func ownerWhere(owner string) (string, []any) {
+	if owner == "" {
+		return "", []any{}
+	}
+	return " WHERE COALESCE(owner,'')=?", []any{owner}
+}
+
+// and appends a condition to a clause that may or may not have started one yet.
+func and(where, cond string) string {
+	if where == "" {
+		return " WHERE " + cond
+	}
+	return where + " AND " + cond
 }
 
 // --- scenarios / tests (index + promote scenario -> test) -------------------
@@ -112,23 +136,23 @@ func (s *Server) SaveScenario(_ context.Context, sc *pb.Scenario) (*pb.Empty, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO scenarios(scenario_id,name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO scenarios(scenario_id,name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at,owner)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(scenario_id) DO UPDATE SET name=excluded.name,target=excluded.target,run_mode=excluded.run_mode,
 		   plan_hash=excluded.plan_hash,steps_json=excluded.steps_json,unmatched=excluded.unmatched,
-		   tags=excluded.tags,source_run_id=excluded.source_run_id`,
+		   tags=excluded.tags,source_run_id=excluded.source_run_id,owner=excluded.owner`,
 		sc.ScenarioId, sc.Name, sc.Target, sc.RunMode, sc.PlanHash, sc.StepsJson, sc.Unmatched, sc.Tags,
-		sc.SourceRunId, nowRFC3339(sc.CreatedAt))
+		sc.SourceRunId, nowRFC3339(sc.CreatedAt), sc.Owner)
 	return &pb.Empty{}, err
 }
 
 func (s *Server) GetScenario(_ context.Context, id *pb.ScenarioId) (*pb.Scenario, error) {
 	sc := &pb.Scenario{ScenarioId: id.ScenarioId}
 	err := s.db.QueryRow(
-		`SELECT name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at
+		`SELECT name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at,COALESCE(owner,'')
 		 FROM scenarios WHERE scenario_id=?`, id.ScenarioId).Scan(
 		&sc.Name, &sc.Target, &sc.RunMode, &sc.PlanHash, &sc.StepsJson, &sc.Unmatched, &sc.Tags,
-		&sc.SourceRunId, &sc.CreatedAt)
+		&sc.SourceRunId, &sc.CreatedAt, &sc.Owner)
 	if err == sql.ErrNoRows {
 		return &pb.Scenario{Found: false}, nil
 	}
@@ -149,7 +173,8 @@ func (s *Server) ListScenarios(_ context.Context, q *pb.ListScenariosReq) (*pb.S
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT scenario_id,name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at
+		`SELECT scenario_id,name,target,run_mode,plan_hash,steps_json,unmatched,tags,source_run_id,created_at,
+		        COALESCE(owner,'')
 		 FROM scenarios`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`,
 		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
@@ -159,7 +184,7 @@ func (s *Server) ListScenarios(_ context.Context, q *pb.ListScenariosReq) (*pb.S
 	for rows.Next() {
 		sc := &pb.Scenario{Found: true}
 		if err := rows.Scan(&sc.ScenarioId, &sc.Name, &sc.Target, &sc.RunMode, &sc.PlanHash, &sc.StepsJson,
-			&sc.Unmatched, &sc.Tags, &sc.SourceRunId, &sc.CreatedAt); err != nil {
+			&sc.Unmatched, &sc.Tags, &sc.SourceRunId, &sc.CreatedAt, &sc.Owner); err != nil {
 			return nil, err
 		}
 		out.Scenarios = append(out.Scenarios, sc)
@@ -194,11 +219,12 @@ func (s *Server) PromoteTest(_ context.Context, r *pb.PromoteReq) (*pb.TestRecor
 		name = r.ScenarioId
 	}
 	t := &pb.TestRecord{TestId: newStoreID(), ScenarioId: r.ScenarioId, PlanHash: planHash, Name: name,
-		Schedule: r.Schedule, Enabled: true, CreatedAt: time.Now().UTC().Format(time.RFC3339), Found: true}
+		Schedule: r.Schedule, Enabled: true, CreatedAt: time.Now().UTC().Format(time.RFC3339), Found: true,
+		Owner: r.Owner}
 	if _, err = s.db.Exec(
-		`INSERT INTO tests(test_id,scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at)
-		 VALUES(?,?,?,?,?,1,'','',?)`,
-		t.TestId, t.ScenarioId, t.PlanHash, t.Name, t.Schedule, t.CreatedAt); err != nil {
+		`INSERT INTO tests(test_id,scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at,owner)
+		 VALUES(?,?,?,?,?,1,'','',?,?)`,
+		t.TestId, t.ScenarioId, t.PlanHash, t.Name, t.Schedule, t.CreatedAt, t.Owner); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -208,9 +234,10 @@ func (s *Server) GetTest(_ context.Context, id *pb.TestId) (*pb.TestRecord, erro
 	t := &pb.TestRecord{TestId: id.TestId}
 	var enabled int
 	err := s.db.QueryRow(
-		`SELECT scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at
+		`SELECT scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at,COALESCE(owner,'')
 		 FROM tests WHERE test_id=?`, id.TestId).Scan(
-		&t.ScenarioId, &t.PlanHash, &t.Name, &t.Schedule, &enabled, &t.LastStatus, &t.LastRunId, &t.CreatedAt)
+		&t.ScenarioId, &t.PlanHash, &t.Name, &t.Schedule, &enabled, &t.LastStatus, &t.LastRunId, &t.CreatedAt,
+		&t.Owner)
 	if err == sql.ErrNoRows {
 		return &pb.TestRecord{Found: false}, nil
 	}
@@ -224,12 +251,15 @@ func (s *Server) GetTest(_ context.Context, id *pb.TestId) (*pb.TestRecord, erro
 
 func (s *Server) ListTests(_ context.Context, q *pb.ListTestsReq) (*pb.TestList, error) {
 	out := &pb.TestList{}
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM tests").Scan(&out.Total); err != nil {
+	where, args := ownerWhere(q.Owner)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM tests"+where, args...).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT test_id,scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at
-		 FROM tests ORDER BY created_at DESC LIMIT ? OFFSET ?`, listCap(q.Limit), q.Offset)
+		`SELECT test_id,scenario_id,plan_hash,name,schedule,enabled,last_status,last_run_id,created_at,
+		        COALESCE(owner,'')
+		 FROM tests`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +268,7 @@ func (s *Server) ListTests(_ context.Context, q *pb.ListTestsReq) (*pb.TestList,
 		t := &pb.TestRecord{Found: true}
 		var enabled int
 		if err := rows.Scan(&t.TestId, &t.ScenarioId, &t.PlanHash, &t.Name, &t.Schedule, &enabled,
-			&t.LastStatus, &t.LastRunId, &t.CreatedAt); err != nil {
+			&t.LastStatus, &t.LastRunId, &t.CreatedAt, &t.Owner); err != nil {
 			return nil, err
 		}
 		t.Enabled = enabled != 0
@@ -261,20 +291,20 @@ func (s *Server) UpsertChat(_ context.Context, c *pb.ChatProjection) (*pb.Empty,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO chats(conversation_id,last_target,turn_count,last_active,last_goal,summary,updated_at)
-		 VALUES(?,?,?,?,?,?,?)
+		`INSERT INTO chats(conversation_id,last_target,turn_count,last_active,last_goal,summary,updated_at,owner)
+		 VALUES(?,?,?,?,?,?,?,?)
 		 ON CONFLICT(conversation_id) DO UPDATE SET last_target=excluded.last_target,turn_count=excluded.turn_count,
-		   last_active=excluded.last_active,last_goal=excluded.last_goal,summary=excluded.summary,updated_at=excluded.updated_at`,
+		   last_active=excluded.last_active,last_goal=excluded.last_goal,summary=excluded.summary,updated_at=excluded.updated_at,owner=excluded.owner`,
 		c.ConversationId, c.LastTarget, c.TurnCount, nowRFC3339(c.LastActive), c.LastGoal, c.Summary,
-		time.Now().UTC().Format(time.RFC3339))
+		time.Now().UTC().Format(time.RFC3339), c.Owner)
 	return &pb.Empty{}, err
 }
 
 func (s *Server) GetChat(_ context.Context, id *pb.ConversationId) (*pb.ChatProjection, error) {
 	c := &pb.ChatProjection{ConversationId: id.ConversationId}
 	err := s.db.QueryRow(
-		`SELECT last_target,turn_count,last_active,last_goal,summary FROM chats WHERE conversation_id=?`,
-		id.ConversationId).Scan(&c.LastTarget, &c.TurnCount, &c.LastActive, &c.LastGoal, &c.Summary)
+		`SELECT last_target,turn_count,last_active,last_goal,summary,COALESCE(owner,'') FROM chats WHERE conversation_id=?`,
+		id.ConversationId).Scan(&c.LastTarget, &c.TurnCount, &c.LastActive, &c.LastGoal, &c.Summary, &c.Owner)
 	if err == sql.ErrNoRows {
 		return &pb.ChatProjection{Found: false}, nil
 	}
@@ -287,19 +317,22 @@ func (s *Server) GetChat(_ context.Context, id *pb.ConversationId) (*pb.ChatProj
 
 func (s *Server) ListChats(_ context.Context, q *pb.ListChatsReq) (*pb.ChatList, error) {
 	out := &pb.ChatList{}
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM chats").Scan(&out.Total); err != nil {
+	where, args := ownerWhere(q.Owner)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM chats"+where, args...).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT conversation_id,last_target,turn_count,last_active,last_goal,summary
-		 FROM chats ORDER BY last_active DESC LIMIT ? OFFSET ?`, listCap(q.Limit), q.Offset)
+		`SELECT conversation_id,last_target,turn_count,last_active,last_goal,summary,COALESCE(owner,'')
+		 FROM chats`+where+` ORDER BY last_active DESC LIMIT ? OFFSET ?`,
+		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		c := &pb.ChatProjection{Found: true}
-		if err := rows.Scan(&c.ConversationId, &c.LastTarget, &c.TurnCount, &c.LastActive, &c.LastGoal, &c.Summary); err != nil {
+		if err := rows.Scan(&c.ConversationId, &c.LastTarget, &c.TurnCount, &c.LastActive, &c.LastGoal,
+			&c.Summary, &c.Owner); err != nil {
 			return nil, err
 		}
 		out.Chats = append(out.Chats, c)
@@ -323,24 +356,25 @@ func (s *Server) SaveResult(_ context.Context, r *pb.ResultRecord) (*pb.Empty, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO results(run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO results(run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,owner)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(run_id) DO UPDATE SET plan_id=excluded.plan_id,mode=excluded.mode,verdict=excluded.verdict,
 		   exit_code=excluded.exit_code,healed=excluded.healed,failed=excluded.failed,
 		   regressions_json=excluded.regressions_json,steps_json=excluded.steps_json,coverage=excluded.coverage,
-		   duration_ms=excluded.duration_ms`,
+		   duration_ms=excluded.duration_ms,owner=excluded.owner`,
 		r.RunId, r.PlanId, r.Mode, r.Verdict, r.ExitCode, r.Healed, r.Failed, r.RegressionsJson,
-		r.StepsJson, r.Coverage, r.DurationMs, nowRFC3339(r.CreatedAt))
+		r.StepsJson, r.Coverage, r.DurationMs, nowRFC3339(r.CreatedAt), r.Owner)
 	return &pb.Empty{}, err
 }
 
 func (s *Server) GetResult(_ context.Context, id *pb.RunId) (*pb.ResultRecord, error) {
 	r := &pb.ResultRecord{RunId: id.RunId}
 	err := s.db.QueryRow(
-		`SELECT plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at
+		`SELECT plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,
+		        COALESCE(owner,'')
 		 FROM results WHERE run_id=?`, id.RunId).Scan(
 		&r.PlanId, &r.Mode, &r.Verdict, &r.ExitCode, &r.Healed, &r.Failed, &r.RegressionsJson,
-		&r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt)
+		&r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner)
 	if err == sql.ErrNoRows {
 		return &pb.ResultRecord{Found: false}, nil
 	}
@@ -353,12 +387,15 @@ func (s *Server) GetResult(_ context.Context, id *pb.RunId) (*pb.ResultRecord, e
 
 func (s *Server) ListResults(_ context.Context, q *pb.ListResultsReq) (*pb.ResultList, error) {
 	out := &pb.ResultList{}
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM results").Scan(&out.Total); err != nil {
+	where, args := ownerWhere(q.Owner)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM results"+where, args...).Scan(&out.Total); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.Query(
-		`SELECT run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at
-		 FROM results ORDER BY created_at DESC LIMIT ? OFFSET ?`, listCap(q.Limit), q.Offset)
+		`SELECT run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,
+		        COALESCE(owner,'')
+		 FROM results`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +403,7 @@ func (s *Server) ListResults(_ context.Context, q *pb.ListResultsReq) (*pb.Resul
 	for rows.Next() {
 		r := &pb.ResultRecord{Found: true}
 		if err := rows.Scan(&r.RunId, &r.PlanId, &r.Mode, &r.Verdict, &r.ExitCode, &r.Healed, &r.Failed,
-			&r.RegressionsJson, &r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt); err != nil {
+			&r.RegressionsJson, &r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner); err != nil {
 			return nil, err
 		}
 		out.Results = append(out.Results, r)

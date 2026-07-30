@@ -51,6 +51,10 @@ const (
 	StoreService_ListConfig_FullMethodName     = "/sentinel.persistence.v1.StoreService/ListConfig"
 	StoreService_DeleteConfig_FullMethodName   = "/sentinel.persistence.v1.StoreService/DeleteConfig"
 	StoreService_PurgeStore_FullMethodName     = "/sentinel.persistence.v1.StoreService/PurgeStore"
+	StoreService_UpsertUser_FullMethodName     = "/sentinel.persistence.v1.StoreService/UpsertUser"
+	StoreService_GetUser_FullMethodName        = "/sentinel.persistence.v1.StoreService/GetUser"
+	StoreService_ListUsers_FullMethodName      = "/sentinel.persistence.v1.StoreService/ListUsers"
+	StoreService_DeleteUser_FullMethodName     = "/sentinel.persistence.v1.StoreService/DeleteUser"
 )
 
 // StoreServiceClient is the client API for StoreService service.
@@ -90,6 +94,11 @@ type StoreServiceClient interface {
 	DeleteConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*Empty, error)
 	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
 	PurgeStore(ctx context.Context, in *PurgeReq, opts ...grpc.CallOption) (*PurgeReport, error)
+	// ADR-109 local accounts.
+	UpsertUser(ctx context.Context, in *User, opts ...grpc.CallOption) (*Empty, error)
+	GetUser(ctx context.Context, in *UserRef, opts ...grpc.CallOption) (*User, error)
+	ListUsers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*UserList, error)
+	DeleteUser(ctx context.Context, in *UserRef, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type storeServiceClient struct {
@@ -360,6 +369,46 @@ func (c *storeServiceClient) PurgeStore(ctx context.Context, in *PurgeReq, opts 
 	return out, nil
 }
 
+func (c *storeServiceClient) UpsertUser(ctx context.Context, in *User, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_UpsertUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) GetUser(ctx context.Context, in *UserRef, opts ...grpc.CallOption) (*User, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(User)
+	err := c.cc.Invoke(ctx, StoreService_GetUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) ListUsers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*UserList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UserList)
+	err := c.cc.Invoke(ctx, StoreService_ListUsers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storeServiceClient) DeleteUser(ctx context.Context, in *UserRef, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, StoreService_DeleteUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StoreServiceServer is the server API for StoreService service.
 // All implementations must embed UnimplementedStoreServiceServer
 // for forward compatibility.
@@ -397,6 +446,11 @@ type StoreServiceServer interface {
 	DeleteConfig(context.Context, *ConfigKey) (*Empty, error)
 	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
 	PurgeStore(context.Context, *PurgeReq) (*PurgeReport, error)
+	// ADR-109 local accounts.
+	UpsertUser(context.Context, *User) (*Empty, error)
+	GetUser(context.Context, *UserRef) (*User, error)
+	ListUsers(context.Context, *Empty) (*UserList, error)
+	DeleteUser(context.Context, *UserRef) (*Empty, error)
 	mustEmbedUnimplementedStoreServiceServer()
 }
 
@@ -484,6 +538,18 @@ func (UnimplementedStoreServiceServer) DeleteConfig(context.Context, *ConfigKey)
 }
 func (UnimplementedStoreServiceServer) PurgeStore(context.Context, *PurgeReq) (*PurgeReport, error) {
 	return nil, status.Error(codes.Unimplemented, "method PurgeStore not implemented")
+}
+func (UnimplementedStoreServiceServer) UpsertUser(context.Context, *User) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpsertUser not implemented")
+}
+func (UnimplementedStoreServiceServer) GetUser(context.Context, *UserRef) (*User, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUser not implemented")
+}
+func (UnimplementedStoreServiceServer) ListUsers(context.Context, *Empty) (*UserList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUsers not implemented")
+}
+func (UnimplementedStoreServiceServer) DeleteUser(context.Context, *UserRef) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteUser not implemented")
 }
 func (UnimplementedStoreServiceServer) mustEmbedUnimplementedStoreServiceServer() {}
 func (UnimplementedStoreServiceServer) testEmbeddedByValue()                      {}
@@ -974,6 +1040,78 @@ func _StoreService_PurgeStore_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StoreService_UpsertUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(User)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).UpsertUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_UpsertUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).UpsertUser(ctx, req.(*User))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_GetUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UserRef)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).GetUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_GetUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).GetUser(ctx, req.(*UserRef))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_ListUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).ListUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_ListUsers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).ListUsers(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StoreService_DeleteUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UserRef)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StoreServiceServer).DeleteUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StoreService_DeleteUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StoreServiceServer).DeleteUser(ctx, req.(*UserRef))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StoreService_ServiceDesc is the grpc.ServiceDesc for StoreService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1084,6 +1222,22 @@ var StoreService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PurgeStore",
 			Handler:    _StoreService_PurgeStore_Handler,
+		},
+		{
+			MethodName: "UpsertUser",
+			Handler:    _StoreService_UpsertUser_Handler,
+		},
+		{
+			MethodName: "GetUser",
+			Handler:    _StoreService_GetUser_Handler,
+		},
+		{
+			MethodName: "ListUsers",
+			Handler:    _StoreService_ListUsers_Handler,
+		},
+		{
+			MethodName: "DeleteUser",
+			Handler:    _StoreService_DeleteUser_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -3,8 +3,8 @@
 import grpc
 import warnings
 
-from . import persistence_pb2 as persistence__pb2
-from . import store_pb2 as store__pb2
+import persistence_pb2 as persistence__pb2
+import store_pb2 as store__pb2
 
 GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
@@ -164,6 +164,26 @@ class StoreServiceStub:
                 '/sentinel.persistence.v1.StoreService/PurgeStore',
                 request_serializer=store__pb2.PurgeReq.SerializeToString,
                 response_deserializer=store__pb2.PurgeReport.FromString,
+                _registered_method=True)
+        self.UpsertUser = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/UpsertUser',
+                request_serializer=store__pb2.User.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
+                _registered_method=True)
+        self.GetUser = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/GetUser',
+                request_serializer=store__pb2.UserRef.SerializeToString,
+                response_deserializer=store__pb2.User.FromString,
+                _registered_method=True)
+        self.ListUsers = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/ListUsers',
+                request_serializer=persistence__pb2.Empty.SerializeToString,
+                response_deserializer=store__pb2.UserList.FromString,
+                _registered_method=True)
+        self.DeleteUser = channel.unary_unary(
+                '/sentinel.persistence.v1.StoreService/DeleteUser',
+                request_serializer=store__pb2.UserRef.SerializeToString,
+                response_deserializer=persistence__pb2.Empty.FromString,
                 _registered_method=True)
 
 
@@ -338,6 +358,31 @@ class StoreServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UpsertUser(self, request, context):
+        """ADR-109 local accounts.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetUser(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListUsers(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteUser(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_StoreServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -470,6 +515,26 @@ def add_StoreServiceServicer_to_server(servicer, server):
                     servicer.PurgeStore,
                     request_deserializer=store__pb2.PurgeReq.FromString,
                     response_serializer=store__pb2.PurgeReport.SerializeToString,
+            ),
+            'UpsertUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpsertUser,
+                    request_deserializer=store__pb2.User.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
+            ),
+            'GetUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetUser,
+                    request_deserializer=store__pb2.UserRef.FromString,
+                    response_serializer=store__pb2.User.SerializeToString,
+            ),
+            'ListUsers': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListUsers,
+                    request_deserializer=persistence__pb2.Empty.FromString,
+                    response_serializer=store__pb2.UserList.SerializeToString,
+            ),
+            'DeleteUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteUser,
+                    request_deserializer=store__pb2.UserRef.FromString,
+                    response_serializer=persistence__pb2.Empty.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1174,6 +1239,114 @@ class StoreService:
             '/sentinel.persistence.v1.StoreService/PurgeStore',
             store__pb2.PurgeReq.SerializeToString,
             store__pb2.PurgeReport.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpsertUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/UpsertUser',
+            store__pb2.User.SerializeToString,
+            persistence__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/GetUser',
+            store__pb2.UserRef.SerializeToString,
+            store__pb2.User.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListUsers(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/ListUsers',
+            persistence__pb2.Empty.SerializeToString,
+            store__pb2.UserList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.persistence.v1.StoreService/DeleteUser',
+            store__pb2.UserRef.SerializeToString,
+            persistence__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,
