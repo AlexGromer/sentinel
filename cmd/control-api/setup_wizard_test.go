@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,57 +84,102 @@ func sub(t *testing.T, m map[string]any, key, what string) map[string]any {
 	return v
 }
 
+// prose names a key whose value is explanatory text for a human reading the payload, not a value the
+// wizard renders from. The snapshot deliberately omits these; copying them in would grow the embedded
+// literal to restate what the live handler already says, and none of it reaches a control.
+var prose = map[string]bool{"note": true}
+
+// schemaDiff walks both trees and returns the first divergence as a path, or "" when they agree.
+//
+// It WALKS rather than checking a list of blocks, and that distinction is the whole gate. The previous
+// version compared the top-level key set and then descended into exactly `modes`, `planner`, `backends`,
+// `roles`, `fields` and `llm`. `settings` — sixteen operator-facing knobs — was in the key set and so
+// looked covered, while its contents were never compared at all. Two retention knobs drifted out of the
+// snapshot underneath that, and air-gapped operators lost the ability to bound run retention with the
+// gate green. A gate that enumerates what to check agrees with any implementation that shares its
+// blind spot; one that walks cannot, and a block added tomorrow is covered without anyone remembering.
+func schemaDiff(live, snap any, path string) string {
+	at := func() string {
+		if path == "" {
+			return "(root)"
+		}
+		return path
+	}
+	lm, lok := live.(map[string]any)
+	sm, sok := snap.(map[string]any)
+	if lok != sok {
+		return fmt.Sprintf("%s: shape differs — handler %T, wizard %T", at(), live, snap)
+	}
+	if lok {
+		for _, k := range sortedKeys(lm) {
+			if prose[k] {
+				continue
+			}
+			sv, ok := sm[k]
+			if !ok {
+				return fmt.Sprintf("%s.%s: present in the handler, MISSING from the wizard snapshot "+
+					"(handler value: %s)", at(), k, compact(lm[k]))
+			}
+			if d := schemaDiff(lm[k], sv, path+"."+k); d != "" {
+				return d
+			}
+		}
+		for _, k := range sortedKeys(sm) {
+			if prose[k] {
+				continue
+			}
+			if _, ok := lm[k]; !ok {
+				return fmt.Sprintf("%s.%s: in the wizard snapshot but the handler no longer serves it", at(), k)
+			}
+		}
+		return ""
+	}
+	if !reflect.DeepEqual(live, snap) {
+		return fmt.Sprintf("%s: handler=%s wizard=%s", at(), compact(live), compact(snap))
+	}
+	return ""
+}
+
+func compact(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	if len(b) > 160 {
+		return string(b[:160]) + "…"
+	}
+	return string(b)
+}
+
 // TestSetupWizardSchemaSnapshotMatchesHandler: the wizard's offline fallback schema still describes the
-// surface the live handler serves — same top-level keys, same enums, same fields (incl. default/required)
-// and same llm descriptor env names. The wizard renders from these, so drift silently misconfigures users.
+// whole surface the live handler serves. The wizard renders from it with no control-API reachable, so
+// drift silently misconfigures exactly the operators who cannot check against a server.
 func TestSetupWizardSchemaSnapshotMatchesHandler(t *testing.T) {
 	snap := extractSnapshot(t, readWizard(t), "SCHEMA", "FALLBACK_SCHEMA")
 	live := liveConfigSchema(t)
 
-	if !reflect.DeepEqual(sortedKeys(snap), sortedKeys(live)) {
-		t.Fatalf("top-level keys drifted:\n  wizard: %v\n  handler: %v", sortedKeys(snap), sortedKeys(live))
-	}
-	for _, k := range []string{"modes", "planner", "backends", "roles"} {
-		if !reflect.DeepEqual(snap[k], live[k]) {
-			t.Fatalf("%s drifted:\n  wizard: %v\n  handler: %v", k, snap[k], live[k])
-		}
+	if d := schemaDiff(live, snap, ""); d != "" {
+		t.Fatalf("wizard schema snapshot drifted from GET /v1/config-schema:\n  %s", d)
 	}
 
-	sf, lf := sub(t, snap, "fields", "wizard"), sub(t, live, "fields", "handler")
-	if !reflect.DeepEqual(sortedKeys(sf), sortedKeys(lf)) {
-		t.Fatalf("fields drifted:\n  wizard: %v\n  handler: %v", sortedKeys(sf), sortedKeys(lf))
+	// The walk proves the two trees AGREE. These two claims are different in kind and survive it.
+	sl := sub(t, snap, "llm", "wizard")
+
+	// Asymmetric, and a security claim rather than a drift one: the wizard must be STRICTER than the
+	// handler about a secret. Equality alone would be satisfied by both sides carrying a key.
+	ak := sub(t, sl, "api_key", "wizard llm")
+	if ak["secret"] != true {
+		t.Fatalf("llm.api_key.secret must stay true in the wizard snapshot, got %v", ak["secret"])
 	}
-	for _, k := range sortedKeys(lf) {
-		sd, ld := sub(t, sf, k, "wizard fields"), sub(t, lf, k, "handler fields")
-		for _, attr := range []string{"type", "default", "required"} {
-			if !reflect.DeepEqual(sd[attr], ld[attr]) {
-				t.Fatalf("fields.%s.%s drifted: wizard=%v handler=%v", k, attr, sd[attr], ld[attr])
-			}
-		}
+	if _, leaked := ak["default"]; leaked {
+		t.Fatalf("llm.api_key must never carry a default/value in the wizard snapshot")
 	}
 
-	sl, ll := sub(t, snap, "llm", "wizard"), sub(t, live, "llm", "handler")
-	if !reflect.DeepEqual(sortedKeys(sl), sortedKeys(ll)) {
-		t.Fatalf("llm descriptors drifted:\n  wizard: %v\n  handler: %v", sortedKeys(sl), sortedKeys(ll))
-	}
-	for _, k := range sortedKeys(ll) {
-		sd, ld := sub(t, sl, k, "wizard llm"), sub(t, ll, k, "handler llm")
-		if sd["env"] != ld["env"] {
-			t.Fatalf("llm.%s.env drifted: wizard=%v handler=%v", k, sd["env"], ld["env"])
-		}
-		// the wizard must not carry a value for a secret descriptor, and must keep the secret flag
-		if k == "api_key" {
-			if sd["secret"] != true {
-				t.Fatalf("llm.api_key.secret must stay true in the wizard snapshot, got %v", sd["secret"])
-			}
-			if _, leaked := sd["default"]; leaked {
-				t.Fatalf("llm.api_key must never carry a default/value in the wizard snapshot")
-			}
-		}
-	}
-	if !reflect.DeepEqual(sl["backend"].(map[string]any)["enum"], live["backends"]) {
+	// Cross-block identity: two places in one document name the same set, and the walk compares each
+	// against its own counterpart without ever asking whether they still agree with each other.
+	if !reflect.DeepEqual(sub(t, sl, "backend", "wizard llm")["enum"], live["backends"]) {
 		t.Fatalf("wizard llm.backend.enum != handler backends: %v vs %v",
-			sl["backend"].(map[string]any)["enum"], live["backends"])
+			sub(t, sl, "backend", "wizard llm")["enum"], live["backends"])
 	}
 }
 

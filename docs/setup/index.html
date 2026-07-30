@@ -505,6 +505,30 @@ var FALLBACK_SCHEMA = {
       "step": 1,
       "type": "int"
     },
+    "run_keep": {
+      "default": 0,
+      "env": "SENTINEL_RUN_KEEP",
+      "group": "retention",
+      "hint": {
+        "en": "How many recent runs keep their whole directory. 0 — never delete. The newest is never removed regardless.",
+        "ru": "Каталоги скольких последних прогонов сохранять целиком. 0 — не удалять никогда. Самый свежий не удаляется в любом случае."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
+    "run_ttl_hours": {
+      "default": 0,
+      "env": "SENTINEL_RUN_TTL_HOURS",
+      "group": "retention",
+      "hint": {
+        "en": "After how many hours a run's whole directory is deleted. 0 — never delete by age.",
+        "ru": "Через сколько часов удалять каталог прогона целиком. 0 — не удалять по возрасту."
+      },
+      "min": 0,
+      "step": 1,
+      "type": "int"
+    },
     "takeover_timeout": {
       "default": 1800,
       "env": "SENTINEL_TAKEOVER_TIMEOUT",
