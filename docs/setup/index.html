@@ -383,20 +383,152 @@ details a{color:var(--acc2)}
    ===================================================================== */
 /* SCHEMA-SNAPSHOT-BEGIN */
 var FALLBACK_SCHEMA = {
-  "modes": ["explore", "goal", "describe", "replay", "baseline", "chat"],
-  "planner": ["heuristic", "llm", "goal"],
-  "backends": ["anthropic", "openai", "sampling"],
-  "roles": ["planner", "heal"],
+  "modes": [
+    "explore",
+    "goal",
+    "describe",
+    "replay",
+    "baseline",
+    "chat"
+  ],
+  "planner": [
+    "heuristic",
+    "llm",
+    "goal"
+  ],
+  "backends": [
+    "anthropic",
+    "openai",
+    "sampling"
+  ],
+  "roles": [
+    "planner",
+    "heal"
+  ],
   "fields": {
-    "target": {"type": "string", "required": true},
-    "goal": {"type": "string"},
-    "describe": {"type": "string"},
-    "conversation_id": {"type": "string"},
-    "coverage_target": {"type": "number", "default": 0.85},
-    "max_steps": {"type": "int", "default": 40},
-    "plan_budget": {"type": "int", "default": 50000},
-    "heal_budget": {"type": "int", "default": 20000},
-    "total_budget": {"type": "int", "default": 0}
+    "aut_version": {
+      "group": "gates",
+      "type": "string"
+    },
+    "ci": {
+      "default": false,
+      "group": "gates",
+      "type": "bool"
+    },
+    "conversation_id": {
+      "group": "run",
+      "type": "string"
+    },
+    "coverage_target": {
+      "default": 0.85,
+      "group": "run",
+      "type": "number"
+    },
+    "describe": {
+      "group": "run",
+      "type": "string"
+    },
+    "force_replay": {
+      "default": false,
+      "group": "gates",
+      "type": "bool"
+    },
+    "goal": {
+      "group": "run",
+      "type": "string"
+    },
+    "heal_budget": {
+      "default": 20000,
+      "group": "budgets",
+      "type": "int"
+    },
+    "heal_llm": {
+      "default": false,
+      "group": "healing",
+      "type": "bool"
+    },
+    "login_plan": {
+      "group": "auth",
+      "type": "string"
+    },
+    "max_steps": {
+      "default": 40,
+      "group": "run",
+      "type": "int"
+    },
+    "plan_budget": {
+      "default": 50000,
+      "group": "budgets",
+      "type": "int"
+    },
+    "pw_no_trace": {
+      "default": false,
+      "group": "auth",
+      "type": "bool"
+    },
+    "scenario": {
+      "group": "run",
+      "type": "string"
+    },
+    "storage_state": {
+      "group": "auth",
+      "type": "string"
+    },
+    "storage_state_save": {
+      "group": "auth",
+      "type": "string"
+    },
+    "target": {
+      "group": "run",
+      "required": true,
+      "type": "string"
+    },
+    "total_budget": {
+      "default": 0,
+      "group": "budgets",
+      "type": "int"
+    }
+  },
+  "llm": {
+    "api_key": {
+      "env": "LLM_API_KEY",
+      "role_split": true,
+      "secret": true,
+      "type": "string"
+    },
+    "backend": {
+      "default": "anthropic",
+      "enum": [
+        "anthropic",
+        "openai",
+        "sampling"
+      ],
+      "env": "LLM_BACKEND",
+      "role_split": true,
+      "type": "enum"
+    },
+    "base_url": {
+      "env": "LLM_BASE_URL",
+      "role_split": true,
+      "type": "string"
+    },
+    "model": {
+      "env": "LLM_MODEL",
+      "role_split": true,
+      "type": "string"
+    },
+    "structured": {
+      "default": false,
+      "env": "LLM_STRUCTURED",
+      "role_split": true,
+      "type": "bool"
+    },
+    "vision": {
+      "default": false,
+      "env": "LLM_VISION",
+      "role_split": true,
+      "type": "bool"
+    }
   },
   "settings": {
     "auto_hitl_threshold": {
@@ -585,16 +717,7 @@ var FALLBACK_SCHEMA = {
       },
       "type": "bool"
     }
-  },
-  "llm": {
-    "backend": {"env": "LLM_BACKEND", "type": "enum", "enum": ["anthropic", "openai", "sampling"], "default": "anthropic", "role_split": true},
-    "model": {"env": "LLM_MODEL", "type": "string", "role_split": true},
-    "base_url": {"env": "LLM_BASE_URL", "type": "string", "role_split": true},
-    "api_key": {"env": "LLM_API_KEY", "type": "string", "secret": true, "role_split": true},
-    "vision": {"env": "LLM_VISION", "type": "bool", "default": false, "role_split": true},
-    "structured": {"env": "LLM_STRUCTURED", "type": "bool", "default": false, "role_split": true}
-  },
-  "note": "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload"
+  }
 };
 /* SCHEMA-SNAPSHOT-END */
 
@@ -1446,13 +1569,25 @@ $('run').addEventListener('click', function () {
   var target = $('target').value.trim(), mode = $('mode').value;
   var broken = firstBrokenStep();
   if (broken) { clearErrors(); paintErrors(allErrors()); showStep(broken); return; }
-  startRun({
+  /* ADR-107c: this used to send seven fields, so the budgets and the auth block the wizard renders
+     were dropped exactly as the hub dropped them — the same defect on the other surface, and the
+     reason was the same: a hand-written literal beside a schema-driven form. Built from the schema
+     now, so a field the server adds arrives here without an edit. */
+  var body = {
     target: target, mode: mode, planner: $('planner').value,
     goal: mode === 'goal' ? $('goal').value.trim() : '',
-    describe: mode === 'describe' ? $('describe').value.trim() : '',
-    coverage_target: ($(fieldId('coverage_target')) || {}).value || '',
-    max_steps: ($(fieldId('max_steps')) || {}).value || ''
+    describe: mode === 'describe' ? $('describe').value.trim() : ''
+  };
+  numericFields().forEach(function (k) {
+    var el = $(fieldId(k));
+    if (el && el.value !== '') body[k] = el.value;
   });
+  [['ss', 'storage_state'], ['sss', 'storage_state_save'], ['loginplan', 'login_plan']].forEach(function (p) {
+    var el = $(p[0]);
+    if (el && el.value.trim()) body[p[1]] = el.value.trim();
+  });
+  if ($('pwnotrace') && $('pwnotrace').checked) body.pw_no_trace = true;
+  startRun(body);
 });
 $('rerun').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'replay', from_run: lastRunId }, '🔁 replay from_run=' + lastRunId); });
 $('baseline').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'baseline', from_run: lastRunId }, '📌 baseline from_run=' + lastRunId); });
