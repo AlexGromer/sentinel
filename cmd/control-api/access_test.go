@@ -310,6 +310,147 @@ func TestScopedRoutesRefuseAnotherAccountsRow(t *testing.T) {
 	}
 }
 
+// deadStore is a store client pointed at a socket nobody is listening on. grpc.NewClient is lazy, so
+// it constructs fine and fails on every call — which is what a gateway that died after boot looks
+// like from in here.
+func deadStore(t *testing.T) *storeClient {
+	t.Helper()
+	conn, err := grpc.NewClient("unix:"+filepath.Join(t.TempDir(), "nobody.sock"),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return &storeClient{cl: storepb.NewStoreServiceClient(conn), conn: conn}
+}
+
+// TestAnUnreachableGatewayDoesNotReopenTheLegacyReads — found by a SURVIVING mutation.
+//
+// accountsExist() asks the store "are there accounts?", and the honest-looking answer to a gateway
+// that does not respond is "no". That answer re-opens every legacyOpen route to anonymous callers for
+// as long as the store is down: a transport failure would silently become an access-control decision,
+// and the failure mode is invisible — the routes answer 200 exactly as they did before accounts.
+func TestAnUnreachableGatewayDoesNotReopenTheLegacyReads(t *testing.T) {
+	s := newTestServer()
+	s.store = deadStore(t)
+
+	if !s.accountsExist() {
+		t.Fatal("an unreachable gateway was read as 'no accounts exist' — the legacy reads just re-opened")
+	}
+	legacy := 0
+	for _, sp := range s.routes() {
+		if !sp.legacyOpen {
+			continue
+		}
+		legacy++
+		rec := httptest.NewRecorder()
+		s.mux().ServeHTTP(rec, requestFor(sp, "any-id"))
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s answered %d anonymously while the gateway was unreachable", sp.pattern, rec.Code)
+		}
+	}
+	if legacy == 0 {
+		t.Fatal("no legacyOpen routes — this gate is measuring nothing")
+	}
+
+	// A gateway that answered EARLIER leaves a known answer, and that answer is what a later hiccup must
+	// fall back to — otherwise a deployment with genuinely no accounts would start refusing anonymous
+	// polls the first time the store stuttered, which is the opposite mistake.
+	s.accounts.mu.Lock()
+	s.accounts.known, s.accounts.exists = true, false
+	s.accounts.mu.Unlock()
+	if s.accountsExist() {
+		t.Error("a store hiccup overrode the last known answer (no accounts) — anonymous polls would start failing")
+	}
+}
+
+// TestALiveRunIsScopedBeforeItReachesTheStore — found by a SURVIVING mutation.
+//
+// ownerOfRow consults the in-memory map first because a run that is RUNNING may not be in the store
+// yet (and in a deployment with no gateway, never will be). Dropping that lookup leaves the guard
+// unable to resolve an owner, and an unresolvable owner is treated as "not found" — which passes.
+// So every live run would be readable by every account: the run a person is most likely to be
+// looking at is the one that leaks. This is the same shape as the surviving mutation in the first
+// half of ADR-109, where scoping only the persisted rows handed out every running run.
+func TestALiveRunIsScopedBeforeItReachesTheStore(t *testing.T) {
+	s := newTestServer()
+	addr := startTestGateway(t, "")
+	sc, err := newStoreClient(addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s.store = sc
+	sc.upsertUser(&storepb.User{UserId: "ua", Name: "alice", PwHash: "x"})
+	sc.upsertUser(&storepb.User{UserId: "ub", Name: "bob", PwHash: "x"})
+	s.forgetAccounts()
+
+	// In memory only — NOT persisted. This is what a run looks like between spawn and its first upsert,
+	// and permanently in a deployment with no gateway.
+	rec := &run{ID: "live-1", Owner: "ua", State: "running", stream: newRunStream()}
+	rec.stream.finish()
+	s.mu.Lock()
+	s.runs["live-1"] = rec
+	s.mu.Unlock()
+
+	if _, found := sc.getRun("live-1"); found {
+		t.Fatal("fixture is wrong: the run must NOT be in the store, or this proves nothing")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/live-1", nil)
+	req.Header.Set("Authorization", "Bearer "+s.sessions.mint("ub", "bob", false, sessionTTL()))
+	w := httptest.NewRecorder()
+	s.mux().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("another account read a LIVE run that is not yet persisted: got %d want 404", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/live-1", nil)
+	req.Header.Set("Authorization", "Bearer "+s.sessions.mint("ua", "alice", false, sessionTTL()))
+	w = httptest.NewRecorder()
+	s.mux().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("the OWNER could not read their own live run: got %d want 200", w.Code)
+	}
+}
+
+// TestSpawnHandsItsOwnStoreToTheRun is the control-api half of "one store, not two".
+//
+// agentctl starts its own gateway over repo/state/locators.db when it inherits no address. So a run
+// launched from here persisted into a database this process never reads — the brain wrote the `chats`
+// projection there, and GET /v1/chats answered 0 about a conversation that plainly existed. Both
+// halves are needed and each is invisible without the other, so each is pinned where it lives.
+func TestSpawnHandsItsOwnStoreToTheRun(t *testing.T) {
+	addr := startTestGateway(t, "")
+	sc, err := newStoreClient(addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s, _, envPath := newEnvCapturingServer(t)
+	s.store, s.storeAddr = sc, addr
+
+	postRunAndWait(t, s, runBodyJSON(t, map[string]any{"target": "file:///x.html", "mode": "goal", "goal": "g"}))
+	if got := readEnvFile(t, envPath)["STORE_ADDR"]; got != addr {
+		t.Errorf("spawn env STORE_ADDR = %q, want %q — without it the run opens a SECOND database and the "+
+			"chats projection lands where this process never reads", got, addr)
+	}
+}
+
+// TestSpawnWithoutAStoreHandsDownNothing: the address is passed only when the gateway actually
+// answered at boot. Handing down one that did not dial would replace agentctl's working local
+// fallback with a dead address, turning "no persistence" into "a run that cannot reach its store".
+func TestSpawnWithoutAStoreHandsDownNothing(t *testing.T) {
+	s, _, envPath := newEnvCapturingServer(t)
+	s.store, s.storeAddr = nil, "unix:/tmp/never-dialled.sock" // configured, did not answer
+
+	postRunAndWait(t, s, runBodyJSON(t, map[string]any{"target": "file:///x.html", "mode": "goal", "goal": "g"}))
+	if got := readEnvFile(t, envPath)["STORE_ADDR"]; got != "" {
+		t.Errorf("spawn env STORE_ADDR = %q, want empty: the gateway never answered, so the run must keep "+
+			"its own local fallback", got)
+	}
+}
+
 // TestMachineTokenStaysUnscoped: CI and agentctl authenticate as the machine and must keep seeing
 // every row, exactly as before. This is the rule that lets the scoping above be safe to add.
 func TestMachineTokenStaysUnscoped(t *testing.T) {
