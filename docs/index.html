@@ -2572,8 +2572,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var target=ge('ch-target').value.trim(), mode=ge('ch-mode').value, text=ge('ch-text').value.trim();
     if (!target){ addBubble('sys',bi('Укажи Target URL.','Set a Target URL.')); return; }
     if (mode!=='explore'&&!text){ addBubble('sys',bi('Опиши тест словами.','Describe the test in words.')); return; }
-    var body={ target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic',
-      goal: mode==='goal'?text:'', describe: mode==='describe'?text:'' };
+    var body={ target:target, mode:mode, planner: mode==='goal'?'goal':'heuristic' };
+    /* ADR-108a: the FIRST turn declares the objective (goal/describe); every later turn is a `message`.
+       They used to be one field — each turn was sent as a new goal — so nothing could tell a correction
+       from a change of objective, and the server would have had to accept both. A conversation has one
+       goal; for a different goal, press «Новый разговор». */
+    var continuing = (mode !== 'explore') && !!chConvId;
+    if (continuing) body.message = text;
+    else { body.goal = mode==='goal' ? text : ''; body.describe = mode==='describe' ? text : ''; }
     body.llm=bLLM();   // ADR-063: same #build LLM connection applies to chat runs
     // M9.10: goal/describe = a multi-turn conversation (attach conversation_id; server resumes the thread).
     // explore has no goal/describe → brain chat-mode can't use it → keep it one-shot.

@@ -476,6 +476,10 @@ func cmdRun(repo string, args []string) int {
 	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
 	planner := fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
 	goal := fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
+	// ADR-108a: this turn's text, distinct from the objective. Before it existed, control-api sent
+	// every turn AS --goal, so a follow-up and a new objective were the same field and "one goal per
+	// conversation" could not be stated, let alone enforced.
+	message := fs.String("message", "", "chat turn text (use with --mode chat); the objective stays pinned to the conversation")
 	describe := fs.String("describe", "", "NL flow description -> describe-mode (M9.2b); mutually exclusive with --goal")
 	scenario := fs.String("scenario", "", "RunConfig scenario name to select (M9.2b)")
 	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets/auth/scenarios)")
@@ -525,6 +529,7 @@ func cmdRun(repo string, args []string) int {
 		"COVERAGE_TARGET=" + *coverageTarget,
 		"MAX_STEPS=" + *maxSteps,
 		"GOAL=" + *goal,
+		"MESSAGE=" + *message,
 		"DESCRIBE=" + *describe,
 		"SCENARIO=" + *scenario,
 		"RUN_CONFIG=" + *runConfig,
