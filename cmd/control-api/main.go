@@ -1705,7 +1705,12 @@ func (s *server) handlePromoteTest(w http.ResponseWriter, r *http.Request) {
 	var t *storepb.TestRecord
 	var ok bool
 	if s.store != nil {
-		t, ok = s.store.promoteTest(&storepb.PromoteReq{ScenarioId: req.ScenarioID, Name: req.Name, Schedule: req.Schedule})
+		// ADR-109: the promoted test belongs to whoever promoted it. Without this the test lands unowned,
+		// which under a scoped list means it appears in NOBODY's library — promote a test and watch it
+		// vanish, with the row sitting in the database the whole time.
+		c, _ := s.callerOf(r)
+		t, ok = s.store.promoteTest(&storepb.PromoteReq{ScenarioId: req.ScenarioID, Name: req.Name,
+			Schedule: req.Schedule, Owner: c.owner()})
 	}
 	if !ok || !t.Found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such scenario to promote (or store-gateway unavailable)"})
