@@ -74,8 +74,13 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, name TEXT UNIQUE, pw_hash TEXT, is_admin INTEGER, created_at TEXT
 );
+-- ADR-109 (Alex's directive): the tool belongs to the master user, everything the working person
+-- configures belongs to them. So a config document is identified by (key, OWNER), not by key alone --
+-- "" is the global document and any other value is one account's. With key alone, a personal "setup"
+-- would overwrite the global one instead of layering over it.
 CREATE TABLE IF NOT EXISTS config (
-  key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT
+  key TEXT, owner TEXT NOT NULL DEFAULT '', value_json TEXT, updated_at TEXT,
+  PRIMARY KEY (key, owner)
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
 CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics(run_id);
@@ -132,6 +137,12 @@ func New(path string) (*Server, error) {
 	// owner". An upgrade-breaking defect that only appears on a database old enough to matter, and the
 	// migration test missed it by building its "old" database with the NEW schema.
 	if _, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs(owner)"); err != nil {
+		return nil, err
+	}
+	// config is the one table whose PRIMARY KEY changed, and SQLite cannot ALTER one — so it is
+	// rebuilt rather than extended. Existing rows become the GLOBAL document (owner=""), which is what
+	// they always were: written by whoever ran the wizard, before an account could exist.
+	if err = ensureConfigOwner(db); err != nil {
 		return nil, err
 	}
 	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)
@@ -223,6 +234,65 @@ func ensureColumn(db *sql.DB, table, col string) error {
 	}
 	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + col + " TEXT")
 	return err
+}
+
+// hasColumn reports whether `table` has `col`. Split out of ensureColumn because the config migration
+// below cannot use the ALTER path at all: it changes a PRIMARY KEY, which SQLite has no statement for.
+func hasColumn(db *sql.DB, table, col string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == col {
+			found = true
+		}
+	}
+	return found, rows.Err()
+}
+
+// ensureConfigOwner migrates a pre-ADR-109 `config` table, whose PRIMARY KEY was the key alone.
+//
+// A rebuild, not an ALTER: adding the column would be one statement, but the key would stay `key`, so
+// a personal document would OVERWRITE the global one — the same row, silently, with no error and no
+// way to tell afterwards which layer the surviving text came from. Existing rows migrate to owner=""
+// because that is what they are: the global configuration, written before any account existed.
+//
+// The whole rebuild runs in one transaction. A half-migrated config is worse than an unmigrated one:
+// the reader would find a table with the right shape and none of the operator's settings in it.
+func ensureConfigOwner(db *sql.DB) error {
+	has, err := hasColumn(db, "config", "owner")
+	if err != nil || has {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit; the point is that a failure leaves nothing
+	stmts := []string{
+		`CREATE TABLE config_adr109 (
+		   key TEXT, owner TEXT NOT NULL DEFAULT '', value_json TEXT, updated_at TEXT,
+		   PRIMARY KEY (key, owner)
+		 )`,
+		`INSERT INTO config_adr109(key,owner,value_json,updated_at) SELECT key,'',value_json,updated_at FROM config`,
+		`DROP TABLE config`,
+		`ALTER TABLE config_adr109 RENAME TO config`,
+	}
+	for _, q := range stmts {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("config owner migration (%.40s…): %w", q, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // ensureGoldenMacColumn adds the `mac` column to a golden_snapshots table created before #24.

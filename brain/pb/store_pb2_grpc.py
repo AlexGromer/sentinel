@@ -339,7 +339,10 @@ class StoreServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def ListConfig(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """ListConfig stays unscoped and is deliberately NOT exposed over HTTP: its only caller is the
+        readiness ping, which needs the cheapest round trip that proves the socket is alive and
+        authenticating. Anything a person reads goes through GetConfig, which names the layer it wants.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')

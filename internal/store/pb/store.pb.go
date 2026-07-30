@@ -2103,12 +2103,19 @@ func (x *TrendReply) GetPoints() []*TrendPoint {
 // domain is what a service deployment reads at start and the setup wizard writes.
 // SECRETS ARE REJECTED, not stripped: PutConfig fails with InvalidArgument when value_json carries a
 // secret-shaped key anywhere in the document. Keys live in the process env, never in the store.
+// ADR-109 (Alex's directive): "everything the working person owns belongs to them; only the GLOBAL
+// settings and the tool itself belong to the master user." So a config document has an owner too, and
+// the key alone no longer identifies it: "" is the GLOBAL document (the tool, written by an admin or
+// the machine token), any other value is that account's personal document. The pair (key, owner) is
+// the primary key — a personal `setup` and the global `setup` are two rows, not one overwriting the
+// other.
 type ConfigRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	ValueJson     string                 `protobuf:"bytes,2,opt,name=value_json,json=valueJson,proto3" json:"value_json,omitempty"` // a JSON object; secret-shaped member names are refused
 	UpdatedAt     string                 `protobuf:"bytes,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"` // RFC3339 (defaulted on write)
 	Found         bool                   `protobuf:"varint,4,opt,name=found,proto3" json:"found,omitempty"`                         // false => no such key (GetConfig)
+	Owner         string                 `protobuf:"bytes,5,opt,name=owner,proto3" json:"owner,omitempty"`                          // "" => the global document; otherwise the account it belongs to
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2171,9 +2178,17 @@ func (x *ConfigRecord) GetFound() bool {
 	return false
 }
 
+func (x *ConfigRecord) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type ConfigKey struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Owner         string                 `protobuf:"bytes,2,opt,name=owner,proto3" json:"owner,omitempty"` // "" => the global document. NOT "any owner": a read must name which layer it wants
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2211,6 +2226,13 @@ func (*ConfigKey) Descriptor() ([]byte, []int) {
 func (x *ConfigKey) GetKey() string {
 	if x != nil {
 		return x.Key
+	}
+	return ""
+}
+
+func (x *ConfigKey) GetOwner() string {
+	if x != nil {
+		return x.Owner
 	}
 	return ""
 }
@@ -2645,16 +2667,18 @@ const file_store_proto_rawDesc = "" +
 	"\x05value\x18\x03 \x01(\x01R\x05value\"I\n" +
 	"\n" +
 	"TrendReply\x12;\n" +
-	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points\"t\n" +
+	"\x06points\x18\x01 \x03(\v2#.sentinel.persistence.v1.TrendPointR\x06points\"\x8a\x01\n" +
 	"\fConfigRecord\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1d\n" +
 	"\n" +
 	"value_json\x18\x02 \x01(\tR\tvalueJson\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\x03 \x01(\tR\tupdatedAt\x12\x14\n" +
-	"\x05found\x18\x04 \x01(\bR\x05found\"\x1d\n" +
+	"\x05found\x18\x04 \x01(\bR\x05found\x12\x14\n" +
+	"\x05owner\x18\x05 \x01(\tR\x05owner\"3\n" +
 	"\tConfigKey\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\"I\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05owner\x18\x02 \x01(\tR\x05owner\"I\n" +
 	"\n" +
 	"ConfigList\x12;\n" +
 	"\x05items\x18\x01 \x03(\v2%.sentinel.persistence.v1.ConfigRecordR\x05items\"d\n" +
