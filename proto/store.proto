@@ -140,6 +140,7 @@ message MetricPoint {
   string name = 3;
   double value = 4;
   string labels_json = 5;
+  string owner = 6;   // ADR-109: inherited from the run, so a trend is one account's numbers
 }
 message MetricsBatch { repeated MetricPoint points = 1; }
 message MetricsQuery {
@@ -152,6 +153,7 @@ message MetricsSeries { repeated MetricPoint points = 1; }
 message TrendReq {
   string metric = 1;
   int64 window = 2; // last N runs (0 => a sane default)
+  string owner = 3; // ADR-109: "" => every row (a machine token)
 }
 message TrendPoint { string run_id = 1; double ts = 2; double value = 3; }
 message TrendReply { repeated TrendPoint points = 1; }

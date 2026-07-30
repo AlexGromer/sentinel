@@ -239,9 +239,14 @@ def _project_chat(conversation_id: str, target: str, final: dict) -> None:
         return
     try:
         turns = _user_turns(final.get("messages"))
+        # ADR-109: the projection is written HERE, by the brain, which is why the owner has to travel as
+        # a run var. control-api resolves who asked for the run but never touches this row — so without
+        # SENTINEL_OWNER every conversation landed unowned, and "each person has their own chats" was
+        # true of the schema and false of the data.
         projector.upsert_chat(conversation_id=conversation_id, last_target=target,
                               turn_count=len(turns), last_goal=(turns[-1] if turns else ""),
-                              summary=_rolling_summary(turns))
+                              summary=_rolling_summary(turns),
+                              owner=os.environ.get("SENTINEL_OWNER", ""))
     finally:
         projector.close()
 

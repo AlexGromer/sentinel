@@ -109,7 +109,7 @@ func TestPersistResultOnFinish(t *testing.T) {
 		t.Fatalf("labels_json = %q (want {mode:replay,target:…,model:claude-opus-4-8})", ms.Points[0].LabelsJson)
 	}
 	// the Trends RPC (SPA sparkline feed) returns the coverage series chronologically
-	if tr, ok := sc.trends("coverage", 10); !ok || len(tr.Points) != 1 || tr.Points[0].Value != 0.75 {
+	if tr, ok := sc.trends("coverage", 10, ""); !ok || len(tr.Points) != 1 || tr.Points[0].Value != 0.75 {
 		t.Fatalf("coverage trend = %+v ok=%v", tr, ok)
 	}
 

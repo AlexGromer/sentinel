@@ -1701,6 +1701,7 @@ type MetricPoint struct {
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Value         float64                `protobuf:"fixed64,4,opt,name=value,proto3" json:"value,omitempty"`
 	LabelsJson    string                 `protobuf:"bytes,5,opt,name=labels_json,json=labelsJson,proto3" json:"labels_json,omitempty"`
+	Owner         string                 `protobuf:"bytes,6,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109: inherited from the run, so a trend is one account's numbers
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1766,6 +1767,13 @@ func (x *MetricPoint) GetValue() float64 {
 func (x *MetricPoint) GetLabelsJson() string {
 	if x != nil {
 		return x.LabelsJson
+	}
+	return ""
+}
+
+func (x *MetricPoint) GetOwner() string {
+	if x != nil {
+		return x.Owner
 	}
 	return ""
 }
@@ -1930,6 +1938,7 @@ type TrendReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Metric        string                 `protobuf:"bytes,1,opt,name=metric,proto3" json:"metric,omitempty"`
 	Window        int64                  `protobuf:"varint,2,opt,name=window,proto3" json:"window,omitempty"` // last N runs (0 => a sane default)
+	Owner         string                 `protobuf:"bytes,3,opt,name=owner,proto3" json:"owner,omitempty"`    // ADR-109: "" => every row (a machine token)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1976,6 +1985,13 @@ func (x *TrendReq) GetWindow() int64 {
 		return x.Window
 	}
 	return 0
+}
+
+func (x *TrendReq) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type TrendPoint struct {
@@ -2600,14 +2616,15 @@ const file_store_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"U\n" +
 	"\bUserList\x123\n" +
 	"\x05users\x18\x01 \x03(\v2\x1d.sentinel.persistence.v1.UserR\x05users\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\x7f\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x95\x01\n" +
 	"\vMetricPoint\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x0e\n" +
 	"\x02ts\x18\x02 \x01(\x01R\x02ts\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x04 \x01(\x01R\x05value\x12\x1f\n" +
 	"\vlabels_json\x18\x05 \x01(\tR\n" +
-	"labelsJson\"L\n" +
+	"labelsJson\x12\x14\n" +
+	"\x05owner\x18\x06 \x01(\tR\x05owner\"L\n" +
 	"\fMetricsBatch\x12<\n" +
 	"\x06points\x18\x01 \x03(\v2$.sentinel.persistence.v1.MetricPointR\x06points\"n\n" +
 	"\fMetricsQuery\x12\x12\n" +
@@ -2616,10 +2633,11 @@ const file_store_proto_rawDesc = "" +
 	"\buntil_ts\x18\x03 \x01(\x01R\auntilTs\x12\x14\n" +
 	"\x05limit\x18\x04 \x01(\x03R\x05limit\"M\n" +
 	"\rMetricsSeries\x12<\n" +
-	"\x06points\x18\x01 \x03(\v2$.sentinel.persistence.v1.MetricPointR\x06points\":\n" +
+	"\x06points\x18\x01 \x03(\v2$.sentinel.persistence.v1.MetricPointR\x06points\"P\n" +
 	"\bTrendReq\x12\x16\n" +
 	"\x06metric\x18\x01 \x01(\tR\x06metric\x12\x16\n" +
-	"\x06window\x18\x02 \x01(\x03R\x06window\"I\n" +
+	"\x06window\x18\x02 \x01(\x03R\x06window\x12\x14\n" +
+	"\x05owner\x18\x03 \x01(\tR\x05owner\"I\n" +
 	"\n" +
 	"TrendPoint\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x0e\n" +

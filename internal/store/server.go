@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS results (
   duration_ms INTEGER, created_at TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS metrics (
-  run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT
+  run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT, owner TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY, name TEXT UNIQUE, pw_hash TEXT, is_admin INTEGER, created_at TEXT
@@ -81,7 +81,6 @@ CREATE INDEX IF NOT EXISTS idx_metrics_name_ts ON metrics(name, ts);
 CREATE INDEX IF NOT EXISTS idx_metrics_run ON metrics(run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state);
 CREATE INDEX IF NOT EXISTS idx_scenarios_target ON scenarios(target);
-CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs(owner);
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);`
 
 func now() float64 { return float64(time.Now().UnixNano()) / 1e9 }
@@ -122,10 +121,18 @@ func New(path string) (*Server, error) {
 	}
 	// ADR-109: pre-identity DBs get the owner column. Empty for every existing row, which is what
 	// "unowned" means and what keeps a single-team install behaving exactly as it did.
-	for _, t := range []string{"runs", "scenarios", "tests", "chats", "results"} {
+	for _, t := range []string{"runs", "scenarios", "tests", "chats", "results", "metrics"} {
 		if err = ensureColumn(db, t, "owner"); err != nil {
 			return nil, err
 		}
+	}
+	// The index comes AFTER the column, and that ordering is the whole point. It first lived in
+	// storeSchema, which runs before this loop — so on a FRESH database it worked (the column is created
+	// in the same DDL) and on an EXISTING one the gateway refused to open at all: "no such column:
+	// owner". An upgrade-breaking defect that only appears on a database old enough to matter, and the
+	// migration test missed it by building its "old" database with the NEW schema.
+	if _, err = db.Exec("CREATE INDEX IF NOT EXISTS idx_runs_owner ON runs(owner)"); err != nil {
+		return nil, err
 	}
 	if err = ensureGoldenMacColumn(db); err != nil { // migrate pre-#24 DBs (no mac column)
 		return nil, err

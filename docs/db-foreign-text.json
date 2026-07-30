@@ -386,6 +386,10 @@
         "labels_json": {
           "foreign": "inherent",
           "note": "carries the target URL on EVERY metric point (cmd/control-api/main.go:943,1047-1052)"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: the local account id, inherited from the run. Ours, not the tested application's — a trend is one account's numbers, and unscoped it showed everyone's coverage over time to anyone."
         }
       }
     },

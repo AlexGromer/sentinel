@@ -482,6 +482,10 @@ func cmdRun(repo string, args []string) int {
 	// every turn AS --goal, so a follow-up and a new objective were the same field and "one goal per
 	// conversation" could not be stated, let alone enforced.
 	message := fs.String("message", "", "chat turn text (use with --mode chat); the objective stays pinned to the conversation")
+	// ADR-109: the local account this run belongs to, as control-api resolved it. Not a secret (a user
+	// id) and no more privileged than the direct database access a local user already has — but it is
+	// what lets the BRAIN stamp the chats projection it writes, which control-api never touches.
+	owner := fs.String("owner", "", "local account id that owns this run (set by control-api; rarely useful by hand)")
 	describe := fs.String("describe", "", "NL flow description -> describe-mode (M9.2b); mutually exclusive with --goal")
 	scenario := fs.String("scenario", "", "RunConfig scenario name to select (M9.2b)")
 	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets/auth/scenarios)")
@@ -534,6 +538,7 @@ func cmdRun(repo string, args []string) int {
 		"MESSAGE=" + *message,
 		"DESCRIBE=" + *describe,
 		"SCENARIO=" + *scenario,
+		"SENTINEL_OWNER=" + *owner,
 		"RUN_CONFIG=" + *runConfig,
 		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,

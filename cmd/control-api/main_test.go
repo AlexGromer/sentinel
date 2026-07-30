@@ -51,6 +51,7 @@ func newTestServer() *server {
 		token:     "secret-tok",
 		corsAllow: map[string]bool{"https://alexgromer.github.io": true},
 		runs:      map[string]*run{},
+		sessions:  newSessionStore(), // ADR-109
 	}
 }
 

@@ -60,7 +60,7 @@ func TestControlAPIStorePersistsAndSurvivesRestart(t *testing.T) {
 	if !found || got.State != "done" || got.ConversationID != "conv1" || got.Mode != "chat" {
 		t.Fatalf("getRun = %+v found=%v (conversation_id must persist for the runs<->chats join)", got, found)
 	}
-	runs, ok := sc.listRuns()
+	runs, ok := sc.listRuns("")
 	if !ok || len(runs) != 1 || runs[0].ID != "run1" {
 		t.Fatalf("listRuns = %+v ok=%v", runs, ok)
 	}

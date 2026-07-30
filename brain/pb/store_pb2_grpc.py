@@ -3,8 +3,8 @@
 import grpc
 import warnings
 
-import persistence_pb2 as persistence__pb2
-import store_pb2 as store__pb2
+from . import persistence_pb2 as persistence__pb2
+from . import store_pb2 as store__pb2
 
 GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
