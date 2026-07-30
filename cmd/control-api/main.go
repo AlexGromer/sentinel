@@ -518,20 +518,20 @@ var settingsSchema = map[string]any{
 }
 
 type runRequest struct {
-	Target         string          `json:"target"`
-	Mode           string          `json:"mode"`
-	Goal           string          `json:"goal"`
-	Describe       string          `json:"describe"`
-	Planner        string          `json:"planner"`
-	CoverageTarget string          `json:"coverage_target"`
-	MaxSteps       string          `json:"max_steps"`
-	FromRun        string          `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
-	ConversationID string          `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
+	Target         string `json:"target"`
+	Mode           string `json:"mode"`
+	Goal           string `json:"goal"`
+	Describe       string `json:"describe"`
+	Planner        string `json:"planner"`
+	CoverageTarget string `json:"coverage_target"`
+	MaxSteps       string `json:"max_steps"`
+	FromRun        string `json:"from_run"`        // M9.9: prior run_id whose frozen plan to replay / baseline-update
+	ConversationID string `json:"conversation_id"` // M9.10 (ADR-048): multi-turn chat thread — resumes by conversation_id->thread_id
 	// ADR-108a: this turn's text. `goal`/`describe` DECLARE the conversation's objective; `message`
 	// carries a follow-up. They were one field, so every turn arrived as a new goal and the rule "a
 	// conversation has one goal — for a new goal, start a new chat" had nothing to attach to.
-	Message string `json:"message"`
-	LLM            json.RawMessage `json:"llm"`             // ADR-063: per-run LLM override (backend/base_url/model/vision); validated+parsed into `llm` below
+	Message string          `json:"message"`
+	LLM     json.RawMessage `json:"llm"` // ADR-063: per-run LLM override (backend/base_url/model/vision); validated+parsed into `llm` below
 
 	// ADR-107: everything below used to be expressible ONLY as a CLI flag or a hand-written RunConfig
 	// file. The hub rendered inputs for the budgets and the auth block and then wrote them into a
@@ -571,6 +571,12 @@ func validTarget(t string) bool {
 // itself (it is the one place that rule lives). handleCreateRun rejects it earlier with a 400 so a
 // person gets an answer instead of a failed run; this stays permissive so the rule has a single owner.
 func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string {
+	// ADR-109: the brain writes the `chats` projection, so the owner has to reach the brain — and the
+	// only channel to it is this argv. Passed for every mode, not just chat: a replay or baseline also
+	// belongs to whoever asked for it.
+	if req.owner != "" {
+		args = append(args, "--owner", req.owner)
+	}
 	if req.Scenario != "" {
 		args = append(args, "--scenario", req.Scenario)
 	}
@@ -1232,6 +1238,7 @@ func (s *server) persistResult(rec *run) {
 	for _, p := range pts {
 		batch.Points = append(batch.Points, &storepb.MetricPoint{
 			RunId: rec.ID, Ts: ts, Name: p.n, Value: p.v, LabelsJson: labels,
+			Owner: rec.Owner, // ADR-109: a trend belongs to the account whose run produced it
 		})
 	}
 	s.store.ingestMetrics(batch)
@@ -2072,7 +2079,8 @@ func (s *server) handleTrends(w http.ResponseWriter, r *http.Request) {
 	}
 	var points []*storepb.TrendPoint
 	if s.store != nil {
-		if tr, ok := s.store.trends(metric, parseIntQuery(r, "window", 50)); ok {
+		c, _ := s.callerOf(r)
+		if tr, ok := s.store.trends(metric, parseIntQuery(r, "window", 50), c.owner()); ok {
 			points = tr.Points
 		}
 	}

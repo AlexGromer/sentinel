@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -174,6 +175,80 @@ func TestUsersCRUD(t *testing.T) {
 	}
 	if r, _ := s.GetRun(ctx, &pb.RunId{RunId: "kept"}); !r.Found {
 		t.Error("deleting an account destroyed a run it owned — history someone else may rely on")
+	}
+}
+
+// TestOpensAGenuinelyPreIdentityDatabase: an OLD database — one whose tables were created before the
+// owner column existed — must open.
+//
+// This exists because the migration test below did NOT catch a defect that broke exactly this. It
+// built its "old" database with the CURRENT schema, closed it and reopened it, so the column was there
+// the whole time and the test proved only that a no-op ALTER is safe. Meanwhile the owner INDEX sat in
+// storeSchema, which runs BEFORE the migration, and every real pre-identity database failed to open
+// with "no such column: owner". A fixture that shares the code's assumptions cannot test them.
+//
+// So the tables here are written by hand, in their pre-ADR-109 shape.
+func TestOpensAGenuinelyPreIdentityDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control-store.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := []string{
+		`CREATE TABLE runs (run_id TEXT PRIMARY KEY, conversation_id TEXT, mode TEXT, target TEXT,
+		  planner TEXT, state TEXT, exit_code INTEGER, artifact_dir TEXT, error TEXT, started_at TEXT,
+		  finished_at TEXT)`,
+		`CREATE TABLE scenarios (scenario_id TEXT PRIMARY KEY, name TEXT, target TEXT, run_mode TEXT,
+		  plan_hash TEXT, steps_json TEXT, unmatched INTEGER, tags TEXT, source_run_id TEXT, created_at TEXT)`,
+		`CREATE TABLE tests (test_id TEXT PRIMARY KEY, scenario_id TEXT, plan_hash TEXT, name TEXT,
+		  schedule TEXT, enabled INTEGER, last_status TEXT, last_run_id TEXT, created_at TEXT)`,
+		`CREATE TABLE chats (conversation_id TEXT PRIMARY KEY, last_target TEXT, turn_count INTEGER,
+		  last_active TEXT, last_goal TEXT, summary TEXT, updated_at TEXT)`,
+		`CREATE TABLE results (run_id TEXT PRIMARY KEY, plan_id TEXT, mode TEXT, verdict TEXT,
+		  exit_code INTEGER, healed INTEGER, failed INTEGER, regressions_json TEXT, steps_json TEXT,
+		  coverage REAL, duration_ms INTEGER, created_at TEXT)`,
+		`CREATE TABLE metrics (run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT)`,
+		// Every column supplied, because the OLD binary's INSERT supplied every column too — a row with
+		// NULLs in it would be a fixture nothing ever wrote, and a test of a situation that cannot arise.
+		// The one column that IS genuinely NULL on an upgraded row is `owner`, added by the ALTER above,
+		// and the read path COALESCEs exactly that.
+		`INSERT INTO runs(run_id,conversation_id,mode,target,planner,state,exit_code,artifact_dir,error,
+		  started_at,finished_at)
+		 VALUES('ancient','','explore','http://old','heuristic','done',0,'/runs/ancient','',
+		  '2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')`,
+	}
+	for _, stmt := range old {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("seeding the pre-identity schema: %v\n%s", err, stmt)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("opening a pre-identity database failed: %v", err)
+	}
+	defer s.Close()
+
+	r, err := s.GetRun(context.Background(), &pb.RunId{RunId: "ancient"})
+	if err != nil {
+		t.Fatalf("reading a migrated row failed: %v", err)
+	}
+	if !r.Found {
+		t.Fatal("the pre-existing row did not survive the migration")
+	}
+	if r.Owner != "" {
+		t.Errorf("a migrated row came back owned by %q — it must be unowned", r.Owner)
+	}
+	// And it is USABLE afterwards, not merely openable: the migration has to leave a store that writes.
+	if _, err := s.UpsertRun(context.Background(), &pb.RunRecord{RunId: "fresh", Owner: "alice"}); err != nil {
+		t.Fatalf("writing to a migrated store failed: %v", err)
+	}
+	l, err := s.ListRuns(context.Background(), &pb.ListRunsReq{Owner: "alice"})
+	if err != nil || len(l.Runs) != 1 || l.Runs[0].RunId != "fresh" {
+		t.Fatalf("scoping does not work on a migrated store: %v %+v", err, l)
 	}
 }
 

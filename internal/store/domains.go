@@ -420,7 +420,7 @@ func (s *Server) IngestMetrics(_ context.Context, b *pb.MetricsBatch) (*pb.Empty
 	if err != nil {
 		return nil, err
 	}
-	stmt, err := tx.Prepare("INSERT INTO metrics(run_id,ts,name,value,labels_json) VALUES(?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO metrics(run_id,ts,name,value,labels_json,owner) VALUES(?,?,?,?,?,?)")
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
@@ -431,7 +431,7 @@ func (s *Server) IngestMetrics(_ context.Context, b *pb.MetricsBatch) (*pb.Empty
 		if ts == 0 {
 			ts = now()
 		}
-		if _, err := stmt.Exec(p.RunId, ts, p.Name, p.Value, p.LabelsJson); err != nil {
+		if _, err := stmt.Exec(p.RunId, ts, p.Name, p.Value, p.LabelsJson, p.Owner); err != nil {
 			_ = tx.Rollback()
 			return nil, err
 		}
@@ -479,8 +479,14 @@ func (s *Server) Trends(_ context.Context, r *pb.TrendReq) (*pb.TrendReply, erro
 	if window <= 0 || window > 1000 {
 		window = 50
 	}
+	// ADR-109: a trend is one account's numbers. Unscoped it showed everyone's coverage over time to
+	// anyone — an aggregate leak rather than a row leak, but a leak with a graph on it.
+	where, args := " WHERE name=?", []any{r.Metric}
+	if r.Owner != "" {
+		where, args = where+" AND COALESCE(owner,'')=?", append(args, r.Owner)
+	}
 	rows, err := s.db.Query(
-		"SELECT run_id,ts,value FROM metrics WHERE name=? ORDER BY ts DESC LIMIT ?", r.Metric, window)
+		"SELECT run_id,ts,value FROM metrics"+where+" ORDER BY ts DESC LIMIT ?", append(args, window)...)
 	if err != nil {
 		return nil, err
 	}

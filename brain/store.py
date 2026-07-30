@@ -372,11 +372,12 @@ class ChatProjector:
         self._ch = grpc.intercept_channel(base, *interceptors)
         self._stub = pbgrpc.StoreServiceStub(self._ch)
 
-    def upsert_chat(self, conversation_id, last_target="", turn_count=0, last_goal="", summary="") -> None:
+    def upsert_chat(self, conversation_id, last_target="", turn_count=0, last_goal="", summary="",
+                    owner="") -> None:
         try:
             self._stub.UpsertChat(self._pb.ChatProjection(
                 conversation_id=conversation_id, last_target=last_target, turn_count=int(turn_count or 0),
-                last_goal=last_goal, summary=summary))
+                last_goal=last_goal, summary=summary, owner=owner))
         except Exception:  # best-effort projection — never break the run on a gateway hiccup
             pass
 

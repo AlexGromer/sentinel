@@ -356,10 +356,10 @@ func (c *storeClient) ingestMetrics(b *storepb.MetricsBatch) {
 
 // trends returns the last `window` points of a metric (chronological), for the SPA sparklines.
 // Returns (nil,false) on gateway error; the caller degrades to an empty series.
-func (c *storeClient) trends(metric string, window int64) (*storepb.TrendReply, bool) {
+func (c *storeClient) trends(metric string, window int64, owner string) (*storepb.TrendReply, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	tr, err := c.cl.Trends(ctx, &storepb.TrendReq{Metric: metric, Window: window})
+	tr, err := c.cl.Trends(ctx, &storepb.TrendReq{Metric: metric, Window: window, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store Trends(%s): %v (falling back to empty)\n", metric, err)
 		return nil, false
