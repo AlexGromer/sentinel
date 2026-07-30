@@ -34,8 +34,12 @@ type apiVerb struct {
 	Query  []string // flags forwarded as query parameters
 	Body   []string // flags sent as a JSON object (POST/PUT)
 	Stdin  bool     // read the request body from a file/stdin instead of flags (config set)
-	Stream bool     // copy the response through instead of parsing it (SSE)
-	Help   string
+	// SecretField names a body field whose value is read from STDIN via --<field>-stdin, never from a
+	// flag. A password on an argv is visible to every `ps` on the host and lands in shell history; a
+	// convenience worth exactly nothing against that.
+	SecretField string
+	Stream      bool // copy the response through instead of parsing it (SSE)
+	Help        string
 }
 
 // apiVerbs is the CLI half of the one configuration/data model. Ordered as a person would look for
@@ -75,6 +79,14 @@ var apiVerbs = []apiVerb{
 	{Verb: "results list", Method: "GET", Path: "/v1/results", Query: []string{"limit", "offset"}, Help: "run verdicts"},
 	{Verb: "results show", Method: "GET", Path: "/v1/results/{id}", Arg: "run_id", Help: "one result record"},
 	{Verb: "trends", Method: "GET", Path: "/v1/trends", Query: []string{"metric", "window"}, Help: "a metric over time (--metric coverage --window 50)"},
+
+	// ADR-109 local accounts.
+	{Verb: "whoami", Method: "GET", Path: "/v1/me", Help: "which credential this is and whether it is scoped"},
+	{Verb: "users list", Method: "GET", Path: "/v1/users", Help: "local accounts (machine token or an admin)"},
+	{Verb: "users add", Method: "POST", Path: "/v1/users", Body: []string{"name", "is_admin"},
+		SecretField: "password",
+		Help:        "create a local account; the password is read from stdin via --password-stdin"},
+	{Verb: "users remove", Method: "DELETE", Path: "/v1/users/{id}", Arg: "user_id", Help: "remove a local account (its rows stay, unowned)"},
 }
 
 // apiRoutesWithoutCLI names routes that deliberately have no CLI verb, each with the reason. The
@@ -86,6 +98,8 @@ var apiRoutesWithoutCLI = map[string]string{
 	"POST /v1/import":           "`agentctl import` IS the implementation — the route spawns this binary, so a CLI verb would call itself",
 	"GET /v1/stream":            "a WebSocket with a takeover/return control channel; `runs events` covers the read side over SSE, and driving a takeover from a terminal has no meaning",
 	"GET /v1/ui-token":          "hands a browser tab its token during bootstrap; a CLI already has the token it would be asking for",
+	"POST /v1/login":            "a CLI already holds the machine token, which is strictly more powerful than any session, so logging in from a terminal buys nothing — and would put a password on an argv that every `ps` on the host can read",
+	"POST /v1/logout":           "there is no CLI session to end (see POST /v1/login)",
 	"GET /v1/":                  "the catch-all 404 for unknown /v1 paths, not a capability",
 
 	// The four revision routes ARE reachable from a terminal: `agentctl revisions list|show|diff|rollback`
@@ -171,6 +185,9 @@ func apiUsage(w io.Writer) {
 		if v.Stdin {
 			flags += " --file <f>|-"
 		}
+		if v.SecretField != "" {
+			flags += " --" + v.SecretField + "-stdin"
+		}
 		fmt.Fprintf(w, "  agentctl %s%s%s\n      %s\n", v.Verb, arg, flags, v.Help)
 	}
 }
@@ -199,6 +216,9 @@ func cmdAPI(repo string, v *apiVerb, rest []string) int {
 	if v.Stdin {
 		allowed["file"] = true
 	}
+	if v.SecretField != "" {
+		allowed[v.SecretField+"-stdin"] = true
+	}
 
 	vals := map[string]string{}
 	for i := 0; i < len(rest); i++ {
@@ -210,6 +230,11 @@ func cmdAPI(repo string, v *apiVerb, rest []string) int {
 		name, val := strings.TrimPrefix(a, "--"), ""
 		if eq := strings.IndexByte(name, '='); eq >= 0 {
 			name, val = name[:eq], name[eq+1:]
+		} else if v.SecretField != "" && name == v.SecretField+"-stdin" {
+			// A valueless switch: it says WHERE the secret comes from, not what it is. Demanding a value
+			// here is how the flag whose whole purpose is to keep a password off the argv ended up asking
+			// for one on the argv.
+			val = "yes"
 		} else {
 			if i+1 >= len(rest) {
 				fmt.Fprintf(os.Stderr, "error: --%s needs a value\n", name)
@@ -242,11 +267,36 @@ func cmdAPI(repo string, v *apiVerb, rest []string) int {
 	}
 
 	var body io.Reader
-	if len(v.Body) > 0 {
-		obj := map[string]string{}
+	if len(v.Body) > 0 || v.SecretField != "" {
+		obj := map[string]any{}
 		for _, k := range v.Body {
 			if val, ok := vals[k]; ok {
-				obj[k] = val
+				// "true"/"false" become JSON booleans. A server field declared bool would otherwise reject
+				// the string "true" — and a CLI that can only ever send strings could not set one at all.
+				switch val {
+				case "true":
+					obj[k] = true
+				case "false":
+					obj[k] = false
+				default:
+					obj[k] = val
+				}
+			}
+		}
+		if v.SecretField != "" {
+			if _, asked := vals[v.SecretField+"-stdin"]; asked {
+				secret, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: reading %s from stdin: %v\n", v.SecretField, err)
+					return 2
+				}
+				// One trailing newline is what `echo` and a here-string add; anything else the person typed
+				// is theirs to keep, because a password may legitimately end in a space.
+				obj[v.SecretField] = strings.TrimRight(string(secret), "\r\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "error: %s needs --%s-stdin (the %s is read from stdin, never from an "+
+					"argv every `ps` on the host can read)\n", v.Verb, v.SecretField, v.SecretField)
+				return 2
 			}
 		}
 		raw, _ := json.Marshal(obj)

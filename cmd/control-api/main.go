@@ -34,7 +34,6 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -70,6 +69,9 @@ type run struct {
 	StartedAt      string `json:"started_at"`
 	FinishedAt     string `json:"finished_at,omitempty"`
 	Error          string `json:"error,omitempty"`
+	// ADR-109: the local account that started this run, "" when nobody is logged in or the caller was
+	// the machine token. Serialized so a UI can say whose a run is; scoping reads it, not the reverse.
+	Owner string `json:"owner,omitempty"`
 
 	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
 	sink   *logSink   // M9-LIVE: on-disk log artifacts under the run's dir (not serialized)
@@ -203,8 +205,12 @@ type server struct {
 	storeAddr  string
 	publicBind bool      // M13 R3-hardening: bound to a non-loopback addr (tightens /v1/stream Origin check)
 	ui         *uiServer // ADR-064 Mode 3: serves the browser UI from this port (nil/disabled = Modes 1-2)
-	mu         sync.RWMutex
-	runs       map[string]*run
+	// ADR-109: live local-account sessions. In memory on purpose — a restart logging everyone out is
+	// correct for a tool whose machine token is already per-process, and persisting them would mean a
+	// second credential store to protect, expire and purge.
+	sessions *sessionStore
+	mu       sync.RWMutex
+	runs     map[string]*run
 
 	// M11.5 PR-5 (ADR-062): /readyz. llmBaseURL is the env-configured LLM endpoint ("" = not configured);
 	// probes fall back to the persisted config's llm.base_url. ready guards its own state, NOT s.mu —
@@ -282,14 +288,21 @@ func (s *server) cors(h http.Handler) http.Handler {
 	})
 }
 
-// authed reports whether a request carries the configured bearer token (constant-time). Mutations
-// require it; if no token is configured at all, mutations are refused (fail-closed).
+// authed reports whether a request carries ANY accepted credential: the configured machine token
+// (constant-time) or a live local-account session (ADR-109).
+//
+// Changed in one place on purpose. Twenty-four call sites ask this question, and editing each to also
+// accept a session would have been twenty-four chances to miss one — and a missed one is not a broken
+// feature but a route that silently stays machine-only, which reads to a logged-in person as the
+// product ignoring them. Authentication ("may this caller act?") and scoping ("whose rows?") stay
+// separate: the handlers that read data ask callerOf for an owner.
+//
+// Fail-closed still holds. With no machine token configured there is no credential that can create an
+// account, so no account can exist, so no session can either — the empty-token case refuses mutations
+// exactly as it did.
 func (s *server) authed(r *http.Request) bool {
-	if s.token == "" {
-		return false
-	}
-	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) == 1
+	_, ok := s.callerOf(r)
+	return ok
 }
 
 func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -533,8 +546,12 @@ type runRequest struct {
 	LoginPlan        string `json:"login_plan"`
 	PWNoTrace        bool   `json:"pw_no_trace"`
 
-	plan string        // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
-	llm  *llmRunConfig // ADR-063: parsed+validated per-run LLM config; unexported → never client-settable
+	// ADR-109: the account that asked for this run, resolved from the credential by the handler.
+	// Unexported like `plan` and `llm` — a client that could name its own owner could write into
+	// somebody else's set, which is the opposite of what scoping is for.
+	owner string
+	plan  string        // M9.9: server-RESOLVED plan path (runs/control-<FromRun>/plan.json|scenario.json); unexported → never client-settable
+	llm   *llmRunConfig // ADR-063: parsed+validated per-run LLM config; unexported → never client-settable
 }
 
 func validTarget(t string) bool {
@@ -691,7 +708,7 @@ func (s *server) resolveFromRun(fromRun string) (planPath, planTarget string, er
 func (s *server) spawnRun(req runRequest) *run {
 	id := newRunID()
 	artDir := filepath.Join(s.repo, "runs", "control-"+id)
-	rec := &run{ID: id, State: "running", Target: req.Target, Mode: req.Mode, Planner: req.Planner,
+	rec := &run{ID: id, State: "running", Target: req.Target, Mode: req.Mode, Planner: req.Planner, Owner: req.owner,
 		ConversationID: req.ConversationID, ArtifactDir: artDir,
 		StartedAt: time.Now().UTC().Format(time.RFC3339), stream: newRunStream()}
 	s.mu.Lock()
@@ -937,6 +954,10 @@ func (s *server) persistScenario(rec *run) {
 		StepsJson:   string(art.Steps),
 		Unmatched:   art.Unmatched,
 		SourceRunId: rec.ID,
+		// ADR-109: the scenario a run produced belongs to whoever asked for the run. Inheriting rather
+		// than re-deriving means a person's authored work lands in their own set without the finish
+		// goroutine needing a credential it does not have.
+		Owner: rec.Owner,
 	})
 }
 
@@ -1103,7 +1124,7 @@ func (s *server) persistResult(rec *run) {
 	}
 
 	rr := &storepb.ResultRecord{
-		RunId: rec.ID, Mode: mode, Verdict: verdictEnum(exit),
+		RunId: rec.ID, Mode: mode, Verdict: verdictEnum(exit), Owner: rec.Owner, // ADR-109: inherits the run
 		ExitCode: int64(exit), DurationMs: durationMs(startedAt, finishedAt),
 	}
 	var stepN, regN int64
@@ -1265,15 +1286,29 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			"error": "ci and force_replay are mutually exclusive: --force-replay bypasses the plan_hash hard-abort, which CI mode exists to enforce"})
 		return
 	}
+	// ADR-109: stamp the run with whoever asked for it, so their list shows it and nobody else's does.
+	if c, ok := s.callerOf(r); ok {
+		req.owner = c.owner()
+	}
 	rec := s.spawnRun(req)
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"})
 }
 
-func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
+func (s *server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	// ADR-109: "" = unscoped, which is both the machine token and a deployment with no accounts. An
+	// unauthenticated caller cannot reach this route at all (the mux wraps it), so a missing caller here
+	// would be a routing bug rather than an anonymous read.
+	c, _ := s.callerOf(r)
+	owner := c.owner()
 	s.mu.RLock()
 	live := make(map[string]bool, len(s.runs))
 	out := make([]run, 0, len(s.runs)) // VALUE copies: snapshot mutable fields under the lock (race-free marshal)
 	for id, rr := range s.runs {
+		// The in-memory map is filtered too. Scoping only the STORE would leak every live run to
+		// everyone — and a live run is the one a person is most likely to be looking at.
+		if owner != "" && rr.Owner != owner {
+			continue
+		}
 		live[id] = true
 		out = append(out, *rr)
 	}
@@ -1281,7 +1316,7 @@ func (s *server) handleListRuns(w http.ResponseWriter, _ *http.Request) {
 	// M13 (ADR-050): fold in persisted runs from the gateway (e.g. from before a restart). The in-memory
 	// copy wins for a run that's both live and stored — it has the freshest state + the live stream.
 	if s.store != nil {
-		if stored, ok := s.store.listRuns(); ok {
+		if stored, ok := s.store.listRuns(owner); ok {
 			for _, rr := range stored {
 				if !live[rr.ID] {
 					out = append(out, *rr)
@@ -1564,7 +1599,8 @@ func (s *server) handleListScenarios(w http.ResponseWriter, r *http.Request) {
 	var scenarios []*storepb.Scenario
 	var total int64
 	if s.store != nil {
-		if sl, ok := s.store.listScenarios(r.URL.Query().Get("target")); ok {
+		c, _ := s.callerOf(r)
+		if sl, ok := s.store.listScenarios(r.URL.Query().Get("target"), c.owner()); ok {
 			scenarios, total = sl.Scenarios, sl.Total
 		}
 	}
@@ -1607,7 +1643,8 @@ func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
 	var tests []*storepb.TestRecord
 	var total int64
 	if s.store != nil {
-		if tl, ok := s.store.listTests(); ok {
+		c, _ := s.callerOf(r)
+		if tl, ok := s.store.listTests(c.owner()); ok {
 			tests, total = tl.Tests, tl.Total
 		}
 	}
@@ -1685,7 +1722,8 @@ func (s *server) handleListChats(w http.ResponseWriter, r *http.Request) {
 	var chats []*storepb.ChatProjection
 	var total int64
 	if s.store != nil {
-		if cl, ok := s.store.listChats(); ok {
+		c, _ := s.callerOf(r)
+		if cl, ok := s.store.listChats(c.owner()); ok {
 			chats, total = cl.Chats, cl.Total
 		}
 	}
@@ -1875,6 +1913,9 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	case "describe":
 		rr.Describe = text
 	}
+	if c, ok := s.callerOf(r); ok { // ADR-109: the chat shim spawns runs too
+		rr.owner = c.owner()
+	}
 	rec := s.spawnRun(rr)
 
 	if req.Stream {
@@ -1979,7 +2020,8 @@ func (s *server) handleListResults(w http.ResponseWriter, r *http.Request) {
 	var results []*storepb.ResultRecord
 	var total int64
 	if s.store != nil {
-		if rl, ok := s.store.listResults(parseIntQuery(r, "limit", 200), parseIntQuery(r, "offset", 0)); ok {
+		c, _ := s.callerOf(r)
+		if rl, ok := s.store.listResults(parseIntQuery(r, "limit", 200), parseIntQuery(r, "offset", 0), c.owner()); ok {
 			results, total = rl.Results, rl.Total
 		}
 	}
@@ -2027,6 +2069,15 @@ func (s *server) mux() http.Handler {
 	m.HandleFunc("GET /healthz", s.handleHealthz)
 	m.HandleFunc("GET /readyz", s.handleReadyz) // M11.5 PR-5 (ADR-062): unauth like /healthz, but probes real deps
 	m.HandleFunc("GET /v1/config-schema", s.handleConfigSchema)
+	// ADR-109 local accounts. /v1/login is UNAUTHENTICATED by necessity — it is where a credential is
+	// first presented — and answers identically for a wrong name and a wrong password so it cannot be
+	// used to enumerate who has an account here.
+	m.HandleFunc("POST /v1/login", s.handleLogin)
+	m.HandleFunc("POST /v1/logout", s.handleLogout)
+	m.HandleFunc("GET /v1/me", s.handleMe)
+	m.HandleFunc("POST /v1/users", s.handleCreateUser)
+	m.HandleFunc("GET /v1/users", s.handleListUsers)
+	m.HandleFunc("DELETE /v1/users/{id}", s.handleDeleteUser)
 	// M11.5 PR-5: the service tier of the tiered config (ADR-049). Token-gated both ways.
 	m.HandleFunc("GET /v1/config", s.handleGetConfig)
 	m.HandleFunc("PUT /v1/config", s.handlePutConfig)
@@ -2120,6 +2171,7 @@ func main() {
 		publicBind: !isLocalBind(addr),
 		ui:         newUIServer(), // ADR-064: disabled unless CONTROL_API_SERVE_UI / CONTROL_API_UI_DIR
 		runs:       map[string]*run{},
+		sessions:   newSessionStore(),         // ADR-109
 		llmBaseURL: os.Getenv("LLM_BASE_URL"), // M11.5 PR-5: the /readyz llm probe target (env wins over the stored config)
 	}
 	for _, o := range strings.Split(os.Getenv("CONTROL_API_CORS_ORIGINS"), ",") {

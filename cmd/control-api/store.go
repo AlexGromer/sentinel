@@ -74,7 +74,7 @@ func runToRecord(r *run) *storepb.RunRecord {
 	return &storepb.RunRecord{
 		RunId: r.ID, ConversationId: r.ConversationID, Mode: r.Mode, Target: r.Target, Planner: r.Planner,
 		State: r.State, ExitCode: int64(r.ExitCode), ArtifactDir: r.ArtifactDir, Error: r.Error,
-		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Owner: r.Owner,
 	}
 }
 
@@ -84,11 +84,55 @@ func recordToRun(rec *storepb.RunRecord) *run {
 	return &run{
 		ID: rec.RunId, ConversationID: rec.ConversationId, Mode: rec.Mode, Target: rec.Target,
 		Planner: rec.Planner, State: rec.State, ExitCode: int(rec.ExitCode), ArtifactDir: rec.ArtifactDir,
-		Error: rec.Error, StartedAt: rec.StartedAt, FinishedAt: rec.FinishedAt,
+		Error: rec.Error, StartedAt: rec.StartedAt, FinishedAt: rec.FinishedAt, Owner: rec.Owner,
 	}
 }
 
 // upsertRun persists a run's current state (best-effort; logs + continues on error).
+// --- users (ADR-109 local accounts) ------------------------------------------
+// The gateway stores the credential; verification happens here (internal/identity), so the hash
+// crosses this authenticated channel and nowhere else.
+
+func (c *storeClient) upsertUser(u *storepb.User) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.UpsertUser(ctx, u); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store UpsertUser(%s): %v\n", u.Name, err)
+		return false
+	}
+	return true
+}
+
+func (c *storeClient) getUser(ref *storepb.UserRef) (*storepb.User, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	u, err := c.cl.GetUser(ctx, ref)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store GetUser: %v\n", err)
+		return nil, false
+	}
+	return u, true
+}
+
+func (c *storeClient) listUsers() (*storepb.UserList, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	l, err := c.cl.ListUsers(ctx, &storepb.Empty{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store ListUsers: %v\n", err)
+		return nil, false
+	}
+	return l, true
+}
+
+func (c *storeClient) deleteUser(ref *storepb.UserRef) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	if _, err := c.cl.DeleteUser(ctx, ref); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] store DeleteUser: %v\n", err)
+	}
+}
+
 func (c *storeClient) upsertRun(r *run) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
@@ -113,10 +157,10 @@ func (c *storeClient) getRun(id string) (*run, bool) {
 }
 
 // listRuns returns all persisted runs. Returns (nil,false) on gateway error (caller falls back to memory).
-func (c *storeClient) listRuns() ([]*run, bool) {
+func (c *storeClient) listRuns(owner string) ([]*run, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	rl, err := c.cl.ListRuns(ctx, &storepb.ListRunsReq{Limit: 1000})
+	rl, err := c.cl.ListRuns(ctx, &storepb.ListRunsReq{Limit: 1000, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store ListRuns: %v (falling back to in-memory)\n", err)
 		return nil, false
@@ -157,10 +201,10 @@ func (c *storeClient) getScenario(id string) (*storepb.Scenario, bool) {
 }
 
 // listScenarios returns (nil,false) on gateway error; target=="" lists all scenarios.
-func (c *storeClient) listScenarios(target string) (*storepb.ScenarioList, bool) {
+func (c *storeClient) listScenarios(target, owner string) (*storepb.ScenarioList, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	sl, err := c.cl.ListScenarios(ctx, &storepb.ListScenariosReq{Limit: 1000, Target: target})
+	sl, err := c.cl.ListScenarios(ctx, &storepb.ListScenariosReq{Limit: 1000, Target: target, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store ListScenarios: %v (falling back to empty)\n", err)
 		return nil, false
@@ -205,10 +249,10 @@ func (c *storeClient) getTest(id string) (*storepb.TestRecord, bool) {
 	return t, true
 }
 
-func (c *storeClient) listTests() (*storepb.TestList, bool) {
+func (c *storeClient) listTests(owner string) (*storepb.TestList, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	tl, err := c.cl.ListTests(ctx, &storepb.ListTestsReq{Limit: 1000})
+	tl, err := c.cl.ListTests(ctx, &storepb.ListTestsReq{Limit: 1000, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store ListTests: %v (falling back to empty)\n", err)
 		return nil, false
@@ -238,10 +282,10 @@ func (c *storeClient) getChat(id string) (*storepb.ChatProjection, bool) {
 	return ch, true
 }
 
-func (c *storeClient) listChats() (*storepb.ChatList, bool) {
+func (c *storeClient) listChats(owner string) (*storepb.ChatList, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	cl, err := c.cl.ListChats(ctx, &storepb.ListChatsReq{Limit: 1000})
+	cl, err := c.cl.ListChats(ctx, &storepb.ListChatsReq{Limit: 1000, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store ListChats: %v (falling back to empty)\n", err)
 		return nil, false
@@ -287,10 +331,10 @@ func (c *storeClient) getResult(id string) (*storepb.ResultRecord, bool) {
 }
 
 // listResults returns (nil,false) on gateway error; the caller degrades to an empty list.
-func (c *storeClient) listResults(limit, offset int64) (*storepb.ResultList, bool) {
+func (c *storeClient) listResults(limit, offset int64, owner string) (*storepb.ResultList, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	rl, err := c.cl.ListResults(ctx, &storepb.ListResultsReq{Limit: limit, Offset: offset})
+	rl, err := c.cl.ListResults(ctx, &storepb.ListResultsReq{Limit: limit, Offset: offset, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store ListResults: %v (falling back to empty)\n", err)
 		return nil, false
