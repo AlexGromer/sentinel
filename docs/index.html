@@ -1227,8 +1227,22 @@ function mdRender(raw){
 /* ADR-066: kept as a shim so any legacy caller lands on a real view instead of toggling containers
    the router owns. "tests" was a bucket of seven unrelated things; its closest single meaning is the
    run narrative, so that is where it points. */
+/* The router lives ~2600 lines below and is reached by NAME, not by scope. Four call sites each
+   invented their own way to reach it: three guarded with `typeof setView === 'function'`, whose false
+   branch is SILENCE, and one that had already learned to look on `window`. A silent false branch is
+   how a navigation button does nothing with nothing logged — twice already, and the ADR-066 rename
+   left a third site calling a function that no longer existed at all.
+   vwGo is the single addressable entry, and it THROWS when the router is missing rather than
+   returning quietly: the hub DOM gate fails any check that raises an uncaught page error, so the next
+   rename breaks a test instead of a button. */
+function vwGo(view, opts){
+  var go = window.setView;
+  if (typeof go !== 'function') throw new Error('router unavailable: setView is not reachable as a global');
+  return go(view, opts);
+}
+
 function setTopTab(name){
-  if (typeof setView === 'function') setView(name === 'tests' ? 'live' : 'settings');
+  vwGo(name === 'tests' ? 'live' : 'settings');
 }
 
 
@@ -1586,7 +1600,7 @@ function init(){
     a.addEventListener('click', function(){
       var el = document.querySelector(a.getAttribute('href'));
       var host = el && el.closest('[data-view]');
-      if (host && typeof setView === 'function') setView(host.getAttribute('data-view').split(' ')[0]);
+      if (host) vwGo(host.getAttribute('data-view').split(' ')[0]);
     });
   });
   renderAll();
@@ -1658,8 +1672,7 @@ function loadCapabilities(){
       var b = ev.target.closest && ev.target.closest('.cap-open');
       if (!b) return;
       ev.preventDefault();
-      var go = window.setView || (typeof setView === 'function' ? setView : null);
-      if (go) go(b.getAttribute('data-goto'));
+      vwGo(b.getAttribute('data-goto'));
     });
   }).catch(function(){ /* file:// or offline — leave the loading hint */ });
 }
@@ -2857,7 +2870,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         '<div class="libmeta">'+esc(rn.started_at||'')+(rn.error?' · err='+esc(rn.error):'')+'</div></div>';
     });
     ge('runs-list').innerHTML = html || '<p class="hint">'+bi('прогонов ещё нет','no runs yet')+'</p>';
-    document.querySelectorAll('#runs-list [data-watch]').forEach(function(b){ b.addEventListener('click', function(){ var id=b.getAttribute('data-watch'); tSubTab('live'); agConnect(id); }); });
+    /* ADR-066 replaced tSubTab with setView/setInnerSub and this call site was left behind, so the
+       button threw ReferenceError — and because the throw happened BEFORE agConnect on the same line,
+       it also swallowed the connect. Nothing was logged where a user would look, so "Watch" simply
+       did nothing. Order matters here: connect first, then move, so a failure to reach the router
+       can never again cost the connection the button exists for. */
+    document.querySelectorAll('#runs-list [data-watch]').forEach(function(b){ b.addEventListener('click', function(){ var id=b.getAttribute('data-watch'); agConnect(id); vwGo('live'); }); });
     document.querySelectorAll('#runs-list [data-rerun]').forEach(function(b){ b.addEventListener('click', function(){ tRunFromRunId(b.getAttribute('data-rerun'), 'replay'); }); });
     document.querySelectorAll('#runs-list [data-baseline]').forEach(function(b){ b.addEventListener('click', function(){ tRunFromRunId(b.getAttribute('data-baseline'), 'baseline'); }); });
   }
@@ -3882,11 +3900,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     vwLoaders(v, sub);
   }
 
-  // The router is ADDRESSABLE, not merely in scope. Three call sites already guarded it with
-  // `typeof setView === 'function'` — a guard that turns an unreachable router into a SILENT
-  // no-op, which is what a navigation button did until this line existed: the click fired, the
-  // handler ran, and nothing moved, with no error to notice. Naming it on `window` is how a
-  // control in one part of a 4000-line page reaches the router defined in another.
+  // The router is ADDRESSABLE, not merely in scope: naming it on `window` is how a control in one
+  // part of a 4000-line page reaches a router defined in another. Callers do NOT read this name
+  // directly — they go through `vwGo` (top of the script), which throws when the router is missing
+  // instead of falling silent. That distinction is the whole point: every silent guard this file
+  // ever grew produced a button that did nothing with nothing logged.
   window.setView = setView;
 
   function setInnerSub(view, sub){
