@@ -112,7 +112,13 @@ def main():
         print("PASS unknown test -> empty history; unknown revision -> not found; bad op -> refused")
 
         # 7 — the HTTP surface exists for all four operations, or the hub has nothing to call.
-        api = open(os.path.join(REPO, "cmd", "control-api", "main.go"), encoding="utf-8").read()
+        # The whole package, not main.go alone: ADR-109's second half moved the registrations into the
+        # access.go declaration table, and a gate pinned to one file reported all four routes missing.
+        apidir = os.path.join(REPO, "cmd", "control-api")
+        api = "\n".join(
+            open(os.path.join(apidir, f), encoding="utf-8").read()
+            for f in sorted(os.listdir(apidir))
+            if f.endswith(".go") and not f.endswith("_test.go"))
         for route in ("GET /v1/tests/{id}/revisions",
                       "GET /v1/tests/{id}/revisions/diff",
                       "GET /v1/tests/{id}/revisions/show",

@@ -21,7 +21,20 @@ import (
 	"testing"
 )
 
-var routeRe = regexp.MustCompile(`(?m)^\s*m\.HandleFunc\("([A-Z]+) ([^"]+)"`)
+// Two shapes carry a route today, and the gate reads both.
+//
+// `{pattern: "GET /v1/x", …}` is the declaration table in cmd/control-api/access.go, which the mux is
+// now built from (ADR-109 second half: a route states what credential and whose rows it requires, and
+// there is nowhere else to register one). `m.HandleFunc("…")` still registers the two UI-mode routes
+// directly, because they exist only when the UI is served.
+//
+// Matching both is deliberate rather than transitional: this gate must keep finding routes however
+// they are registered, and the floor check below is what makes "the shape changed" fail loudly
+// instead of passing on an empty list — which is exactly what it did when the table arrived.
+var routeRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)^\s*\{pattern: "([A-Z]+) ([^"]+)"`),
+	regexp.MustCompile(`(?m)^\s*m\.HandleFunc\("([A-Z]+) ([^"]+)"`),
+}
 
 // controlAPIRoutes returns every "METHOD /path" the mux registers.
 func controlAPIRoutes(t *testing.T) []string {
@@ -40,8 +53,10 @@ func controlAPIRoutes(t *testing.T) []string {
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)
 		}
-		for _, m := range routeRe.FindAllStringSubmatch(string(raw), -1) {
-			out = append(out, m[1]+" "+m[2])
+		for _, re := range routeRes {
+			for _, m := range re.FindAllStringSubmatch(string(raw), -1) {
+				out = append(out, m[1]+" "+m[2])
+			}
 		}
 	}
 	if len(out) < 20 {

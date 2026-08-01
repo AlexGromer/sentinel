@@ -72,7 +72,11 @@ def main() -> int:
             assert f'case "{ref}":' in agentctl, (
                 f"{cid}: cli subcommand {ref!r} is not in cmd/agentctl/main.go's switch")
         elif kind == "http":
-            assert f'HandleFunc("{ref}"' in control_api, (
+            # Two shapes register a route: the declaration table in access.go (ADR-109 second half,
+            # where the mux is built from `{pattern: "GET /v1/x", …}`) and the direct HandleFunc the
+            # UI-mode routes still use. A gate that knew only the second one reported every route
+            # missing the moment the table arrived.
+            assert (f'HandleFunc("{ref}"' in control_api or f'{{pattern: "{ref}"' in control_api), (
                 f"{cid}: HTTP route {ref!r} is not registered in cmd/control-api")
         elif kind == "mode":
             # the brain must dispatch on this RUN_MODE, not merely mention it in a comment: require the

@@ -458,8 +458,28 @@ func startGateway(repo, runID, token string) (string, func()) {
 	}
 }
 
-// runWithStore starts the gateway, injects STORE_ADDR, runs the brain, then stops the gateway.
+// runWithStore starts the gateway, injects STORE_ADDR, runs the brain, then stops the gateway —
+// UNLESS a gateway was already handed to it.
+//
+// An inherited STORE_ADDR means the caller owns a store and wants this run to write into it. Today
+// that caller is control-api, which passes its own CONTROL_API_STORE_ADDR down. Before this, agentctl
+// unconditionally started its OWN gateway over repo/state/locators.db and overrode the inherited
+// address (extra is appended after filteredEnv, so it always won). The result was two databases and
+// one projection: the brain wrote the `chats` row into locators.db while control-api read its own
+// store, so GET /v1/chats answered 0 for a conversation that existed — truthfully, about a table
+// nobody had ever written to.
 func runWithStore(repo, runID string, extra []string) int {
+	if addr := strings.TrimSpace(os.Getenv("STORE_ADDR")); addr != "" {
+		// STORE_TOKEN is deliberately NOT in filteredEnv's allowlist (it is a per-run secret, normally
+		// minted here), so inheriting the ADDRESS without forwarding the token would hand the brain a
+		// gateway it cannot authenticate against — and the chats projection, being best-effort, would
+		// swallow the resulting error exactly as it swallowed the last one.
+		extra = append(extra, "STORE_ADDR="+addr)
+		if tok := os.Getenv("STORE_TOKEN"); tok != "" {
+			extra = append(extra, "STORE_TOKEN="+tok)
+		}
+		return spawnBrain(repo, runID, extra)
+	}
 	token := newToken() // #23: per-run secret shared by the gateway and the brain only
 	addr, stop := startGateway(repo, runID, token)
 	defer stop()

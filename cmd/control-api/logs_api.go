@@ -34,10 +34,6 @@ const (
 // code, step, q (substring of the message), after (seq exclusive), limit. Server-side filtering exists so a long run stays usable on
 // a slow link; the UI still filters client-side for instant feedback within a loaded page.
 func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
-	if !s.authed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer token (set CONTROL_API_TOKEN)"})
-		return
-	}
 	id := r.PathValue("id")
 	if !validRunID(id) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id must be a bare run id"})
