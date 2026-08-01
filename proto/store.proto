@@ -163,13 +163,23 @@ message TrendReply { repeated TrendPoint points = 1; }
 // domain is what a service deployment reads at start and the setup wizard writes.
 // SECRETS ARE REJECTED, not stripped: PutConfig fails with InvalidArgument when value_json carries a
 // secret-shaped key anywhere in the document. Keys live in the process env, never in the store.
+// ADR-109 (Alex's directive): "everything the working person owns belongs to them; only the GLOBAL
+// settings and the tool itself belong to the master user." So a config document has an owner too, and
+// the key alone no longer identifies it: "" is the GLOBAL document (the tool, written by an admin or
+// the machine token), any other value is that account's personal document. The pair (key, owner) is
+// the primary key — a personal `setup` and the global `setup` are two rows, not one overwriting the
+// other.
 message ConfigRecord {
   string key = 1;
   string value_json = 2; // a JSON object; secret-shaped member names are refused
   string updated_at = 3; // RFC3339 (defaulted on write)
   bool found = 4;        // false => no such key (GetConfig)
+  string owner = 5;      // "" => the global document; otherwise the account it belongs to
 }
-message ConfigKey { string key = 1; }
+message ConfigKey {
+  string key = 1;
+  string owner = 2; // "" => the global document. NOT "any owner": a read must name which layer it wants
+}
 message ConfigList { repeated ConfigRecord items = 1; }
 
 // --- purge (ADR-100): explicitly-invoked cleanup of stored foreign text ------------------------
@@ -239,6 +249,9 @@ service StoreService {
   // config (M11.5 PR-5)
   rpc PutConfig(ConfigRecord) returns (Empty);   // InvalidArgument when value_json carries a secret
   rpc GetConfig(ConfigKey) returns (ConfigRecord);
+  // ListConfig stays unscoped and is deliberately NOT exposed over HTTP: its only caller is the
+  // readiness ping, which needs the cheapest round trip that proves the socket is alive and
+  // authenticating. Anything a person reads goes through GetConfig, which names the layer it wants.
   rpc ListConfig(Empty) returns (ConfigList);
   rpc DeleteConfig(ConfigKey) returns (Empty);   // idempotent, like DeleteScenario/DeleteTest/DeleteChat
   // purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope

@@ -163,7 +163,7 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 		checks["config"] = readyCheck{Status: "error", Detail: "store-gateway unreachable"}
 	} else {
 		checks["store"] = readyCheck{Status: "ok"}
-		rec, err := s.store.getConfig(setupConfigKey, readyProbeTimeout)
+		rec, err := s.store.getConfig(setupConfigKey, "", readyProbeTimeout)
 		switch {
 		case err != nil: // gateway hiccup, NOT "no config" — do not tell the operator to re-run the wizard
 			checks["config"] = readyCheck{Status: "error", Detail: "store-gateway GetConfig failed: " + err.Error()}
@@ -269,21 +269,51 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"key": doc.Key, "updated_at": doc.UpdatedAt, "config": parsed, "tier": tierFile, "path": s.configFilePath()})
 		return
 	}
-	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	// ADR-109 / Alex's directive: what a caller reads is the EFFECTIVE document — the tool's global
+	// configuration with their own sections laid over it. `sources` travels beside it because "which of
+	// these values are mine and which are the deployment's" is not derivable from the merged document,
+	// and an interface that cannot tell them apart cannot say what a reset would restore.
+	c, _ := s.callerOf(r)
+	globalRec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
 	if err != nil { // a gateway failure is NOT a 404 — that would hide a real config behind a false miss
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "store-gateway unreachable"})
 		return
 	}
-	if rec == nil {
+	globalDoc := map[string]json.RawMessage{}
+	updatedAt := ""
+	if globalRec != nil {
+		if err := json.Unmarshal([]byte(globalRec.ValueJson), &globalDoc); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stored config is not valid JSON"})
+			return
+		}
+		updatedAt = globalRec.UpdatedAt
+	}
+	personalDoc := map[string]json.RawMessage{}
+	if c.owner() != "" {
+		personalRec, perr := s.store.getConfig(setupConfigKey, c.owner(), storeCallTimeout)
+		if perr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "store-gateway unreachable"})
+			return
+		}
+		if personalRec != nil {
+			if err := json.Unmarshal([]byte(personalRec.ValueJson), &personalDoc); err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stored personal config is not valid JSON"})
+				return
+			}
+			if personalRec.UpdatedAt > updatedAt { // the newer of the two layers is when THIS view last changed
+				updatedAt = personalRec.UpdatedAt
+			}
+		}
+	}
+	if globalRec == nil && len(personalDoc) == 0 {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no config stored"})
 		return
 	}
-	var doc any
-	if err := json.Unmarshal([]byte(rec.ValueJson), &doc); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stored config is not valid JSON"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"key": rec.Key, "updated_at": rec.UpdatedAt, "config": doc, "tier": tierStore})
+	merged, sources := mergeConfigDocs(globalDoc, personalDoc)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key": setupConfigKey, "updated_at": updatedAt, "config": merged, "sources": sources,
+		"tier": tierStore, "may_write_global": mayWriteGlobal(c),
+	})
 }
 
 func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +346,31 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	// ADR-109 / Alex's directive: the document is split by declared scope BEFORE anything is written.
+	// An unknown section is refused here rather than defaulted, so a section nobody classified cannot
+	// enter the store and become admin-only or per-account by accident (configscope.go).
+	global, personal, serr := splitConfigDoc(body)
+	if serr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": serr.Error()})
+		return
+	}
+	c, _ := s.callerOf(r)
+	// Refused by NAME, not silently dropped. Quietly discarding the tool's sections would answer
+	// "saved" to someone whose change never happened — the exact silent-degradation shape this
+	// milestone exists to close.
+	if len(global) > 0 && !mayWriteGlobal(c) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "section(s) " + globalSectionsIn(global) + " configure the tool for everyone, so only an " +
+				"admin account or the machine token may change them; your own sections (" +
+				strings.Join([]string{"run", "auth"}, ", ") + ") are yours to set",
+			"refused_sections": globalSectionsIn(global),
+		})
+		return
+	}
 	if s.configTier() == tierFile { // ADR-075 standalone tier
+		// The file tier has no accounts at all (local accounts need a store-gateway), so there is exactly
+		// one document and it is the global one. Writing the body through unchanged keeps a standalone
+		// deployment byte-identical to what it had before the split existed.
 		if err := s.writeConfigFile(string(body)); err != nil {
 			// A config write that silently vanished would leave the operator believing the wizard had
 			// saved — the same reason storeClient.putConfig is the one store helper that does not swallow
@@ -330,16 +384,69 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
 		return
 	}
-	if err := s.store.putConfig(setupConfigKey, string(body)); err != nil {
-		if isInvalidArgument(err) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+	// A caller with no subject (the machine token, or a deployment with no accounts) writes the global
+	// document for BOTH halves — the same "no subject, no scoping" rule as everywhere else in ADR-109,
+	// and what keeps the setup wizard working unchanged: it authenticates as the machine, so the
+	// run/auth defaults it saves are the tool's defaults, exactly as before.
+	owner := c.owner()
+	written := map[string]string{}
+	if len(global) > 0 || owner == "" {
+		doc, merr := marshalConfigDoc(mergeSectionsForOwner(global, personal, owner))
+		if merr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "cannot re-serialise the document"})
 			return
 		}
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "store-gateway rejected the write"})
-		return
+		if err := s.putConfigLayer(w, "", string(doc)); err != nil {
+			return // putConfigLayer wrote the response
+		}
+		written["global"] = globalSectionsIn(mergeSectionsForOwner(global, personal, owner))
+	}
+	if owner != "" && len(personal) > 0 {
+		doc, merr := marshalConfigDoc(personal)
+		if merr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "cannot re-serialise the document"})
+			return
+		}
+		if err := s.putConfigLayer(w, owner, string(doc)); err != nil {
+			return
+		}
+		written["personal"] = globalSectionsIn(personal)
 	}
 	s.invalidateReadiness() // the "config" check just changed; do not serve a stale 503 for 3 more seconds
-	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "key": setupConfigKey, "tier": tierStore})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written})
+}
+
+// mergeSectionsForOwner decides what goes into the GLOBAL document. For a caller with no subject that
+// is the whole document (both halves); for an account it is only the tool's sections, since their own
+// go to their own layer.
+func mergeSectionsForOwner(global, personal map[string]json.RawMessage, owner string) map[string]json.RawMessage {
+	if owner != "" {
+		return global
+	}
+	out := map[string]json.RawMessage{}
+	for k, v := range global {
+		out[k] = v
+	}
+	for k, v := range personal {
+		out[k] = v
+	}
+	return out
+}
+
+// putConfigLayer writes one layer and maps a store failure onto the response. It returns the error so
+// the caller stops; the response has already been written.
+func (s *server) putConfigLayer(w http.ResponseWriter, owner, doc string) error {
+	err := s.store.putConfig(setupConfigKey, owner, doc)
+	if err == nil {
+		return nil
+	}
+	if isInvalidArgument(err) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return err
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]any{"error": "store-gateway rejected the write"})
+	return err
 }
 
 // invalidateReadiness drops the memo AND bumps epoch, so a probe that is already in flight (started
@@ -388,7 +495,7 @@ func (s *server) loadStartupConfig() {
 		}
 		return
 	}
-	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "control-api: startup config read failed (gateway): %v\n", err)
 		return

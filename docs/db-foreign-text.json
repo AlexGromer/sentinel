@@ -406,6 +406,10 @@
         },
         "updated_at": {
           "foreign": "none"
+        },
+        "owner": {
+          "foreign": "none",
+          "note": "ADR-109: part of this table's PRIMARY KEY, not merely a column on it — a config document is identified by (key, owner). Empty is the GLOBAL document (the tool, written by an admin or the machine token); any other value is one account's personal document, layered over it. Ours, not the tested application's: a user_id minted by control-api."
         }
       }
     },

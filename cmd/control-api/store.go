@@ -372,10 +372,21 @@ func (c *storeClient) trends(metric string, window int64, owner string) (*storep
 // silently vanished would leave the operator believing the wizard had saved. The HTTP layer maps the
 // gRPC code (InvalidArgument -> 400, anything else -> 502).
 
-func (c *storeClient) putConfig(key, valueJSON string) error {
+// putConfig writes ONE layer: owner "" is the global document (the tool), anything else is that
+// account's personal one (ADR-109 / Alex's directive).
+func (c *storeClient) putConfig(key, owner, valueJSON string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	_, err := c.cl.PutConfig(ctx, &storepb.ConfigRecord{Key: key, ValueJson: valueJSON})
+	_, err := c.cl.PutConfig(ctx, &storepb.ConfigRecord{Key: key, Owner: owner, ValueJson: valueJSON})
+	return err
+}
+
+// deleteConfig removes one layer. Deleting a personal document reveals the global one again — that is
+// what "reset my settings to the tool's defaults" means, and why it is not a write of an empty doc.
+func (c *storeClient) deleteConfig(key, owner string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
+	defer cancel()
+	_, err := c.cl.DeleteConfig(ctx, &storepb.ConfigKey{Key: key, Owner: owner})
 	return err
 }
 
@@ -388,10 +399,10 @@ func (c *storeClient) putConfig(key, valueJSON string) error {
 // unreachable (hiding a real config) and made /readyz tell an operator to re-run the wizard on a
 // gateway-latency problem. `timeout` lets the readiness path bound this at readyProbeTimeout rather than
 // the longer storeCallTimeout.
-func (c *storeClient) getConfig(key string, timeout time.Duration) (*storepb.ConfigRecord, error) {
+func (c *storeClient) getConfig(key, owner string, timeout time.Duration) (*storepb.ConfigRecord, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	rec, err := c.cl.GetConfig(ctx, &storepb.ConfigKey{Key: key})
+	rec, err := c.cl.GetConfig(ctx, &storepb.ConfigKey{Key: key, Owner: owner})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[control-api] store GetConfig(%s): %v\n", key, err)
 		return nil, err

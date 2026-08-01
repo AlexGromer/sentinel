@@ -90,6 +90,9 @@ type StoreServiceClient interface {
 	// config (M11.5 PR-5)
 	PutConfig(ctx context.Context, in *ConfigRecord, opts ...grpc.CallOption) (*Empty, error)
 	GetConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*ConfigRecord, error)
+	// ListConfig stays unscoped and is deliberately NOT exposed over HTTP: its only caller is the
+	// readiness ping, which needs the cheapest round trip that proves the socket is alive and
+	// authenticating. Anything a person reads goes through GetConfig, which names the layer it wants.
 	ListConfig(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ConfigList, error)
 	DeleteConfig(ctx context.Context, in *ConfigKey, opts ...grpc.CallOption) (*Empty, error)
 	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
@@ -442,6 +445,9 @@ type StoreServiceServer interface {
 	// config (M11.5 PR-5)
 	PutConfig(context.Context, *ConfigRecord) (*Empty, error)
 	GetConfig(context.Context, *ConfigKey) (*ConfigRecord, error)
+	// ListConfig stays unscoped and is deliberately NOT exposed over HTTP: its only caller is the
+	// readiness ping, which needs the cheapest round trip that proves the socket is alive and
+	// authenticating. Anything a person reads goes through GetConfig, which names the layer it wants.
 	ListConfig(context.Context, *Empty) (*ConfigList, error)
 	DeleteConfig(context.Context, *ConfigKey) (*Empty, error)
 	// purge (ADR-100) — operator-invoked only; InvalidArgument on an empty or unknown scope
