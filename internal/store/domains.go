@@ -528,16 +528,23 @@ func (s *Server) PutConfig(_ context.Context, r *pb.ConfigRecord) (*pb.Empty, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// ADR-109: (key, owner) is the identity of a document. The conflict target has to name BOTH, or the
+	// upsert matches no unique constraint at all — SQLite refuses the statement rather than guessing,
+	// which is how this migration announced itself.
 	_, err := s.db.Exec(
-		`INSERT INTO config(key,value_json,updated_at) VALUES(?,?,?)
-		 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
-		r.Key, r.ValueJson, nowRFC3339(r.UpdatedAt))
+		`INSERT INTO config(key,owner,value_json,updated_at) VALUES(?,?,?,?)
+		 ON CONFLICT(key,owner) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+		r.Key, r.Owner, r.ValueJson, nowRFC3339(r.UpdatedAt))
 	return &pb.Empty{}, err
 }
 
+// GetConfig reads ONE layer, named by (key, owner). It deliberately does not fall back from a personal
+// document to the global one: the overlay is the control-API's decision (it knows which sections are
+// the tool's and which are the person's), and a silent fallback here would make a missing personal
+// document indistinguishable from one that exists and happens to match the global.
 func (s *Server) GetConfig(_ context.Context, k *pb.ConfigKey) (*pb.ConfigRecord, error) {
-	r := &pb.ConfigRecord{Key: k.Key}
-	err := s.db.QueryRow(`SELECT value_json,updated_at FROM config WHERE key=?`, k.Key).
+	r := &pb.ConfigRecord{Key: k.Key, Owner: k.Owner}
+	err := s.db.QueryRow(`SELECT value_json,updated_at FROM config WHERE key=? AND owner=?`, k.Key, k.Owner).
 		Scan(&r.ValueJson, &r.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return &pb.ConfigRecord{Found: false}, nil
@@ -550,7 +557,7 @@ func (s *Server) GetConfig(_ context.Context, k *pb.ConfigKey) (*pb.ConfigRecord
 }
 
 func (s *Server) ListConfig(_ context.Context, _ *pb.Empty) (*pb.ConfigList, error) {
-	rows, err := s.db.Query(`SELECT key,value_json,updated_at FROM config ORDER BY key`)
+	rows, err := s.db.Query(`SELECT key,owner,value_json,updated_at FROM config ORDER BY key,owner`)
 	if err != nil {
 		return nil, err
 	}
@@ -558,7 +565,7 @@ func (s *Server) ListConfig(_ context.Context, _ *pb.Empty) (*pb.ConfigList, err
 	out := &pb.ConfigList{}
 	for rows.Next() {
 		r := &pb.ConfigRecord{Found: true}
-		if err := rows.Scan(&r.Key, &r.ValueJson, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.Key, &r.Owner, &r.ValueJson, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out.Items = append(out.Items, r)
@@ -567,9 +574,10 @@ func (s *Server) ListConfig(_ context.Context, _ *pb.Empty) (*pb.ConfigList, err
 }
 
 // DeleteConfig is idempotent — deleting a missing key is success, like DeleteScenario/DeleteTest/DeleteChat.
+// It deletes ONE layer: removing a personal document must not remove the global one it overlaid.
 func (s *Server) DeleteConfig(_ context.Context, k *pb.ConfigKey) (*pb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`DELETE FROM config WHERE key=?`, k.Key)
+	_, err := s.db.Exec(`DELETE FROM config WHERE key=? AND owner=?`, k.Key, k.Owner)
 	return &pb.Empty{}, err
 }
