@@ -385,7 +385,12 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		// new setting arrives with sane input constraints rather than inheriting `step=1000` from an
 		// `else` written for token budgets.
 		"settings": settingsSchema,
-		"note":     "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
+		// ADR-109 / Alex's directive: which sections of the stored document configure the TOOL (admin
+		// only) and which belong to the person using it. Published verbatim from the one map that
+		// enforces it (configscope.go), so an interface disables what a caller may not change instead of
+		// letting them fill in a form whose save is going to be refused.
+		"config_sections": configSectionScope,
+		"note":            "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
 	})
 }
 

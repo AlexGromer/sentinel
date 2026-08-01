@@ -138,7 +138,7 @@ func (s *server) getPersistedLogging() map[string]string {
 	if s.store == nil {
 		return nil
 	}
-	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
 	if err != nil || rec == nil {
 		return nil
 	}
@@ -233,7 +233,7 @@ func (s *server) getPersistedSettings() map[string]string {
 	if s.store == nil {
 		return nil
 	}
-	rec, err := s.store.getConfig(setupConfigKey, storeCallTimeout)
+	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
 	if err != nil || rec == nil {
 		return nil
 	}
