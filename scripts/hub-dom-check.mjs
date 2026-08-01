@@ -61,7 +61,7 @@ function eq(actual, expected, what) {
 }
 
 /* ------------------------------------------------------------------ fixtures */
-let capi = null, browser = null;
+let capi = null, capi2 = null, browser = null, gw = null;
 
 // Every resource is captured INSIDE the try, so a failure to launch cannot leave an orphaned
 // control-API holding the port. An orphan is not a hypothetical: it makes the NEXT run talk to the old
@@ -71,6 +71,7 @@ try {
   if (!fs.existsSync(bin)) throw new Error(`${bin} not built — run: go build -o bin/control-api ./cmd/control-api`);
 
   fs.mkdirSync(path.join(REPO, 'state'), { recursive: true });
+
   capi = spawn(bin, [], {
     cwd: REPO,
     env: {
@@ -1355,12 +1356,194 @@ try {
     await page.uncheck('#b-forcereplay');
   }, { allowConsole: freshConfig404 });
 
+  /* ================= ADR-109 — local accounts in the hub =================
+     These run LAST and against their OWN control-API, deliberately.
+
+     Local accounts need a store-gateway, and attaching one to the server the
+     checks above use changes what those checks are looking at: /readyz turns
+     503 until a config is saved (the store tier EXPECTS one, the file tier
+     does not), and creating the first account tightens the pre-identity open
+     reads. Both are correct product behaviour and both would rewrite the
+     premises of forty-five checks that are about something else. A second
+     process on its own port is cheaper than reasoning about that overlap —
+     and it is also how the product is deployed when identity is in use. */
+
+  const gwBin = path.join(REPO, 'bin', 'store-gateway');
+  if (!fs.existsSync(gwBin)) {
+    // NOT a skip. The identity checks would silently stop measuring, and a gate that cannot fail is
+    // indistinguishable from one that passes (ADR-097).
+    throw new Error(`${gwBin} not built — run: go build -o bin/store-gateway ./cmd/store-gateway`);
+  }
+  // SHORT socket path, under /tmp: a unix address is capped at ~108 bytes and a longer one fails with
+  // a bare "bind: invalid argument" that reads as a build problem.
+  const storeSock = `/tmp/sentinel-hubgate-${process.pid}.sock`;
+  const storeToken = 'hub-gate-store-token';
+  gw = spawn(gwBin, ['--addr', storeSock, '--db', path.join(REPO, 'state', `hub-gate-${process.pid}.db`)], {
+    cwd: REPO,
+    env: { ...process.env, STORE_TOKEN: storeToken },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  for (let i = 0; i < 100 && !fs.existsSync(storeSock); i++) await new Promise((r) => setTimeout(r, 50));
+  if (!fs.existsSync(storeSock)) throw new Error('store-gateway socket never appeared');
+
+  const PORT2 = PORT + 1;
+  capi2 = spawn(bin, [], {
+    cwd: REPO,
+    env: {
+      ...process.env,
+      CONTROL_API_ADDR: `127.0.0.1:${PORT2}`,
+      CONTROL_API_SERVE_UI: '1',
+      CONTROL_API_UI_DIR: path.join(REPO, 'docs'),
+      CONTROL_API_AGENTCTL: path.join(REPO, 'bin', 'agentctl'),
+      CONTROL_API_CORS_ORIGINS: '',
+      CONTROL_API_STORE_ADDR: `unix:${storeSock}`,
+      STORE_TOKEN: storeToken,
+      CONTROL_API_TOKEN: 'hub-gate-machine-token',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let log2 = '';
+  capi2.stdout.on('data', (b) => { log2 += b; });
+  capi2.stderr.on('data', (b) => { log2 += b; });
+  let nonce2 = '';
+  for (let i = 0; i < 100; i++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT2}/healthz`);
+      if (r.ok) { const m = /bootstrap=([0-9a-f]+)/.exec(log2); if (m) { nonce2 = m[1]; break; } }
+    } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!nonce2) throw new Error(`second control-API never printed a bootstrap nonce:\n${log2.slice(0, 1200)}`);
+  const token2 = 'hub-gate-machine-token';
+
+  // Two accounts, created through the API with the machine token — the same way an operator does it
+  // before anyone can sign in.
+  const mkUser = async (name, password, isAdmin) => {
+    const r = await fetch(`http://127.0.0.1:${PORT2}/v1/users`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, password, is_admin: isAdmin }),
+    });
+    if (r.status !== 201) throw new Error(`POST /v1/users ${name} -> ${r.status} ${await r.text()}`);
+  };
+  await mkUser('gate-admin', 'gate-admin-pass', true);
+  await mkUser('gate-user', 'gate-user-pass1', false);
+  // A stored document, so the settings view has the tool's sections to show and lock. Written by the
+  // machine token, which is exactly how the setup wizard writes it.
+  {
+    const r = await fetch(`http://127.0.0.1:${PORT2}/v1/config`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { log_keep: 5 }, run: { max_steps: 40 } }),
+    });
+    if (!r.ok) throw new Error(`PUT /v1/config -> ${r.status} ${await r.text()}`);
+  }
+
+  const idPage = await context.newPage();
+  idPage.on('pageerror', (e) => pageErrors.push(e.message));
+  idPage.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`console: ${m.text()}`); });
+  await idPage.goto(`http://127.0.0.1:${PORT2}/?bootstrap=${nonce2}`, { waitUntil: 'load' });
+  await idPage.waitForTimeout(400);
+
+  // The sign-in controls live in the Settings view, so every check here starts by revealing it. A
+  // locator that is merely present is not a control a person can use.
+  const openSettings = async () => {
+    await idPage.click('.rail a[data-nav="settings"]');
+    await idPage.waitForTimeout(200);
+  };
+  const signIn = async (name, password) => {
+    await openSettings();
+    await idPage.fill('#id-name', name);
+    await idPage.fill('#id-pass', password);
+    await idPage.click('#id-login');
+    await idPage.waitForTimeout(800);
+  };
+
+  await check('identity: the hub can sign in, and says who is working', async () => {
+    await openSettings();
+    ok(await idPage.locator('#id-login').isVisible(), 'there is no sign-in control in the hub at all');
+    await signIn('gate-user', 'gate-user-pass1');
+    const who = await idPage.locator('#id-who').innerText();
+    ok(/gate-user/.test(who), `the page does not say who is signed in: ${JSON.stringify(who)}`);
+    // The session REPLACED the machine token rather than sitting beside it: two credentials would mean
+    // an invisible rule about which one wins.
+    const tok = await idPage.locator('#capitok').inputValue();
+    ok(tok.length > 0 && tok !== token2, 'the machine token is still in the field after signing in');
+    ok(await idPage.locator('#id-logout').isVisible(), 'no way to sign out once signed in');
+  }, { allowConsole: freshConfig404 });
+
+  await check('identity: a plain account is not offered the account controls', async () => {
+    ok(!(await idPage.locator('#idadmin').isVisible()),
+       'the account-management block is visible to a non-admin — a control whose use will be refused');
+  }, { allowConsole: freshConfig404 });
+
+  await check('config split: the tool\'s settings are visible but locked, and the reason is on screen', async () => {
+    await idPage.click('#cfg-reload');
+    await idPage.waitForTimeout(900);
+    const first = idPage.locator('#cfg-groups input').first();
+    ok(await first.count() > 0, 'the settings view rendered no controls at all');
+    ok(await first.isDisabled(), 'a non-admin can edit the tool\'s settings — the split is not reaching the UI');
+    // Visible, not hidden: a value nobody can see is one nobody can ask to have changed.
+    ok(await first.isVisible(), 'the tool\'s settings were HIDDEN from a non-admin rather than shown read-only');
+    const why = await idPage.locator('#cfg-locked').innerText();
+    ok(why.trim().length > 0, 'the controls are disabled with nothing saying why');
+  }, { allowConsole: freshConfig404 });
+
+  await check('config split: saving as a plain account is not refused', async () => {
+    // The document the hub reads back is the MERGED one, so it always contains the tool's sections.
+    // Sending them back would earn a 403 and make the settings view unusable for everyone but an admin
+    // — the opposite of what the split is for. What leaves the page must be only what is theirs.
+    let sentBody = null;
+    await idPage.route('**/v1/config', async (route) => {
+      if (route.request().method() === 'PUT') { sentBody = route.request().postData(); await route.abort(); return; }
+      await route.continue();
+    });
+    await idPage.click('#cfg-save');
+    await idPage.waitForTimeout(400);
+    await idPage.unroute('**/v1/config');
+    ok(sentBody !== null, 'the save button sent nothing');
+    const doc = JSON.parse(sentBody);
+    ok(!('settings' in doc), `a non-admin's save carried the tool's settings section: ${sentBody.slice(0, 200)}`);
+    ok(!('llm' in doc), `a non-admin's save carried the tool's llm section: ${sentBody.slice(0, 200)}`);
+    // The aborted PUT is the technique, not a defect: intercepting the request is how its BODY is read
+    // (the assertion is about what leaves the page, not about what the server answers), and an aborted
+    // fetch necessarily logs a failed resource. Allowed narrowly, by the abort's own signature.
+  }, { allowConsole: /404 \(Not Found\)|net::ERR_FAILED/ });
+
+  await check('identity: an admin gets the account controls and a real list', async () => {
+    await idPage.click('#id-logout');
+    await idPage.waitForTimeout(400);
+    await signIn('gate-admin', 'gate-admin-pass');
+    ok(await idPage.locator('#idadmin').isVisible(), 'an admin is not offered the account controls');
+    await idPage.click('#ua-reload');
+    await idPage.waitForTimeout(600);
+    const list = await idPage.locator('#ua-list').innerText();
+    ok(/gate-user/.test(list) && /gate-admin/.test(list), `the account list does not show the accounts: ${list}`);
+  }, { allowConsole: freshConfig404 });
+
+  await check('config split: an admin may edit the tool', async () => {
+    await idPage.click('#cfg-reload');
+    await idPage.waitForTimeout(900);
+    const first = idPage.locator('#cfg-groups input').first();
+    ok(!(await first.isDisabled()),
+       'an admin cannot edit the tool\'s settings either — then the lock is not about permission at all');
+  }, { allowConsole: freshConfig404 });
+
+  await check('identity: signing out returns the hub to no identity', async () => {
+    await idPage.click('#id-logout');
+    await idPage.waitForTimeout(500);
+    ok(!(await idPage.locator('#idadmin').isVisible()), 'the account controls survived signing out');
+    eq(await idPage.locator('#capitok').inputValue(), '', 'the session token stayed in the field after signing out');
+  }, { allowConsole: freshConfig404 });
+
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (capi) capi.kill('SIGTERM');
+  if (capi2) capi2.kill('SIGTERM');
+  if (gw) gw.kill('SIGTERM');
 }
 
 const failed = results.filter((r) => !r.ok);

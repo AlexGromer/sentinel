@@ -244,6 +244,26 @@ func TestSplitPreservesTheCallersBytes(t *testing.T) {
 	if !strings.Contains(rec.ValueJson, `"log_keep":40`) || !strings.Contains(rec.ValueJson, `"heal_auto":0.85`) {
 		t.Errorf("the stored bytes were rewritten: %s", rec.ValueJson)
 	}
+
+	// The BYTES, not merely equivalent JSON — this is what the first version of this check got wrong,
+	// and a mutation that round-tripped the document through map[string]any survived it. Two things a
+	// round trip destroys and substring matching cannot see:
+	//
+	//	member ORDER inside a section — Go sorts map keys, so a document comes back rearranged and
+	//	  every diff an operator takes of their own config shows changes nobody made;
+	//	integer PRECISION — a JSON number becomes float64, so 2^53+1 silently returns as 2^53. A
+	//	  budget or a timeout is exactly the kind of value that lives here.
+	const exact = `{"settings":{"zzz_last":1,"aaa_first":2,"big":9007199254740993}}`
+	if rec2, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(exact), admin); rec2.Code != http.StatusOK {
+		t.Fatalf("PUT of the byte-exactness document = %d", rec2.Code)
+	}
+	stored, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
+	if err != nil || stored == nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if stored.ValueJson != exact {
+		t.Errorf("the document was re-serialised on the way in:\n sent   %s\n stored %s", exact, stored.ValueJson)
+	}
 	// Sections are stored in a stable order, so an operator diffing the stored document sees changes,
 	// not member shuffling.
 	var first, second map[string]json.RawMessage

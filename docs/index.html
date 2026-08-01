@@ -645,6 +645,72 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <button type="button" class="btn" id="cap-check"><span data-lang="ru">Проверить</span><span data-lang="en">Check</span></button>
       <span id="cap-status" style="font-size:.88rem;color:var(--mut)"></span>
     </div>
+
+    <!-- ADR-109: local accounts. The machine token above is the DEPLOYMENT's credential — unscoped, it
+         sees every row, which is what CI and agentctl need and what nobody working in this page wants.
+         Signing in swaps it for a session, and from then on the whole hub shows one person's runs,
+         scenarios, tests and conversations. The session lives in the same memory-only field as the
+         machine token: one place a credential can be, never localStorage, never the URL. -->
+    <div id="idbox" style="margin-top:.9rem;border-top:1px solid var(--bd);padding-top:.7rem">
+      <h3 style="font-size:.92rem;margin:0 0 .35rem">
+        <span data-lang="ru">Вход в аккаунт</span><span data-lang="en">Sign in</span>
+      </h3>
+      <p class="sub" style="margin:0 0 .5rem">
+        <span data-lang="ru">Машинный токен выше видит ВСЁ — он для CI и командной строки. Войдите под своим аккаунтом, чтобы видеть свои прогоны, сценарии, тесты и беседы.</span>
+        <span data-lang="en">The machine token above sees EVERYTHING — it is for CI and the command line. Sign in with your account to see your own runs, scenarios, tests and conversations.</span>
+      </p>
+      <div class="grid g2" id="id-form">
+        <div>
+          <label for="id-name"><span data-lang="ru">Имя</span><span data-lang="en">Name</span></label>
+          <input id="id-name" type="text" placeholder="alice" autocomplete="username">
+        </div>
+        <div>
+          <label for="id-pass"><span data-lang="ru">Пароль</span><span data-lang="en">Password</span></label>
+          <input id="id-pass" type="password" placeholder="—" autocomplete="current-password">
+        </div>
+      </div>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="id-login"><span data-lang="ru">Войти</span><span data-lang="en">Sign in</span></button>
+        <button type="button" class="btn" id="id-logout" style="display:none"><span data-lang="ru">Выйти</span><span data-lang="en">Sign out</span></button>
+        <span id="id-status" style="font-size:.88rem;color:var(--mut)"></span>
+      </div>
+      <p class="hint" id="id-who" style="margin-top:.5rem"></p>
+    </div>
+
+    <!-- Account management, revealed only to an admin (or the machine token). Rendered from
+         GET /v1/me rather than assumed: a page that decides on its own what someone may do will
+         eventually offer a control whose use is refused. -->
+    <div id="idadmin" style="margin-top:.9rem;border-top:1px solid var(--bd);padding-top:.7rem;display:none">
+      <h3 style="font-size:.92rem;margin:0 0 .35rem">
+        <span data-lang="ru">Аккаунты</span><span data-lang="en">Accounts</span>
+      </h3>
+      <p class="sub" style="margin:0 0 .5rem">
+        <span data-lang="ru">Аккаунты локальные, живут в этом развёртывании. Строки, записанные до появления аккаунтов, не принадлежат никому и видны всем.</span>
+        <span data-lang="en">Accounts are local to this deployment. Rows written before accounts existed belong to nobody and stay visible to everyone.</span>
+      </p>
+      <div class="grid g3">
+        <div>
+          <label for="ua-name"><span data-lang="ru">Имя</span><span data-lang="en">Name</span></label>
+          <input id="ua-name" type="text" placeholder="bob" autocomplete="off">
+        </div>
+        <div>
+          <label for="ua-pass"><span data-lang="ru">Пароль</span><span data-lang="en">Password</span></label>
+          <input id="ua-pass" type="password" placeholder="—" autocomplete="new-password">
+        </div>
+        <div>
+          <label style="display:flex;align-items:center;gap:.4rem;margin-top:1.4rem;color:var(--tx)">
+            <input id="ua-admin" type="checkbox" style="width:auto">
+            <span data-lang="ru">админ</span><span data-lang="en">admin</span>
+          </label>
+        </div>
+      </div>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="ua-create"><span data-lang="ru">Создать</span><span data-lang="en">Create</span></button>
+        <button type="button" class="btn" id="ua-reload"><span data-lang="ru">Обновить список</span><span data-lang="en">Reload</span></button>
+        <span id="ua-status" style="font-size:.88rem;color:var(--mut)"></span>
+      </div>
+      <div id="ua-list" style="margin-top:.5rem"></div>
+    </div>
     <!-- ADR-074: the setup wizard had no link from anywhere in the app — it was reachable only by typing
          its URL, which is also why nobody noticed it could not get a token. It belongs next to the token
          it needs. The link is relative so it works on the served origin, on Pages and from file://. -->
@@ -1760,7 +1826,167 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       cfgLoaded = false;
       if (typeof vwActive !== 'undefined' && vwActive === 'settings') cfgInit();
     }
+    /* ADR-109: a working credential is also the moment we can ask WHOSE it is. Without this the
+       account controls would stay hidden for someone holding the machine token, and the settings view
+       would have no idea whether it may offer the tool's knobs. */
+    if (ok) idRefresh().then(function(){ if (idIsAdmin()) uaLoad(); });
   }
+
+  /* =======================================================================
+     ADR-109 — local accounts in the hub.
+     Until now this page knew one credential: the machine token, which is
+     unscoped and therefore shows every account's rows to whoever holds it.
+     Signing in mints a SESSION and puts it in the very same field, so every
+     request the hub already makes becomes that person's — one credential
+     store, memory-only, and no second code path to keep in step.
+     `idMe` is what the page knows about the current caller; the settings
+     view reads it to disable what an account may not change.
+     ======================================================================= */
+  var idMe = null;   /* null = unknown/anonymous; {machine} or {user:{...}} */
+
+  function idSetStatus(html){ var el=ge('id-status'); if (el) el.innerHTML=html; }
+
+  function idPaint(){
+    var who=ge('id-who'), out=ge('id-logout'), adm=ge('idadmin');
+    if (!who) return;
+    if (!idMe){
+      who.innerHTML = bi('не выполнен вход — хаб работает под тем токеном, что вписан выше',
+                         'not signed in — the hub is using whatever token is entered above');
+      if (out) out.style.display='none';
+      if (adm) adm.style.display='none';
+      return;
+    }
+    if (idMe.machine){
+      who.innerHTML = bi('машинный токен: <b>без области видимости</b> — видно всё, что есть в этом развёртывании',
+                         'machine token: <b>unscoped</b> — everything in this deployment is visible');
+      if (out) out.style.display='none';
+    } else {
+      var u=idMe.user||{};
+      who.innerHTML = bi('вы вошли как <b>'+esc(u.name||'?')+'</b>'+(u.is_admin?' (админ)':'')+' — видны только ваши строки',
+                         'signed in as <b>'+esc(u.name||'?')+'</b>'+(u.is_admin?' (admin)':'')+' — only your rows are visible');
+      if (out) out.style.display='';
+    }
+    if (adm) adm.style.display = idIsAdmin() ? '' : 'none';
+  }
+
+  function idIsAdmin(){ return !!(idMe && (idMe.machine || (idMe.user && idMe.user.is_admin))); }
+
+  /* idRefresh asks the SERVER who the current credential belongs to instead of remembering what was
+     typed. A page that decides on its own what someone may do eventually offers a control whose use is
+     refused — and the refusal arrives after the work, not before it. */
+  async function idRefresh(){
+    var base=capiBase();
+    idMe=null;
+    if (base && capiTok()){
+      try {
+        var r=await fetch(base+'/v1/me',{headers:authHdr()});
+        if (r.ok) idMe=await r.json();
+      } catch(e){ /* offline / CORS — stay anonymous rather than claim an identity */ }
+    }
+    idPaint();
+    return idMe;
+  }
+
+  ge('id-login').addEventListener('click', async function(){
+    var base=capiBase();
+    if (!base){ idSetStatus(bi('укажите URL control-API','set the control-API URL')); return; }
+    var name=(ge('id-name').value||'').trim(), pass=ge('id-pass').value||'';
+    if (!name || !pass){ idSetStatus(bi('введите имя и пароль','enter a name and password')); return; }
+    idSetStatus(bi('вхожу…','signing in…'));
+    try {
+      var r=await fetch(base+'/v1/login',{method:'POST',headers:{'Content-Type':'application/json'},
+                                          body:JSON.stringify({name:name,password:pass})});
+      var j=await r.json().catch(function(){ return {}; });
+      if (!r.ok){ idSetStatus('<span class="fail">✗ '+esc(j.error||('HTTP '+r.status))+'</span>'); return; }
+      /* The session replaces whatever was in the token field. Keeping both would mean two credentials
+         and a rule about which wins — and the rule would be invisible from the interface. */
+      ge('capitok').value=j.session||'';
+      ge('id-pass').value='';
+      idSetStatus('<span class="ok">✓ '+bi('вход выполнен','signed in')+'</span>');
+      await idRefresh();
+      capUnlock(true);
+      idReloadViews();
+    } catch(e){ idSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
+  });
+
+  ge('id-logout').addEventListener('click', async function(){
+    var base=capiBase();
+    try { await fetch(base+'/v1/logout',{method:'POST',headers:authHdr()}); } catch(e){}
+    ge('capitok').value='';
+    idSetStatus(bi('выход выполнен','signed out'));
+    await idRefresh();
+    idReloadViews();
+  });
+
+  /* Signing in or out changes WHICH rows exist, so every list the hub is showing is now about someone
+     else. Marking them unloaded is the difference between an interface that answers the new question
+     and one that keeps displaying the previous person's library until something happens to refresh. */
+  function idReloadViews(){
+    cfgLoaded=false;
+    if (typeof tLibLoaded  !== 'undefined') tLibLoaded=false;
+    if (typeof tRunsLoaded !== 'undefined') tRunsLoaded=false;
+    if (typeof vwActive !== 'undefined' && typeof vwLoaders === 'function'){
+      try { vwLoaders(vwActive, (typeof vwSub!=='undefined'?vwSub:'')); } catch(e){}
+    }
+  }
+
+  /* ---- account management (admin or machine token) ---- */
+  function uaSetStatus(html){ var el=ge('ua-status'); if (el) el.innerHTML=html; }
+
+  async function uaLoad(){
+    var base=capiBase(); if (!base || !idIsAdmin()) return;
+    var box=ge('ua-list'); if (!box) return;
+    try {
+      var r=await fetch(base+'/v1/users',{headers:authHdr()});
+      var j=await r.json().catch(function(){ return {}; });
+      if (!r.ok){ box.innerHTML='<p class="hint fail">✗ '+esc(j.error||('HTTP '+r.status))+'</p>'; return; }
+      var us=j.users||[];
+      if (!us.length){ box.innerHTML='<p class="hint">'+bi('аккаунтов ещё нет','no accounts yet')+'</p>'; return; }
+      var html='<table style="width:100%;font-size:.86rem"><tbody>';
+      us.forEach(function(u){
+        html += '<tr><td>'+esc(u.name||'')+(u.is_admin?' <span class="hint" style="display:inline">admin</span>':'')+'</td>'
+             +  '<td style="text-align:right"><button type="button" class="btn ua-del" data-uid="'+esc(u.user_id||'')+'">'
+             +  bi('удалить','remove')+'</button></td></tr>';
+      });
+      box.innerHTML=html+'</tbody></table>';
+      Array.prototype.forEach.call(box.querySelectorAll('.ua-del'), function(b){
+        b.addEventListener('click', function(){ uaDelete(b.getAttribute('data-uid')); });
+      });
+    } catch(e){ box.innerHTML='<p class="hint fail">✗ '+esc(e.message)+'</p>'; }
+  }
+
+  async function uaDelete(id){
+    var base=capiBase(); if (!base || !id) return;
+    uaSetStatus(bi('удаляю…','removing…'));
+    try {
+      var r=await fetch(base+'/v1/users/'+encodeURIComponent(id),{method:'DELETE',headers:authHdr()});
+      var j=await r.json().catch(function(){ return {}; });
+      /* Deleting an account does NOT delete its rows — they stay, unowned. Said here because the
+         opposite is the reasonable assumption, and acting on it would be irreversible. */
+      uaSetStatus(r.ok ? '<span class="ok">✓ '+bi('аккаунт удалён · его прогоны и сценарии остались, теперь без владельца',
+                                                  'account removed · its runs and scenarios remain, now unowned')+'</span>'
+                       : '<span class="fail">✗ '+esc(j.error||('HTTP '+r.status))+'</span>');
+      uaLoad();
+    } catch(e){ uaSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
+  }
+
+  ge('ua-create').addEventListener('click', async function(){
+    var base=capiBase(); if (!base) return;
+    var name=(ge('ua-name').value||'').trim(), pass=ge('ua-pass').value||'';
+    uaSetStatus(bi('создаю…','creating…'));
+    try {
+      var r=await fetch(base+'/v1/users',{method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},authHdr()),
+        body:JSON.stringify({name:name,password:pass,is_admin:ge('ua-admin').checked})});
+      var j=await r.json().catch(function(){ return {}; });
+      if (!r.ok){ uaSetStatus('<span class="fail">✗ '+esc(j.error||('HTTP '+r.status))+'</span>'); return; }
+      ge('ua-pass').value=''; ge('ua-name').value='';
+      uaSetStatus('<span class="ok">✓ '+bi('создан','created')+' '+esc(j.name||'')+'</span>');
+      uaLoad();
+    } catch(e){ uaSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
+  });
+
+  ge('ua-reload').addEventListener('click', uaLoad);
 
   /* ---- SSE reader: fetch+reader because EventSource cannot send Authorization ---- */
   async function streamEvents(base, id, h){
@@ -3989,6 +4215,23 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     logging:   ['Логирование',                          'Logging']
   };
 
+  /* cfgMayWriteGlobal comes from the SERVER (GET /v1/config → may_write_global), not from what the page
+     thinks of the token it holds. Null means "not asked yet", which is treated as allowed so a page
+     that has not loaded a document does not disable itself for the operator. */
+  var cfgMayWriteGlobal = null;
+  function cfgGlobalLocked(){ return cfgMayWriteGlobal === false; }
+
+  /* cfgUserSections is the schema's own classification (config_sections). Save uses it to send only
+     what this caller may change: sending the tool's sections as a non-admin would earn a 403 for a
+     save the person never meant to make — the settings view would become unusable for everyone but an
+     admin, which is the opposite of what the split is for. */
+  function cfgUserSections(){
+    var m = (cfgSchema && cfgSchema.config_sections) || {};
+    var out = {};
+    Object.keys(m).forEach(function(k){ if (m[k] === 'user') out[k] = true; });
+    return out;
+  }
+
   function cfgRender(){
     var box = ge('cfg-groups'); if (!box || !cfgSchema) return;
     var settings = cfgSchema.settings || {};
@@ -4017,22 +4260,38 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
            `agentctl config set`, and a person who cannot see the name cannot use the other two ways. */
         var envTag = d.env ? ' <code style="font-size:.72rem;opacity:.72">'+esc(d.env)+'</code>' : '';
         var cur = Object.prototype.hasOwnProperty.call(saved, k) ? saved[k] : d['default'];
+        /* ADR-109 / Alex's directive: `settings` configures the TOOL, so only an admin (or the machine
+           token) may change it. The control is disabled rather than hidden — hiding it would make the
+           deployment's own configuration invisible to the people running against it, and a value you
+           cannot see is one you cannot ask anyone to change. */
+        var ro = cfgGlobalLocked() ? ' disabled' : '';
         if (d.type === 'bool'){
           html += '<label style="display:flex;align-items:center;gap:.4rem;margin-top:.35rem;color:var(--tx)">'
-                + '<input id="'+id+'" type="checkbox" style="width:auto"'+(cur ? ' checked' : '')+'>'
+                + '<input id="'+id+'" type="checkbox" style="width:auto"'+(cur ? ' checked' : '')+ro+'>'
                 + esc(k)+envTag+'</label>';
         } else {
           var attrs = (d.type === 'int' || d.type === 'number') ? ' type="number"' : '';
           if (d.min !== undefined)  attrs += ' min="'+esc(String(d.min))+'"';
           if (d.step !== undefined) attrs += ' step="'+esc(String(d.step))+'"';
           html += '<label for="'+id+'" style="margin-top:.4rem">'+esc(k)+envTag+'</label>'
-                + '<input id="'+id+'"'+attrs+' value="'+esc(cur === undefined || cur === null ? '' : String(cur))+'">';
+                + '<input id="'+id+'"'+attrs+ro+' value="'+esc(cur === undefined || cur === null ? '' : String(cur))+'">';
         }
         if (hint) html += '<div class="hint" style="margin-top:.15rem">'+hint+'</div>';
       });
       html += '</div>';
     });
-    box.innerHTML = html;   /* data-lang pairs inside are carried by the CSS language switch */
+    /* Said once, above the disabled controls, rather than left for the reader to infer from a form that
+       will not accept input. */
+    if (cfgGlobalLocked()){
+      box.innerHTML = '<p class="hint" id="cfg-locked" style="margin:0 0 .4rem">'
+        + bi('эти настройки принадлежат инструменту и действуют на всех — менять их может только админ. '
+           + 'Ваши собственные параметры прогона сохраняются отсюда и остаются вашими.',
+             'these settings belong to the tool and apply to everyone — only an admin may change them. '
+           + 'Your own run parameters are saved from here and stay yours.')
+        + '</p>' + html;
+    } else {
+      box.innerHTML = html;   /* data-lang pairs inside are carried by the CSS language switch */
+    }
   }
 
   async function cfgInit(){
@@ -4061,7 +4320,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         var rc = await fetch(base + '/v1/config', { headers: authHdr() });
         var j = await rc.json().catch(function(){ return {}; });
         if (rc.ok && j && j.config) cfgDoc = j.config;
-        else if (!rc.ok && rc.status !== 404){
+        /* ADR-109: whether this caller may change the TOOL's configuration is the server's answer, and
+           it travels with the document precisely because the page cannot work it out. */
+        if (rc.ok && Object.prototype.hasOwnProperty.call(j, 'may_write_global')) cfgMayWriteGlobal = !!j.may_write_global;
+        if (!rc.ok && rc.status !== 404){
           cfgSetStatus(bi('показаны значения по умолчанию — сохранённый конфиг не прочитан (HTTP '+rc.status+')',
                           'showing defaults — the saved config could not be read (HTTP '+rc.status+')'));
         }
@@ -4098,6 +4360,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var doc = {};
     Object.keys(cfgDoc || {}).forEach(function(k){ doc[k] = cfgDoc[k]; });
     doc.settings = settings;
+    /* ADR-109: a caller who may not change the tool sends only their OWN sections. Carrying the global
+       ones forward would make every save a 403 — the document we read back is the MERGED one, so it
+       always contains them, and a non-admin would find the settings view permanently unable to save
+       even the parts that are theirs. */
+    if (cfgGlobalLocked()){
+      var mine = cfgUserSections(), only = {};
+      Object.keys(doc).forEach(function(k){ if (mine[k]) only[k] = doc[k]; });
+      doc = only;
+    }
 
     cfgSetStatus(bi('сохраняю…','saving…'));
     try {
