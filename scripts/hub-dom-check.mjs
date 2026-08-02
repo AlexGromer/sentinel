@@ -1390,6 +1390,79 @@ try {
     await page.uncheck('#b-forcereplay');
   }, { allowConsole: freshConfig404 });
 
+  /* ================= ADR-108d — the three-pane chat screen ================= */
+
+  await check('three-pane: the layout exists in the CHAT tab and nowhere else', async () => {
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#chat3').isVisible(), 'the chat tab has no three-pane layout');
+    ok(await page.locator('#live-area').isVisible(), 'no live area');
+    ok(await page.locator('#run-flow').isVisible(), 'no run-flow pane');
+    // Alex's directive is explicit that this belongs to the chat and NOT to settings, the library,
+    // results or the tools. A layout that leaked into them would be a different product decision.
+    for (const view of ['settings', 'library', 'results', 'logs']) {
+      await page.click(`.rail a[data-nav="${view}"]`);
+      await page.waitForTimeout(150);
+      ok(!(await page.locator('#chat3').isVisible()),
+         `the three-pane layout is visible under ${view} — it belongs to the chat alone`);
+    }
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(200);
+  });
+
+  await check('three-pane: all three live modes switch WITHOUT reloading', async () => {
+    const url0 = page.url();
+    // The frame pane starts visible; the other two are hidden but PRESENT — a mode that does not exist
+    // until clicked cannot be said to be switchable.
+    ok(await page.locator('#lv-frame').isVisible(), 'the browser-frame pane is not the default');
+    for (const mode of ['actions', 'video', 'frame']) {
+      await page.click(`#lv-mode-${mode}`);
+      await page.waitForTimeout(150);
+      ok(await page.locator(`#lv-${mode}`).isVisible(), `mode ${mode} did not reveal its pane`);
+      for (const other of ['frame', 'actions', 'video'].filter((m) => m !== mode)) {
+        ok(!(await page.locator(`#lv-${other}`).isVisible()), `mode ${mode} left ${other} on screen`);
+      }
+      eq(await page.locator(`#lv-mode-${mode}`).getAttribute('aria-selected'), 'true',
+         `mode ${mode} is shown but not marked selected`);
+    }
+    eq(page.url(), url0, 'switching modes navigated — the toggle must not reload (Alex: без перезагрузки)');
+  });
+
+  await check('three-pane: the unbuilt mode says so instead of showing an empty box', async () => {
+    await page.click('#lv-mode-video');
+    await page.waitForTimeout(150);
+    const text = (await page.locator('#lv-video').innerText()).trim();
+    ok(text.length > 0, 'the video mode is an empty box — indistinguishable from a broken one');
+    ok(/screencast|CDP/i.test(text), `the video mode does not say WHY it is unavailable: ${text}`);
+    await page.click('#lv-mode-frame');
+  });
+
+  await check('three-pane: the run flow separates the tool from the application, visibly', async () => {
+    // Driven through the page's own event consumer, so this exercises the shipped code path rather
+    // than a copy of it — the same seam the Logs filter checks use.
+    await page.evaluate(() => {
+      const ev = (type, data) => window.lvOnEvent({ type, run_id: 'r-test', seq: 1, data });
+      ev('tool.call', { name: 'click', args_summary: "click button 'Pay'" });
+      ev('step.progress', { n: 1, total: 10, desc: 'pay for the order' });
+      ev('state.transition', { to: 'perceive' });
+    });
+    await page.waitForTimeout(200);
+    const business = await page.locator('#rf-list .rf-business').count();
+    const tool = await page.locator('#rf-list .rf-tool').count();
+    ok(business > 0 && tool > 0,
+       `the split is not visible: business=${business} tool=${tool} — one side missing means the layout `
+       + 'is not showing the distinction it exists for');
+    // And it is a LAYOUT, not a filter: both are on screen at once by default.
+    ok(await page.locator('#rf-list .rf-business').first().isVisible(), 'business rows are not visible');
+    ok(await page.locator('#rf-list .rf-tool').first().isVisible(), 'tool rows are not visible by default');
+    // The toggle hides the tool without touching the application's side.
+    await page.uncheck('#rf-tool');
+    await page.waitForTimeout(150);
+    ok(!(await page.locator('#rf-list .rf-tool').first().isVisible()), 'unchecking left the tool rows visible');
+    ok(await page.locator('#rf-list .rf-business').first().isVisible(), 'hiding the tool also hid the application');
+    await page.check('#rf-tool');
+  });
+
   /* ================= ADR-109 — local accounts in the hub =================
      These run LAST and against their OWN control-API, deliberately.
 
