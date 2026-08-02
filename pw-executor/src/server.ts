@@ -12,11 +12,12 @@ import { chromium, Browser, BrowserContext, Page, Locator, Frame } from 'playwri
 import * as readline from 'node:readline';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as dns from 'node:dns/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { setupTracing, spanForTool, currentTraceparent } from './otel.js';
-import { resolveLaunchPlan } from './launch.js';
+import { resolveLaunchPlan, cdpHostNeedsNumericAddress, withCdpHost } from './launch.js';
 import {
   DETERMINISM_VIEWPORT,
   DETERMINISM_DEVICE_SCALE_FACTOR,
@@ -367,6 +368,32 @@ let tracingStopped = false;
 // M9.6/ADR-037: true when we attached to the user's browser over CDP — teardown must NOT close it.
 let attachedOverCDP = false;
 
+/**
+ * ADR-110: turn a configured CDP endpoint into one Chrome will actually answer.
+ *
+ * Only DNS names are touched (see cdpHostNeedsNumericAddress). A lookup failure THROWS with the
+ * name that could not be resolved: falling back to the unresolved endpoint would produce Chrome's
+ * "Host header is specified and is not an IP address or localhost" — a message that describes a
+ * header rather than the missing DNS record, and sends the reader to the wrong place entirely.
+ */
+async function resolveCdpEndpoint(endpoint: string): Promise<string> {
+  if (!cdpHostNeedsNumericAddress(endpoint)) return endpoint;
+  const host = new URL(endpoint).hostname;
+  let addr: string;
+  try {
+    addr = (await dns.lookup(host)).address;
+  } catch (e) {
+    throw new Error(
+      `PW_CDP_ENDPOINT names host '${host}', which does not resolve: ${(e as Error).message}. ` +
+      `Chrome's DevTools endpoint rejects a DNS-name Host header, so the name must resolve here ` +
+      `to be rewritten to an address before connecting.`,
+    );
+  }
+  const rewritten = withCdpHost(endpoint, addr);
+  log(`CDP endpoint ${endpoint} -> ${rewritten} (Chrome rejects a DNS-name Host header)`);
+  return rewritten;
+}
+
 async function ensureBrowser(): Promise<void> {
   if (browser) return;
   // M9.6/ADR-037: resolve launch mode (headless default / headed / CDP-attach) from env (pure, tested).
@@ -396,9 +423,14 @@ async function ensureBrowser(): Promise<void> {
     // route-injection (OTEL_*) and tracing (unless PW_NO_TRACE=1) touch the user's LIVE session; set
     // PW_NO_TRACE=1 to avoid recording their session into trace.zip.
     attachedOverCDP = true;
-    browser = await chromium.connectOverCDP(plan.cdpEndpoint!);
+    // ADR-110: Chrome's DevTools endpoint refuses a Host header that is a DNS name, so a
+    // cross-container endpoint (`http://browser:9223`) has to be addressed numerically. The
+    // substitution is announced — a connection made to an address other than the configured
+    // one must never be something the operator has to infer from a failure later.
+    const endpoint = await resolveCdpEndpoint(plan.cdpEndpoint!);
+    browser = await chromium.connectOverCDP(endpoint);
     context = browser.contexts()[0] ?? (await browser.newContext());
-    log('attached over CDP:', plan.cdpEndpoint);
+    log('attached over CDP:', endpoint);
     if (storageState) log('STORAGE_STATE ignored in CDP-attach mode (reusing the user session)');
   } else {
     // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.

@@ -1,0 +1,68 @@
+Sentinel for Debian/Ubuntu
+==========================
+
+What this package is
+--------------------
+
+The Go CONTROL PLANE, statically linked, in /usr/bin:
+
+    agentctl         the CLI — everything the product does, from the terminal
+    control-api      HTTP control plane + the browser UI (ADR-064)
+    store-gateway    persistence for runs/scenarios/tests/chats/results/config
+    orchestrator     run-control gRPC (pause/resume/takeover)
+    report-service   report generation
+
+What this package is NOT
+------------------------
+
+It is not a runnable test stack. A real browser run needs three more things on
+this host, none of which a .deb should be silently dragging in:
+
+    Python 3.11+ and uv     the planning / healing brain
+    Node 24+                the Playwright executor
+    Playwright browsers     `npx playwright install chromium`
+
+Two honest ways to get a working run:
+
+  1. Container — the whole stack in one image, nothing else to install:
+
+         docker run --rm ghcr.io/alexgromer/sentinel:latest --help
+
+  2. This package as a CLIENT — agentctl drives a control-api that has the
+     stack, on another host or in a container:
+
+         agentctl --help
+
+Starting control-api as a service
+---------------------------------
+
+Nothing starts on install. control-api mints a bearer token on first start and
+can serve a UI that starts runs; that is the operator's call, not the packager's.
+
+    sudoedit /etc/sentinel/control-api.env      # at minimum, review the bind address
+    sudo systemctl enable --now sentinel-control-api
+    journalctl -u sentinel-control-api -f       # the startup line carries the UI link
+
+The unit runs under a systemd DynamicUser with /var/lib/sentinel as its state
+directory, so no system account is created and nothing is left behind on purge.
+
+Configuration
+-------------
+
+/etc/sentinel/control-api.env is a conffile — dpkg preserves your edits across
+upgrades. Its variables are the same CONTROL_API_* / LLM_* names used by the
+container and by `agentctl` (ADR-107: one configuration model, three complete
+projections — CLI, HTTP, UI/files). There is deliberately no packaging-only
+configuration surface.
+
+Verifying what you installed
+----------------------------
+
+Every release asset is checksummed and signed keyless with cosign:
+
+    cosign verify-blob sentinel_<version>_<arch>.deb \
+      --bundle sentinel_<version>_<arch>.deb.cosign.bundle \
+      --certificate-identity-regexp 'https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+ -- AlexGromer
