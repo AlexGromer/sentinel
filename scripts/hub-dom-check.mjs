@@ -1398,6 +1398,18 @@ try {
     ok(await page.locator('#chat3').isVisible(), 'the chat tab has no three-pane layout');
     ok(await page.locator('#live-area').isVisible(), 'no live area');
     ok(await page.locator('#run-flow').isVisible(), 'no run-flow pane');
+    // BELONGING, not just visibility. A mutation that forced the author subpanel visible everywhere
+    // survived the visibility check alone: the router hides the whole view container, so the panes
+    // were invisible for a reason that has nothing to do with where they live. What Alex's directive
+    // is about is which view OWNS this layout, so that is what gets asserted — the panes must be
+    // inside the chat's own subpanel, where the router can only ever reveal them with the chat.
+    for (const id of ['chat3', 'live-area', 'run-flow', 'artifacts']) {
+      const owned = await page.evaluate((elId) => {
+        const el = document.getElementById(elId);
+        return !!el && !!el.closest('[data-subpanel="author"][data-view="chat"]');
+      }, id);
+      ok(owned, `#${id} is not inside the chat subpanel — it would outlive the chat view`);
+    }
     // Alex's directive is explicit that this belongs to the chat and NOT to settings, the library,
     // results or the tools. A layout that leaked into them would be a different product decision.
     for (const view of ['settings', 'library', 'results', 'logs']) {
