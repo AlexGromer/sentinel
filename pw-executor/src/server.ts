@@ -362,6 +362,16 @@ let page: Page | null = null;
 // M9.4 (A6): every page in the context (initial + popups/new tabs). `page` is the ACTIVE one;
 // browser.switchTab just re-points `page`, so all existing tools operate on the active tab unchanged.
 let pages: Page[] = [];
+
+// ADR-108d: the live VIDEO mode — a CDP screencast, kept in memory and never on disk.
+//
+// A screencast delivers tens of frames a second. The per-step frames each become a file, which is
+// right for them (one per step, kept with the run) and wrong for this: a two-minute run would leave
+// thousands of files nobody asked for. Video of the live view is worth watching WHILE it happens, so
+// only the most recent frame is kept and the rest are dropped as they arrive — bounded by
+// construction rather than by a cleanup that has to be remembered.
+let screencastSession: { detach: () => Promise<void> } | null = null;
+let screencastLast: { data: string; ts: number } | null = null;
 let tracingStarted = false;
 let tracingStopped = false;
 // M9.6/ADR-037: true when we attached to the user's browser over CDP — teardown must NOT close it.
@@ -958,6 +968,45 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       }
       return { marks, path: outPath ?? null };
     }
+    case 'browser.screencastStart': {
+      // Idempotent: asking twice keeps one session rather than stacking two on the same page, which
+      // would double the frame rate and the ack traffic for no gain.
+      if (screencastSession) return { started: true, already: true };
+      await ensureBrowser();
+      const cdp = await context!.newCDPSession(page!);
+      cdp.on('Page.screencastFrame', async (f: any) => {
+        screencastLast = { data: f.data, ts: Date.now() };
+        // The ack is what keeps frames coming. Without it Chromium stops after the first one — so a
+        // failure here is not cosmetic, it is the whole feature stopping silently.
+        try { await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }); } catch { /* page gone */ }
+      });
+      await cdp.send('Page.startScreencast', {
+        format: 'jpeg',
+        quality: Number(params?.quality ?? 55),
+        // Bounded on purpose: this is a view of the run, not a recording of it. A full-resolution
+        // stream would cost bandwidth and memory to show something nobody can read at that size.
+        maxWidth: Number(params?.maxWidth ?? 960),
+        maxHeight: Number(params?.maxHeight ?? 720),
+        everyNthFrame: Number(params?.everyNthFrame ?? 2),
+      });
+      screencastSession = { detach: async () => { try { await cdp.send('Page.stopScreencast'); } catch { /* gone */ } await cdp.detach(); } };
+      return { started: true };
+    }
+    case 'browser.screencastStop': {
+      if (!screencastSession) return { stopped: false };
+      const sess = screencastSession;
+      screencastSession = null;
+      screencastLast = null;   // the buffer belongs to the session, not to the page
+      await sess.detach();
+      return { stopped: true };
+    }
+    case 'browser.screencastFrame': {
+      // The LAST frame, as base64 — this one does travel as bytes, because it is answering a request
+      // for it rather than riding the run's event stream. Null when nothing has arrived yet, which the
+      // caller must be able to tell apart from an error.
+      if (!screencastSession) return { frame: null, reason: 'no screencast session' };
+      return screencastLast ? { frame: screencastLast.data, ts: screencastLast.ts } : { frame: null };
+    }
     case 'browser.frame': {
       // ADR-108d: one FRAME of the live view, written to a file rather than returned as bytes.
       //
@@ -1040,6 +1089,9 @@ const TOOL_METHODS = [
   'browser.screenshotHash',
   'browser.setOfMarks',
   'browser.frame',
+  'browser.screencastStart',
+  'browser.screencastStop',
+  'browser.screencastFrame',
   'browser.traceStop',
   'browser.tabs',
   'browser.switchTab',
@@ -1102,6 +1154,10 @@ async function mainMcp(): Promise<void> {
     'browser.screenshotHash': {},
     'browser.setOfMarks': { path: z.string() },
     'browser.frame': { path: z.string(), fullPage: z.boolean().optional() },
+    'browser.screencastStart': { quality: z.number().optional(), maxWidth: z.number().optional(),
+                                 maxHeight: z.number().optional(), everyNthFrame: z.number().optional() },
+    'browser.screencastStop': {},
+    'browser.screencastFrame': {},
     'browser.traceStop': { path: z.string().optional() }, // ADR-084: omitted = discard the trace
   };
   for (const method of TOOL_METHODS) {
