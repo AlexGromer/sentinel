@@ -341,8 +341,8 @@ func (s *server) streamRecord(conn net.Conn, br *bufio.Reader, resumeSession str
 			// NOT persisted as a recorder event; everything else is a recorder DOM event (events.ndjson).
 			// Control frames get their OWN per-session cap (each dials the orchestrator) so an authed
 			// client can't loop them unboundedly — the recorder-event cap below doesn't bound this branch.
-			if action, runID, isCtl := parseControlFrame(payload); isCtl {
-				s.handleControlFrame(wc, action, runID)
+			if action, runID, reason, isCtl := parseControlFrameFull(payload); isCtl {
+				s.handleControlFrame(wc, action, runID, reason)
 				ctlFrames++
 				if ctlFrames >= wsMaxRecordEvents {
 					_ = wc.writeFrame(wsOpClose, closePayload(1009, "control-frame cap reached"))
@@ -463,8 +463,8 @@ func (s *server) streamRunEvents(conn net.Conn, br *bufio.Reader, runID string) 
 			if line == "" {
 				continue
 			}
-			if action, ctlRunID, isCtl := parseControlFrame(payload); isCtl {
-				s.handleControlFrame(wc, action, ctlRunID)
+			if action, ctlRunID, reason, isCtl := parseControlFrameFull(payload); isCtl {
+				s.handleControlFrame(wc, action, ctlRunID, reason)
 				ctlFrames++
 				if ctlFrames >= wsMaxRecordEvents {
 					_ = wc.writeFrame(wsOpClose, closePayload(1009, "control-frame cap reached"))
@@ -522,15 +522,23 @@ func closePayload(code uint16, reason string) []byte {
 // well-formed control envelope (action validated downstream); any other frame is a recorder event
 // (ok=false), persisted to events.ndjson as before.
 func parseControlFrame(payload []byte) (action, runID string, ok bool) {
+	a, id, _, k := parseControlFrameFull(payload)
+	return a, id, k
+}
+
+// parseControlFrameFull also returns the optional `reason` — ADR-108c lets a person say WHY they
+// refused a map, and that sentence is the only part of the refusal a reader learns anything from.
+func parseControlFrameFull(payload []byte) (action, runID, reason string, ok bool) {
 	var f struct {
 		Type   string `json:"type"`
 		Action string `json:"action"`
 		RunID  string `json:"run_id"`
+		Reason string `json:"reason"`
 	}
 	if json.Unmarshal(payload, &f) != nil || f.Type != "control" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return f.Action, f.RunID, true
+	return f.Action, f.RunID, f.Reason, true
 }
 
 // validRunID bounds a run_id forwarded to the orchestrator (M9.8 F4). run_ids are hex (the orchestrator's
@@ -554,21 +562,22 @@ func validRunID(id string) bool {
 // handleControlFrame validates a control envelope, forwards takeover/return to the orchestrator, and acks
 // the result over the socket (control-ok / control-error). An unknown action, a missing/invalid run_id,
 // or an unconfigured orchestrator is reported to the client, never persisted.
-func (s *server) handleControlFrame(wc *wsConn, action, runID string) {
+func (s *server) handleControlFrame(wc *wsConn, action, runID, reason string) {
 	reply := func(m map[string]string) {
 		if b, e := json.Marshal(m); e == nil {
 			_ = wc.writeFrame(wsOpText, b)
 		}
 	}
-	if action != "takeover" && action != "return" {
-		reply(map[string]string{"type": "control-error", "action": action, "error": "unknown control action (want takeover|return)"})
+	if action != "takeover" && action != "return" && action != "approve-map" && action != "reject-map" {
+		reply(map[string]string{"type": "control-error", "action": action,
+			"error": "unknown control action (want takeover|return|approve-map|reject-map)"})
 		return
 	}
 	if !validRunID(runID) {
 		reply(map[string]string{"type": "control-error", "action": action, "error": "missing/invalid run_id"})
 		return
 	}
-	if err := s.forwardControl(action, runID); err != nil {
+	if err := s.forwardControl(action, runID, reason); err != nil {
 		reply(map[string]string{"type": "control-error", "action": action, "run_id": runID, "error": err.Error()})
 		return
 	}
@@ -579,7 +588,7 @@ func (s *server) handleControlFrame(wc *wsConn, action, runID string) {
 // "unix:/abs/state/sentinel-orch-<id>.sock") and issues the Takeover/Return RPC for run_id (M9.8 F4,
 // ADR-054). A fresh connection per call: takeover/return are low-frequency operator signals, not the
 // per-event recorder path. Fail-closed when no orchestrator is wired.
-func (s *server) forwardControl(action, runID string) error {
+func (s *server) forwardControl(action, runID, reason string) error {
 	if s.orchAddr == "" {
 		return errors.New("no orchestrator wired (set CONTROL_API_ORCH_ADDR)")
 	}
@@ -596,6 +605,13 @@ func (s *server) forwardControl(action, runID string) error {
 		_, err = cl.Takeover(ctx, &pb.TakeoverRequest{RunId: runID, Reason: "operator (control-api /v1/stream)"})
 	case "return":
 		_, err = cl.Return(ctx, &pb.ReturnRequest{RunId: runID})
+	// ADR-108c: the map gate's two answers. Deliberately NOT expressed as takeover/return — `return` is
+	// only meaningful after a takeover, and "the human took the browser" is a different fact from "the
+	// human approved this plan". Two states that read alike in a log are two states nobody can debug.
+	case "approve-map":
+		_, err = cl.DecideMap(ctx, &pb.MapDecisionRequest{RunId: runID, Decision: "approve", Reason: reason})
+	case "reject-map":
+		_, err = cl.DecideMap(ctx, &pb.MapDecisionRequest{RunId: runID, Decision: "reject", Reason: reason})
 	default:
 		err = errors.New("unknown control action: " + action)
 	}

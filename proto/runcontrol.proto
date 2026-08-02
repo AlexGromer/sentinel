@@ -24,6 +24,15 @@ service RunControl {
   // forwarded by the control-API over its WebSocket — modelled on Abort.
   rpc Takeover (TakeoverRequest) returns (TakeoverReply);
   rpc Return (ReturnRequest) returns (ReturnReply);
+  // ADR-108c: the MAP GATE. After exploring, the brain reports what it found and waits for a person to
+  // say whether to author a test over it. DecideMap records that answer; the next ReportEvent reply
+  // carries it as Control.map_decision, so the brain learns of it at its own superstep boundary — the
+  // same shape as Takeover, and for the same reason: the orchestrator holds run state, the brain polls.
+  //
+  // NOT modelled as takeover/return, though that channel already exists. `return` is only meaningful
+  // AFTER a takeover, and "the human took the browser" is a different fact from "the human approved
+  // this plan". Overloading them would make the log unreadable and the two states indistinguishable.
+  rpc DecideMap (MapDecisionRequest) returns (MapDecisionReply);
 }
 
 message StartRunRequest {
@@ -47,7 +56,20 @@ message Control {
   // M9.8 F4 (ADR-054): pause for an operator takeover. DISTINCT from abort — the run is not killed; it
   // interrupt()s and persists, then resumes on Return. abort takes precedence (a hard stop beats a pause).
   bool takeover = 3;
+  // ADR-108c: the operator's answer to the map gate — "" (nobody has answered yet), "approve" or
+  // "reject". Empty is the DEFAULT and means WAIT, not proceed: a gate whose unanswered state let the
+  // run continue would be decoration. The brain treats an absent orchestrator separately (nobody can
+  // answer, so there is nothing to wait for) — see brain/graph.py.
+  string map_decision = 4;
 }
+
+// ADR-108c: the operator's answer, forwarded by the control-API from its WebSocket.
+message MapDecisionRequest {
+  string run_id = 1;
+  string decision = 2;  // approve | reject
+  string reason = 3;    // optional, shown to the person and recorded in the run log
+}
+message MapDecisionReply { bool ok = 1; }
 
 message AbortRequest {
   string run_id = 1;

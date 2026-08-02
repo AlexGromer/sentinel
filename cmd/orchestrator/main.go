@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/AlexGromer/sentinel/internal/orchestrator/pb"
 )
@@ -44,6 +46,9 @@ type runState struct {
 	breached                            bool
 	reason                              string
 	takeover                            bool // M9.8 F4 (ADR-054): operator takeover pending (set by Takeover, cleared by Return)
+	// ADR-108c: the map gate. "" = nobody has answered yet, which is what makes the gate a gate; the
+	// brain waits on an empty answer rather than proceeding. "approve" | "reject" once a person decides.
+	mapDecision, mapReason string
 }
 
 type orchestrator struct {
@@ -114,7 +119,9 @@ func (o *orchestrator) ReportEvent(_ context.Context, e *pb.RunEvent) (*pb.Contr
 	if rs.takeover {
 		return &pb.Control{Takeover: true, Reason: "operator takeover"}, nil
 	}
-	return &pb.Control{Abort: false}, nil
+	// ADR-108c: carried on EVERY reply, not only when set. The brain polls this node while it waits, and
+	// an answer that only appeared on some replies would be a race the brain could not see through.
+	return &pb.Control{Abort: false, MapDecision: rs.mapDecision, Reason: rs.mapReason}, nil
 }
 
 func (o *orchestrator) Abort(_ context.Context, r *pb.AbortRequest) (*pb.AbortReply, error) {
@@ -144,6 +151,23 @@ func (o *orchestrator) Return(_ context.Context, r *pb.ReturnRequest) (*pb.Retur
 	o.get(r.RunId).takeover = false
 	fmt.Fprintf(os.Stderr, "[orchestrator] Return %s\n", r.RunId)
 	return &pb.ReturnReply{Ok: true}, nil
+}
+
+// DecideMap records the operator's answer to the map gate (ADR-108c). The brain sees it on its next
+// ReportEvent reply, at its own superstep boundary — the same shape as Takeover.
+//
+// An unknown decision is REFUSED rather than stored: a typo that reached the brain as neither approve
+// nor reject would leave the run waiting forever on a gate somebody believes they answered.
+func (o *orchestrator) DecideMap(_ context.Context, r *pb.MapDecisionRequest) (*pb.MapDecisionReply, error) {
+	if r.Decision != "approve" && r.Decision != "reject" {
+		return nil, status.Errorf(codes.InvalidArgument, "decision must be approve|reject, got %q", r.Decision)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	rs := o.get(r.RunId)
+	rs.mapDecision, rs.mapReason = r.Decision, r.Reason
+	fmt.Fprintf(os.Stderr, "[orchestrator] DecideMap %s decision=%s reason=%q\n", r.RunId, r.Decision, r.Reason)
+	return &pb.MapDecisionReply{Ok: true}, nil
 }
 
 func (o *orchestrator) breachOf(runID string) (bool, string) {

@@ -26,17 +26,27 @@ TAKEOVER = "takeover"
 class _Noop:
     """Used when no orchestrator is configured: the run is never aborted and never paused."""
 
+    # ADR-108c: `wired` says whether there is anybody on the other end. The map gate reads it because a
+    # gate with no one to answer it is not a safeguard, it is a hang — a headless run (CI, cron, the
+    # air-gapped bundle) has no operator, and waiting for one would stop the product working at all.
+    wired = False
+
     def report(self, run_id, node, prompt_tokens, completion_tokens, status="running") -> str:
         return CONTINUE
 
     def poll(self, run_id, node="checkpoint") -> str:
         return CONTINUE
 
+    def map_decision(self, run_id) -> str:
+        return ""
+
     def close(self) -> None:
         pass
 
 
 class _GrpcRunControl:
+    wired = True   # ADR-108c: there is an orchestrator, so a person can be asked (see _Noop.wired)
+
     def __init__(self, addr: str) -> None:
         import grpc
         from .pb import runcontrol_pb2 as pb, runcontrol_pb2_grpc as pbg
@@ -73,6 +83,22 @@ class _GrpcRunControl:
         """M9.8 F4 (ADR-054): a 0-token heartbeat — surfaces a pending takeover/abort at the superstep
         boundary without spending budget (the orchestrator adds 0 to the run's spend)."""
         return self.report(run_id, node, 0, 0, status="running")
+
+    def map_decision(self, run_id) -> str:
+        """ADR-108c: the operator's answer to the map gate — "" (not answered yet), "approve", "reject".
+
+        Another 0-token heartbeat, on its own node name so the wait is legible in the orchestrator's log
+        as waiting-for-a-person rather than as ordinary progress. A transport error reads as "" — not
+        answered — because the alternative is to invent an answer nobody gave, and the caller already
+        bounds the wait with a timeout.
+        """
+        try:
+            c = self._stub.ReportEvent(self._pb.RunEvent(
+                run_id=run_id, node="map_gate", prompt_tokens=0, completion_tokens=0, status="running"))
+            return getattr(c, "map_decision", "") or ""
+        except Exception as e:
+            log("system.runcontrol_report_error", error=e)
+            return ""
 
     def close(self) -> None:
         try:

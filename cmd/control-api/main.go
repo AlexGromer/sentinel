@@ -326,7 +326,12 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		"modes":    []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
 		"planner":  []string{"heuristic", "llm", "goal"},
 		"backends": backends,
-		"roles":    []string{"planner", "heal"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
+		// ADR-108b added `chat`: conversation is its own role, so an operator can point talking and
+		// planning at different endpoints (the planner may be a large remote model while the chat that
+		// answers a question runs on whatever is local). A role the brain honours but the schema does not
+		// publish is a knob nobody can find — the same "capability nobody can reach" this milestone exists
+		// to close.
+		"roles":    []string{"planner", "heal", "chat"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
 		// ADR-107: `fields` is the per-run half of the one configuration model, and every key here is
 		// settable on POST /v1/runs — asserted by TestRunRequestCoversEverySchemaField, which walks this
 		// map rather than listing what it expects to find.

@@ -429,6 +429,69 @@
         "__main__"
       ]
     },
+    "map.ready": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Карта построена: {pages} стр., {interactives} элементов ({destructive} похожи на разрушительные, {auth} на вход) — жду разрешения",
+      "en": "Map built: {pages} page(s), {interactives} element(s) ({destructive} look destructive, {auth} look like sign-in) — waiting for approval",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_waiting": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Ожидаю решения человека по карте ({pages} стр., {interactives} элементов)",
+      "en": "Waiting for a person to decide on the map ({pages} page(s), {interactives} element(s))",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.approved": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Карта одобрена ({pages} стр.) — собираю сценарий",
+      "en": "Map approved ({pages} page(s)) — authoring the scenario",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.rejected": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Карта НЕ одобрена ({pages} стр.) — сценарий не собирается; результаты разведки сохранены",
+      "en": "Map NOT approved ({pages} page(s)) — no scenario authored; the exploration artefacts are kept",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_timeout": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Никто не ответил по карте за {seconds} с — считаю это отказом: молчание не согласие",
+      "en": "Nobody answered the map gate in {seconds}s — treated as a refusal: silence is not consent",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_unattended": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Гейт карты пропущен: оркестратор не подключён, спрашивать некого ({pages} стр.)",
+      "en": "Map gate skipped: no orchestrator wired, so there is nobody to ask ({pages} page(s))",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_disabled": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Гейт карты выключен (SENTINEL_MAP_GATE=0)",
+      "en": "Map gate disabled (SENTINEL_MAP_GATE=0)",
+      "modules": [
+        "graph"
+      ]
+    },
     "chat.reply": {
       "lvl": "info",
       "cat": "run",

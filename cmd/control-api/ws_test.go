@@ -243,7 +243,7 @@ func TestParseControlFrame(t *testing.T) {
 
 func TestForwardControlNoOrchestrator(t *testing.T) {
 	s := newTestServer() // orchAddr == ""
-	if err := s.forwardControl("takeover", "r1"); err == nil {
+	if err := s.forwardControl("takeover", "r1", ""); err == nil {
 		t.Fatal("forwardControl must error (fail-closed) when no orchestrator is wired")
 	}
 }

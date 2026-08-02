@@ -59,6 +59,11 @@ class RunControlStub:
                 request_serializer=runcontrol__pb2.ReturnRequest.SerializeToString,
                 response_deserializer=runcontrol__pb2.ReturnReply.FromString,
                 _registered_method=True)
+        self.DecideMap = channel.unary_unary(
+                '/sentinel.runcontrol.v1.RunControl/DecideMap',
+                request_serializer=runcontrol__pb2.MapDecisionRequest.SerializeToString,
+                response_deserializer=runcontrol__pb2.MapDecisionReply.FromString,
+                _registered_method=True)
 
 
 class RunControlServicer:
@@ -103,6 +108,20 @@ class RunControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DecideMap(self, request, context):
+        """ADR-108c: the MAP GATE. After exploring, the brain reports what it found and waits for a person to
+        say whether to author a test over it. DecideMap records that answer; the next ReportEvent reply
+        carries it as Control.map_decision, so the brain learns of it at its own superstep boundary — the
+        same shape as Takeover, and for the same reason: the orchestrator holds run state, the brain polls.
+
+        NOT modelled as takeover/return, though that channel already exists. `return` is only meaningful
+        AFTER a takeover, and "the human took the browser" is a different fact from "the human approved
+        this plan". Overloading them would make the log unreadable and the two states indistinguishable.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RunControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -130,6 +149,11 @@ def add_RunControlServicer_to_server(servicer, server):
                     servicer.Return,
                     request_deserializer=runcontrol__pb2.ReturnRequest.FromString,
                     response_serializer=runcontrol__pb2.ReturnReply.SerializeToString,
+            ),
+            'DecideMap': grpc.unary_unary_rpc_method_handler(
+                    servicer.DecideMap,
+                    request_deserializer=runcontrol__pb2.MapDecisionRequest.FromString,
+                    response_serializer=runcontrol__pb2.MapDecisionReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -267,6 +291,33 @@ class RunControl:
             '/sentinel.runcontrol.v1.RunControl/Return',
             runcontrol__pb2.ReturnRequest.SerializeToString,
             runcontrol__pb2.ReturnReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DecideMap(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sentinel.runcontrol.v1.RunControl/DecideMap',
+            runcontrol__pb2.MapDecisionRequest.SerializeToString,
+            runcontrol__pb2.MapDecisionReply.FromString,
             options,
             channel_credentials,
             insecure,
