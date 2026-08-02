@@ -29,6 +29,33 @@ from . import strategies as S     # ADR-083: one vocabulary, shared with the rec
 
 
 
+
+def capture_frame(ex, state, step_id) -> str:
+    """ADR-108d: one frame of the live view, as a FILE in the run's artifact dir. Returns its name, or
+    "" when no frame was taken.
+
+    The name — not the bytes — is what travels: AG-UI envelopes are stdout lines, and a base64 PNG in
+    one would bloat the run log past reading and break the very stream the UI follows. The hub fetches
+    the file through the artifact route that already exists.
+
+    Best-effort by construction. A frame is an OBSERVATION of the run, so failing to take one must
+    never fail the run — but it is not silent either: the caller logs what happened, because "the live
+    view stopped updating" with no reason is the shape of defect this milestone exists to remove.
+    """
+    frames_on = os.environ.get("SENTINEL_LIVE_FRAMES", "1") != "0"
+    art = state.get("artifact_dir") or ""
+    if not frames_on or not art:
+        return ""
+    name = f"frame-{int(step_id or 0):04d}.png"
+    try:
+        os.makedirs(os.path.join(art, "frames"), exist_ok=True)
+        ex.call("browser.frame", path=os.path.join(art, "frames", name))
+        return name
+    except Exception as e:
+        log("live.frame_failed", step=step_id, error=e)
+        return ""
+
+
 def summarise_site_map(site_map: dict) -> dict:
     """ADR-108c: what the tool FOUND, in the terms a person decides on.
 
@@ -528,6 +555,11 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     # blacklist exists to remove.
                     log("plan.element_blacklisted", element=sid_el,
                         intent=p.get("intent", ""), attempts=failed[sid_el])
+            frame = capture_frame(ex, state, p.get("step_id"))
+            if frame:
+                # A frame of the FAILURE is the one most worth having: it shows the page as it was when
+                # the step could not be performed.
+                _agui("step.frame", rid, n=p.get("step_id", 0), frame=frame, ok=False)
             return {"errors": list(state.get("errors", [])) + [f"act#{p['step_id']}: {e}"],
                     "interactive_failed": failed,
                     "_last_ok": False, "current_step": p["step_id"]}
@@ -536,6 +568,11 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             exercised = list(dict.fromkeys(exercised + [p["semantic_id"]]))
         execs = list(state.get("executed_actions", [])) + [
             {"step_id": p["step_id"], "type": p["action_type"], "ok": True}]
+        frame = capture_frame(ex, state, p.get("step_id"))
+        if frame:
+            # The frame belongs to the step it shows, so it rides the step's own event rather than a
+            # separate stream the UI would have to correlate by timestamp.
+            _agui("step.frame", rid, n=p.get("step_id", 0), frame=frame, ok=True)
         return {"interactive_exercised": exercised, "executed_actions": execs,
                 "current_step": p["step_id"], "_last_ok": True}
 

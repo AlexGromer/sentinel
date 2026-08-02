@@ -958,6 +958,23 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       }
       return { marks, path: outPath ?? null };
     }
+    case 'browser.frame': {
+      // ADR-108d: one FRAME of the live view, written to a file rather than returned as bytes.
+      //
+      // The AG-UI envelope is a stdout LINE (`@@AGUI {...}`). A base64 PNG in it would bloat the run
+      // log past readability and break the very stream the UI reads to follow the run — so the frame
+      // goes to the run's artifact directory and the event carries a NAME. The hub fetches it through
+      // the artifact route that already exists, whitelist and all.
+      //
+      // Subject to the same lever as the trace's screenshots (ADR-098): pixels are not redactable, so
+      // SENTINEL_TRACE_SCREENSHOTS=0 stops frames being taken at all rather than trying to clean them.
+      if (process.env.SENTINEL_TRACE_SCREENSHOTS === '0') return { path: null, skipped: 'screenshots disabled' };
+      const path = params?.path as string;
+      if (!path) throw new Error('browser.frame needs a path');
+      await ensureBrowser();
+      await page!.screenshot({ path, fullPage: !!params?.fullPage });
+      return { path };
+    }
     case 'browser.traceStop': {
       // ADR-084: `path` is now OPTIONAL, and omitting it DISCARDS the trace instead of writing it.
       // Playwright's `tracing.stop()` without a path throws the buffered trace away, which is
@@ -1022,6 +1039,7 @@ const TOOL_METHODS = [
   'browser.appFaults',
   'browser.screenshotHash',
   'browser.setOfMarks',
+  'browser.frame',
   'browser.traceStop',
   'browser.tabs',
   'browser.switchTab',
@@ -1083,6 +1101,7 @@ async function mainMcp(): Promise<void> {
     'browser.appFaults': {},
     'browser.screenshotHash': {},
     'browser.setOfMarks': { path: z.string() },
+    'browser.frame': { path: z.string(), fullPage: z.boolean().optional() },
     'browser.traceStop': { path: z.string().optional() }, // ADR-084: omitted = discard the trace
   };
   for (const method of TOOL_METHODS) {

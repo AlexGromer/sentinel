@@ -43,6 +43,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -331,7 +332,7 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		// answers a question runs on whatever is local). A role the brain honours but the schema does not
 		// publish is a knob nobody can find — the same "capability nobody can reach" this milestone exists
 		// to close.
-		"roles":    []string{"planner", "heal", "chat"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
+		"roles": []string{"planner", "heal", "chat"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
 		// ADR-107: `fields` is the per-run half of the one configuration model, and every key here is
 		// settable on POST /v1/runs — asserted by TestRunRequestCoversEverySchemaField, which walks this
 		// map rather than listing what it expects to find.
@@ -1461,6 +1462,13 @@ var artifactWhitelist = map[string]bool{
 	"run.yaml": true,
 }
 
+// frameNamePattern bounds what a live-frame request may name (ADR-108d). Written as an anchored
+// pattern rather than a prefix check because "starts with frames/" would admit anything after it —
+// including a traversal spelled in a way ContainsAny does not catch.
+var frameNamePattern = regexp.MustCompile(`^frames/frame-[0-9]{4}\.png$`)
+
+func isFrameName(name string) bool { return frameNamePattern.MatchString(name) }
+
 // handleRunEvents streams a run's state + captured log lines as Server-Sent Events (ADR-040).
 // Token-gated like mutations: logs are more sensitive than a bare status poll.
 func (s *server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
@@ -1545,8 +1553,13 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.URL.Query().Get("name")
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || !artifactWhitelist[name] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a whitelisted run artifact (e.g. scenario.json, plan.json, report.json, heal-report.json)"})
+	// ADR-108d: frames live in a SUBDIRECTORY (frames/frame-0007.png) because a run produces one per
+	// step and a flat whitelist cannot enumerate them. So they are matched by SHAPE instead — and the
+	// shape is deliberately narrow: the fixed prefix, four digits, `.png`, nothing else. `..` and
+	// separators are still refused above it, so the pattern can only ever name a file this run wrote.
+	if !isFrameName(name) &&
+		(name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || !artifactWhitelist[name]) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a whitelisted run artifact (e.g. scenario.json, plan.json, report.json, heal-report.json) or a live frame (frames/frame-0001.png)"})
 		return
 	}
 	f, err := os.Open(filepath.Join(rec.ArtifactDir, name))
