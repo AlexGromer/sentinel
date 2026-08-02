@@ -284,6 +284,20 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   padding:.6rem .8rem;margin:.5rem 0;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .mdcode{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.5rem;
   overflow:auto;font-size:.8rem;margin:.3rem 0}
+/* ADR-108d: the three-pane chat screen. Two columns on a wide screen, one below 1100px — where two
+   panes would each be too narrow for either the conversation or the frame to be readable, and a
+   layout that is technically present but unusable is worse than one that folds. */
+#chat3 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:.8rem; align-items:start }
+#chat3-right { display:flex; flex-direction:column; gap:.6rem; min-width:0; position:sticky; top:.5rem; max-height:calc(100vh - 1.5rem) }
+#chat3-left { min-width:0 }
+.lv-pane { min-height:12rem; max-height:46vh; overflow:auto; border:1px solid var(--bd); border-radius:.4rem; padding:.4rem; background:rgba(0,0,0,.15) }
+#lv-frame img { width:100%; height:auto; display:block; border-radius:.3rem }
+.rf-row { display:flex; gap:.4rem; padding:.15rem .2rem; border-left:2px solid transparent }
+.rf-row.rf-business { border-left-color:var(--ok) }
+.rf-row.rf-tool { border-left-color:var(--mut); opacity:.75 }
+.rf-src { flex:0 0 5.5rem; font-size:.72rem; text-transform:uppercase; letter-spacing:.03em; opacity:.8 }
+@media (max-width:1100px) { #chat3 { grid-template-columns:minmax(0,1fr) } #chat3-right { position:static; max-height:none } }
+
 </style>
 </head>
 <body class="lang-ru">
@@ -992,6 +1006,14 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
     <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
     <div class="subpanel" data-subpanel="author" data-view="chat">
+      <!-- ADR-108d: the three-pane screen, and ONLY in the chat tab (Alex's directive: not in settings,
+           not in the library, not in results). Left is the conversation; right-top is the live area
+           with its three modes; right-bottom is the run as it happens, with tool and business plainly
+           separated. Every id inside the left column is unchanged — the layout wraps the console, it
+           does not rewrite it. Collapses to one column under 1100px, where two panes would each be too
+           narrow to read. -->
+      <div id="chat3">
+        <div id="chat3-left">
       <div class="grid g2">
         <div>
           <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
@@ -1021,6 +1043,59 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <span class="hint"><span data-lang="ru">сначала проверьте подключение (Settings → #7)</span><span data-lang="en">check the connection first (Settings → #7)</span></span>
       </div>
       <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
+        </div><!-- /chat3-left -->
+
+        <div id="chat3-right">
+          <!-- Live area: three modes, switched WITHOUT reloading (Alex's directive). -->
+          <div class="card" id="live-area" style="padding:.6rem">
+            <div class="ctl-row" style="margin:0 0 .5rem">
+              <div class="subtabbar" role="tablist" aria-label="live view mode" style="margin:0">
+                <button type="button" class="subtab-btn" id="lv-mode-frame" data-lvmode="frame" role="tab" aria-selected="true">🖼 <span data-lang="ru">Браузер</span><span data-lang="en">Browser</span></button>
+                <button type="button" class="subtab-btn" id="lv-mode-actions" data-lvmode="actions" role="tab" aria-selected="false">🖱 <span data-lang="ru">Действия</span><span data-lang="en">Actions</span></button>
+                <button type="button" class="subtab-btn" id="lv-mode-video" data-lvmode="video" role="tab" aria-selected="false">🎞 <span data-lang="ru">Видео</span><span data-lang="en">Video</span></button>
+              </div>
+              <span id="lv-status" class="hint" style="margin-left:auto"></span>
+            </div>
+            <div id="lv-frame" class="lv-pane"><p class="hint" data-lang="ru">Кадры появятся, когда пойдёт прогон.</p><p class="hint" data-lang="en">Frames appear once a run is under way.</p></div>
+            <div id="lv-actions" class="lv-pane" hidden></div>
+            <div id="lv-video" class="lv-pane" hidden></div>
+          </div>
+
+          <!-- The run as it happens. The business/tool split already exists in the catalogue
+               (`audiences`, ADR-068) and was only ever a FILTER VALUE in a separate Logs tab; here it
+               is the layout itself, which is what Alex asked for: see which is which without choosing. -->
+          <div class="card" id="run-flow" style="padding:.6rem;flex:1;min-height:0;display:flex;flex-direction:column">
+            <div class="ctl-row" style="margin:0 0 .4rem">
+              <b style="font-size:.9rem"><span data-lang="ru">Ход прогона</span><span data-lang="en">Run in progress</span></b>
+              <label class="hint" style="margin-left:auto;display:flex;align-items:center;gap:.3rem">
+                <input type="checkbox" id="rf-tool" checked style="width:auto">
+                <span data-lang="ru">показывать инструмент</span><span data-lang="en">show the tool</span>
+              </label>
+            </div>
+            <div id="rf-list" style="overflow:auto;flex:1;min-height:6rem;font-size:.84rem"></div>
+          </div>
+
+          <!-- ADR-108d: artefacts are downloaded FROM THE CHAT and viewed on a canvas (Alex's
+               directive). The list is built by asking the server which of the whitelisted names this
+               run actually produced — guessing would offer downloads that 404, and a dead button is
+               the defect this milestone keeps finding. -->
+          <div class="card" id="artifacts" style="padding:.6rem">
+            <div class="ctl-row" style="margin:0 0 .4rem">
+              <b style="font-size:.9rem"><span data-lang="ru">Артефакты</span><span data-lang="en">Artefacts</span></b>
+              <button type="button" class="btn" id="art-refresh" style="margin-left:auto">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+            </div>
+            <div id="art-list" class="hint"><span data-lang="ru">появятся, когда прогон что-нибудь создаст</span><span data-lang="en">they appear once a run has produced something</span></div>
+            <div id="art-view" hidden style="margin-top:.5rem">
+              <div class="ctl-row" style="margin:0 0 .3rem">
+                <span id="art-view-name" class="hint"></span>
+                <button type="button" class="btn" id="art-close" style="margin-left:auto">✕</button>
+              </div>
+              <canvas id="art-canvas" style="max-width:100%;display:none;border:1px solid var(--bd);border-radius:.3rem"></canvas>
+              <pre id="art-text" style="display:none;max-height:40vh;overflow:auto;font-size:.78rem;white-space:pre-wrap"></pre>
+            </div>
+          </div>
+        </div><!-- /chat3-right -->
+      </div><!-- /chat3 -->
     </div>
 
     <!-- ---- Live AG-UI timeline (M14 W2/§2): WS /v1/stream?run_id=, hitl_needed + takeover/return ---- -->
@@ -3297,8 +3372,209 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (!agWS || agWS.readyState!==1 || !agRunId) return;
     try { agWS.send(JSON.stringify({type:'control',action:action,run_id:agRunId})); } catch(e){}
   }
+
+  /* ================= ADR-108d: the three-pane chat screen =========================================
+     The live area shows the SAME run three ways, switched without reloading; the flow below it shows
+     what is happening with the tool and the business plainly apart. Both are fed by the AG-UI events
+     the hub already receives — this adds a second consumer, it does not add a second stream. */
+  var lvMode = 'frame', lvRunId = '', lvLastFrame = '';
+
+
+  /* ---- ADR-108d: artefacts, from the chat, on a canvas ---- */
+  var ART_NAMES = ['scenario.json','plan.json','report.json','report.html','heal-report.json',
+                   'baseline-report.json','junit.xml','executed-plan.json','metrics.prom',
+                   'site-map.json','run.yaml','trace.zip','reply.json'];
+
+  async function artList(runId){
+    var box = ge('art-list'); if (!box) return;
+    runId = runId || lvRunId || (ge('live-runid') ? ge('live-runid').value.trim() : '');
+    if (!capiBase() || !runId){ box.innerHTML = bi('нет прогона','no run yet'); return; }
+    box.innerHTML = bi('смотрю…','looking…');
+    /* HEAD would be cheaper, but the route does not serve it — so each name is probed with a real GET
+       and the ones that 404 simply do not become buttons. Offering a name the run never wrote is how a
+       download turns into a dead button. */
+    var found = [];
+    for (var i = 0; i < ART_NAMES.length; i++){
+      try {
+        var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(ART_NAMES[i]),
+                            { headers: authHdr() });
+        if (r.ok) found.push(ART_NAMES[i]);
+      } catch(e){ /* offline: show what was found so far rather than nothing */ }
+    }
+    if (!found.length){ box.innerHTML = bi('этот прогон пока ничего не создал','this run has produced nothing yet'); return; }
+    box.innerHTML = found.map(function(n){
+      return '<span class="ctl-row" style="display:inline-flex;gap:.2rem;margin:.15rem .3rem .15rem 0">'
+           + '<button type="button" class="btn art-open" data-art="'+esc(n)+'" data-run="'+esc(runId)+'">'+esc(n)+'</button>'
+           + '<button type="button" class="btn art-dl" data-art="'+esc(n)+'" data-run="'+esc(runId)+'" title="'+bi('скачать','download')+'">⬇</button></span>';
+    }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('.art-open'), function(b){
+      b.addEventListener('click', function(){ artOpen(b.getAttribute('data-run'), b.getAttribute('data-art')); });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('.art-dl'), function(b){
+      b.addEventListener('click', function(){ artDownload(b.getAttribute('data-run'), b.getAttribute('data-art')); });
+    });
+  }
+
+  /* Images go on the CANVAS, text goes in a <pre>. Both, rather than one: a canvas cannot show
+     scenario.json and a <pre> cannot show a frame, and the person opening an artefact should not have
+     to know which kind it is before clicking. */
+  async function artOpen(runId, name){
+    var view = ge('art-view'), cv = ge('art-canvas'), tx = ge('art-text');
+    if (!view) return;
+    view.hidden = false;
+    ge('art-view-name').textContent = name;
+    cv.style.display = 'none'; tx.style.display = 'none';
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(name),
+                          { headers: authHdr() });
+      if (!r.ok){ tx.style.display='block'; tx.textContent = 'HTTP '+r.status; return; }
+      if (/\.(png|jpe?g|webp)$/i.test(name)){
+        var blob = await r.blob(), url = URL.createObjectURL(blob), img = new Image();
+        img.onload = function(){
+          cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+          cv.getContext('2d').drawImage(img, 0, 0);
+          cv.style.display = 'block';
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+        return;
+      }
+      var text = await r.text();
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch(e){ /* not JSON: show as-is */ }
+      tx.textContent = text; tx.style.display = 'block';
+    } catch(e){ tx.style.display='block'; tx.textContent = e.message; }
+  }
+
+  async function artDownload(runId, name){
+    /* `download=1` is what tells the server this is a REAL download rather than the hub drawing the
+       run (SEC-RETENTION-DOWNLOAD) — the retention policy distinguishes the two. */
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(name)+'&download=1',
+                          { headers: authHdr() });
+      if (!r.ok) return;
+      var blob = await r.blob(), a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 0);
+    } catch(e){ /* offline */ }
+  }
+
+  if (ge('art-refresh')) ge('art-refresh').addEventListener('click', function(){ artList(); });
+  if (ge('art-close')) ge('art-close').addEventListener('click', function(){ ge('art-view').hidden = true; });
+
+  function lvSetMode(mode){
+    lvMode = mode;
+    ['frame','actions','video'].forEach(function(m){
+      var pane = ge('lv-'+m), btn = ge('lv-mode-'+m);
+      if (pane) pane.hidden = (m !== mode);
+      if (btn) btn.setAttribute('aria-selected', String(m === mode));
+    });
+    /* Switching is a VIEW change, so nothing is refetched and nothing is lost: the frame stays the
+       frame that was last received, the action list keeps its rows. Reloading here would make the
+       toggle destructive, which is the opposite of what a toggle is for. */
+    if (mode === 'video') lvRenderVideo();
+  }
+  ['frame','actions','video'].forEach(function(m){
+    var b = ge('lv-mode-'+m);
+    if (b) b.addEventListener('click', function(){ lvSetMode(m); });
+  });
+
+  function lvSetStatus(html){ var el = ge('lv-status'); if (el) el.innerHTML = html; }
+
+  /* A frame arrives as a NAME, never as bytes (ADR-108d) — the image is fetched through the artifact
+     route, with the token, which is why it goes through fetch+objectURL rather than a bare <img src>:
+     an <img> cannot carry an Authorization header. */
+  async function lvShowFrame(runId, frameName, ok){
+    var box = ge('lv-frame'); if (!box || !runId || !frameName) return;
+    if (frameName === lvLastFrame) return;
+    lvLastFrame = frameName;
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='
+                          +encodeURIComponent('frames/'+frameName), { headers: authHdr() });
+      if (!r.ok){ lvSetStatus('<span class="fail">'+bi('кадр не получен','frame unavailable')+' ('+r.status+')</span>'); return; }
+      var url = URL.createObjectURL(await r.blob());
+      var prev = box.querySelector('img');
+      box.innerHTML = '<img alt="'+esc(frameName)+'">';
+      var img = box.querySelector('img');
+      img.src = url;
+      /* Release the PREVIOUS object URL, not this one: a page watching a long run would otherwise hold
+         every frame it has ever shown. */
+      if (prev && prev.src.startsWith('blob:')) URL.revokeObjectURL(prev.src);
+      lvSetStatus(bi('кадр','frame')+' '+esc(frameName)+(ok===false ? ' <span class="fail">('+bi('шаг не удался','step failed')+')</span>' : ''));
+    } catch(e){ lvSetStatus('<span class="fail">'+esc(e.message)+'</span>'); }
+  }
+
+  function lvAddAction(kind, text){
+    var box = ge('lv-actions'); if (!box) return;
+    var row = document.createElement('div');
+    row.className = 'rf-row rf-'+(kind === 'tool' ? 'tool' : 'business');
+    row.innerHTML = '<span class="rf-src">'+esc(kind)+'</span><span>'+text+'</span>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  /* Video is the one mode with no backend yet (there is no CDP screencast in the executor). It says so
+     PLAINLY instead of showing an empty box: a mode that looks broken and a mode that is not built are
+     different things, and only one of them is a bug worth reporting. */
+  function lvRenderVideo(){
+    var box = ge('lv-video'); if (!box) return;
+    box.innerHTML = '<p class="hint">'
+      + bi('видео-режим (CDP screencast) пока не поддерживается этим развёртыванием — исполнитель не открывает CDP-сессию. Пока это доступно как поток КАДРОВ: вкладка «Браузер» обновляется на каждом шаге.',
+           'the video mode (CDP screencast) is not supported by this deployment yet — the executor opens no CDP session. Until then it is available as a stream of FRAMES: the Browser tab updates on every step.')
+      + '</p>';
+  }
+
+  /* The run flow: the same events, laid out so the two audiences are visible at once rather than
+     chosen between. `business` = what happened to the application under test; `tool` = what Sentinel
+     itself did. The mapping is the catalogue's (ADR-068), not a new vocabulary. */
+  function rfAdd(kind, text){
+    var box = ge('rf-list'); if (!box) return;
+    var row = document.createElement('div');
+    row.className = 'rf-row rf-'+kind;
+    row.dataset.kind = kind;
+    row.innerHTML = '<span class="rf-src">'+(kind === 'tool' ? bi('инструмент','tool') : bi('приложение','app'))+'</span><span>'+text+'</span>';
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+    rfApplyFilter();
+  }
+  function rfApplyFilter(){
+    var show = ge('rf-tool') ? ge('rf-tool').checked : true;
+    Array.prototype.forEach.call(document.querySelectorAll('#rf-list .rf-tool'), function(r){
+      r.style.display = show ? '' : 'none';
+    });
+  }
+  if (ge('rf-tool')) ge('rf-tool').addEventListener('change', rfApplyFilter);
+
+  /* One place decides which side of the split an event belongs to, so the layout and any later filter
+     cannot disagree about the same event. */
+  function lvKindOf(type){
+    return (type === 'step.progress' || type === 'tool.call' || type === 'step.frame' ||
+            type === 'verdict' || type === 'run.finished') ? 'business' : 'tool';
+  }
+
+  /* Exposed as a seam so the DOM gate drives the SHIPPED consumer rather than a copy of it — the same
+     technique as window.lgCompile for the filter grammar. An extracted copy is a test of the copy. */
+  window.lvOnEvent = function(p){ return lvOnEvent(p); };
+
+  function lvOnEvent(p){
+    if (!p || !p.type) return;
+    var d = p.data || {};
+    if (p.type === 'run.started'){ lvRunId = p.run_id || lvRunId; }
+    if (p.type === 'run.finished' || p.type === 'verdict'){ artList(p.run_id || lvRunId); }
+    if (p.type === 'step.frame'){
+      lvShowFrame(p.run_id || lvRunId, d.frame, d.ok);
+      lvAddAction('business', bi('шаг','step')+' #'+esc(d.n)+' — '+esc(d.frame));
+      return;    /* a frame is not a line of the flow; it IS the flow's picture */
+    }
+    if (p.type === 'tool.call'){ lvAddAction('tool', esc(d.name||'')+' — '+esc(d.args_summary||'')); }
+    if (p.type === 'step.progress'){ lvAddAction('business', bi('шаг','step')+' #'+esc(d.n)+'/'+esc(d.total)+' '+esc(d.desc||'')); }
+    var text = '<b>'+esc(p.type)+'</b> '+esc(JSON.stringify(d));
+    rfAdd(lvKindOf(p.type), text);
+  }
+
   function agHandle(p){
     if (!p || !p.type) return;
+    lvOnEvent(p);   /* ADR-108d: a SECOND consumer of the same stream, never a second stream */
     if (p.type==='subscribed'){ agSetStatus('<span class="pass">● '+bi('подписан','subscribed')+'</span> run_id='+esc(p.run_id||agRunId)); return; }
     if (p.type==='error'){ agAddEvent('err', '✗ '+esc(p.error||'error')); return; }
     if (p.type==='control-ok'){ agAddEvent('verdict', '✓ control '+esc(p.action)); if (p.action==='return') agHitlBanner(false); return; }

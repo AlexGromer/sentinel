@@ -537,3 +537,43 @@ func TestArtifactOfAHistoricalRunIsReachable(t *testing.T) {
 		t.Fatalf("artifact body: %v (err=%v)", body, err)
 	}
 }
+
+// TestLiveFramesAreServedAndBounded — ADR-108d.
+//
+// Frames live in a SUBDIRECTORY, one per step, so the flat whitelist cannot enumerate them and they
+// are matched by shape instead. The shape has to be narrow enough that it can only ever name a file
+// this run wrote — which is why the refusals below matter as much as the acceptance.
+func TestLiveFramesAreServedAndBounded(t *testing.T) {
+	s := newTestServer()
+	dir := filepath.Join(s.repo, "runs", "control-fr")
+	if err := os.MkdirAll(filepath.Join(dir, "frames"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "frames", "frame-0007.png"), []byte("PNGDATA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.runs["fr"] = &run{ID: "fr", State: "done", ArtifactDir: dir, stream: newRunStream()}
+
+	get := func(name string) int {
+		req := httptest.NewRequest(http.MethodGet, "/v1/runs/fr/artifact?name="+name, nil)
+		req.Header.Set("Authorization", "Bearer "+s.token)
+		rec := httptest.NewRecorder()
+		s.mux().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := get("frames%2Fframe-0007.png"); code != http.StatusOK {
+		t.Errorf("a real frame: got %d want 200 — the live view would show nothing", code)
+	}
+	// Everything that is not exactly a frame of this run's own making.
+	for _, bad := range []string{
+		"frames%2F..%2F..%2Fetc%2Fpasswd",
+		"frames%2Fframe-7.png",       // not four digits
+		"frames%2Fframe-0007.png.sh", // suffix smuggling
+		"frames%2Fother.png",
+		"frames%2F",
+	} {
+		if code := get(bad); code == http.StatusOK {
+			t.Errorf("%s was served; the frame pattern is too wide", bad)
+		}
+	}
+}

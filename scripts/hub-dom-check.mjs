@@ -1390,6 +1390,122 @@ try {
     await page.uncheck('#b-forcereplay');
   }, { allowConsole: freshConfig404 });
 
+  /* ================= ADR-108d — the three-pane chat screen ================= */
+
+  await check('three-pane: the layout exists in the CHAT tab and nowhere else', async () => {
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(250);
+    ok(await page.locator('#chat3').isVisible(), 'the chat tab has no three-pane layout');
+    ok(await page.locator('#live-area').isVisible(), 'no live area');
+    ok(await page.locator('#run-flow').isVisible(), 'no run-flow pane');
+    // BELONGING, not just visibility. A mutation that forced the author subpanel visible everywhere
+    // survived the visibility check alone: the router hides the whole view container, so the panes
+    // were invisible for a reason that has nothing to do with where they live. What Alex's directive
+    // is about is which view OWNS this layout, so that is what gets asserted — the panes must be
+    // inside the chat's own subpanel, where the router can only ever reveal them with the chat.
+    for (const id of ['chat3', 'live-area', 'run-flow', 'artifacts']) {
+      const owned = await page.evaluate((elId) => {
+        const el = document.getElementById(elId);
+        return !!el && !!el.closest('[data-subpanel="author"][data-view="chat"]');
+      }, id);
+      ok(owned, `#${id} is not inside the chat subpanel — it would outlive the chat view`);
+    }
+    // Alex's directive is explicit that this belongs to the chat and NOT to settings, the library,
+    // results or the tools. A layout that leaked into them would be a different product decision.
+    for (const view of ['settings', 'library', 'results', 'logs']) {
+      await page.click(`.rail a[data-nav="${view}"]`);
+      await page.waitForTimeout(150);
+      ok(!(await page.locator('#chat3').isVisible()),
+         `the three-pane layout is visible under ${view} — it belongs to the chat alone`);
+    }
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(200);
+  });
+
+  await check('three-pane: all three live modes switch WITHOUT reloading', async () => {
+    const url0 = page.url();
+    // The frame pane starts visible; the other two are hidden but PRESENT — a mode that does not exist
+    // until clicked cannot be said to be switchable.
+    ok(await page.locator('#lv-frame').isVisible(), 'the browser-frame pane is not the default');
+    for (const mode of ['actions', 'video', 'frame']) {
+      await page.click(`#lv-mode-${mode}`);
+      await page.waitForTimeout(150);
+      ok(await page.locator(`#lv-${mode}`).isVisible(), `mode ${mode} did not reveal its pane`);
+      for (const other of ['frame', 'actions', 'video'].filter((m) => m !== mode)) {
+        ok(!(await page.locator(`#lv-${other}`).isVisible()), `mode ${mode} left ${other} on screen`);
+      }
+      eq(await page.locator(`#lv-mode-${mode}`).getAttribute('aria-selected'), 'true',
+         `mode ${mode} is shown but not marked selected`);
+    }
+    eq(page.url(), url0, 'switching modes navigated — the toggle must not reload (Alex: без перезагрузки)');
+  });
+
+  await check('three-pane: the unbuilt mode says so instead of showing an empty box', async () => {
+    await page.click('#lv-mode-video');
+    await page.waitForTimeout(150);
+    const text = (await page.locator('#lv-video').innerText()).trim();
+    ok(text.length > 0, 'the video mode is an empty box — indistinguishable from a broken one');
+    ok(/screencast|CDP/i.test(text), `the video mode does not say WHY it is unavailable: ${text}`);
+    await page.click('#lv-mode-frame');
+  });
+
+  await check('three-pane: the run flow separates the tool from the application, visibly', async () => {
+    // Driven through the page's own event consumer, so this exercises the shipped code path rather
+    // than a copy of it — the same seam the Logs filter checks use.
+    await page.evaluate(() => {
+      const ev = (type, data) => window.lvOnEvent({ type, run_id: 'r-test', seq: 1, data });
+      ev('tool.call', { name: 'click', args_summary: "click button 'Pay'" });
+      ev('step.progress', { n: 1, total: 10, desc: 'pay for the order' });
+      ev('state.transition', { to: 'perceive' });
+    });
+    await page.waitForTimeout(200);
+    const business = await page.locator('#rf-list .rf-business').count();
+    const tool = await page.locator('#rf-list .rf-tool').count();
+    ok(business > 0 && tool > 0,
+       `the split is not visible: business=${business} tool=${tool} — one side missing means the layout `
+       + 'is not showing the distinction it exists for');
+    // And it is a LAYOUT, not a filter: both are on screen at once by default.
+    ok(await page.locator('#rf-list .rf-business').first().isVisible(), 'business rows are not visible');
+    ok(await page.locator('#rf-list .rf-tool').first().isVisible(), 'tool rows are not visible by default');
+    // The toggle hides the tool without touching the application's side.
+    await page.uncheck('#rf-tool');
+    await page.waitForTimeout(150);
+    ok(!(await page.locator('#rf-list .rf-tool').first().isVisible()), 'unchecking left the tool rows visible');
+    ok(await page.locator('#rf-list .rf-business').first().isVisible(), 'hiding the tool also hid the application');
+    await page.check('#rf-tool');
+  });
+
+  await check('three-pane: artefacts are reachable FROM THE CHAT and open on a canvas', async () => {
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(200);
+    ok(await page.locator('#artifacts').isVisible(), 'the chat has no artefacts panel — Alex: качаются из чата');
+    // The list is built by ASKING the server which names this run produced, so it is driven at a real
+    // run rather than asserted against a hard-coded set. A name the run never wrote must not appear:
+    // offering it would be a download that 404s, which is the dead-button defect this milestone keeps
+    // finding.
+    await page.evaluate((id) => window.lvOnEvent({ type: 'run.started', run_id: id, seq: 1, data: {} }), baseRun);
+    await page.click('#art-refresh');
+    await page.waitForFunction(() => {
+      const t = document.querySelector('#art-list')?.innerText || '';
+      return t && !/looking|смотрю/i.test(t);
+    }, { timeout: 20000 });
+    const names = await page.locator('#art-list .art-open').allInnerTexts();
+    ok(names.length > 0, 'no artefacts offered for a finished run');
+    ok(names.includes('plan.json') || names.includes('scenario.json'),
+       `neither plan.json nor scenario.json offered: ${JSON.stringify(names)}`);
+    ok(!names.includes('heal-report.json'),
+       'a replay-only artefact was offered for an explore run — the list is guessing, not asking');
+
+    // Opening a JSON artefact shows it as text; the canvas stays for images. Both exist because a
+    // canvas cannot show scenario.json and a <pre> cannot show a frame.
+    await page.click('#art-list .art-open >> nth=0');
+    await page.waitForTimeout(600);
+    ok(await page.locator('#art-view').isVisible(), 'opening an artefact revealed nothing');
+    const shownText = await page.locator('#art-text').isVisible();
+    const shownCanvas = await page.locator('#art-canvas').isVisible();
+    ok(shownText || shownCanvas, 'the artefact opened into an empty viewer');
+  }, { allowConsole: /404 \(Not Found\)/ });
+
   /* ================= ADR-109 — local accounts in the hub =================
      These run LAST and against their OWN control-API, deliberately.
 

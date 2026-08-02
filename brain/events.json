@@ -507,6 +507,18 @@
         "graph"
       ]
     },
+    "live.frame_failed": {
+      "lvl": "warn",
+      "cat": "browser",
+      "degrades": true,
+      "ru": "Не удалось снять кадр живого вида на шаге {step} ({error}) — прогон продолжается",
+      "en": "Could not capture a live frame at step {step} ({error}) — the run continues",
+      "ru_verdict": "живой вид был НЕПОЛОН: часть кадров снять не удалось, поэтому «браузер» в чате показывает не все шаги",
+      "en_verdict": "the live view was INCOMPLETE: some frames could not be captured, so the browser view in the chat does not show every step",
+      "modules": [
+        "graph"
+      ]
+    },
     "chat.reply": {
       "lvl": "info",
       "cat": "run",
