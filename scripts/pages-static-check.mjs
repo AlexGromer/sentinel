@@ -94,10 +94,21 @@ function fakeApi(port) {
  * itself (typing a URL and pressing Check is the ONE thing that must work with no backend). */
 const CONNECT_FORM = new Set(['cap-check', 'capi', 'capitok']);
 
+/* Returns handles, not ids to be pasted back into a selector string. Building `[id="${id}"]` meant
+ * escaping page-controlled text into a query — CodeQL flagged the quote-only escaping as incomplete
+ * (a backslash in an id breaks out of it), and it was right. A handle removes the class of bug
+ * rather than fixing this instance of it: nothing is ever re-parsed. */
 async function clickableControls(page) {
-  return page.$$eval('button, [role="button"]', (els) =>
-    els.filter((e) => !e.disabled && e.offsetParent !== null)
-       .map((e) => e.id || (e.textContent || '').trim().slice(0, 30)));
+  const handles = await page.$$('button, [role="button"]');
+  const out = [];
+  for (const h of handles) {
+    const info = await h.evaluate((e) => ({
+      clickable: !e.disabled && e.offsetParent !== null,
+      name: e.id || (e.textContent || '').trim().slice(0, 30),
+    }));
+    if (info.clickable) out.push({ handle: h, name: info.name });
+  }
+  return out;
 }
 
 async function main() {
@@ -150,17 +161,15 @@ async function main() {
       for (const view of views) {
         await page.evaluate((v) => { location.hash = `#v=${v}`; }, view);
         await page.waitForTimeout(250);
-        for (const id of await clickableControls(page)) {
-          if (CONNECT_FORM.has(id)) continue;
+        for (const { handle, name } of await clickableControls(page)) {
+          if (CONNECT_FORM.has(name)) continue;
           seen.length = 0;
           try {
-            // `[id="…"]`, not `#…`: CSS.escape does not exist in Node, and several ids here would
-            // need escaping anyway. The attribute form sidesteps both.
-            await page.click(`[id="${id.replace(/"/g, '\\"')}"]`, { timeout: 1200, noWaitAfter: true });
+            await handle.click({ timeout: 1200, noWaitAfter: true });
             clicked += 1;
           } catch { continue; }      // not clickable / covered — nothing to assert
           await page.waitForTimeout(120);
-          if (seen.length) leaked.push(`[${view}] ${id} -> ${seen.join(',')}`);
+          if (seen.length) leaked.push(`[${view}] ${name} -> ${seen.join(',')}`);
         }
       }
       ok(clicked >= 20, `only ${clicked} controls were actually clicked — the sweep is not sweeping`);

@@ -1025,12 +1025,12 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div class="subtabbar" role="tablist" aria-label="Tests sub-views" hidden>
       <button type="button" class="subtab-btn" data-subtab="author" role="tab" aria-selected="true">💬 <span data-lang="ru">Авторинг</span><span data-lang="en">Author</span></button>
       <button type="button" class="subtab-btn" data-subtab="live" role="tab" aria-selected="false">📡 <span data-lang="ru">Live</span><span data-lang="en">Live</span></button>
-      <button type="button" class="subtab-btn" data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
-      <button type="button" class="subtab-btn" data-subtab="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
-      <button type="button" class="subtab-btn" data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
-      <button type="button" class="subtab-btn" data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
-      <button type="button" class="subtab-btn" data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
-      <button type="button" class="subtab-btn" data-subtab="logs" role="tab" aria-selected="false">📜 <span data-lang="ru">Логи</span><span data-lang="en">Logs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="logs" role="tab" aria-selected="false">📜 <span data-lang="ru">Логи</span><span data-lang="en">Logs</span></button>
     </div>
 
     <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
@@ -1145,9 +1145,9 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
     <!-- ---- Library: scenarios + tests (promote/rename/delete/search) ---- -->
     <div class="subtabbar" data-innerbar="library" data-view="library" role="tablist" aria-label="Library sections">
-      <button type="button" class="subtab-btn" data-sub="library" role="tab" aria-selected="true">📚 <span data-lang="ru">Сценарии и тесты</span><span data-lang="en">Scenarios &amp; tests</span></button>
-      <button type="button" class="subtab-btn" data-sub="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
-      <button type="button" class="subtab-btn" data-sub="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Conversations</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="library" role="tab" aria-selected="true">📚 <span data-lang="ru">Сценарии и тесты</span><span data-lang="en">Scenarios &amp; tests</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Conversations</span></button>
     </div>
     <div class="subpanel" data-subpanel="library" data-view="library">
       <div class="ctl-row">
@@ -1179,8 +1179,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
     <!-- ---- Results: per-run outcomes + native SVG charts (M15, ADR-051) ---- -->
     <div class="subtabbar" data-innerbar="results" data-view="results" role="tablist" aria-label="Results sections">
-      <button type="button" class="subtab-btn" data-sub="results" role="tab" aria-selected="true">📊 <span data-lang="ru">Вердикты</span><span data-lang="en">Verdicts</span></button>
-      <button type="button" class="subtab-btn" data-sub="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="results" role="tab" aria-selected="true">📊 <span data-lang="ru">Вердикты</span><span data-lang="en">Verdicts</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
     </div>
     <div class="subpanel" data-subpanel="results" data-view="results">
       <div class="ctl-row">
