@@ -1463,6 +1463,37 @@ try {
     await page.check('#rf-tool');
   });
 
+  await check('three-pane: artefacts are reachable FROM THE CHAT and open on a canvas', async () => {
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForTimeout(200);
+    ok(await page.locator('#artifacts').isVisible(), 'the chat has no artefacts panel — Alex: качаются из чата');
+    // The list is built by ASKING the server which names this run produced, so it is driven at a real
+    // run rather than asserted against a hard-coded set. A name the run never wrote must not appear:
+    // offering it would be a download that 404s, which is the dead-button defect this milestone keeps
+    // finding.
+    await page.evaluate((id) => window.lvOnEvent({ type: 'run.started', run_id: id, seq: 1, data: {} }), baseRun);
+    await page.click('#art-refresh');
+    await page.waitForFunction(() => {
+      const t = document.querySelector('#art-list')?.innerText || '';
+      return t && !/looking|смотрю/i.test(t);
+    }, { timeout: 20000 });
+    const names = await page.locator('#art-list .art-open').allInnerTexts();
+    ok(names.length > 0, 'no artefacts offered for a finished run');
+    ok(names.includes('plan.json') || names.includes('scenario.json'),
+       `neither plan.json nor scenario.json offered: ${JSON.stringify(names)}`);
+    ok(!names.includes('heal-report.json'),
+       'a replay-only artefact was offered for an explore run — the list is guessing, not asking');
+
+    // Opening a JSON artefact shows it as text; the canvas stays for images. Both exist because a
+    // canvas cannot show scenario.json and a <pre> cannot show a frame.
+    await page.click('#art-list .art-open >> nth=0');
+    await page.waitForTimeout(600);
+    ok(await page.locator('#art-view').isVisible(), 'opening an artefact revealed nothing');
+    const shownText = await page.locator('#art-text').isVisible();
+    const shownCanvas = await page.locator('#art-canvas').isVisible();
+    ok(shownText || shownCanvas, 'the artefact opened into an empty viewer');
+  }, { allowConsole: /404 \(Not Found\)/ });
+
   /* ================= ADR-109 — local accounts in the hub =================
      These run LAST and against their OWN control-API, deliberately.
 

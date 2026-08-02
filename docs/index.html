@@ -1074,6 +1074,26 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
             </div>
             <div id="rf-list" style="overflow:auto;flex:1;min-height:6rem;font-size:.84rem"></div>
           </div>
+
+          <!-- ADR-108d: artefacts are downloaded FROM THE CHAT and viewed on a canvas (Alex's
+               directive). The list is built by asking the server which of the whitelisted names this
+               run actually produced — guessing would offer downloads that 404, and a dead button is
+               the defect this milestone keeps finding. -->
+          <div class="card" id="artifacts" style="padding:.6rem">
+            <div class="ctl-row" style="margin:0 0 .4rem">
+              <b style="font-size:.9rem"><span data-lang="ru">Артефакты</span><span data-lang="en">Artefacts</span></b>
+              <button type="button" class="btn" id="art-refresh" style="margin-left:auto">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+            </div>
+            <div id="art-list" class="hint"><span data-lang="ru">появятся, когда прогон что-нибудь создаст</span><span data-lang="en">they appear once a run has produced something</span></div>
+            <div id="art-view" hidden style="margin-top:.5rem">
+              <div class="ctl-row" style="margin:0 0 .3rem">
+                <span id="art-view-name" class="hint"></span>
+                <button type="button" class="btn" id="art-close" style="margin-left:auto">✕</button>
+              </div>
+              <canvas id="art-canvas" style="max-width:100%;display:none;border:1px solid var(--bd);border-radius:.3rem"></canvas>
+              <pre id="art-text" style="display:none;max-height:40vh;overflow:auto;font-size:.78rem;white-space:pre-wrap"></pre>
+            </div>
+          </div>
         </div><!-- /chat3-right -->
       </div><!-- /chat3 -->
     </div>
@@ -3359,6 +3379,89 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      the hub already receives — this adds a second consumer, it does not add a second stream. */
   var lvMode = 'frame', lvRunId = '', lvLastFrame = '';
 
+
+  /* ---- ADR-108d: artefacts, from the chat, on a canvas ---- */
+  var ART_NAMES = ['scenario.json','plan.json','report.json','report.html','heal-report.json',
+                   'baseline-report.json','junit.xml','executed-plan.json','metrics.prom',
+                   'site-map.json','run.yaml','trace.zip','reply.json'];
+
+  async function artList(runId){
+    var box = ge('art-list'); if (!box) return;
+    runId = runId || lvRunId || (ge('live-runid') ? ge('live-runid').value.trim() : '');
+    if (!capiBase() || !runId){ box.innerHTML = bi('нет прогона','no run yet'); return; }
+    box.innerHTML = bi('смотрю…','looking…');
+    /* HEAD would be cheaper, but the route does not serve it — so each name is probed with a real GET
+       and the ones that 404 simply do not become buttons. Offering a name the run never wrote is how a
+       download turns into a dead button. */
+    var found = [];
+    for (var i = 0; i < ART_NAMES.length; i++){
+      try {
+        var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(ART_NAMES[i]),
+                            { headers: authHdr() });
+        if (r.ok) found.push(ART_NAMES[i]);
+      } catch(e){ /* offline: show what was found so far rather than nothing */ }
+    }
+    if (!found.length){ box.innerHTML = bi('этот прогон пока ничего не создал','this run has produced nothing yet'); return; }
+    box.innerHTML = found.map(function(n){
+      return '<span class="ctl-row" style="display:inline-flex;gap:.2rem;margin:.15rem .3rem .15rem 0">'
+           + '<button type="button" class="btn art-open" data-art="'+esc(n)+'" data-run="'+esc(runId)+'">'+esc(n)+'</button>'
+           + '<button type="button" class="btn art-dl" data-art="'+esc(n)+'" data-run="'+esc(runId)+'" title="'+bi('скачать','download')+'">⬇</button></span>';
+    }).join('');
+    Array.prototype.forEach.call(box.querySelectorAll('.art-open'), function(b){
+      b.addEventListener('click', function(){ artOpen(b.getAttribute('data-run'), b.getAttribute('data-art')); });
+    });
+    Array.prototype.forEach.call(box.querySelectorAll('.art-dl'), function(b){
+      b.addEventListener('click', function(){ artDownload(b.getAttribute('data-run'), b.getAttribute('data-art')); });
+    });
+  }
+
+  /* Images go on the CANVAS, text goes in a <pre>. Both, rather than one: a canvas cannot show
+     scenario.json and a <pre> cannot show a frame, and the person opening an artefact should not have
+     to know which kind it is before clicking. */
+  async function artOpen(runId, name){
+    var view = ge('art-view'), cv = ge('art-canvas'), tx = ge('art-text');
+    if (!view) return;
+    view.hidden = false;
+    ge('art-view-name').textContent = name;
+    cv.style.display = 'none'; tx.style.display = 'none';
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(name),
+                          { headers: authHdr() });
+      if (!r.ok){ tx.style.display='block'; tx.textContent = 'HTTP '+r.status; return; }
+      if (/\.(png|jpe?g|webp)$/i.test(name)){
+        var blob = await r.blob(), url = URL.createObjectURL(blob), img = new Image();
+        img.onload = function(){
+          cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+          cv.getContext('2d').drawImage(img, 0, 0);
+          cv.style.display = 'block';
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+        return;
+      }
+      var text = await r.text();
+      try { text = JSON.stringify(JSON.parse(text), null, 2); } catch(e){ /* not JSON: show as-is */ }
+      tx.textContent = text; tx.style.display = 'block';
+    } catch(e){ tx.style.display='block'; tx.textContent = e.message; }
+  }
+
+  async function artDownload(runId, name){
+    /* `download=1` is what tells the server this is a REAL download rather than the hub drawing the
+       run (SEC-RETENTION-DOWNLOAD) — the retention policy distinguishes the two. */
+    try {
+      var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(name)+'&download=1',
+                          { headers: authHdr() });
+      if (!r.ok) return;
+      var blob = await r.blob(), a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 0);
+    } catch(e){ /* offline */ }
+  }
+
+  if (ge('art-refresh')) ge('art-refresh').addEventListener('click', function(){ artList(); });
+  if (ge('art-close')) ge('art-close').addEventListener('click', function(){ ge('art-view').hidden = true; });
+
   function lvSetMode(mode){
     lvMode = mode;
     ['frame','actions','video'].forEach(function(m){
@@ -3457,6 +3560,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (!p || !p.type) return;
     var d = p.data || {};
     if (p.type === 'run.started'){ lvRunId = p.run_id || lvRunId; }
+    if (p.type === 'run.finished' || p.type === 'verdict'){ artList(p.run_id || lvRunId); }
     if (p.type === 'step.frame'){
       lvShowFrame(p.run_id || lvRunId, d.frame, d.ok);
       lvAddAction('business', bi('шаг','step')+' #'+esc(d.n)+' — '+esc(d.frame));
