@@ -5,17 +5,17 @@
 class Sentinel < Formula
   desc "Autonomous self-healing UI-testing agent — agentctl control-plane CLI"
   homepage "https://github.com/AlexGromer/sentinel"
-  version "0.0.0"
+  version "0.1.0"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/AlexGromer/sentinel/releases/download/v0.0.0/sentinel-v0.0.0-darwin-arm64.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      url "https://github.com/AlexGromer/sentinel/releases/download/v0.1.0/sentinel-v0.1.0-darwin-arm64.tar.gz"
+      sha256 "c946f54f95e018171405a5b1791692a3254b51ac831219dae2b7a35748dacb9a"
     end
     on_intel do
-      url "https://github.com/AlexGromer/sentinel/releases/download/v0.0.0/sentinel-v0.0.0-darwin-amd64.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      url "https://github.com/AlexGromer/sentinel/releases/download/v0.1.0/sentinel-v0.1.0-darwin-amd64.tar.gz"
+      sha256 "078b599a50d5c835f0f21ac8ddd4679b5c86ba910b5e52603f734d710a982b9e"
     end
   end
 
