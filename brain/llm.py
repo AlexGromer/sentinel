@@ -94,6 +94,20 @@ class AnthropicBackend:
             messages=[{"role": "user", "content": prompt}])
         return self._result(msg)
 
+    def complete_chat(self, messages: list, *, max_tokens: int, temperature: float,
+                      system: Optional[str] = None) -> LLMResult:
+        """ADR-108b: a turn of CONVERSATION — the whole exchange, with its roles intact.
+
+        `complete` exists and takes one string, so a conversation could have been flattened into it.
+        That would have been a transcript pretending to be a dialogue: the model loses which words were
+        its own, and every provider's multi-turn handling (caching, role-aware safety, tool state) is
+        bypassed. Anthropic's `system` is a separate parameter, not a message, which is exactly why it
+        travels separately here too."""
+        kw = dict(model=self.model, max_tokens=max_tokens, temperature=temperature, messages=messages)
+        if system:
+            kw["system"] = system
+        return self._result(self._client.messages.create(**kw))
+
     def complete_vision(self, prompt: str, image_b64: str, *, max_tokens: int,
                         temperature: float) -> LLMResult:
         msg = self._client.messages.create(
@@ -161,6 +175,14 @@ class OpenAICompatBackend:
             model=self.model, max_tokens=max_tokens, temperature=temperature,
             messages=[{"role": "user", "content": prompt}])
         return self._result(resp)
+
+    def complete_chat(self, messages: list, *, max_tokens: int, temperature: float,
+                      system: Optional[str] = None) -> LLMResult:
+        """ADR-108b, the OpenAI-compatible half. Here `system` IS a message, and it goes first — the
+        one place the two providers genuinely differ in shape rather than in spelling."""
+        msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        return self._result(self._client.chat.completions.create(
+            model=self.model, max_tokens=max_tokens, temperature=temperature, messages=msgs))
 
     def complete_vision(self, prompt: str, image_b64: str, *, max_tokens: int,
                         temperature: float) -> LLMResult:
@@ -235,7 +257,15 @@ class SamplingBackend:
 
 
 # Per-role defaults preserve today's behaviour (ADR-007): Opus explore, Sonnet heal.
-_DEFAULT_MODEL = {"planner": "claude-opus-4-8", "heal": "claude-sonnet-4-6"}
+_DEFAULT_MODEL = {
+    "planner": "claude-opus-4-8",
+    "heal": "claude-sonnet-4-6",
+    # ADR-108b: conversation is its own role, and NOT because a third model was wanted. A role is what
+    # lets an operator point talking and planning at different endpoints — the planner may be a large
+    # remote model while the chat that answers "what does this test cover?" runs on whatever is local.
+    # It defaults to the cheaper of the two: answering a person is not the work planning is.
+    "chat": "claude-sonnet-4-6",
+}
 
 
 def _env(role: str, key: str) -> Optional[str]:
@@ -431,3 +461,48 @@ def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
         attempt += 1
     r.prompt_tokens, r.completion_tokens = total_pt, total_ct  # true total across attempts (ADR-021)
     return r
+
+
+# --- ADR-108b: conversation -----------------------------------------------------------------------
+# Everything above this line asks the model for a STRUCTURE — a plan, a pick, a locator — and the
+# whole apparatus (schemas, extract_json, adaptive ceilings) exists to make the reply machine-usable.
+# None of it can answer a person. `complete` was the only unconstrained call in the module and it had
+# exactly one caller: the fallback inside _one_structured, for backends that cannot do schemas. So the
+# product whose centre is a chat had no way to say anything back.
+
+CONVERSATION_SYSTEM = (
+    "You are Sentinel, an autonomous UI-testing agent. You are talking to the person who runs you.\n"
+    "Answer their question directly and briefly. Plain prose, no JSON, no code fences unless they ask "
+    "for code.\n"
+    "You author and replay browser tests: you explore an application, freeze a deterministic plan, and "
+    "repair locators when the DOM drifts.\n"
+    "To actually TEST something you need an objective for this conversation (a goal, or a description "
+    "of the flow) and a target URL. If the person has not given one and seems to want work done, say "
+    "plainly what you need."
+)
+
+
+def converse(backend, messages: list, *, max_tokens: int = 800, temperature: float = 0.3,
+             system: Optional[str] = None) -> LLMResult:
+    """One turn of conversation: the exchange goes in, prose comes out.
+
+    `messages` is the OpenAI/Anthropic shape — [{"role": "user"|"assistant", "content": str}, …] —
+    and the ROLES are preserved wherever the backend understands them (complete_chat). A backend that
+    does not (MCP sampling, which is text-only by contract) gets the exchange flattened into a single
+    prompt with the speakers labelled; that is a real loss of fidelity, which is why it is the fallback
+    rather than the implementation.
+
+    Returns the LLMResult unchanged so the caller charges budget.tracker().add("chat", result) exactly
+    as the structured callers do — a conversation spends tokens like everything else, and a turn that
+    escaped accounting would make the budget a number about part of the work.
+    """
+    sys_prompt = system or CONVERSATION_SYSTEM
+    chat = getattr(backend, "complete_chat", None)
+    if callable(chat):
+        return chat(messages, max_tokens=max_tokens, temperature=temperature, system=sys_prompt)
+    flat = [sys_prompt, ""]
+    for m in messages:
+        who = "User" if (m.get("role") == "user") else "Assistant"
+        flat.append(f"{who}: {m.get('content', '')}")
+    flat.append("Assistant:")
+    return backend.complete("\n".join(flat), max_tokens=max_tokens, temperature=temperature)

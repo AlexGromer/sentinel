@@ -329,17 +329,39 @@ func TestChatCompletionsStream(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsNoTarget(t *testing.T) {
+// TestChatCompletionsNoTargetConverses — CHANGED BY ADR-108b, deliberately.
+//
+// A turn with words but no target used to be answered with one fixed sentence telling the person to
+// supply a URL. That is the right thing to say eventually, but saying only that means the product
+// cannot be asked a question, and a chat that answers one sentence is not a chat. The turn now goes
+// to the brain as a conversational turn, and the answer is whatever came back — here, from a stub
+// agentctl that writes no reply.json, so the fallback text plus the thread id.
+func TestChatCompletionsNoTargetConverses(t *testing.T) {
 	s, _ := newRunServer(t)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "describe: open login", false)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "what can you do?", false)))
 	req.Header.Set("Authorization", "Bearer secret-tok")
 	s.mux().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("no-target: got %d want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Set a target") {
-		t.Fatalf("no-target should ask for a target:\n%s", rec.Body.String())
+	// A conversation needs a thread to be one, and a client that sent no id has to be able to continue
+	// the exchange — so the id it was given comes back.
+	if !strings.Contains(rec.Body.String(), "conversation_id: conv-") {
+		t.Fatalf("a conversational turn must return the thread it was given:\n%s", rec.Body.String())
+	}
+}
+
+// TestChatCompletionsEmptyTurnStillAsks: with no words AND no target there is nothing to converse
+// about, so the guidance sentence is still the right answer.
+func TestChatCompletionsEmptyTurnStillAsks(t *testing.T) {
+	s, _ := newRunServer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("sentinel", "", false)))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "target") {
+		t.Fatalf("an empty turn should still ask for something to work with: %d\n%s", rec.Code, rec.Body.String())
 	}
 }
 

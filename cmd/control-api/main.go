@@ -768,7 +768,15 @@ func (s *server) spawnRun(req runRequest) *run {
 			args = append(args, "--target", req.Target)
 		}
 	default: // explore / goal / describe / chat (mode inferred from goal/describe + conversation_id as before)
-		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir}
+		// ADR-108b: a conversational turn has no target — the person is still deciding what to test.
+		// Passing an EMPTY `--target` instead of omitting it would reach agentctl as a set-but-blank
+		// flag, and RunConfig precedence treats "the user set this" as authoritative (fs.Visit,
+		// cmd/agentctl/main.go), so a blank would win over a target the config file supplies.
+		args = []string{"run"}
+		if req.Target != "" {
+			args = append(args, "--target", req.Target)
+		}
+		args = append(args, "--artifact-dir", artDir)
 		if req.ConversationID != "" { // M9.10 (ADR-048): multi-turn — resume the thread by conversation_id
 			args = append(args, "--mode", "chat", "--conversation-id", req.ConversationID)
 		}
@@ -1404,6 +1412,9 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 
 // artifactWhitelist limits artifact-fetch to known run outputs (no arbitrary file reads).
 var artifactWhitelist = map[string]bool{
+	// ADR-108b: the deliverable of a CONVERSATIONAL turn — prose, not a scenario. It is what the chat
+	// shim answers with, and what the hub shows as the assistant's message.
+	"reply.json":            true,
 	"scenario.json":         true,
 	"reconcile-report.json": true,
 	"report.json":           true,
@@ -1769,6 +1780,11 @@ type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
 	Stream   bool          `json:"stream"`
+	// ADR-108b: the thread this turn belongs to. Without it every call to this endpoint was a fresh
+	// start — the shim could spawn a run but never a CONVERSATION, and the multi-turn machinery
+	// (ADR-048) was reachable only through POST /v1/runs. An OpenAI client that does not know the
+	// field simply omits it and gets the previous one-shot behaviour.
+	ConversationID string `json:"conversation_id"`
 }
 
 // extractTarget returns the first http(s)://|file:// token in content (supports a "target: <url>" line).
@@ -1890,9 +1906,31 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	id, created := "chatcmpl-"+newRunID(), time.Now().Unix()
 
-	// Friendly, chat-shaped guidance instead of an HTTP error when the turn is unusable.
+	// ADR-108b: a turn with words but no target is no longer a dead end. It used to be answered with a
+	// fixed sentence telling the person to supply a URL — which is the right thing to say EVENTUALLY,
+	// but saying only that means the product cannot be asked a question, and a chat that answers one
+	// sentence is not a chat. A conversational turn goes to the model, which either answers or says
+	// what it needs (brain/__main__.py `_run_converse`).
+	//
+	// A conversation needs a thread to be a conversation, so one is minted when the caller sent none.
+	// The id comes back on the response, which is how an OpenAI client that knows nothing about
+	// Sentinel can still continue the exchange.
 	if !validTarget(target) {
-		s.chatReply(w, req.Stream, id, created, model, "Set a target first — include a URL like `target: https://app.example` (or a `file://` URL) in your message.")
+		if text == "" {
+			s.chatReply(w, req.Stream, id, created, model,
+				"Say something, or give me a target like `target: https://app.example` and what the test should do.")
+			return
+		}
+		conv := strings.TrimSpace(req.ConversationID)
+		if conv == "" {
+			conv = "conv-" + newRunID()
+		}
+		rr := runRequest{Mode: "chat", Planner: "heuristic", Message: text, ConversationID: conv}
+		if c, ok := s.callerOf(r); ok {
+			rr.owner = c.owner()
+		}
+		rec := s.spawnRun(rr)
+		s.conversationalReply(w, req.Stream, rec, id, created, model, conv)
 		return
 	}
 	if mode != "explore" && text == "" {
@@ -1900,7 +1938,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rr := runRequest{Target: target, Mode: mode, Planner: "heuristic"}
+	rr := runRequest{Target: target, Mode: mode, Planner: "heuristic", ConversationID: strings.TrimSpace(req.ConversationID)}
 	switch mode {
 	case "goal":
 		rr.Goal, rr.Planner = text, "goal"
@@ -1917,6 +1955,41 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.blockingChat(w, rec, id, created, model)
+}
+
+// conversationalReply waits for a conversational turn and answers with what the model SAID.
+//
+// blockingChat answers with the run's log plus a verdict, which is right for a turn that authored a
+// test and wrong for a turn that answered a question: a person who asked "what can you do?" would get
+// a wall of run output with the reply somewhere inside it. The deliverable is reply.json, so that is
+// what is served — and if it is missing, the log is still better than silence.
+func (s *server) conversationalReply(w http.ResponseWriter, stream bool, rec *run, id string,
+	created int64, model, conversationID string) {
+	_, ch, finished := rec.stream.subscribe()
+	if !finished {
+		defer rec.stream.unsubscribe(ch)
+		for range ch { // drain: the turn is over when its process is
+		}
+	}
+	msg := ""
+	if b, err := os.ReadFile(filepath.Join(rec.ArtifactDir, "reply.json")); err == nil {
+		var doc struct {
+			Reply string `json:"reply"`
+		}
+		if json.Unmarshal(b, &doc) == nil {
+			msg = strings.TrimSpace(doc.Reply)
+		}
+	}
+	if msg == "" {
+		msg = "I could not produce an answer for that turn. " + s.verdict(rec)
+	}
+	// The thread id travels back so a client that did not send one can continue the conversation. It is
+	// appended to the text rather than added as a field because an OpenAI client parses the schema it
+	// knows and drops what it does not — a continuation id nobody can see is not a continuation id.
+	if conversationID != "" {
+		msg += "\n\n<!-- conversation_id: " + conversationID + " -->"
+	}
+	s.chatReply(w, stream, id, created, model, msg)
 }
 
 // chatReply emits a single assistant message (one-shot guidance / errors), stream or not.

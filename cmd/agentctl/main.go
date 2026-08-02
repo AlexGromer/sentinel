@@ -531,7 +531,12 @@ func cmdRun(repo string, args []string) int {
 		}
 	}
 
-	if *target == "" {
+	// ADR-108b: a conversational turn has nothing to point a browser at yet — the person is still
+	// deciding what to test, which is the whole situation the conversation exists to serve. A target is
+	// still required the moment a turn carries an objective (the brain refuses with fatal.chat_no_target
+	// on the authoring path), so this widens where a target is unnecessary, not where it is optional.
+	conversationalTurn := *mode == "chat" && *message != "" && *goal == "" && *describe == ""
+	if *target == "" && !conversationalTurn {
 		fmt.Fprintln(os.Stderr, "error: --target is required")
 		return 2
 	}
