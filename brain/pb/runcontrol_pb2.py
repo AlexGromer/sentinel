@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10runcontrol.proto\x12\x16sentinel.runcontrol.v1\"p\n\x0fStartRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x18\n\x10plan_token_limit\x18\x02 \x01(\x03\x12\x18\n\x10heal_token_limit\x18\x03 \x01(\x03\x12\x19\n\x11total_token_limit\x18\x04 \x01(\x03\"\x1b\n\rStartRunReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"j\n\x08RunEvent\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0c\n\x04node\x18\x02 \x01(\t\x12\x15\n\rprompt_tokens\x18\x03 \x01(\x03\x12\x19\n\x11\x63ompletion_tokens\x18\x04 \x01(\x03\x12\x0e\n\x06status\x18\x05 \x01(\t\":\n\x07\x43ontrol\x12\r\n\x05\x61\x62ort\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x10\n\x08takeover\x18\x03 \x01(\x08\".\n\x0c\x41\x62ortRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x18\n\nAbortReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"1\n\x0fTakeoverRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x1b\n\rTakeoverReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"\x1f\n\rReturnRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\x19\n\x0bReturnReply\x12\n\n\x02ok\x18\x01 \x01(\x08\x32\xbf\x03\n\nRunControl\x12Z\n\x08StartRun\x12\'.sentinel.runcontrol.v1.StartRunRequest\x1a%.sentinel.runcontrol.v1.StartRunReply\x12P\n\x0bReportEvent\x12 .sentinel.runcontrol.v1.RunEvent\x1a\x1f.sentinel.runcontrol.v1.Control\x12Q\n\x05\x41\x62ort\x12$.sentinel.runcontrol.v1.AbortRequest\x1a\".sentinel.runcontrol.v1.AbortReply\x12Z\n\x08Takeover\x12\'.sentinel.runcontrol.v1.TakeoverRequest\x1a%.sentinel.runcontrol.v1.TakeoverReply\x12T\n\x06Return\x12%.sentinel.runcontrol.v1.ReturnRequest\x1a#.sentinel.runcontrol.v1.ReturnReplyB<Z:github.com/AlexGromer/sentinel/internal/orchestrator/pb;pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10runcontrol.proto\x12\x16sentinel.runcontrol.v1\"p\n\x0fStartRunRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x18\n\x10plan_token_limit\x18\x02 \x01(\x03\x12\x18\n\x10heal_token_limit\x18\x03 \x01(\x03\x12\x19\n\x11total_token_limit\x18\x04 \x01(\x03\"\x1b\n\rStartRunReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"j\n\x08RunEvent\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0c\n\x04node\x18\x02 \x01(\t\x12\x15\n\rprompt_tokens\x18\x03 \x01(\x03\x12\x19\n\x11\x63ompletion_tokens\x18\x04 \x01(\x03\x12\x0e\n\x06status\x18\x05 \x01(\t\"P\n\x07\x43ontrol\x12\r\n\x05\x61\x62ort\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x10\n\x08takeover\x18\x03 \x01(\x08\x12\x14\n\x0cmap_decision\x18\x04 \x01(\t\"F\n\x12MapDecisionRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x10\n\x08\x64\x65\x63ision\x18\x02 \x01(\t\x12\x0e\n\x06reason\x18\x03 \x01(\t\"\x1e\n\x10MapDecisionReply\x12\n\n\x02ok\x18\x01 \x01(\x08\".\n\x0c\x41\x62ortRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x18\n\nAbortReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"1\n\x0fTakeoverRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"\x1b\n\rTakeoverReply\x12\n\n\x02ok\x18\x01 \x01(\x08\"\x1f\n\rReturnRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\"\x19\n\x0bReturnReply\x12\n\n\x02ok\x18\x01 \x01(\x08\x32\xa2\x04\n\nRunControl\x12Z\n\x08StartRun\x12\'.sentinel.runcontrol.v1.StartRunRequest\x1a%.sentinel.runcontrol.v1.StartRunReply\x12P\n\x0bReportEvent\x12 .sentinel.runcontrol.v1.RunEvent\x1a\x1f.sentinel.runcontrol.v1.Control\x12Q\n\x05\x41\x62ort\x12$.sentinel.runcontrol.v1.AbortRequest\x1a\".sentinel.runcontrol.v1.AbortReply\x12Z\n\x08Takeover\x12\'.sentinel.runcontrol.v1.TakeoverRequest\x1a%.sentinel.runcontrol.v1.TakeoverReply\x12T\n\x06Return\x12%.sentinel.runcontrol.v1.ReturnRequest\x1a#.sentinel.runcontrol.v1.ReturnReply\x12\x61\n\tDecideMap\x12*.sentinel.runcontrol.v1.MapDecisionRequest\x1a(.sentinel.runcontrol.v1.MapDecisionReplyB<Z:github.com/AlexGromer/sentinel/internal/orchestrator/pb;pbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,19 +39,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RUNEVENT']._serialized_start=187
   _globals['_RUNEVENT']._serialized_end=293
   _globals['_CONTROL']._serialized_start=295
-  _globals['_CONTROL']._serialized_end=353
-  _globals['_ABORTREQUEST']._serialized_start=355
-  _globals['_ABORTREQUEST']._serialized_end=401
-  _globals['_ABORTREPLY']._serialized_start=403
-  _globals['_ABORTREPLY']._serialized_end=427
-  _globals['_TAKEOVERREQUEST']._serialized_start=429
-  _globals['_TAKEOVERREQUEST']._serialized_end=478
-  _globals['_TAKEOVERREPLY']._serialized_start=480
-  _globals['_TAKEOVERREPLY']._serialized_end=507
-  _globals['_RETURNREQUEST']._serialized_start=509
-  _globals['_RETURNREQUEST']._serialized_end=540
-  _globals['_RETURNREPLY']._serialized_start=542
-  _globals['_RETURNREPLY']._serialized_end=567
-  _globals['_RUNCONTROL']._serialized_start=570
-  _globals['_RUNCONTROL']._serialized_end=1017
+  _globals['_CONTROL']._serialized_end=375
+  _globals['_MAPDECISIONREQUEST']._serialized_start=377
+  _globals['_MAPDECISIONREQUEST']._serialized_end=447
+  _globals['_MAPDECISIONREPLY']._serialized_start=449
+  _globals['_MAPDECISIONREPLY']._serialized_end=479
+  _globals['_ABORTREQUEST']._serialized_start=481
+  _globals['_ABORTREQUEST']._serialized_end=527
+  _globals['_ABORTREPLY']._serialized_start=529
+  _globals['_ABORTREPLY']._serialized_end=553
+  _globals['_TAKEOVERREQUEST']._serialized_start=555
+  _globals['_TAKEOVERREQUEST']._serialized_end=604
+  _globals['_TAKEOVERREPLY']._serialized_start=606
+  _globals['_TAKEOVERREPLY']._serialized_end=633
+  _globals['_RETURNREQUEST']._serialized_start=635
+  _globals['_RETURNREQUEST']._serialized_end=666
+  _globals['_RETURNREPLY']._serialized_start=668
+  _globals['_RETURNREPLY']._serialized_end=693
+  _globals['_RUNCONTROL']._serialized_start=696
+  _globals['_RUNCONTROL']._serialized_end=1242
 # @@protoc_insertion_point(module_scope)

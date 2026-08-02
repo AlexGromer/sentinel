@@ -30,6 +30,7 @@ const (
 	RunControl_Abort_FullMethodName       = "/sentinel.runcontrol.v1.RunControl/Abort"
 	RunControl_Takeover_FullMethodName    = "/sentinel.runcontrol.v1.RunControl/Takeover"
 	RunControl_Return_FullMethodName      = "/sentinel.runcontrol.v1.RunControl/Return"
+	RunControl_DecideMap_FullMethodName   = "/sentinel.runcontrol.v1.RunControl/DecideMap"
 )
 
 // RunControlClient is the client API for RunControl service.
@@ -50,6 +51,15 @@ type RunControlClient interface {
 	// forwarded by the control-API over its WebSocket — modelled on Abort.
 	Takeover(ctx context.Context, in *TakeoverRequest, opts ...grpc.CallOption) (*TakeoverReply, error)
 	Return(ctx context.Context, in *ReturnRequest, opts ...grpc.CallOption) (*ReturnReply, error)
+	// ADR-108c: the MAP GATE. After exploring, the brain reports what it found and waits for a person to
+	// say whether to author a test over it. DecideMap records that answer; the next ReportEvent reply
+	// carries it as Control.map_decision, so the brain learns of it at its own superstep boundary — the
+	// same shape as Takeover, and for the same reason: the orchestrator holds run state, the brain polls.
+	//
+	// NOT modelled as takeover/return, though that channel already exists. `return` is only meaningful
+	// AFTER a takeover, and "the human took the browser" is a different fact from "the human approved
+	// this plan". Overloading them would make the log unreadable and the two states indistinguishable.
+	DecideMap(ctx context.Context, in *MapDecisionRequest, opts ...grpc.CallOption) (*MapDecisionReply, error)
 }
 
 type runControlClient struct {
@@ -110,6 +120,16 @@ func (c *runControlClient) Return(ctx context.Context, in *ReturnRequest, opts .
 	return out, nil
 }
 
+func (c *runControlClient) DecideMap(ctx context.Context, in *MapDecisionRequest, opts ...grpc.CallOption) (*MapDecisionReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MapDecisionReply)
+	err := c.cc.Invoke(ctx, RunControl_DecideMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunControlServer is the server API for RunControl service.
 // All implementations must embed UnimplementedRunControlServer
 // for forward compatibility.
@@ -128,6 +148,15 @@ type RunControlServer interface {
 	// forwarded by the control-API over its WebSocket — modelled on Abort.
 	Takeover(context.Context, *TakeoverRequest) (*TakeoverReply, error)
 	Return(context.Context, *ReturnRequest) (*ReturnReply, error)
+	// ADR-108c: the MAP GATE. After exploring, the brain reports what it found and waits for a person to
+	// say whether to author a test over it. DecideMap records that answer; the next ReportEvent reply
+	// carries it as Control.map_decision, so the brain learns of it at its own superstep boundary — the
+	// same shape as Takeover, and for the same reason: the orchestrator holds run state, the brain polls.
+	//
+	// NOT modelled as takeover/return, though that channel already exists. `return` is only meaningful
+	// AFTER a takeover, and "the human took the browser" is a different fact from "the human approved
+	// this plan". Overloading them would make the log unreadable and the two states indistinguishable.
+	DecideMap(context.Context, *MapDecisionRequest) (*MapDecisionReply, error)
 	mustEmbedUnimplementedRunControlServer()
 }
 
@@ -152,6 +181,9 @@ func (UnimplementedRunControlServer) Takeover(context.Context, *TakeoverRequest)
 }
 func (UnimplementedRunControlServer) Return(context.Context, *ReturnRequest) (*ReturnReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Return not implemented")
+}
+func (UnimplementedRunControlServer) DecideMap(context.Context, *MapDecisionRequest) (*MapDecisionReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method DecideMap not implemented")
 }
 func (UnimplementedRunControlServer) mustEmbedUnimplementedRunControlServer() {}
 func (UnimplementedRunControlServer) testEmbeddedByValue()                    {}
@@ -264,6 +296,24 @@ func _RunControl_Return_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunControl_DecideMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MapDecisionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunControlServer).DecideMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunControl_DecideMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunControlServer).DecideMap(ctx, req.(*MapDecisionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunControl_ServiceDesc is the grpc.ServiceDesc for RunControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -290,6 +340,10 @@ var RunControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Return",
 			Handler:    _RunControl_Return_Handler,
+		},
+		{
+			MethodName: "DecideMap",
+			Handler:    _RunControl_DecideMap_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

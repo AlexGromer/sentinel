@@ -754,9 +754,17 @@ func TestConfigSchemaIncludesLLMBackend(t *testing.T) {
 			t.Fatalf("config-schema backends missing %q: %v", want, body.Backends)
 		}
 	}
-	// roles advertise the LLM_<KEY>_<ROLE> override surface
-	if len(body.Roles) != 2 || body.Roles[0] != "planner" || body.Roles[1] != "heal" {
-		t.Fatalf("config-schema roles = %v, want [planner heal]", body.Roles)
+	// roles advertise the LLM_<KEY>_<ROLE> override surface. `chat` joined them in ADR-108b: talking is
+	// its own role so an operator can point conversation and planning at different endpoints, and a role
+	// the brain honours but the schema does not publish is a knob nobody can find.
+	wantRoles := []string{"planner", "heal", "chat"}
+	if len(body.Roles) != len(wantRoles) {
+		t.Fatalf("config-schema roles = %v, want %v", body.Roles, wantRoles)
+	}
+	for i, want := range wantRoles {
+		if body.Roles[i] != want {
+			t.Fatalf("config-schema roles = %v, want %v", body.Roles, wantRoles)
+		}
 	}
 	// the nested llm.backend.enum must stay in lockstep with the top-level backends (built from one slice)
 	enumRaw, _ := body.LLM["backend"]["enum"].([]any)

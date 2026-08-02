@@ -28,6 +28,103 @@ from . import strategies as S     # ADR-083: one vocabulary, shared with the rec
 
 
 
+
+def summarise_site_map(site_map: dict) -> dict:
+    """ADR-108c: what the tool FOUND, in the terms a person decides on.
+
+    A count of elements is not a report — "412 interactives" tells nobody whether authoring a test over
+    this map is a good idea. What a person weighs is: how many pages were reached, what KINDS of control
+    are there, and — the part that decides it — whether anything looks destructive or looks like a login,
+    because those are the two ways an autonomous run does damage or silently achieves nothing.
+    """
+    pages = sorted(site_map or {})
+    kinds, forms, risky, auth = {}, 0, [], []
+    total = 0
+    for page in pages:
+        for el in site_map.get(page) or []:
+            total += 1
+            role = (el.get("role") or el.get("tag") or "element").lower()
+            kinds[role] = kinds.get(role, 0) + 1
+            name = (el.get("name") or el.get("text") or "").strip()
+            low = name.lower()
+            if role in ("textbox", "input", "combobox", "checkbox", "radio"):
+                forms += 1
+            # Word lists, deliberately: this is a REPORT, not a safety mechanism. It exists so a person
+            # sees what to look at, and it must never be mistaken for a guarantee that nothing else is
+            # destructive — which is exactly why the decision stays with the person.
+            if any(w in low for w in ("delete", "remove", "удалить", "удали", "drop", "wipe",
+                                      "deactivate", "cancel subscription", "pay", "оплат", "buy", "купить")):
+                risky.append({"page": page, "name": name, "role": role})
+            if any(w in low for w in ("login", "sign in", "войти", "password", "пароль", "log in")):
+                auth.append({"page": page, "name": name, "role": role})
+    return {
+        "pages": len(pages), "page_list": pages[:20], "interactives": total,
+        "kinds": dict(sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))[:8]),
+        "form_fields": forms,
+        "looks_destructive": risky[:10], "looks_like_auth": auth[:10],
+    }
+
+
+# --- ADR-108c: the map gate -----------------------------------------------------------------------
+# Alex's directive: after exploring, the tool ANALYSES the map itself, reports what it found, and asks
+# permission before authoring a test over it. The interception sits at the top of the `scenario` node
+# because that node serves BOTH paths — the one-shot goal/describe run and the warm chat resume — so a
+# gate placed anywhere else would guard one of them and quietly miss the other.
+
+MAP_GATE_POLL_SECONDS = 1.0
+
+
+def _map_gate_timeout() -> float:
+    try:
+        return max(0.0, float(os.environ.get("SENTINEL_MAP_GATE_TIMEOUT", "300")))
+    except ValueError:
+        return 300.0
+
+
+def await_map_decision(rc, run_id: str, summary: dict) -> str:
+    """Return "approve" | "reject" | "skipped".
+
+    "skipped" is the honest answer in two situations, and neither is a failure:
+
+      - no orchestrator is wired, so there is NOBODY who can answer. A headless run — CI, cron, the
+        air-gapped bundle — has no operator, and a gate that waited for one there would not be a
+        safeguard but a hang. The report is still emitted; only the waiting is skipped.
+      - SENTINEL_MAP_GATE=0, an explicit opt-out for automation that has already decided.
+
+    A TIMEOUT is a rejection, not an approval. The whole point of asking is that authoring over an
+    unreviewed map is the thing worth preventing; treating silence as consent would give the gate the
+    opposite meaning at exactly the moment it matters.
+    """
+    import time
+
+    if os.environ.get("SENTINEL_MAP_GATE") == "0":
+        log("map.gate_disabled")
+        return "skipped"
+    if not getattr(rc, "wired", False):
+        log("map.gate_unattended", pages=summary.get("pages", 0))
+        return "skipped"
+
+    deadline = time.monotonic() + _map_gate_timeout()
+    log("map.gate_waiting", pages=summary.get("pages", 0), interactives=summary.get("interactives", 0))
+    errors_before = getattr(rc, "transport_errors", 0)
+    while True:
+        decision = rc.map_decision(run_id)
+        if decision in ("approve", "reject"):
+            return decision
+        if time.monotonic() >= deadline:
+            # "Nobody answered" and "nobody COULD answer" look identical from here and are not the same
+            # problem: one waits on a person, the other on a broken channel, and only the second is
+            # something the operator can fix. Both refuse — silence is not consent either way — but the
+            # run must SAY which happened, and both are declared degradations so the verdict carries it.
+            failed = getattr(rc, "transport_errors", 0) - errors_before
+            if failed > 0:
+                log("map.gate_unreachable", errors=failed)
+            else:
+                log("map.gate_timeout", seconds=int(_map_gate_timeout()))
+            return "reject"
+        time.sleep(MAP_GATE_POLL_SECONDS)
+
+
 def _agui(event_type: str, run_id: str, **data) -> None:
     """Best-effort AG-UI emission (M14, ADR-055; docs/M14_CONTRACT.md §2/§4): additive stdout only,
     UNCONDITIONAL — never gates on run outcome and never touches plan_hash/exit codes/artifacts. A
@@ -527,6 +624,25 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             return {}
         from .scenario import flatten_site_map, ground_scenario, reconcile
         site_map = state.get("site_map") or {}
+        # ADR-108c: report what was found, then ask — before a single step is authored over it.
+        rid = state.get("run_id", "")
+        summary = summarise_site_map(site_map)
+        _agui("map.ready", rid, **summary)
+        log("map.ready", pages=summary["pages"], interactives=summary["interactives"],
+            destructive=len(summary["looks_destructive"]), auth=len(summary["looks_like_auth"]))
+        decision = await_map_decision(rc, rid, summary)
+        if decision == "reject":
+            # A refusal ends the run the ORDINARY way: the explore plan is still frozen and its
+            # artefacts still written, because the map is what the person was looking at and throwing it
+            # away would make "no" cost them the exploration too.
+            _agui("map.rejected", rid, pages=summary["pages"])
+            log("map.rejected", pages=summary["pages"])
+            return {"scenario_steps": [], "scenario_unmatched": [], "phase": "map_rejected",
+                    "messages": [{"role": "assistant",
+                                  "content": "the map was not approved, so no test was authored"}]}
+        if decision == "approve":
+            _agui("map.approved", rid, pages=summary["pages"])
+            log("map.approved", pages=summary["pages"])
         base_id = len(state.get("exploration_plan", []))
         # M9.10: prior user turns (all but the current — which IS this turn's goal/describe) = refine context.
         # GAP-M9-20: cap to the last N turns + a rolling-summary prefix so the prompt stays bounded.

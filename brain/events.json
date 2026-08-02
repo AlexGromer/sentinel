@@ -429,6 +429,84 @@
         "__main__"
       ]
     },
+    "map.ready": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Карта построена: {pages} стр., {interactives} элементов ({destructive} похожи на разрушительные, {auth} на вход) — жду разрешения",
+      "en": "Map built: {pages} page(s), {interactives} element(s) ({destructive} look destructive, {auth} look like sign-in) — waiting for approval",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_waiting": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Ожидаю решения человека по карте ({pages} стр., {interactives} элементов)",
+      "en": "Waiting for a person to decide on the map ({pages} page(s), {interactives} element(s))",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.approved": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Карта одобрена ({pages} стр.) — собираю сценарий",
+      "en": "Map approved ({pages} page(s)) — authoring the scenario",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.rejected": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Карта НЕ одобрена ({pages} стр.) — сценарий не собирается; результаты разведки сохранены",
+      "en": "Map NOT approved ({pages} page(s)) — no scenario authored; the exploration artefacts are kept",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_timeout": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Никто не ответил по карте за {seconds} с — считаю это отказом: молчание не согласие",
+      "en": "Nobody answered the map gate in {seconds}s — treated as a refusal: silence is not consent",
+      "modules": [
+        "graph"
+      ],
+      "degrades": true,
+      "ru_verdict": "сценарий НЕ собирался: карта была показана, но никто не ответил за отведённое время (молчание — не согласие)",
+      "en_verdict": "no scenario was authored: the map was reported but nobody answered in time (silence is not consent)"
+    },
+    "map.gate_unreachable": {
+      "lvl": "warn",
+      "cat": "run",
+      "degrades": true,
+      "ru": "Гейт карты не смог связаться с оркестратором ({errors} ошибок связи за ожидание) — считаю отказом",
+      "en": "The map gate could not reach the orchestrator ({errors} transport error(s) while waiting) — treated as a refusal",
+      "ru_verdict": "сценарий НЕ собирался: разрешения спросить было НЕ У КОГО — канал до оркестратора не работал (это техническая неисправность, а не отказ человека)",
+      "en_verdict": "no scenario was authored: there was NOBODY to ask — the channel to the orchestrator was down (a technical fault, not a person's refusal)",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_unattended": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Гейт карты пропущен: оркестратор не подключён, спрашивать некого ({pages} стр.)",
+      "en": "Map gate skipped: no orchestrator wired, so there is nobody to ask ({pages} page(s))",
+      "modules": [
+        "graph"
+      ]
+    },
+    "map.gate_disabled": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Гейт карты выключен (SENTINEL_MAP_GATE=0)",
+      "en": "Map gate disabled (SENTINEL_MAP_GATE=0)",
+      "modules": [
+        "graph"
+      ]
+    },
     "chat.reply": {
       "lvl": "info",
       "cat": "run",
@@ -1142,11 +1220,14 @@
     "system.runcontrol_report_error": {
       "lvl": "warn",
       "cat": "system",
-      "ru": "Не удалось доложить о расходе (продолжаю): {error}",
-      "en": "Could not report spend (continuing): {error}",
+      "ru": "Оркестратор недоступен ({error}) — продолжаю без него",
+      "en": "The orchestrator is unreachable ({error}) — continuing without it",
       "modules": [
         "runcontrol"
-      ]
+      ],
+      "degrades": true,
+      "ru_verdict": "канал управления НЕ РАБОТАЛ: расход не сверялся с бюджетом, внешний стоп и передача управления оператору не дошли бы, а гейт карты не получил бы ответа",
+      "en_verdict": "the control channel was DOWN: spend was not reconciled against the budget, an external stop and an operator takeover could not have arrived, and the map gate could not have been answered"
     },
     "system.runcontrol_unavailable": {
       "lvl": "info",

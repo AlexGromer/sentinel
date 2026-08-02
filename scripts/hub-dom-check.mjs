@@ -106,6 +106,29 @@ try {
   if (!fs.existsSync(tokenPath)) throw new Error(`control-api did not persist a token at ${tokenPath}`);
   const token = fs.readFileSync(tokenPath, 'utf8').trim();
 
+  // Wait for a run to actually FINISH, rather than sleeping a guessed number of seconds.
+  //
+  // The fixed 25s/22s sleeps were the gate's own flake: on a slow runner the run had not written its
+  // log yet, so eleven Logs checks failed on a run that was merely still going — and the failure looked
+  // exactly like a regression in the page. Two consecutive PRs died on it. Waiting on the STATE the
+  // checks depend on removes the guess; the cap only bounds a genuinely stuck run, and it says so.
+  const waitForRun = async (id, capMs = 120000) => {
+    const deadline = Date.now() + capMs;
+    for (;;) {
+      const r = await fetch(`http://127.0.0.1:${PORT}/v1/runs/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.ok) {
+        const state = (await r.json()).state;
+        if (state && state !== 'running') return state;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`run ${id} was still running after ${capMs}ms — the gate cannot check logs that do not exist yet`);
+      }
+      await new Promise((res) => setTimeout(res, 500));
+    }
+  };
+
   const spawnRun = async (target) => {
     const started = await fetch(`http://127.0.0.1:${PORT}/v1/runs`, {
       method: 'POST',
@@ -120,9 +143,10 @@ try {
   // misses, a real narrative to split from real diagnostics. It used to be the source of the repeat
   // the collapsing check needed, because explore retried one control until max_steps; ADR-070 gave
   // that retry a budget, so the repeat now comes from the application instead (see l7 below).
-  await spawnRun(FIXTURE);
-  // Long enough for the browser to launch and a few steps to run.
-  await new Promise((r) => setTimeout(r, 25000));
+  // Kept, because the Logs checks below are about THIS run specifically — see the explicit selection
+  // before that block.
+  const baseRun = await spawnRun(FIXTURE);
+  await waitForRun(baseRun);
 
   // A SECOND run, against the fixture that actually misbehaves. The audience check below needs a run
   // carrying application-side records, and l2 has none — it behaves, so `src == application` matches
@@ -130,7 +154,7 @@ try {
   // entirely, `src == business` and `src == application || src == testing` both matched zero rows on
   // l2 and the check passed on 0 == 0. A set identity over two empty sets asserts nothing.
   const faultRun = await spawnRun(FAULT_FIXTURE);
-  await new Promise((r) => setTimeout(r, 22000));
+  await waitForRun(faultRun);
 
   browser = await chromium.launch({ headless: true });
   // An EXPLICIT context, not browser.newPage(): the ADR-074 relay check has to open a second tab beside
@@ -359,6 +383,16 @@ try {
   await page.click('.rail a[data-nav="logs"]');
   await page.click('#lg-reload');
   await page.waitForSelector('#lg-list .lgrow', { timeout: 20000 });
+  // Pick the run these checks are ABOUT, rather than inheriting whichever is newest.
+  //
+  // The view defaults to the most recent run, and the in-flight check above deliberately spawns one
+  // and cancels it — so the newest run is a CANCELLED one whose log holds two control-API lines and no
+  // brain output at all. Every Logs check then measures an empty view and fails with text pointing at
+  // the Logs view: "unchecking DEBUG changed nothing (2 -> 2)". Cancelling settles that run quickly but
+  // does not stop it being the newest, which is why the previous fix did not hold. Naming the run
+  // removes the dependency on ordering entirely.
+  await page.selectOption('#lg-run', baseRun);
+  await page.waitForTimeout(1500);
 
   /* ---------------------------------------------------------------- ADR-065: Logs view */
   await check('logs: the view loads and starts with DEBUG off', async () => {

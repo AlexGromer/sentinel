@@ -243,7 +243,7 @@ func TestParseControlFrame(t *testing.T) {
 
 func TestForwardControlNoOrchestrator(t *testing.T) {
 	s := newTestServer() // orchAddr == ""
-	if err := s.forwardControl("takeover", "r1"); err == nil {
+	if err := s.forwardControl("takeover", "r1", ""); err == nil {
 		t.Fatal("forwardControl must error (fail-closed) when no orchestrator is wired")
 	}
 }
@@ -936,5 +936,66 @@ func TestRunFinishedSignalKillCarriesDoneState(t *testing.T) {
 	data, _ := ev["data"].(map[string]any)
 	if data == nil || data["exit_code"] != float64(-1) || data["state"] != "done" {
 		t.Fatalf("signal-kill run.finished data = %v, want exit_code -1 + state done (distinct from failed-spawn)", ev["data"])
+	}
+}
+
+// --- ADR-108c: the map gate's control actions ---------------------------------------------------
+
+// TestMapControlActionsAreInTheVocabulary — found by a SURVIVING mutation.
+//
+// Removing approve-map/reject-map from the accepted set left every test passing: nothing asked the
+// question, so the answer a person clicks would have been rejected as "unknown control action" while
+// the run waited at its gate. The reason field is checked too — it is the only part of a refusal a
+// later reader learns anything from.
+func TestMapControlActionsAreInTheVocabulary(t *testing.T) {
+	action, runID, reason, ok := parseControlFrameFull(
+		[]byte(`{"type":"control","action":"reject-map","run_id":"r1","reason":"it found the admin panel"}`))
+	if !ok || action != "reject-map" || runID != "r1" || reason != "it found the admin panel" {
+		t.Fatalf("parse = %q %q %q ok=%v", action, runID, reason, ok)
+	}
+
+	// Exercised through handleControlFrame, which is where the VOCABULARY lives. Calling forwardControl
+	// instead would skip that check entirely — the first version of this gate did, and the mutation that
+	// removes the map actions from the accepted set survived it.
+	//
+	// The server has no orchestrator, so a KNOWN action reaches forwarding and fails there ("no
+	// orchestrator wired"), while an UNKNOWN one is refused earlier and says so. That difference is what
+	// distinguishes "in the vocabulary" from "not in it" without needing a live orchestrator.
+	s := newTestServer()
+	for _, tc := range []struct {
+		action    string
+		inGrammar bool
+	}{
+		{"approve-map", true},
+		{"reject-map", true},
+		{"takeover", true},
+		{"decide-map", false}, // a plausible near-miss must still be refused
+		{"approve", false},
+	} {
+		client, server := net.Pipe()
+		got := make(chan string, 1)
+		go func() {
+			// The reply is a WebSocket FRAME, not raw bytes: reading the socket directly returns the
+			// 2-byte header and calls it the answer, which is how the first version of this check
+			// "passed" on every action alike.
+			_, payload, err := readServerFrame(bufio.NewReader(client))
+			if err != nil {
+				got <- "read error: " + err.Error()
+			} else {
+				got <- string(payload)
+			}
+			_ = client.Close()
+		}()
+		s.handleControlFrame(newWSConn(server), tc.action, "r1", "because")
+		_ = server.Close()
+		reply := <-got
+		unknown := strings.Contains(reply, "unknown control action")
+		if tc.inGrammar && unknown {
+			t.Errorf("%s: refused as an unknown action — the map gate's answer would never reach the run:\n%s",
+				tc.action, reply)
+		}
+		if !tc.inGrammar && !unknown {
+			t.Errorf("%s: accepted, but it is not a control action:\n%s", tc.action, reply)
+		}
 	}
 }
