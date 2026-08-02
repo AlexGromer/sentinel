@@ -1,9 +1,17 @@
 # Sentinel release pipeline (M11.1, ADR-030) — closes the GAP-SEC-002 signed-release tail.
 #
-# On a `v*` tag: build 5 Go binaries × 5 platforms (25), a multi-arch Docker image (GHCR), a CycloneDX
-# SBOM, Cosign KEYLESS signatures (Sigstore OIDC — no long-lived key/secret), and a GitHub Release with
-# every asset attached. `workflow_dispatch` runs a build/SBOM DRY-RUN (no push / no sign / no release), so
-# the pipeline can be smoke-tested without cutting a tag.
+# On a `v*` tag: build 5 Go binaries × 6 platforms (30) plus a .deb per Linux arch, a multi-arch Docker
+# image (GHCR), a CycloneDX SBOM, Cosign KEYLESS signatures (Sigstore OIDC — no long-lived key/secret),
+# and a GitHub Release with every asset attached. `workflow_dispatch` runs a build/SBOM DRY-RUN (no push
+# / no sign / no release), so the pipeline can be smoke-tested without cutting a tag.
+#
+# ADR-110, from the v0.1.0-rc1 rehearsal — the first time this pipeline had ever fired. What it found:
+#   * a `-rc1` tag produced a Release marked prerelease=FALSE, so /releases/latest resolved to it and
+#     install.sh would have handed a rehearsal to anyone running the documented one-liner. The image
+#     tags already had this distinction (`:latest` only for a dash-free tag); the Release did not.
+#   * the homebrew job pushed straight to `main` and could NEVER have succeeded: the branch requires
+#     verified signatures, a pull request, and passing checks — the bot commit fails all three. The
+#     job was `continue-on-error`, so the pipeline stayed green while the formula stayed at v0.0.0.
 #
 # NOTE: repo convention is SHA-pinned actions. The @vN tags below should be SHA-pinned by a
 # Dependabot / hardening pass (kept as version tags here — SHAs are not invented).
@@ -55,10 +63,23 @@ jobs:
           done
           cp LICENSE README.md "dist/${out}/" 2>/dev/null || true
           tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+      # ADR-110: a .deb per Linux arch, from the binaries just built. Runs in the DRY-RUN too — a
+      # packaging step that only ever executes on a tag is a step nobody has tested when it matters.
+      # A Debian version may not begin with a letter, so the dry-run's `dev-<sha>` becomes
+      # 0.0.0+dev.<sha> rather than being skipped.
+      - name: Build .deb (linux only)
+        if: matrix.goos == 'linux'
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then TAG="${GITHUB_REF_NAME}"; VER="${GITHUB_REF_NAME#v}"
+          else TAG="dev-${GITHUB_SHA::7}"; VER="0.0.0+dev.${GITHUB_SHA::7}"; fi
+          sh scripts/build-deb.sh "$VER" "${{ matrix.goarch }}" "dist/sentinel-${TAG}-linux-${{ matrix.goarch }}" dist
       - uses: actions/upload-artifact@v7
         with:
           name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
           if-no-files-found: error
 
   image:
@@ -149,34 +170,57 @@ jobs:
           set -euo pipefail
           mkdir -p rel
           find art -name '*.tar.gz' -exec cp {} rel/ \;
+          find art -name '*.deb'    -exec cp {} rel/ \;
           find art -name 'sbom.cdx.json' -exec cp {} rel/ \;
-          cd rel && sha256sum *.tar.gz sbom.cdx.json > checksums.sha256
+          # The .deb glob is NOT optional: a release that silently shipped without it would look
+          # complete, and the only symptom is `apt install` 404-ing for whoever followed the docs.
+          ls rel/*.deb >/dev/null || { echo "::error::no .deb assets reached the release job"; exit 1; }
+          cd rel && sha256sum *.tar.gz *.deb sbom.cdx.json > checksums.sha256
       - uses: sigstore/cosign-installer@v4.1.2   # v3 cannot install cosign v3.x (stale v2.x); v4 installs current cosign
       - name: Sign archives + checksums (keyless)
         working-directory: rel
         run: |
           set -euo pipefail
-          for f in *.tar.gz sbom.cdx.json checksums.sha256; do
+          for f in *.tar.gz *.deb sbom.cdx.json checksums.sha256; do
             cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
           done
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" --generate-notes --repo "${GITHUB_REPOSITORY}" \
-            rel/*.tar.gz rel/checksums.sha256 rel/*.cosign.bundle rel/sbom.cdx.json
+          set -euo pipefail
+          # ADR-110: a tag carrying a pre-release suffix (v1.0.0-rc1) MUST be marked as one. Without
+          # this, /releases/latest returns it — and install.sh resolves `latest` through exactly that
+          # endpoint, so a rehearsal became what the documented one-liner installed. The image tags
+          # had this distinction from the start (`:latest` only for a dash-free tag); the Release did
+          # not, and the rc1 rehearsal is what surfaced the asymmetry.
+          case "${GITHUB_REF_NAME}" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
+          gh release create "${GITHUB_REF_NAME}" --generate-notes --repo "${GITHUB_REPOSITORY}" ${PRE} \
+            rel/*.tar.gz rel/*.deb rel/checksums.sha256 rel/*.cosign.bundle rel/sbom.cdx.json
 
-  # Bump the Homebrew formula (macOS) to the released darwin archives. Tag-only, non-blocking: a
-  # protected default branch (PR-only) will reject the direct push — then the tap is bumped by hand.
+  # Bump the Homebrew formula (macOS) to the released darwin archives, VIA A PULL REQUEST.
   # This repo doubles as its own tap: `brew tap AlexGromer/sentinel <repo> && brew install sentinel`.
+  #
+  # It used to push straight to `main`, and the v0.1.0-rc1 rehearsal proved that could never have
+  # worked — the branch rejected it on three counts at once:
+  #     remote: - Commits must have verified signatures.
+  #     remote: - Changes must be made through a pull request.
+  #     remote: - 4 of 4 required status checks are expected.
+  # With `continue-on-error: true` on the job, none of that was visible: the pipeline stayed green
+  # and the formula stayed at its v0.0.0 placeholder, so `brew install` failed its checksum on
+  # purpose forever. A PR clears all three — a squash merge is authored by GitHub and therefore
+  # signed, which is how Dependabot's unsigned commits already land here.
+  #
+  # No longer continue-on-error: a formula that did not get bumped is a broken install path, and
+  # this job existing to hide that fact is what let it stay broken.
   homebrew:
     name: bump homebrew formula
     needs: release
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
-      contents: write   # commit the bumped formula back to the default branch
+      contents: write        # push the bump branch
+      pull-requests: write   # open the PR that carries it to main
     steps:
       - uses: actions/checkout@v7
         with:
@@ -185,7 +229,9 @@ jobs:
         with:
           path: art
           merge-multiple: true
-      - name: Regenerate Formula/sentinel.rb from the darwin archives + commit
+      - name: Regenerate Formula/sentinel.rb from the darwin archives + open a PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
@@ -196,4 +242,15 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/sentinel.rb
           git commit -m "chore(brew): bump sentinel formula to ${TAG}" || { echo "no formula change"; exit 0; }
-          git push origin HEAD:main
+          branch="brew-bump/${TAG}"
+          git push --force origin "HEAD:refs/heads/${branch}"
+          gh pr create --repo "${GITHUB_REPOSITORY}" --base main --head "${branch}" \
+            --title "chore(brew): bump sentinel formula to ${TAG}" \
+            --body "Generated by the \`homebrew\` job of the ${TAG} release run.
+
+          \`Formula/sentinel.rb\` now points at the ${TAG} darwin archives with their real sha256s;
+          until this merges, \`brew install sentinel\` fails its checksum against the v0.0.0
+          placeholder — which is the placeholder doing its job, not a bug.
+
+          Merge with **squash**: the branch commit is an unsigned bot commit, and \`main\` requires
+          verified signatures. A squash merge is authored (and signed) by GitHub."

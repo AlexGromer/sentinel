@@ -491,17 +491,28 @@ successful explore run in ≤ 10 minutes, **with no manual YAML editing** and no
 Not a flat form plus "drop in a YAML file by hand", but a stepped wizard that understands the runtime modes,
 assembles a correct configuration itself, persists it, and reuses it on the next launch.
 
-**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a native PowerShell peer for Windows, no Docker/WSL needed)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a
+PowerShell peer for Windows)
 ```bash
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
 ```powershell
-# Windows (native, no admin)
+# Windows (no admin) — installs the CLIENT; see the note below
 iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
 ```
+
+> ⚠ **Windows is a CLIENT platform (decided 2026-08-02, ADR-110).** The previous wording — "native
+> Windows, no Docker/WSL needed" — was wrong and promised more than exists. `install.ps1` installs
+> **`agentctl.exe` only**, and that part is genuinely native. A run, however, also needs Python
+> 3.11+ with uv (the planning/healing brain), Node 24+ (the Playwright executor) and the browsers
+> themselves; the installer neither ships nor intends to ship those. The supported Windows path is
+> `agentctl` as a client of a control-API running in a container or on another host. For the full
+> stack on the Windows host itself, use Docker Desktop or WSL. `install.ps1` said this all along in
+> its own `.DESCRIPTION`; the documents were what disagreed with it.
+
 - `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: native Windows,
-  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), no Docker/WSL required;
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`);
 - resolves the latest GitHub Release, downloads `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (non-zero exit on mismatch) → **`cosign verify-blob`** with a **pinned identity** (the same
   regex/issuer as `scripts/offline-verify.sh`; if `cosign` is missing — a loud warning, not a hard failure);

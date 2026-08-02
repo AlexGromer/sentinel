@@ -144,6 +144,24 @@ jobs:
             echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 45"; exit 1
           fi
 
+      - name: Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)
+        # The Pages deployment serves this same page with nothing behind it. The gate clicks through
+        # every view with no backend and fails on anything that reaches the API anyway — it derives
+        # the set rather than carrying a list, so a control added later is covered by where it lives.
+        # Same floor rule as the gate above, and the same `|| true` so a failure prints its reason.
+        run: |
+          out=$(node scripts/pages-static-check.mjs 2>&1) || true; echo "$out"
+          echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
+            echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
+          n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
+          t=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f2 | cut -d' ' -f1)
+          if [ "$n" -ne "$t" ]; then
+            echo "::error::$n of $t checks passed in scripts/pages-static-check.mjs"; exit 1
+          fi
+          if [ "$t" -lt 5 ]; then
+            echo "::error::only $t checks ran in scripts/pages-static-check.mjs — expected at least 5"; exit 1
+          fi
+
       - name: Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -463,7 +481,7 @@ jobs:
         with:
           go-version: '1.26'
       - name: shellcheck all shell scripts
-        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh scripts/collect-live-run.sh
+        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh scripts/collect-live-run.sh scripts/build-deb.sh
       - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
         run: |
           set -euo pipefail
@@ -498,6 +516,78 @@ jobs:
           fi
           kill "$(cat "$stage/srv.pid")" 2>/dev/null || true
           echo "install-smoke: OK (positive install + tampered-checksum rejection)"
+
+  # ---------------------------------------------------------------------------
+  # deb-smoke: ADR-110 — the .deb is BUILT, INSTALLED and REMOVED on a real apt host.
+  #
+  # `dpkg-deb --build` succeeding proves almost nothing: it will happily produce an archive whose
+  # binaries land somewhere nothing looks, whose maintainer scripts abort mid-configure, or whose
+  # service starts on install. So this installs the package and asserts what an operator would
+  # notice, including the two properties that are decisions rather than accidents:
+  #   * the systemd unit is present and NOT enabled — installing a package is not consent to open a
+  #     token-minting HTTP service (see packaging/deb/sentinel-control-api.service);
+  #   * the conffile is registered as one, so an operator's edits survive an upgrade instead of
+  #     being silently overwritten.
+  # Removal is asserted too: a package that cannot be cleanly removed is a package people refuse to
+  # install in the first place.
+  # ---------------------------------------------------------------------------
+  deb-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: Build the five control-plane binaries
+        run: |
+          set -euo pipefail
+          mkdir -p debbin
+          for c in agentctl control-api store-gateway orchestrator report-service; do
+            CGO_ENABLED=0 go build -ldflags "-X main.version=v0.0.0-citest" -o "debbin/$c" "./cmd/$c"
+          done
+      - name: Build, install, inspect and remove the package
+        run: |
+          set -euo pipefail
+          deb="$(sh scripts/build-deb.sh 0.0.0-citest amd64 debbin dist)"
+          echo "built: $deb"
+          sudo apt-get install -y "./$deb"
+
+          # The binaries are where the package says they are, and they run.
+          for c in agentctl control-api store-gateway orchestrator report-service; do
+            test -x "/usr/bin/$c" || { echo "::error::/usr/bin/$c missing from the installed package"; exit 1; }
+          done
+          got="$(agentctl --version)"
+          [ "$got" = "v0.0.0-citest" ] || { echo "::error::agentctl --version = '$got'"; exit 1; }
+
+          # The unit exists and is NOT enabled. `is-enabled` prints `disabled` and exits non-zero for
+          # a unit with an [Install] section that was never enabled — so the STRING is the assertion,
+          # not the exit code, and `set -e` must not eat it.
+          test -f /usr/lib/systemd/system/sentinel-control-api.service \
+            || { echo "::error::the systemd unit is not in the package"; exit 1; }
+          state="$(systemctl is-enabled sentinel-control-api 2>/dev/null || true)"
+          [ "$state" = "disabled" ] || { echo "::error::unit state is '$state', expected 'disabled' — a package install must not arm the service"; exit 1; }
+          # `if`, not `cmd && { exit 1; }`: under `set -e` the AND-list fails in the GOOD case (the
+          # service is not active), which would abort the job exactly when the assertion holds.
+          if systemctl is-active --quiet sentinel-control-api; then
+            echo "::error::the service is RUNNING after a plain install"; exit 1
+          fi
+
+          # The env file is registered as a conffile, or an upgrade silently discards operator edits.
+          test -f /etc/sentinel/control-api.env || { echo "::error::conffile not installed"; exit 1; }
+          dpkg-query -W -f='${Conffiles}\n' sentinel | grep -q '/etc/sentinel/control-api.env' \
+            || { echo "::error::/etc/sentinel/control-api.env is NOT registered as a conffile"; exit 1; }
+          grep -q '^CONTROL_API_AGENTCTL=/usr/bin/agentctl' /etc/sentinel/control-api.env \
+            || { echo "::error::the packaged env file does not point control-api at the packaged agentctl"; exit 1; }
+
+          # dpkg's own integrity view must be clean — this is what md5sums buys.
+          sudo dpkg -V sentinel || { echo "::error::dpkg -V reports the installed files do not match the package"; exit 1; }
+
+          sudo apt-get purge -y sentinel
+          if [ -e /usr/bin/agentctl ]; then
+            echo "::error::purge left /usr/bin/agentctl behind"; exit 1
+          fi
+          echo "deb-smoke: OK (build, install, layout, disabled unit, conffile, purge)"
 
   # ---------------------------------------------------------------------------
   # collect-live-run-smoke: M9-LIVE prep — proves scripts/collect-live-run.sh redacts BY DEFAULT.

@@ -491,17 +491,27 @@ QA или devops-инженер, у которого есть Docker, но не�
 Не плоская форма + «подложи YAML руками», а пошаговый мастер, который знает про режимы работы и сам собирает
 корректную конфигурацию, персистит её и переиспользует при повторном запуске.
 
-**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` для Linux/macOS; нативный PowerShell-пир для Windows, без Docker/WSL)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` для Linux/macOS; PowerShell-пир
+для Windows)
 ```bash
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
 ```powershell
-# Windows (нативно, без admin)
+# Windows (без admin) — ставит КЛИЕНТ, см. оговорку ниже
 iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
 ```
+
+> ⚠ **Windows — клиентская платформа (решение 2026-08-02, ADR-110).** Прежняя формулировка «нативный
+> Windows, без Docker/WSL» была неверна и обещала больше, чем есть. `install.ps1` ставит **только
+> `agentctl.exe`**, и это работает нативно. Но прогон — это ещё Python 3.11+/uv (планировщик и починка),
+> Node 24+ (исполнитель Playwright) и сами браузеры; установщик их не приносит и не собирается.
+> Поддерживаемый путь на Windows: `agentctl` как клиент к control-API, поднятому в контейнере или на
+> другой машине. Полный стек на самом Windows-хосте — Docker Desktop или WSL. Сам `install.ps1` это
+> говорил всегда (его `.DESCRIPTION`); расходились с ним документы.
+
 - `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: нативный Windows,
-  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), Docker/WSL не требуется;
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`);
 - резолвит последний GitHub Release, качает `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (ненулевой код при несовпадении) → **`cosign verify-blob`** с **pinned identity** (тот же
   regex/issuer, что `scripts/offline-verify.sh`; если `cosign` нет — громкое предупреждение, не жёсткий фейл);

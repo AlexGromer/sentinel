@@ -34,7 +34,10 @@ case "$VERSION" in
   ''|*[!0-9A-Za-z.+~-]*|[!0-9]*) echo "ERROR: '$VERSION' is not a usable Debian version" >&2; exit 1 ;;
 esac
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# CDPATH is unset rather than prefixed onto `cd`: the prefix form is correct sh but shellcheck reads
+# it as a typo (SC1007), and shellcheck is a HARD gate in ci.yml's install-smoke job.
+unset CDPATH
+ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 SRC="$ROOT/packaging/deb"
 command -v dpkg-deb >/dev/null 2>&1 || { echo "ERROR: dpkg-deb is required" >&2; exit 1; }
 
