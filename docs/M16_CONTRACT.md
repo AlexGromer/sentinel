@@ -285,7 +285,7 @@ ADR-056**, а не ссылки на него. Основание для пра�
 
 | факт | доказательство |
 |---|---|
-| 25 бинарей (5 бинарей × 5 платформ), multi-arch образ в GHCR, cosign keyless, CycloneDX SBOM, GitHub Release со всеми ассетами | `.github/workflows/release.yml:1-6,21,100-166` |
+| 30 бинарей (5 бинарей × 6 платформ), multi-arch образ в GHCR, cosign keyless, CycloneDX SBOM, GitHub Release со всеми ассетами | `.github/workflows/release.yml:1-6,21,100-166` |
 | триггер — только тег `v*` | `release.yml:13-15` |
 | тегов **ноль** локально и на remote | `git tag --list`, `git ls-remote --tags origin` |
 | `install.sh` резолвит `latest` через GitHub API | `install.sh:43` — упрётся в пустой список |

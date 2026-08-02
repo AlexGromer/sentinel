@@ -60,10 +60,10 @@
       "id": "install-ps1",
       "group": "Deployment",
       "severity": "medium",
-      "title_ru": "Установка на Windows",
-      "title_en": "Windows install",
-      "how_ru": "install.ps1 — тот же путь установки для Windows/PowerShell.",
-      "how_en": "install.ps1 — the same install path for Windows/PowerShell.",
+      "title_ru": "Windows как клиент",
+      "title_en": "Windows as a client",
+      "how_ru": "install.ps1 — ставит agentctl.exe нативно, без admin. Прогон при этом требует Python/uv + Node + браузеры на хосте, поэтому поддерживаемый путь — agentctl к control-API в контейнере или на другой машине (ADR-110).",
+      "how_en": "install.ps1 — installs agentctl.exe natively, no admin. A run also needs Python/uv + Node + browsers on the host, so the supported path is agentctl against a control-API in a container or on another machine (ADR-110).",
       "access": {
         "kind": "file",
         "ref": "install.ps1"

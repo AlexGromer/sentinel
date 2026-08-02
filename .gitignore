@@ -33,6 +33,11 @@ memory/
 .env.production
 .env.test
 .envrc
+# Exception (ADR-110): the .deb conffile shipped to /etc/sentinel/control-api.env. It is a PUBLIC
+# deliverable — commented defaults, no values — and it is un-ignored by exact path so the `*.env`
+# net above stays intact for everything else. NOTHING SECRET MAY BE ADDED TO IT: it is installed
+# world-readable on every machine that installs the package.
+!packaging/deb/control-api.env
 
 # API Keys & Tokens
 *_key
@@ -1139,10 +1144,14 @@ artifacts/
 # Docker (extended)
 docker-compose.override.yml
 docker-compose.*.yml
-# Exception: docker-compose.offline.yml is a deliberate PUBLIC deliverable (M11.4 air-gapped
-# bundle stack; consumed by scripts/offline-verify.sh --bundle). Un-ignore it — the wildcard
-# above is for local/secret compose overrides (e.g. docker-compose.secrets.yml), not this.
+# Exceptions: these two are deliberate PUBLIC deliverables, not local overrides. The wildcard above
+# is for local/secret compose files (e.g. docker-compose.secrets.yml).
+#   offline — M11.4 air-gapped bundle stack, consumed by scripts/offline-verify.sh --bundle
+#   ghcr    — ADR-110 pulled stack, the no-checkout install path
+# Both had to be named here explicitly: the wildcard silently excludes a new deliverable, and the
+# only symptom is a file that exists locally and is absent from the clone everyone else has.
 !docker-compose.offline.yml
+!docker-compose.ghcr.yml
 .dockerignore.local
 
 # VirtualBox

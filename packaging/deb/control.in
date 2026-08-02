@@ -1,0 +1,24 @@
+Package: sentinel
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: AlexGromer <noreply@github.com>
+Section: devel
+Priority: optional
+Homepage: https://github.com/AlexGromer/sentinel
+Description: Autonomous self-healing UI-testing agent — control-plane binaries
+ Sentinel explores a web application, grounds a plan against what it actually
+ found, freezes it as a replayable scenario, and heals locators that drifted.
+ .
+ This package ships the Go CONTROL PLANE only: agentctl (CLI), control-api
+ (HTTP + browser UI), store-gateway (persistence), orchestrator and
+ report-service. They are statically linked and need no further libraries.
+ .
+ IT DOES NOT SHIP A RUNNABLE TEST STACK. Driving a real browser run additionally
+ requires, on this host: Python 3.11+ with uv (the planning/healing brain), Node
+ 24+ (the Playwright executor) and the Playwright browser binaries. Install those
+ yourself, or use the container image
+ (ghcr.io/alexgromer/sentinel) which carries the whole stack. Without them
+ agentctl still works as a client against a control-api that has them.
+ .
+ The bundled systemd unit for control-api is installed DISABLED — nothing starts
+ on install. See /usr/share/doc/sentinel/README.Debian.

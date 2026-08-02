@@ -491,17 +491,27 @@ QA или devops-инженер, у которого есть Docker, но не�
 Не плоская форма + «подложи YAML руками», а пошаговый мастер, который знает про режимы работы и сам собирает
 корректную конфигурацию, персистит её и переиспользует при повторном запуске.
 
-**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` для Linux/macOS; нативный PowerShell-пир для Windows, без Docker/WSL)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` для Linux/macOS; PowerShell-пир
+для Windows)
 ```bash
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
 ```powershell
-# Windows (нативно, без admin)
+# Windows (без admin) — ставит КЛИЕНТ, см. оговорку ниже
 iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
 ```
+
+> ⚠ **Windows — клиентская платформа (решение 2026-08-02, ADR-110).** Прежняя формулировка «нативный
+> Windows, без Docker/WSL» была неверна и обещала больше, чем есть. `install.ps1` ставит **только
+> `agentctl.exe`**, и это работает нативно. Но прогон — это ещё Python 3.11+/uv (планировщик и починка),
+> Node 24+ (исполнитель Playwright) и сами браузеры; установщик их не приносит и не собирается.
+> Поддерживаемый путь на Windows: `agentctl` как клиент к control-API, поднятому в контейнере или на
+> другой машине. Полный стек на самом Windows-хосте — Docker Desktop или WSL. Сам `install.ps1` это
+> говорил всегда (его `.DESCRIPTION`); расходились с ним документы.
+
 - `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: нативный Windows,
-  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), Docker/WSL не требуется;
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`);
 - резолвит последний GitHub Release, качает `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (ненулевой код при несовпадении) → **`cosign verify-blob`** с **pinned identity** (тот же
   regex/issuer, что `scripts/offline-verify.sh`; если `cosign` нет — громкое предупреждение, не жёсткий фейл);
@@ -563,6 +573,35 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 - [x] **PR-4 (этот PR):** wizard пошаговый (Runtime→Model&Auth→Run-params→Review), schema-driven (рендер из `/v1/config-schema` + встроенный снимок для offline и live-override, ADR-061), валидирует ввод (target/бюджеты/openai-правила `make_backend`), персистит черновик (секреты — никогда), двуязычный (`data-lang`), air-gapped (`node --check` в CI теперь на всех `docs/*.html`; `file://` — снимок вместо `fetch`). *(DOM-прогон автоматизирован — `scripts/wizard-dom-check.mjs`, 12 проверок в headless-Chromium в CI; синтаксис-гейт — на всех 6 страницах `docs/`; + 2 anti-drift-гейта)*
 - [x] **PR-5 (этот PR):** `config`-домен в store-gateway (6-й домен `StoreService`, ADR-062); секреты **отвергаются** (`internal/configguard`, одно правило на гейтвей и control-API — 14 попыток обхода в тестах); control-API читает конфиг на старте и пишет из мастера (`PUT /v1/config`, token-gated); `/readyz` → `503` до готовности зависимостей, `200` когда готов (несконфигурированная зависимость = `skipped`, поэтому standalone остаётся ready). *(сквозной DOM-гейт: браузер → control-API → gRPC → SQLite → `/readyz`)*
 - [x] Новый пользователь с Docker завершает первый explore за ≤ 10 минут по `docs/QUICKSTART.md`. **Измерено (2026-07-11):** `docker compose build` **208 с** + `docker compose run … --target https://example.com --planner heuristic` **21 с** = **~3 мин 49 с** end-to-end, exit 0, `plan.json`+`trace.zip` произведены. *(Оговорка: base-образ `playwright` был закэширован; полностью холодный пул добавляет ~2.44 ГБ загрузки → ~7 мин на канале ~100 Мбит/с — тоже под бюджетом, но зависит от сети.)*
+
+---
+
+## §7b Podman — измеренная совместимость (ADR-110)
+
+Проверено 2026-08-02 на podman 5.8.3, штатным `docker compose` **против сокета podman**:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+SENTINEL_VERSION=v0.1.0-rc1 docker compose -f docker-compose.ghcr.yml --profile demo run --rm demo
+```
+
+| проверка | docker | podman |
+|---|---|---|
+| `config -q` на обоих стеках | ✔ | ✔ |
+| анонимный pull образа из GHCR | ✔ | ✔ |
+| `--profile demo` (explore до плана) | ✔ 8 шагов | ✔ 8 шагов |
+| прогон через сервис `browser` по CDP | ✔ (`172.19.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
+
+**`plan_hash` совпал побайтово под обоими: `edc74498ac7c5db0`.** Расхождений на проверенных путях
+**нет** — включая CDP-релей, где rootless-сеть podman отличается диапазоном адресов и больше ничем:
+подстановка резолвленного адреса в исполнителе делает разницу невидимой по построению.
+
+⚠ Что **не** проверено и потому не обещается: отдельная реализация `podman-compose` (проверялся
+`docker compose` поверх podman-сокета — это разные программы), rootful-podman, podman на macOS
+через машину. Профили `webui`/`control-api` публикуют порты на хост, и в rootless-режиме порты
+ниже 1024 недоступны — наши (8088/8090) выше, поэтому это не мешает, но при переносе на 80/443
+помешает.
 
 ---
 

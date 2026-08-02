@@ -53,7 +53,7 @@
 | **Готовый Helm-чарт ⭐** | deploy/sentinel/ — разверните в Kubernetes; шаблоны, values и секреты уже написаны. |
 | **Установка без чекаута ⭐** | install.sh — ставит агент по checksum + cosign, без клонирования репозитория. |
 | **Air-gapped-бандл со всем UI ⭐** | scripts/build-airgap-bundle.sh — поставка кладёт весь браузерный UI, работает без сети. |
-| **Установка на Windows** | install.ps1 — тот же путь установки для Windows/PowerShell. |
+| **Windows как клиент** | install.ps1 — ставит `agentctl.exe` нативно, без admin. Прогон при этом требует Python/uv + Node + браузеры на хосте, поэтому поддерживаемый путь — `agentctl` к control-API в контейнере или на другой машине (ADR-110). |
 | **Локальная модель (ollama)** | docker compose --profile ollama up -d ollama — локальный OpenAI-совместимый эндпоинт моделей. |
 | **Роутер моделей (LiteLLM)** | docker compose --profile litellm up -d litellm — роутер поверх многих провайдеров за LLM_BASE_URL (ADR-045). |
 | **Браузерный UI (webui)** | docker compose --profile webui up — раздать хаб и мастер локально. |
