@@ -78,3 +78,69 @@ func TestTakeoverPerRunIsolation(t *testing.T) {
 		t.Fatal("run b must be unaffected (per-run takeover isolation)")
 	}
 }
+
+// --- ADR-108c: the map gate's answer channel ----------------------------------------------------
+
+// TestMapDecisionReachesTheBrain — found by a SURVIVING mutation.
+//
+// The brain learns of the operator's answer through Control.map_decision on its next ReportEvent, the
+// same shape as takeover. Nothing exercised that: dropping the field from the reply left every test
+// passing, and the gate would simply have waited forever while a person believed they had answered.
+func TestMapDecisionReachesTheBrain(t *testing.T) {
+	o := newOrchestrator(0, 0, 0)
+	ctx := context.Background()
+	const run = "r-map"
+
+	// Empty until somebody answers — and empty is what makes the gate WAIT rather than proceed.
+	if c := ctrl(t, o, run); c.MapDecision != "" {
+		t.Fatalf("baseline map_decision = %q, want empty (nobody has answered)", c.MapDecision)
+	}
+	if _, err := o.DecideMap(ctx, &pb.MapDecisionRequest{RunId: run, Decision: "approve", Reason: "looks fine"}); err != nil {
+		t.Fatal(err)
+	}
+	c := ctrl(t, o, run)
+	if c.MapDecision != "approve" {
+		t.Fatalf("after DecideMap(approve): map_decision = %q", c.MapDecision)
+	}
+	if c.Reason != "looks fine" {
+		t.Errorf("the person's reason did not travel: %q", c.Reason)
+	}
+	// Carried on EVERY reply, not only the first: the brain polls while it waits, and an answer that
+	// appeared once would be a race it could not see through.
+	if c2 := ctrl(t, o, run); c2.MapDecision != "approve" {
+		t.Fatalf("the decision did not persist across polls: %q", c2.MapDecision)
+	}
+	// A refusal replaces it.
+	if _, err := o.DecideMap(ctx, &pb.MapDecisionRequest{RunId: run, Decision: "reject"}); err != nil {
+		t.Fatal(err)
+	}
+	if c3 := ctrl(t, o, run); c3.MapDecision != "reject" {
+		t.Fatalf("after DecideMap(reject): map_decision = %q", c3.MapDecision)
+	}
+}
+
+// TestMapDecisionRefusesAnUnknownAnswer: a typo stored verbatim would reach the brain as neither
+// approve nor reject, leaving the run waiting on a gate somebody believes they answered.
+func TestMapDecisionRefusesAnUnknownAnswer(t *testing.T) {
+	o := newOrchestrator(0, 0, 0)
+	ctx := context.Background()
+	for _, bad := range []string{"", "aprove", "yes", "APPROVE", "reject "} {
+		if _, err := o.DecideMap(ctx, &pb.MapDecisionRequest{RunId: "r-bad", Decision: bad}); err == nil {
+			t.Errorf("DecideMap(%q) was accepted; it must be refused", bad)
+		}
+	}
+	if c := ctrl(t, o, "r-bad"); c.MapDecision != "" {
+		t.Fatalf("a refused answer was stored anyway: %q", c.MapDecision)
+	}
+}
+
+// TestMapDecisionIsPerRun: two runs waiting at their gates must not answer for each other.
+func TestMapDecisionIsPerRun(t *testing.T) {
+	o := newOrchestrator(0, 0, 0)
+	if _, err := o.DecideMap(context.Background(), &pb.MapDecisionRequest{RunId: "a", Decision: "approve"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := ctrl(t, o, "b"); c.MapDecision != "" {
+		t.Fatalf("run b saw run a's answer: %q", c.MapDecision)
+	}
+}

@@ -253,24 +253,10 @@ def _trace_interceptor():
 
 
 def store_target(addr: str) -> str:
-    """Normalise STORE_ADDR into a gRPC target.
-
-    Two conventions are alive and BOTH are legitimate. `agentctl` hands the brain a BARE unix socket
-    path (cmd/agentctl/main.go startGateway; see cmd/agentctl/purge_cli_test.go, which pins that
-    contract), while control-api configures its own gateway as a full gRPC target
-    (CONTROL_API_STORE_ADDR=`unix:/abs/path`, or `host:port`) and now passes that same value down so a
-    UI-launched run writes into the store the UI reads.
-
-    Prefixing blindly, as this code did, turned the second form into `unix:unix:/abs/path` — a target
-    that never connects. The failure was invisible on the chats path because the projection is
-    best-effort: the exception was swallowed and the conversation simply never appeared.
-    """
-    a = (addr or "").strip()
-    if not a:
-        return a
-    if a.startswith("/"):  # our bare-socket-path convention
-        return "unix:" + a
-    return a  # already a gRPC target: unix:…, unix-abstract:…, dns:…, host:port
+    """Normalise STORE_ADDR into a gRPC target — see brain/grpcaddr.py for the rule and why it is
+    shared. Kept as a name here because callers and their gate refer to it."""
+    from .grpcaddr import target
+    return target(addr)
 
 
 def _token_interceptor(token: str):

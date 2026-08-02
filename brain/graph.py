@@ -106,12 +106,21 @@ def await_map_decision(rc, run_id: str, summary: dict) -> str:
 
     deadline = time.monotonic() + _map_gate_timeout()
     log("map.gate_waiting", pages=summary.get("pages", 0), interactives=summary.get("interactives", 0))
+    errors_before = getattr(rc, "transport_errors", 0)
     while True:
         decision = rc.map_decision(run_id)
         if decision in ("approve", "reject"):
             return decision
         if time.monotonic() >= deadline:
-            log("map.gate_timeout", seconds=int(_map_gate_timeout()))
+            # "Nobody answered" and "nobody COULD answer" look identical from here and are not the same
+            # problem: one waits on a person, the other on a broken channel, and only the second is
+            # something the operator can fix. Both refuse — silence is not consent either way — but the
+            # run must SAY which happened, and both are declared degradations so the verdict carries it.
+            failed = getattr(rc, "transport_errors", 0) - errors_before
+            if failed > 0:
+                log("map.gate_unreachable", errors=failed)
+            else:
+                log("map.gate_timeout", seconds=int(_map_gate_timeout()))
             return "reject"
         time.sleep(MAP_GATE_POLL_SECONDS)
 

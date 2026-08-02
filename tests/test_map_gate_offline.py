@@ -195,6 +195,97 @@ def test_the_gate_blocks_the_scenario_node_itself():
          f"with the gate off authored {len(ungated.get('scenario_steps') or [])}")
 
 
+def test_a_bare_socket_path_actually_connects():
+    """The defect that made the gate look broken, and had been breaking more than the gate.
+
+    ORCH_ADDR is a BARE socket path — cmd/orchestrator passes it verbatim — and gRPC reads a bare path
+    as a DNS name. The channel therefore never connected, and because every call on this client
+    swallows its error by design ("telemetry must never break the run"), the ENTIRE brain↔orchestrator
+    channel degraded to "continue" in silence: budget reconciliation, the abort signal, and operator
+    takeover/return (ADR-021/ADR-054) alike.
+
+    Found by RUNNING the map gate: the orchestrator logged DecideMap, the answer was recorded, and the
+    brain sat there until its timeout while 137 resolver errors scrolled past.
+
+    So this is a REAL server on a REAL bare path — a unit check of the string rule would not have
+    caught it, because the string rule was not the thing that was missing.
+    """
+    import concurrent.futures, grpc, tempfile
+    from brain.pb import runcontrol_pb2 as pb, runcontrol_pb2_grpc as pbg
+    from brain.runcontrol import _GrpcRunControl
+
+    class Server(pbg.RunControlServicer):
+        def ReportEvent(self, request, context):
+            return pb.Control(abort=False, map_decision="approve", reason="from the server")
+
+    sock = os.path.join(tempfile.mkdtemp(), "orch.sock")      # BARE path, exactly as ORCH_ADDR carries it
+    s = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
+    pbg.add_RunControlServicer_to_server(Server(), s)
+    s.add_insecure_port("unix:" + sock)
+    s.start()
+    try:
+        rc = _GrpcRunControl(sock)
+        assert rc.map_decision("r1") == "approve", (
+            "the client could not reach an orchestrator listening on that very socket — a bare path is "
+            "being handed to gRPC as a DNS name")
+        assert rc.poll("r1") == "continue"
+    finally:
+        s.stop(0)
+
+
+def test_a_dead_channel_is_not_reported_as_an_unanswered_gate():
+    """Alex's requirement: an error must be VISIBLE and classified, not swallowed.
+
+    "Nobody answered" and "nobody COULD answer" look identical from inside the gate and are different
+    problems: one waits on a person, the other on a broken channel, and only the second is something an
+    operator can fix. Both refuse — silence is not consent either way — but the run has to SAY which
+    happened, and both are declared degradations so the sentence reaches the verdict rather than dying
+    in a log line.
+    """
+    from brain import eventlog
+
+    class DeadChannel(FakeRC):
+        """Behaves like the real client did with a bare socket path: every call fails, the error is
+        swallowed (telemetry must not break a run) and only the counter records it."""
+
+        def __init__(self):
+            super().__init__([])
+            self.transport_errors = 0
+
+        def map_decision(self, run_id):
+            self.polls += 1
+            self.transport_errors += 1
+            return ""
+
+    eventlog.reset_degradations()
+    rc = DeadChannel()
+    saved = _env(SENTINEL_MAP_GATE_TIMEOUT="1", SENTINEL_MAP_GATE=None)
+    try:
+        assert await_map_decision(rc, "r1", {"pages": 1}) == "reject"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    degraded = list(eventlog.degradations())
+    assert "map.gate_unreachable" in degraded, (
+        f"a dead control channel was not reported as a degradation: {degraded}")
+    assert "map.gate_timeout" not in degraded, (
+        "a transport failure was reported as if a person had simply not answered — the operator would "
+        "go looking for the person instead of the broken channel")
+
+    # And the ordinary case still reads as what it is. The register is reset first because it
+    # deduplicates by design — without that, this half would be asserting over the previous scenario's
+    # findings and would pass whatever happened here.
+    eventlog.reset_degradations()
+    rc2 = FakeRC([])
+    saved = _env(SENTINEL_MAP_GATE_TIMEOUT="1", SENTINEL_MAP_GATE=None)
+    try:
+        assert await_map_decision(rc2, "r2", {"pages": 1}) == "reject"
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    assert "map.gate_timeout" in eventlog.degradations(), eventlog.degradations()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
