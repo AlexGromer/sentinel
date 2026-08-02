@@ -115,3 +115,43 @@ func TestRunWithStoreStillStartsItsOwnGatewayWhenAlone(t *testing.T) {
 		t.Errorf("a self-started gateway mints a per-run token and hands it to the brain (#23).\nenv:\n%s", got)
 	}
 }
+
+// TestConversationalTurnNeedsNoTarget — ADR-108b, found by a SURVIVING mutation.
+//
+// `--target` was unconditionally required, so a conversational turn — a person who has not decided
+// what to test yet, which is the whole situation the conversation exists to serve — could not be
+// started from the command line at all. The control-API tests could not catch this: they drive a stub
+// agentctl, so the real flag check was never executed by anything.
+//
+// The counterpart matters as much: a turn that DOES carry an objective still requires a target, or
+// this would have widened "no target needed" into "target optional", and an authoring run would get
+// as far as the browser before discovering it has nowhere to go.
+func TestConversationalTurnNeedsNoTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the brain stub is a /bin/sh script")
+	}
+	repo := t.TempDir()
+	os.Unsetenv("STORE_ADDR")
+	os.Unsetenv("STORE_TOKEN")
+	t.Setenv("BRAIN_PYTHON", brainStub(t, repo))
+
+	if rc := cmdRun(repo, []string{"--mode", "chat", "--conversation-id", "c1",
+		"--message", "what do you do?"}); rc != 0 {
+		t.Errorf("a conversational turn with no --target = %d, want 0 — the person has not chosen a "+
+			"target yet, which is exactly why they are talking", rc)
+	}
+	env, err := os.ReadFile(filepath.Join(repo, "env.txt"))
+	if err != nil {
+		t.Fatalf("the brain was never spawned: %v", err)
+	}
+	if !strings.Contains(string(env), "MESSAGE=what do you do?") {
+		t.Errorf("the turn's text did not reach the brain:\n%s", env)
+	}
+
+	// An AUTHORING turn still needs one.
+	if rc := cmdRun(repo, []string{"--mode", "chat", "--conversation-id", "c1",
+		"--goal", "log in as alice"}); rc != 2 {
+		t.Errorf("a turn carrying an objective but no --target = %d, want 2: it is going to open a "+
+			"browser, and it has nowhere to point it", rc)
+	}
+}

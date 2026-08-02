@@ -1068,3 +1068,47 @@ func TestTraceIsDownloadableAsBinary(t *testing.T) {
 		t.Fatal("an unlisted artifact was served; opening the trace must not open the directory")
 	}
 }
+
+// --- ADR-108b: a conversational turn answers with what the MODEL said ---------------------------
+
+// newReplyWritingServer backs the server with a fake agentctl that writes a reply.json into the
+// artifact dir it was given — i.e. behaves like a brain that had a conversation.
+func newReplyWritingServer(t *testing.T, reply string) *server {
+	t.Helper()
+	repo := t.TempDir()
+	script := filepath.Join(repo, "fake-agentctl.sh")
+	// $@ carries `--artifact-dir <dir>`; find it and write the deliverable there.
+	body := "#!/bin/sh\ndir=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--artifact-dir\" ]; then dir=$2; fi\n  shift\ndone\n" +
+		"[ -n \"$dir\" ] && mkdir -p \"$dir\" && printf '%s' '{\"reply\":\"" + reply + "\",\"kind\":\"conversation\"}' > \"$dir/reply.json\"\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &server{repo: repo, agentctl: script, token: "secret-tok",
+		corsAllow: map[string]bool{}, runs: map[string]*run{}, sessions: newSessionStore()}
+}
+
+// TestConversationalTurnAnswersWithTheReply — found by a SURVIVING mutation.
+//
+// blockingChat answers with the run's log plus a verdict, which is right for a turn that authored a
+// test and wrong for a turn that answered a question: the person who asked would get a wall of run
+// output with the answer somewhere inside it. Nothing proved the reply was preferred, because the
+// stub agentctl in every other test writes no reply.json — so reading the wrong file passed.
+func TestConversationalTurnAnswersWithTheReply(t *testing.T) {
+	s := newReplyWritingServer(t, "I explore an app and freeze a replayable test.")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(chatBody("sentinel", "what do you do?", false)))
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("conversational turn: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "I explore an app and freeze a replayable test.") {
+		t.Fatalf("the answer is not what the model said:\n%s", body)
+	}
+	// And NOT the fallback, which is what a handler reading the wrong artifact would produce.
+	if strings.Contains(body, "could not produce an answer") {
+		t.Fatalf("the reply was ignored in favour of the run log:\n%s", body)
+	}
+}
