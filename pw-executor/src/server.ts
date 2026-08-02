@@ -17,7 +17,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { setupTracing, spanForTool, currentTraceparent } from './otel.js';
-import { resolveLaunchPlan, cdpHostNeedsNumericAddress, withCdpHost } from './launch.js';
+import { resolveLaunchPlan, cdpHostNeedsNumericAddress, withCdpHost, pickCdpAddress } from './launch.js';
 import {
   DETERMINISM_VIEWPORT,
   DETERMINISM_DEVICE_SCALE_FACTOR,
@@ -381,7 +381,16 @@ async function resolveCdpEndpoint(endpoint: string): Promise<string> {
   const host = new URL(endpoint).hostname;
   let addr: string;
   try {
-    addr = (await dns.lookup(host)).address;
+    // IPv4 is PREFERRED, not merely accepted: cdp-service.ts binds its relay to 0.0.0.0, which is
+    // the IPv4 wildcard, so an AAAA answer names an address nothing is listening on. A plain
+    // dns.lookup() returns whatever the resolver puts first — on a GitHub runner `localhost` comes
+    // back as ::1, and the connection was refused against a browser that was up and healthy. Fall
+    // back to the first answer of any family so an IPv6-only deployment (CDP_LISTEN_ADDR=::) still
+    // resolves; only the DEFAULT is opinionated.
+    const answers = await dns.lookup(host, { all: true });
+    const picked = pickCdpAddress(answers);
+    if (!picked) throw new Error('resolved to no addresses');
+    addr = picked;
   } catch (e) {
     throw new Error(
       `PW_CDP_ENDPOINT names host '${host}', which does not resolve: ${(e as Error).message}. ` +

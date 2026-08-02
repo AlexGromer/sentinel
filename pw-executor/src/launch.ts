@@ -75,6 +75,25 @@ export function cdpHostNeedsNumericAddress(endpoint: string): boolean {
   return true;
 }
 
+/**
+ * Choose which resolved address to connect to. IPv4 wins when present.
+ *
+ * Not a detail: `cdp-service.ts` binds its relay to `0.0.0.0`, the IPv4 wildcard, so an AAAA answer
+ * names an address nothing is listening on. A plain `dns.lookup()` returns whatever the resolver
+ * happens to order first — on a GitHub runner `localhost` comes back as `::1`, and the connection
+ * was refused against a browser that was up and healthy. Selecting by FAMILY rather than by position
+ * makes the outcome independent of resolver order, which is why this is a pure function with its own
+ * test instead of an argument to `dns.lookup`.
+ *
+ * The fallback is the first answer of any family, so an IPv6-only deployment (CDP_LISTEN_ADDR=::)
+ * still resolves — only the default is opinionated.
+ */
+export function pickCdpAddress(answers: Array<{ address: string; family: number }>): string | null {
+  if (!answers || answers.length === 0) return null;
+  const v4 = answers.find((a) => a.family === 4);
+  return (v4 ?? answers[0]).address;
+}
+
 /** Replace the host of `endpoint` with `addr`, preserving scheme, port and path. */
 export function withCdpHost(endpoint: string, addr: string): string {
   const u = new URL(endpoint);

@@ -234,6 +234,38 @@ def test_localhost_and_numeric_endpoints_are_left_alone():
         f"the rewrite lost part of the endpoint: {rewritten!r} (port and path must survive)")
 
 
+def test_an_ipv6_answer_never_wins_over_an_ipv4_one():
+    """Which resolved address we connect to must not depend on resolver ORDER.
+
+    Found by this suite failing on a GitHub runner while passing on the author's machine: `localhost`
+    came back as `::1` there, `dns.lookup()` returns whatever is first, and the relay in
+    cdp-service.ts binds `0.0.0.0` — the IPv4 wildcard. So the executor dialled an address nothing was
+    listening on and reported ECONNREFUSED against a browser that was up and healthy. Selecting by
+    FAMILY makes the outcome the same on both machines; asserting it here rather than re-running the
+    live check is the point, because the live check only reproduces it on a host that happens to
+    order IPv6 first.
+    """
+    r = subprocess.run(
+        ["node", "-e",
+         "import('./dist/launch.js').then(m=>console.log(JSON.stringify(["
+         "m.pickCdpAddress([{address:'::1',family:6},{address:'127.0.0.1',family:4}]),"
+         "m.pickCdpAddress([{address:'127.0.0.1',family:4},{address:'::1',family:6}]),"
+         "m.pickCdpAddress([{address:'fd00::5',family:6}]),"
+         "m.pickCdpAddress([])])))"],
+        cwd=str(REPO / "pw-executor"), capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        return _skip(f"pw-executor/dist not built: {(r.stderr or '')[-200:]}")
+    v6_first, v4_first, only_v6, empty = json.loads((r.stdout or "").strip())
+    assert v6_first == "127.0.0.1", (
+        f"with IPv6 listed first the picker chose {v6_first!r} — the relay binds 0.0.0.0, so that "
+        f"address has nothing listening on it")
+    assert v4_first == "127.0.0.1", "the IPv4-first ordering must give the same answer"
+    assert only_v6 == "fd00::5", (
+        "an IPv6-only deployment must still resolve — only the DEFAULT is opinionated, and a hard "
+        "IPv4 requirement would break CDP_LISTEN_ADDR=::")
+    assert empty is None, "no answers must be reported as none, not as a crash"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
