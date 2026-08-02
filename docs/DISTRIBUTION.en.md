@@ -587,23 +587,30 @@ export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 SENTINEL_VERSION=v0.1.0-rc1 docker compose -f docker-compose.ghcr.yml --profile demo run --rm demo
 ```
 
-| check | docker | podman |
+| check | docker 28.5.2 | podman 5.8.3 |
 |---|---|---|
 | `config -q` on both stacks | ✔ | ✔ |
 | anonymous image pull from GHCR | ✔ | ✔ |
 | `--profile demo` (explore through to a plan) | ✔ 8 steps | ✔ 8 steps |
-| a run driven through the `browser` service over CDP | ✔ (`172.19.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
+| **`--profile browser` THROUGH compose**, service to service at `http://browser:9223` | ✔ (`172.22.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
 
-**The `plan_hash` matched byte for byte under both: `edc74498ac7c5db0`.** No divergence on any path
-tested — including the CDP relay, where podman's rootless network differs in its address range and
-in nothing else: the executor's numeric-address substitution makes that difference invisible by
+**The `plan_hash` matched byte for byte across all four runs: `edc74498ac7c5db0`.** No divergence on
+any path tested — including the CDP relay, where podman's rootless network differs only in its
+address range: the executor's numeric-address substitution makes that difference invisible by
 construction.
 
-⚠ What was NOT tested, and is therefore not promised: the separate `podman-compose` implementation
-(what ran here was `docker compose` over podman's socket — different programs), rootful podman, and
-podman on macOS via a machine. The `webui`/`control-api` profiles publish host ports, and rootless
-mode cannot bind below 1024 — ours (8088/8090) are above it, so this does not bite today, but it
-would if they moved to 80/443.
+**How many Compose implementations actually took part: one.** Worth knowing before reading this table
+as broader than it is. `docker compose`, `/usr/bin/docker-compose` (a symlink to the same plugin —
+there is no Python Compose v1 here at all) and `podman compose` (which prints
+`Executing external compose provider …/docker-compose`) are **the same Compose v2.40.3 binary**; only
+the engine underneath differs. All three names were exercised, and that is a test of the engine, not
+of three different Composes.
+
+⚠ What was NOT tested, and is therefore not promised: the separate `podman-compose` project (the
+Python one, unrelated to `podman compose`, and absent from this machine), rootful podman, podman on
+macOS via a machine, and Compose v1. The `webui`/`control-api` profiles publish host ports, and
+rootless mode cannot bind below 1024 — ours (8088/8090) are above it, so this does not bite today,
+but it would if they moved to 80/443.
 
 ---
 
