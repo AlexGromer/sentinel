@@ -53,9 +53,15 @@ import (
 )
 
 // version is stamped by the release build (`go build -ldflags "-X main.version=<tag>"`, .github/workflows/
-// release.yml). It MUST stay a var — the linker cannot write into a const, so declaring it const made the
-// -X flag a silent no-op and /healthz reported "0.1.0" on every tagged release (fixed with ADR-064).
-var version = "0.1.0"
+// release.yml, and the Dockerfile's VERSION arg since ADR-110). It MUST stay a var — the linker cannot
+// write into a const, so declaring it const made the -X flag a silent no-op and /healthz reported "0.1.0"
+// on every tagged release (fixed with ADR-064).
+//
+// The default is "dev", not a version number. It used to be "0.1.0", which meant an UNSTAMPED build did
+// not look unstamped: /healthz answered a plausible release number, and the container images — which
+// were not passing -X at all until ADR-110 — reported it on every published tag. A default that has to
+// be hand-bumped to stay honest is the same defect the const/var note above describes, one layer up.
+var version = "dev"
 
 // run is the tracked state of a spawned agentctl run.
 type run struct {

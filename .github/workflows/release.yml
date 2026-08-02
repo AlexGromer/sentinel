@@ -130,6 +130,10 @@ jobs:
           platforms: ${{ steps.meta.outputs.push == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ steps.meta.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
+          # ADR-110: the image's binaries carry the tag too. Until this existed, the tarballs were
+          # stamped and the image was not, so a published `:latest` answered "dev" to --version.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
       - name: Install cosign
         if: steps.meta.outputs.push == 'true'
         uses: sigstore/cosign-installer@v4.1.2   # v3 cannot install cosign v3.x (stale v2.x); v4 installs current cosign
