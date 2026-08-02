@@ -440,6 +440,31 @@ jobs:
           tags: sentinel:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=citest-${{ github.sha }}
+
+      # ADR-110: the image must be able to say WHICH version it is. Until the Dockerfile took a
+      # VERSION arg, the release matrix stamped the tarballs and the image was not stamped at all —
+      # so the published `:latest` answered "dev" to --version, and control-api's /healthz answered a
+      # hardcoded default, in the deployment we recommend over every other. Asserted on the built
+      # image rather than by reading the Dockerfile: a source-shape check would agree with an
+      # ldflags string that never reaches the linker.
+      - name: The image knows its own version
+        run: |
+          set -euo pipefail
+          want="citest-${GITHUB_SHA}"
+          got="$(docker run --rm --entrypoint /app/bin/agentctl sentinel:local --version)"
+          [ "$got" = "$want" ] || { echo "::error::image agentctl --version is '$got', expected '$want'"; exit 1; }
+          # control-api reports the same string over /healthz — that is where a running deployment is
+          # actually asked, and it has its own `var version` that could drift from agentctl's.
+          cid="$(docker run -d -e CONTROL_API_ADDR=0.0.0.0:8090 -p 18790:8090 --entrypoint /app/bin/control-api sentinel:local)"
+          for _ in $(seq 1 40); do
+            curl -fsS -o /tmp/hz.json "http://127.0.0.1:18790/healthz" && break || sleep 0.5
+          done
+          docker rm -f "$cid" >/dev/null
+          hv="$(python3 -c "import json;print(json.load(open('/tmp/hz.json')).get('version',''))")"
+          [ "$hv" = "$want" ] || { echo "::error::/healthz reports version '$hv', expected '$want'"; exit 1; }
+          echo "image version gate: OK ($want, from both agentctl and /healthz)"
 
       - name: Offline runtime verification (save/load -> --network none, no external calls)
         env:
