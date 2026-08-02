@@ -491,17 +491,28 @@ successful explore run in ≤ 10 minutes, **with no manual YAML editing** and no
 Not a flat form plus "drop in a YAML file by hand", but a stepped wizard that understands the runtime modes,
 assembles a correct configuration itself, persists it, and reuses it on the next launch.
 
-**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a native PowerShell peer for Windows, no Docker/WSL needed)
+**1. `install.sh` / `install.ps1` — single-command installers** (POSIX `sh` for Linux/macOS; a
+PowerShell peer for Windows)
 ```bash
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.sh | sh
 ```
 ```powershell
-# Windows (native, no admin)
+# Windows (no admin) — installs the CLIENT; see the note below
 iwr -useb https://raw.githubusercontent.com/AlexGromer/sentinel/main/install.ps1 | iex
 ```
+
+> ⚠ **Windows is a CLIENT platform (decided 2026-08-02, ADR-110).** The previous wording — "native
+> Windows, no Docker/WSL needed" — was wrong and promised more than exists. `install.ps1` installs
+> **`agentctl.exe` only**, and that part is genuinely native. A run, however, also needs Python
+> 3.11+ with uv (the planning/healing brain), Node 24+ (the Playwright executor) and the browsers
+> themselves; the installer neither ships nor intends to ship those. The supported Windows path is
+> `agentctl` as a client of a control-API running in a container or on another host. For the full
+> stack on the Windows host itself, use Docker Desktop or WSL. `install.ps1` said this all along in
+> its own `.DESCRIPTION`; the documents were what disagreed with it.
+
 - `install.sh`: `uname -s`/`-m` → `{linux,darwin}`×`{amd64,arm64}`; `install.ps1`: native Windows,
-  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`), no Docker/WSL required;
+  `{amd64,arm64}` (`$env:PROCESSOR_ARCHITECTURE`);
 - resolves the latest GitHub Release, downloads `sentinel-<tag>-<os>-<arch>.tar.gz` + `checksums.sha256` + `*.cosign.bundle`;
 - **`sha256sum -c`** (non-zero exit on mismatch) → **`cosign verify-blob`** with a **pinned identity** (the same
   regex/issuer as `scripts/offline-verify.sh`; if `cosign` is missing — a loud warning, not a hard failure);
@@ -563,6 +574,43 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 - [x] **PR-4 (this PR):** the wizard is stepped (Runtime→Model&Auth→Run-params→Review), schema-driven (renders from `/v1/config-schema` plus an embedded snapshot for offline and a live override, ADR-061), validates input (target / budgets / the `make_backend` openai rules), persists a draft (never secrets), is bilingual (`data-lang`), air-gapped (`node --check` in CI now covers every `docs/*.html`; on `file://` the snapshot replaces the `fetch`). *(the DOM run is automated — `scripts/wizard-dom-check.mjs`, 12 checks in headless Chromium in CI; the syntax gate covers all 6 `docs/` pages; + 2 anti-drift gates)*
 - [x] **PR-5 (this PR):** the `config` domain lands in the store-gateway (a 6th `StoreService` domain, ADR-062); secrets are **refused** (`internal/configguard`, one rule shared by the gateway and the control-API — 14 bypass attempts in tests); the control-API reads the config at start and the wizard writes it (`PUT /v1/config`, token-gated); `/readyz` → `503` until dependencies are ready, `200` once ready (an unconfigured dependency is `skipped`, so standalone stays ready). *(end-to-end DOM gate: browser → control-API → gRPC → SQLite → `/readyz`)*
 - [x] A new user with Docker completes the first explore in ≤ 10 minutes following `docs/QUICKSTART.md`. **Measured (2026-07-11):** `docker compose build` **208 s** + `docker compose run … --target https://example.com --planner heuristic` **21 s** = **~3 min 49 s** end-to-end, exit 0, `plan.json`+`trace.zip` produced. *(Caveat: the `playwright` base image was cached; a fully cold pull adds ~2.44 GB of download → ~7 min on a ~100 Mbps link — still under budget, but network-dependent.)*
+
+---
+
+## §7b Podman — measured compatibility (ADR-110)
+
+Verified 2026-08-02 on podman 5.8.3, using the stock `docker compose` **against podman's socket**:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+SENTINEL_VERSION=v0.1.0-rc1 docker compose -f docker-compose.ghcr.yml --profile demo run --rm demo
+```
+
+| check | docker 28.5.2 | podman 5.8.3 |
+|---|---|---|
+| `config -q` on both stacks | ✔ | ✔ |
+| anonymous image pull from GHCR | ✔ | ✔ |
+| `--profile demo` (explore through to a plan) | ✔ 8 steps | ✔ 8 steps |
+| **`--profile browser` THROUGH compose**, service to service at `http://browser:9223` | ✔ (`172.22.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
+
+**The `plan_hash` matched byte for byte across all four runs: `edc74498ac7c5db0`.** No divergence on
+any path tested — including the CDP relay, where podman's rootless network differs only in its
+address range: the executor's numeric-address substitution makes that difference invisible by
+construction.
+
+**How many Compose implementations actually took part: one.** Worth knowing before reading this table
+as broader than it is. `docker compose`, `/usr/bin/docker-compose` (a symlink to the same plugin —
+there is no Python Compose v1 here at all) and `podman compose` (which prints
+`Executing external compose provider …/docker-compose`) are **the same Compose v2.40.3 binary**; only
+the engine underneath differs. All three names were exercised, and that is a test of the engine, not
+of three different Composes.
+
+⚠ What was NOT tested, and is therefore not promised: the separate `podman-compose` project (the
+Python one, unrelated to `podman compose`, and absent from this machine), rootful podman, podman on
+macOS via a machine, and Compose v1. The `webui`/`control-api` profiles publish host ports, and
+rootless mode cannot bind below 1024 — ours (8088/8090) are above it, so this does not bite today,
+but it would if they moved to 80/443.
 
 ---
 

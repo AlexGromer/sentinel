@@ -357,6 +357,35 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 </nav>
 <main class="wrap">
 
+  <!-- ADR-110: this page is served from two places that are not alike. control-api serves it beside
+       a working API (mode 3); GitHub Pages serves the same file with nothing behind it. It used to
+       look identical either way — 72 of its 74 buttons were clickable on Pages and silently hit a
+       URL that answers 404. The banner says which situation you are in, and capUnlock() disables the
+       controls that cannot work until one exists.
+
+       It does NOT say "nothing here works", because that is also untrue: a control-API running on
+       your own machine is reachable from this page. Chrome and Edge exempt http://localhost from the
+       mixed-content block precisely for this, which is the same caveat the setup wizard already
+       carries. Both halves have to be said or the banner trades one wrong impression for another. -->
+  <div id="static-showcase" class="hitl-banner" style="display:none;margin:16px 0 0">
+    <span data-lang="ru"><b>Это витрина.</b> Страница открыта без control-API, поэтому всё, что
+      требует сервера — запуск прогона, библиотека, результаты, логи, настройки — здесь погашено.
+      Работают калькуляторы, генераторы конфигурации и мастер.
+      Чтобы страница ожила, поднимите свой control-API и впишите его адрес в «Подключение»
+      (⚙&nbsp;Настройки):
+      <code>docker compose -f docker-compose.ghcr.yml --profile control-api up control-api</code>.
+      С https-страницы браузер пускает только <code>http://localhost</code> — это исключение для
+      локального адреса, и работает оно в Chrome и Edge.</span>
+    <span data-lang="en"><b>This is a showcase.</b> The page is open with no control-API behind it,
+      so everything that needs a server — starting a run, the library, results, logs, settings — is
+      disabled here. The calculators, the config generators and the wizard work.
+      To bring it to life, start your own control-API and enter its address under “Connection”
+      (⚙&nbsp;Settings):
+      <code>docker compose -f docker-compose.ghcr.yml --profile control-api up control-api</code>.
+      From an https page the browser only allows <code>http://localhost</code> — that is the
+      local-address exemption, and it works in Chrome and Edge.</span>
+  </div>
+
   <p class="sub" style="margin-top:18px" data-view="tools">
     <span data-lang="ru">Введите размер сайта, железо и бюджет — ниже сразу появятся: внятная
       рекомендация (что использовать, как глубоко копать, сколько прогонов влезает), сравнение
@@ -684,8 +713,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         </div>
       </div>
       <div class="ctl-row">
-        <button type="button" class="btn" id="id-login"><span data-lang="ru">Войти</span><span data-lang="en">Sign in</span></button>
-        <button type="button" class="btn" id="id-logout" style="display:none"><span data-lang="ru">Выйти</span><span data-lang="en">Sign out</span></button>
+        <button type="button" class="btn" id="id-login" data-needs-api disabled><span data-lang="ru">Войти</span><span data-lang="en">Sign in</span></button>
+        <button type="button" class="btn" id="id-logout" data-needs-api disabled style="display:none"><span data-lang="ru">Выйти</span><span data-lang="en">Sign out</span></button>
         <span id="id-status" style="font-size:.88rem;color:var(--mut)"></span>
       </div>
       <p class="hint" id="id-who" style="margin-top:.5rem"></p>
@@ -719,8 +748,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         </div>
       </div>
       <div class="ctl-row">
-        <button type="button" class="btn" id="ua-create"><span data-lang="ru">Создать</span><span data-lang="en">Create</span></button>
-        <button type="button" class="btn" id="ua-reload"><span data-lang="ru">Обновить список</span><span data-lang="en">Reload</span></button>
+        <button type="button" class="btn" id="ua-create" data-needs-api disabled><span data-lang="ru">Создать</span><span data-lang="en">Create</span></button>
+        <button type="button" class="btn" id="ua-reload" data-needs-api disabled><span data-lang="ru">Обновить список</span><span data-lang="en">Reload</span></button>
         <span id="ua-status" style="font-size:.88rem;color:var(--mut)"></span>
       </div>
       <div id="ua-list" style="margin-top:.5rem"></div>
@@ -753,8 +782,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </p>
     <div id="cfg-groups"><p class="hint" data-lang="ru">подключитесь к control-API выше — настройки читаются из его схемы</p><p class="hint" data-lang="en">connect to the control-API above — the settings are read from its schema</p></div>
     <div class="ctl-row" style="margin-top:.7rem">
-      <button type="button" class="btn" id="cfg-save" style="background:var(--acc);color:#0b0b10;font-weight:700">💾 <span data-lang="ru">Сохранить на сервер</span><span data-lang="en">Save to server</span></button>
-      <button type="button" class="btn" id="cfg-reload">⟳ <span data-lang="ru">Перечитать</span><span data-lang="en">Reload</span></button>
+      <button type="button" class="btn" id="cfg-save" data-needs-api disabled style="background:var(--acc);color:#0b0b10;font-weight:700">💾 <span data-lang="ru">Сохранить на сервер</span><span data-lang="en">Save to server</span></button>
+      <button type="button" class="btn" id="cfg-reload" data-needs-api disabled>⟳ <span data-lang="ru">Перечитать</span><span data-lang="en">Reload</span></button>
       <span id="cfg-status" class="libmeta"></span>
     </div>
   </section>
@@ -949,12 +978,12 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
 
     <div class="ctl-row">
-      <button type="button" class="btn" id="b-run" disabled
+      <button type="button" class="btn" id="b-run" data-needs-api disabled disabled
         style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
         ▶ <span data-lang="ru">Запустить</span><span data-lang="en">Run</span>
       </button>
-      <button type="button" class="btn" id="b-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
-      <button type="button" class="btn" id="b-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+      <button type="button" class="btn" id="b-rerun" data-needs-api disabled disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+      <button type="button" class="btn" id="b-baseline" data-needs-api disabled disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
       <!-- ADR-047 follow-on: says WHY 🔁/📌 are unavailable, instead of leaving them greyed and silent. -->
       <span id="b-noplan" class="hint" style="display:none"></span>
       <span class="hint"><span data-lang="ru">сначала проверьте подключение (секция #7 выше)</span><span data-lang="en">check the connection first (section #7 above)</span></span>
@@ -996,12 +1025,12 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div class="subtabbar" role="tablist" aria-label="Tests sub-views" hidden>
       <button type="button" class="subtab-btn" data-subtab="author" role="tab" aria-selected="true">💬 <span data-lang="ru">Авторинг</span><span data-lang="en">Author</span></button>
       <button type="button" class="subtab-btn" data-subtab="live" role="tab" aria-selected="false">📡 <span data-lang="ru">Live</span><span data-lang="en">Live</span></button>
-      <button type="button" class="subtab-btn" data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
-      <button type="button" class="subtab-btn" data-subtab="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
-      <button type="button" class="subtab-btn" data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
-      <button type="button" class="subtab-btn" data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
-      <button type="button" class="subtab-btn" data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
-      <button type="button" class="subtab-btn" data-subtab="logs" role="tab" aria-selected="false">📜 <span data-lang="ru">Логи</span><span data-lang="en">Logs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="library" role="tab" aria-selected="false">📚 <span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Chats</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="results" role="tab" aria-selected="false">📊 <span data-lang="ru">Результаты</span><span data-lang="en">Results</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-subtab="logs" role="tab" aria-selected="false">📜 <span data-lang="ru">Логи</span><span data-lang="en">Logs</span></button>
     </div>
 
     <!-- ---- Author (= former #chat authoring console, unchanged behavior) ---- -->
@@ -1032,13 +1061,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <label for="ch-text"><span data-lang="ru">Опиши поток</span><span data-lang="en">Describe the flow</span></label>
       <textarea id="ch-text" rows="2" placeholder="открыть форму регистрации, заполнить email и пароль, отправить / open the signup form, fill email & password, submit"></textarea>
       <div class="ctl-row">
-        <button type="button" class="btn" id="ch-send" disabled
+        <button type="button" class="btn" id="ch-send" data-needs-api disabled disabled
           style="background:var(--acc);color:#0b0b10;font-weight:700;box-shadow:var(--glow)">
           ▶ <span data-lang="ru">Отправить / Запустить</span><span data-lang="en">Send / Run</span>
         </button>
         <button type="button" class="btn" id="ch-stop" style="display:none" title="stop the running run">■ <span data-lang="ru">Остановить</span><span data-lang="en">Stop</span></button>
-        <button type="button" class="btn" id="ch-rerun" disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
-        <button type="button" class="btn" id="ch-baseline" disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
+        <button type="button" class="btn" id="ch-rerun" data-needs-api disabled disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
+        <button type="button" class="btn" id="ch-baseline" data-needs-api disabled disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
         <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
         <span class="hint"><span data-lang="ru">сначала проверьте подключение (Settings → #7)</span><span data-lang="en">check the connection first (Settings → #7)</span></span>
       </div>
@@ -1082,7 +1111,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <div class="card" id="artifacts" style="padding:.6rem">
             <div class="ctl-row" style="margin:0 0 .4rem">
               <b style="font-size:.9rem"><span data-lang="ru">Артефакты</span><span data-lang="en">Artefacts</span></b>
-              <button type="button" class="btn" id="art-refresh" style="margin-left:auto">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+              <button type="button" class="btn" id="art-refresh" data-needs-api disabled style="margin-left:auto">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
             </div>
             <div id="art-list" class="hint"><span data-lang="ru">появятся, когда прогон что-нибудь создаст</span><span data-lang="en">they appear once a run has produced something</span></div>
             <div id="art-view" hidden style="margin-top:.5rem">
@@ -1106,7 +1135,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       </p>
       <div class="ctl-row">
         <input id="live-runid" type="text" placeholder="run_id" style="max-width:14rem">
-        <button type="button" class="btn" id="live-connect">🔌 <span data-lang="ru">Подключить</span><span data-lang="en">Connect</span></button>
+        <button type="button" class="btn" id="live-connect" data-needs-api disabled>🔌 <span data-lang="ru">Подключить</span><span data-lang="en">Connect</span></button>
         <button type="button" class="btn" id="live-disconnect" disabled>⏻ <span data-lang="ru">Отключить</span><span data-lang="en">Disconnect</span></button>
         <span id="live-status" class="libmeta"><span data-lang="ru">офлайн</span><span data-lang="en">offline</span></span>
       </div>
@@ -1116,14 +1145,14 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
     <!-- ---- Library: scenarios + tests (promote/rename/delete/search) ---- -->
     <div class="subtabbar" data-innerbar="library" data-view="library" role="tablist" aria-label="Library sections">
-      <button type="button" class="subtab-btn" data-sub="library" role="tab" aria-selected="true">📚 <span data-lang="ru">Сценарии и тесты</span><span data-lang="en">Scenarios &amp; tests</span></button>
-      <button type="button" class="subtab-btn" data-sub="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
-      <button type="button" class="subtab-btn" data-sub="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Conversations</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="library" role="tab" aria-selected="true">📚 <span data-lang="ru">Сценарии и тесты</span><span data-lang="en">Scenarios &amp; tests</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="runs" role="tab" aria-selected="false">🗂 <span data-lang="ru">Прогоны</span><span data-lang="en">Runs</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="chats" role="tab" aria-selected="false">💭 <span data-lang="ru">Беседы</span><span data-lang="en">Conversations</span></button>
     </div>
     <div class="subpanel" data-subpanel="library" data-view="library">
       <div class="ctl-row">
         <input id="lib-search" type="text" placeholder="search / поиск" style="max-width:16rem">
-        <button type="button" class="btn" id="lib-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <button type="button" class="btn" id="lib-refresh" data-needs-api disabled>⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
       </div>
       <h3 style="font-size:.95rem;margin:.8rem 0 .3rem;color:var(--mut)"><span data-lang="ru">Сценарии</span><span data-lang="en">Scenarios</span> (<code>GET /v1/scenarios</code>)</h3>
       <div id="lib-scenarios"></div>
@@ -1134,7 +1163,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <!-- ---- Run history: list + launcher ▶/🔁/📌 (reuses from_run handlers) ---- -->
     <div class="subpanel" data-subpanel="runs" data-view="library">
       <div class="ctl-row">
-        <button type="button" class="btn" id="runs-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <button type="button" class="btn" id="runs-refresh" data-needs-api disabled>⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
       </div>
       <div id="runs-list"></div>
     </div>
@@ -1143,19 +1172,19 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <div class="subpanel" data-subpanel="chats" data-view="library">
       <div class="ctl-row">
         <input id="chats-search" type="text" placeholder="search / поиск" style="max-width:16rem">
-        <button type="button" class="btn" id="chats-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <button type="button" class="btn" id="chats-refresh" data-needs-api disabled>⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
       </div>
       <div id="chats-list"></div>
     </div>
 
     <!-- ---- Results: per-run outcomes + native SVG charts (M15, ADR-051) ---- -->
     <div class="subtabbar" data-innerbar="results" data-view="results" role="tablist" aria-label="Results sections">
-      <button type="button" class="subtab-btn" data-sub="results" role="tab" aria-selected="true">📊 <span data-lang="ru">Вердикты</span><span data-lang="en">Verdicts</span></button>
-      <button type="button" class="subtab-btn" data-sub="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="results" role="tab" aria-selected="true">📊 <span data-lang="ru">Вердикты</span><span data-lang="en">Verdicts</span></button>
+      <button type="button" class="subtab-btn" data-needs-api disabled data-sub="metrics" role="tab" aria-selected="false">📈 <span data-lang="ru">Метрики</span><span data-lang="en">Metrics</span></button>
     </div>
     <div class="subpanel" data-subpanel="results" data-view="results">
       <div class="ctl-row">
-        <button type="button" class="btn" id="results-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <button type="button" class="btn" id="results-refresh" data-needs-api disabled>⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
         <span class="hint"><span data-lang="ru">verdict · покрытие · длительность на прогон (<code>GET /v1/results</code>)</span><span data-lang="en">verdict · coverage · duration per run (<code>GET /v1/results</code>)</span></span>
       </div>
       <div id="results-charts"></div>
@@ -1164,7 +1193,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <!-- ---- Metrics: trend sparklines over recent runs (M15, ADR-051) ---- -->
     <div class="subpanel" data-subpanel="metrics" data-view="results">
       <div class="ctl-row">
-        <button type="button" class="btn" id="metrics-refresh">⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
+        <button type="button" class="btn" id="metrics-refresh" data-needs-api disabled>⟳ <span data-lang="ru">Обновить</span><span data-lang="en">Refresh</span></button>
         <span class="hint"><span data-lang="ru">тренды по последним прогонам (<code>GET /v1/trends</code>)</span><span data-lang="en">trends over recent runs (<code>GET /v1/trends</code>)</span></span>
       </div>
       <div id="metrics-trends"></div>
@@ -1224,7 +1253,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <input id="lg-q" type="search" placeholder="budget | fallback" style="flex:1;min-width:12rem">
         <label class="lgchk" title="treat the search as a regular expression"><input type="checkbox" id="lg-re"> <code>.*</code></label>
         <label class="lgchk" title="match case"><input type="checkbox" id="lg-case"> <code>Aa</code></label>
-        <button type="button" class="btn" id="lg-reload">&#8635; <span data-lang="ru">Обновить</span><span data-lang="en">Reload</span></button>
+        <button type="button" class="btn" id="lg-reload" data-needs-api disabled>&#8635; <span data-lang="ru">Обновить</span><span data-lang="en">Reload</span></button>
         <span id="lg-count" class="libmeta"></span>
       </div>
       <!-- ADR-068: the filter EXPRESSION is the single thing that filters. The controls above are
@@ -1892,8 +1921,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
   });
   function capUnlock(ok){
-    ge('b-run').disabled=!ok;
-    ge('ch-send').disabled=!ok;
+    /* ADR-110: gate the PROPERTY, not two ids. This used to be exactly `b-run` and `ch-send`, and
+       the other 72 buttons on the page stayed live with no API behind them — on GitHub Pages every
+       one of them silently hit a URL that answers 404, which reads as a broken product rather than
+       as a page with no server. Marking the control in the markup means a control added later is
+       covered by where it lives, not by someone remembering this function; scripts/pages-static-check.mjs
+       clicks through every view with no backend and fails on anything that reaches the API anyway. */
+    var gated = document.querySelectorAll('[data-needs-api]');
+    for (var i=0;i<gated.length;i++) gated[i].disabled = !ok;
+    var sc = ge('static-showcase');
+    if (sc) sc.style.display = ok ? 'none' : '';
     /* ADR-107c: a successful check is the moment the settings become readable — the token that was
        missing a second ago is what the saved document needs. Re-reading here is why entering a token
        populates the panel instead of leaving whatever the first, unauthenticated attempt produced. */
@@ -3634,13 +3671,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      Both steps fail silently on Pages / file:// / a Mode-2 split deploy — nothing changes there.
      The token stays in tab memory, never localStorage (#capitok carries no data-draft). */
   (async function adr064Bootstrap(){
+    /* ADR-110: whichever way this ends, the page must SAY which situation it is in. The showcase
+       banner is revealed on every path that does not end in a working same-origin API — including
+       file:// and a Mode-2 split deploy, where it is equally true that nothing is connected YET.
+       Revealed here rather than in the markup on purpose: showing it by default would flash "this is
+       a showcase" across a working mode-3 install for the length of one fetch. */
+    var showcase = function(){ if (typeof capUnlock === 'function') capUnlock(false); };
     try {
-      if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+      if (location.protocol !== 'http:' && location.protocol !== 'https:') return showcase();
       var origin = location.origin.replace(/\/+$/,'');
       var r = await fetch(origin + '/healthz', {cache:'no-store'});
-      if (!r.ok) return;
+      if (!r.ok) return showcase();
       var j = await r.json();
-      if (!j || j.status !== 'ok') return;              /* something else lives on this origin */
+      if (!j || j.status !== 'ok') return showcase();   /* something else lives on this origin */
       if (!ge('capi').value.trim()) ge('capi').value = origin;
       var m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
       if (m) {
@@ -3656,7 +3699,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
          programmatically. The health payload is already in hand, so report it directly (ADR-066). */
       if (typeof vwSetConn === 'function') vwSetConn(true, j.version);
       adr074TokenRelay();
-    } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ }
+    } catch(e){ /* not same-origin with a control-api — Mode 2 behaviour is unchanged */ showcase(); }
   })();
 
   /* ---- ADR-074: same-origin token relay, hub <-> /setup/ -----------------------------------------

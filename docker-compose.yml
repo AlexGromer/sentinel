@@ -24,6 +24,10 @@ x-sentinel-base: &sentinel-base
   environment:
     # Cloud default (Anthropic) — optional; absent key -> offline heuristic/L1–L6 fallback.
     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # ADR-110: attach to the `browser` service below instead of launching a browser inside this
+    # container. Empty (default) = each run launches its own, unchanged. Set it to use the service:
+    #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser up -d browser
+    PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
     # --- Local model via the optional `ollama` service (uncomment to enable) -------------------
     # LLM_BACKEND: openai
     # LLM_BASE_URL: http://ollama:11434/v1
@@ -149,6 +153,30 @@ services:
     <<: *sentinel-base
     profiles: ["store"]
     entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
+
+  # A Chromium that OUTLIVES a run, reachable over CDP by everything else in this stack (ADR-110).
+  # Until now every run launched a browser inside its own process, so there was nothing for a second
+  # consumer — the live view, a co-pilot session — to attach to.
+  #
+  #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser up -d browser
+  #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser run --rm sentinel \
+  #     run --target <URL> --planner heuristic
+  #
+  # Chromium is NOT started directly here: it binds its debugging port to 127.0.0.1 and silently
+  # ignores --remote-debugging-address, so a sibling container could never reach it. cdp-service.js
+  # launches it through Playwright and relays the port — the reasoning, and the two other Chrome
+  # behaviours that shape it, are documented at the top of pw-executor/src/cdp-service.ts.
+  #
+  # ⚠ NO `ports:` KEY, DELIBERATELY. CDP has no authentication and cannot be given any: whoever
+  # reaches this port drives the browser, reads its pages and its cookies. Publishing it to the host
+  # turns it into a remote-control surface. Note what "not published" does and does not buy you: it
+  # keeps the port off the host's published interfaces, but a Docker bridge is routable FROM the
+  # Linux host itself, so the trust boundary is "who can reach this machine's docker network", not
+  # "who can reach localhost". Do not put this stack on a shared/multi-tenant host as-is.
+  browser:
+    <<: *sentinel-base
+    profiles: ["browser"]
+    entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
 
 volumes:
   ollama:

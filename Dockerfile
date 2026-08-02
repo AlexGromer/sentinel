@@ -26,9 +26,15 @@ COPY docs/calculators/ docs/calculators/
 # the same reason for naming the files individually: `COPY brain/ brain/` would rebuild every Go
 # binary on any Python edit. The 2026-07-23 airgap-CI failure was exactly this omission for webui.
 COPY brain/embed.go brain/events.json brain/
-RUN CGO_ENABLED=0 go build -o /out/agentctl ./cmd/agentctl \
- && CGO_ENABLED=0 go build -o /out/store-gateway ./cmd/store-gateway \
- && CGO_ENABLED=0 go build -o /out/control-api ./cmd/control-api
+# ADR-110: stamp the version INTO the image's binaries. Without this the release matrix stamped the
+# tarballs (release.yml passes -ldflags) while the image did not, so `agentctl --version` answered
+# "dev" and control-api's /healthz answered its hardcoded default on every published image — in the
+# deployment we actually recommend. Whoever runs the container could not say which version they had,
+# which is the first question any bug report has to answer.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/agentctl ./cmd/agentctl \
+ && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/store-gateway ./cmd/store-gateway \
+ && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/control-api ./cmd/control-api
 
 # --- stage 2: TypeScript pw-executor ----------------------------------------
 FROM node:24-bookworm AS ts-build

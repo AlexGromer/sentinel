@@ -53,7 +53,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 | **A working Helm chart ⭐** | deploy/sentinel/ — deploy to Kubernetes; templates, values and secrets are written. |
 | **Install without a checkout ⭐** | install.sh — installs the agent by checksum + cosign, no repository clone. |
 | **Air-gapped bundle with the whole UI ⭐** | scripts/build-airgap-bundle.sh — the bundle ships the whole browser UI, runs with no network. |
-| **Windows install** | install.ps1 — the same install path for Windows/PowerShell. |
+| **Windows as a client** | install.ps1 — installs `agentctl.exe` natively, no admin. A run also needs Python/uv + Node + browsers on the host, so the supported path is `agentctl` against a control-API in a container or on another machine (ADR-110). |
 | **Local model (ollama)** | docker compose --profile ollama up -d ollama — a local OpenAI-compatible model endpoint. |
 | **Model router (LiteLLM)** | docker compose --profile litellm up -d litellm — a router over many providers behind LLM_BASE_URL (ADR-045). |
 | **Browser UI (webui)** | docker compose --profile webui up — serve the hub and wizard locally. |

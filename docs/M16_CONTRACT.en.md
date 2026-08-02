@@ -284,7 +284,7 @@ The release pipeline is **complete and has never fired**:
 
 | fact | evidence |
 |---|---|
-| 25 binaries (5 binaries × 5 platforms), a multi-arch image on GHCR, cosign keyless, a CycloneDX SBOM, a GitHub Release with every asset | `.github/workflows/release.yml:1-6,21,100-166` |
+| 30 binaries (5 binaries × 6 platforms), a multi-arch image on GHCR, cosign keyless, a CycloneDX SBOM, a GitHub Release with every asset | `.github/workflows/release.yml:1-6,21,100-166` |
 | the trigger is a `v*` tag only | `release.yml:13-15` |
 | **zero** tags, locally and on the remote | `git tag --list`, `git ls-remote --tags origin` |
 | `install.sh` resolves `latest` through the GitHub API | `install.sh:43` — it meets an empty list |

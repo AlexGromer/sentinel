@@ -1,0 +1,138 @@
+# Sentinel — the same stack, PULLED instead of built (ADR-110).
+#
+# docker-compose.yml builds from a source checkout. That is the contributor's file, and until the
+# first release it was also the only one: `image:` pointed at a tag nobody had ever published, so
+# every "quickstart" began with a Docker build. This file is the other half — no checkout, no
+# toolchain, no build:
+#
+#   curl -fsSLO https://raw.githubusercontent.com/AlexGromer/sentinel/main/docker-compose.ghcr.yml
+#   docker compose -f docker-compose.ghcr.yml --profile demo up          # zero-dep smoke run
+#   docker compose -f docker-compose.ghcr.yml run --rm sentinel run --target <URL>
+#
+# Version: SENTINEL_VERSION pins a release tag; unset means :latest, which a PRE-RELEASE never
+# claims (release.yml only moves :latest for a tag with no dash), so an rc can be pulled explicitly
+# but is never what you get by accident.
+#
+#   SENTINEL_VERSION=v0.1.0 docker compose -f docker-compose.ghcr.yml run --rm sentinel --help
+#
+# Images are signed keyless with cosign; verify before you run something you did not build:
+#   cosign verify ghcr.io/alexgromer/sentinel:latest \
+#     --certificate-identity-regexp 'https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#
+# THE SERVICE AND PROFILE SETS ARE THE SAME AS docker-compose.yml, deliberately: someone who learned
+# `--profile control-api` from one file must not find it missing from the other. That is not left to
+# discipline — tests/test_compose_parity_offline.py compares the two sets and fails on drift.
+#
+# Not to be confused with docker-compose.offline.yml, which is the air-gapped bundle's stack: that
+# one resolves images from `docker load` only (pull_policy: never) and has no registry at all.
+
+x-sentinel-ghcr: &sentinel-ghcr
+  image: ghcr.io/alexgromer/sentinel:${SENTINEL_VERSION:-latest}
+  volumes:
+    - ./runs:/app/runs       # plan.json / transcript / heal-report / scenario.json / trace.zip
+    - ./state:/app/state     # locator/golden/quarantine SQLite + store-gateway socket
+    - ./config:/config       # mount a RunConfig YAML or plan.json (e.g. --run-config /config/run.yaml)
+  environment:
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # ADR-110: set to http://browser:9223 to drive the `browser` service instead of launching a
+    # browser inside each run's own container.
+    PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
+    # Local model via the optional `ollama` service below (see docs/LOCAL_MODELS.md §3):
+    #   LLM_BACKEND=openai LLM_BASE_URL=http://ollama:11434/v1 LLM_MODEL=<model> LLM_API_KEY=noauth
+    LLM_BACKEND: ${LLM_BACKEND:-}
+    LLM_BASE_URL: ${LLM_BASE_URL:-}
+    LLM_MODEL: ${LLM_MODEL:-}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+
+services:
+  # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name.
+  sentinel:
+    <<: *sentinel-ghcr
+    command: ["--help"]
+
+  # Zero-external-dependency demo: deterministic explore against a fixture baked into the image.
+  demo:
+    <<: *sentinel-ghcr
+    profiles: ["demo"]
+    command:
+      - "run"
+      - "--target"
+      - "file:///app/testdata/site/index.html"
+      - "--planner"
+      - "heuristic"
+      - "--artifact-dir"
+      - "/app/runs/demo"
+
+  # Optional local-model endpoint (OpenAI-compatible at http://ollama:11434/v1).
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  # Optional model-router over many providers (ADR-045). Needs deploy/litellm/config.yaml from the
+  # repo — the one service here that is not self-contained, because the routing table is yours.
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:latest
+    profiles: ["litellm"]
+    volumes:
+      - ./deploy/litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    ports:
+      - "4000:4000"
+
+  # Static hub + setup wizard + calculators, served from inside the image (no network, no key).
+  #   docker compose -f docker-compose.ghcr.yml --profile webui up   ->   http://localhost:8088/
+  webui:
+    <<: *sentinel-ghcr
+    profiles: ["webui"]
+    entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
+    ports:
+      - "8088:8088"
+
+  # HTTP control-API (ADR-032/064). Published to host localhost only. Mode 3 (recommended) serves
+  # the UI from this same port — see docker-compose.yml for the full mode walkthrough.
+  #   CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= \
+  #     docker compose -f docker-compose.ghcr.yml --profile control-api up control-api
+  control-api:
+    <<: *sentinel-ghcr
+    profiles: ["control-api"]
+    entrypoint: ["/app/bin/control-api"]
+    environment:
+      CONTROL_API_ADDR: "0.0.0.0:8090"
+      CONTROL_API_AGENTCTL: /app/bin/agentctl
+      CONTROL_API_TOKEN: ${CONTROL_API_TOKEN:-}
+      CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS-http://localhost:8088,https://alexgromer.github.io}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
+      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
+      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
+    ports:
+      - "127.0.0.1:8090:8090"
+
+  # Persistence for the control-API domains (ADR-062) — the SERVICE tier.
+  store-gateway:
+    <<: *sentinel-ghcr
+    profiles: ["store"]
+    entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
+
+  # A Chromium that outlives a run, reachable over CDP (ADR-110). See docker-compose.yml for why it
+  # is not started as a bare `chromium --remote-debugging-port`, and pw-executor/src/cdp-service.ts
+  # for the three measured Chrome behaviours behind that.
+  #
+  # ⚠ NO `ports:` KEY, DELIBERATELY — CDP is unauthenticated and cannot be given a credential.
+  browser:
+    <<: *sentinel-ghcr
+    profiles: ["browser"]
+    entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
+
+volumes:
+  ollama:

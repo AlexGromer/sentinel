@@ -1,0 +1,53 @@
+# Sentinel control-api as a system service (ADR-110).
+#
+# INSTALLED DISABLED ON PURPOSE. control-api mints a bearer token on first start
+# (ADR-064) and, with CONTROL_API_SERVE_UI=1, serves a browser UI that can start
+# runs. A package install is not consent to open that; the operator enables it:
+#
+#   sudo systemctl enable --now sentinel-control-api
+#
+# Settings live in /etc/sentinel/control-api.env (a conffile — your edits survive
+# upgrades). Every knob is the same CONTROL_API_* variable documented for the
+# container; there is no packaging-only configuration surface.
+
+[Unit]
+Description=Sentinel control-api (HTTP control plane + browser UI)
+Documentation=https://github.com/AlexGromer/sentinel/blob/main/docs/DISTRIBUTION.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# `-` prefix: an absent file is not an error. The package ships one, but an
+# operator is free to delete it and drive the service purely from drop-ins.
+EnvironmentFile=-/etc/sentinel/control-api.env
+ExecStart=/usr/bin/control-api
+Restart=on-failure
+RestartSec=5s
+
+# DynamicUser gives the service a transient unprivileged identity, so the package
+# never has to create or clean up a system account. StateDirectory then owns
+# /var/lib/sentinel for it — that is where control-api persists its token and,
+# when configured, the SQLite store.
+DynamicUser=yes
+StateDirectory=sentinel
+WorkingDirectory=/var/lib/sentinel
+
+# The service runs a control plane, not the browser stack: it needs no device
+# access and writes nowhere but its state directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
