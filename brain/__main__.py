@@ -251,6 +251,72 @@ def _project_chat(conversation_id: str, target: str, final: dict) -> None:
         projector.close()
 
 
+def _run_converse(run_id, out, conversation_id, message, snap, saver, cfg, planner, rc, tx_write) -> int:
+    """ADR-108b: one turn of conversation on a chat that has no objective yet.
+
+    The deliverable is `reply.json` — prose, not a scenario. control-api serves it as the assistant's
+    message, which is why a conversational turn does not read as a wall of run log.
+
+    NO objective is pinned here, deliberately. Talking about what to test must not decide it: the goal
+    belongs to the conversation and is fixed once set (ADR-108a), so a passing remark cannot become the
+    thing this chat is forever about. The exchange IS remembered, so the turn that finally states an
+    objective arrives with its context.
+
+    Degrades rather than fails. With no model configured the answer is the deterministic sentence the
+    person needs anyway — which is also the honest answer, since without a backend there is nothing to
+    converse with.
+    """
+    from . import budget, llm
+    history = list((snap.values.get("messages") if snap and snap.values else None) or [])
+    # The checkpointer stores LangChain message objects on an authored thread and plain dicts on one
+    # this function wrote; normalise both, because a conversation may cross between them.
+    def _as_msg(m):
+        if isinstance(m, dict):
+            return {"role": m.get("role", "user"), "content": str(m.get("content", ""))}
+        return {"role": ("assistant" if getattr(m, "type", "") == "ai" else "user"),
+                "content": str(getattr(m, "content", ""))}
+    exchange = [_as_msg(m) for m in history if _as_msg(m)["content"].strip()]
+    exchange.append({"role": "user", "content": message})
+
+    backend = llm.make_backend("chat")
+    if backend is None:
+        log("chat.no_backend")
+        reply = ("I can talk, but no model is configured for conversation, so this is all I can say. "
+                 "Give me an objective for this chat — what should the test do — and a target URL, and "
+                 "I can go and do it.")
+    else:
+        try:
+            result = llm.converse(backend, exchange)
+            budget.tracker().add("chat", result)   # a conversation spends tokens like everything else
+            reply = (result.text or "").strip()
+            tx_write({"role": "chat", "messages": len(exchange), "model": result.model,
+                      "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens})
+            if not reply:
+                reply = "I did not get an answer from the model. Try again, or give me an objective and a target URL."
+        except Exception as e:  # a conversation must not crash the process it runs in
+            log("chat.backend_error", error=e)
+            reply = ("I could not reach the model just now. Give me an objective for this chat and a "
+                     "target URL and I can still author a test without it.")
+
+    (out / "reply.json").write_text(json.dumps({
+        "conversation_id": conversation_id, "run_id": run_id, "reply": reply,
+        # The interface needs to know this turn produced words, not a scenario, without inspecting the
+        # prose for hints about what kind of thing it is looking at.
+        "kind": "conversation", "objective_pinned": False,
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+    log("chat.reply", conversation_id=conversation_id, chars=len(reply))
+
+    # Remember the exchange so the NEXT turn has it — including the turn that finally states a goal.
+    try:
+        app = build_graph(_NoBrowser(), planner, tx_write, scenario_head=None, rc=rc).compile(checkpointer=saver)
+        app.update_state(cfg, {"messages": exchange + [{"role": "assistant", "content": reply}]})
+    except Exception as e:
+        # Best-effort: an unremembered turn is a worse conversation, not a failed one, and the reply
+        # has already been written.
+        log("chat.history_not_saved", error=e)
+    return 0
+
+
 def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) -> int:
     """M9.10 (ADR-048): stateful multi-turn authoring. One brain process per turn; conversation memory is
     the shared checkpointer keyed by thread_id=conversation_id (state/conversations.db or CHECKPOINT_DSN).
@@ -315,8 +381,15 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     # First turn — or a conversation started before chat_intent existed, which pins on
                     # the first turn that carries an objective rather than being refused retroactively.
                     if not goal and not describe:
-                        log("fatal.chat_no_objective")
-                        return 3
+                        # ADR-108b: a turn carrying only a MESSAGE, on a conversation that has no
+                        # objective yet, is a turn of CONVERSATION — and the model answers it.
+                        #
+                        # Until now this was `fatal.chat_no_objective`, exit 3: the product whose centre
+                        # is a chat could not be talked to. Not a missing feature so much as a missing
+                        # premise — every path through the brain assumed the person had already decided
+                        # what to test, and the one where they are still deciding did not exist.
+                        return _run_converse(run_id, out, conversation_id, message, snap, saver, cfg,
+                                             planner, rc, tx_write)
                     kind, objective = ("goal", goal) if goal else ("describe", describe)
                 intent = {"kind": kind, "text": objective}
                 # The turn's instruction is its MESSAGE; a turn that sends none is restating the

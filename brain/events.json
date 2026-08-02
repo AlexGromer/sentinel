@@ -429,6 +429,42 @@
         "__main__"
       ]
     },
+    "chat.reply": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Ответил в беседе {conversation_id} ({chars} симв.) — это разговор, а не авторинг: цель не закреплена",
+      "en": "Answered in conversation {conversation_id} ({chars} chars) — a conversation turn, not authoring: no objective pinned",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "chat.no_backend": {
+      "lvl": "warn",
+      "cat": "llm",
+      "ru": "Для разговора не настроена модель (роль chat) — отвечаю тем, что могу сказать без неё",
+      "en": "No model configured for conversation (role chat) — answering with what can be said without one",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "chat.backend_error": {
+      "lvl": "warn",
+      "cat": "llm",
+      "ru": "Модель для разговора недоступна ({error}) — отвечаю без неё, прогон не прерван",
+      "en": "The conversation model is unreachable ({error}) — answering without it; the turn is not failed",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "chat.history_not_saved": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Ход беседы не сохранён в память треда ({error}) — ответ уже отдан, следующий ход не увидит этот обмен",
+      "en": "The turn was not saved to the thread ({error}) — the reply stands, but the next turn will not see this exchange",
+      "modules": [
+        "__main__"
+      ]
+    },
     "run.mcp_serving": {
       "lvl": "info",
       "cat": "run",
@@ -463,16 +499,6 @@
       "exit": 3,
       "ru": "Для беседы нужна цель или описание потока — не указано ни то, ни другое",
       "en": "Chat mode needs a goal or a flow description — neither was given",
-      "modules": [
-        "__main__"
-      ]
-    },
-    "fatal.chat_no_objective": {
-      "lvl": "error",
-      "cat": "run",
-      "exit": 3,
-      "ru": "Новая беседа должна назвать цель: пришло только сообщение, а закреплять как цель следующую реплику — не то же самое",
-      "en": "A new conversation must declare its objective: only a message arrived, and pinning a follow-up as the goal is not the same thing",
       "modules": [
         "__main__"
       ]
