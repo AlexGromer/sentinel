@@ -503,16 +503,6 @@
         "__main__"
       ]
     },
-    "fatal.chat_no_objective": {
-      "lvl": "error",
-      "cat": "run",
-      "exit": 3,
-      "ru": "Новая беседа должна назвать цель: пришло только сообщение, а закреплять как цель следующую реплику — не то же самое",
-      "en": "A new conversation must declare its objective: only a message arrived, and pinning a follow-up as the goal is not the same thing",
-      "modules": [
-        "__main__"
-      ]
-    },
     "fatal.chat_goal_changed": {
       "lvl": "error",
       "cat": "run",

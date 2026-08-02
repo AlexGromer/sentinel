@@ -391,12 +391,31 @@ def test_cold_turn_pins_the_objective_into_the_thread():
     assert rc2 == 3, f"the pin written by the cold turn must be enforced on the next one, got {rc2}"
 
 
-def test_first_turn_must_declare_an_objective():
-    """A brand-new conversation whose only content is a MESSAGE has nothing to pin, and is refused
-    rather than pinning the follow-up as though it were the goal."""
+def test_first_turn_with_only_a_message_talks_and_pins_nothing():
+    """CHANGED BY ADR-108b, deliberately — this used to assert exit 3.
+
+    ADR-108a was right that a message must not be pinned AS the objective: a follow-up is not a goal,
+    and pinning one would make a passing remark the thing the conversation is forever about. It drew
+    the wrong conclusion from that, though — it refused the turn. So the only thing a person could do
+    on a fresh conversation was state an objective, and the state where someone is still deciding did
+    not exist.
+
+    The turn is now answered (ADR-108b) and STILL pins nothing, which is the part ADR-108a got right
+    and this keeps enforcing: `chat_intent` must be absent afterwards, so a goal stated later is
+    accepted rather than refused as a change.
+    """
     db = os.path.join(tempfile.mkdtemp(), "conversations.db")
-    rc, _ = _chat_turn(db, "conv-empty", {"MESSAGE": "and also check the footer"})
-    assert rc == 3, f"a first turn with only a message must exit 3, got {rc}"
+    rc, out = _chat_turn(db, "conv-empty", {"MESSAGE": "and also check the footer"})
+    assert rc == 0, f"a turn with only a message is a conversation turn and must succeed, got {rc}"
+    assert (pathlib.Path(out) / "reply.json").exists(), "the turn produced no reply"
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    with SqliteSaver.from_conn_string(db) as saver:
+        snap = build_graph(_NoBrowserProbe(), HeuristicPlanner(), lambda r: None,
+                           scenario_head=None).compile(checkpointer=saver).get_state(
+            {"configurable": {"thread_id": "conv-empty"}})
+    assert not (snap.values or {}).get("chat_intent"), \
+        f"talking pinned an objective: {(snap.values or {}).get('chat_intent')!r}"
 
 
 if __name__ == "__main__":
