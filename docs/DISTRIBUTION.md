@@ -576,6 +576,35 @@ Wizard + **все** пресеты рантаймов + file/DB-config + health-
 
 ---
 
+## §7b Podman — измеренная совместимость (ADR-110)
+
+Проверено 2026-08-02 на podman 5.8.3, штатным `docker compose` **против сокета podman**:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+SENTINEL_VERSION=v0.1.0-rc1 docker compose -f docker-compose.ghcr.yml --profile demo run --rm demo
+```
+
+| проверка | docker | podman |
+|---|---|---|
+| `config -q` на обоих стеках | ✔ | ✔ |
+| анонимный pull образа из GHCR | ✔ | ✔ |
+| `--profile demo` (explore до плана) | ✔ 8 шагов | ✔ 8 шагов |
+| прогон через сервис `browser` по CDP | ✔ (`172.19.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
+
+**`plan_hash` совпал побайтово под обоими: `edc74498ac7c5db0`.** Расхождений на проверенных путях
+**нет** — включая CDP-релей, где rootless-сеть podman отличается диапазоном адресов и больше ничем:
+подстановка резолвленного адреса в исполнителе делает разницу невидимой по построению.
+
+⚠ Что **не** проверено и потому не обещается: отдельная реализация `podman-compose` (проверялся
+`docker compose` поверх podman-сокета — это разные программы), rootful-podman, podman на macOS
+через машину. Профили `webui`/`control-api` публикуют порты на хост, и в rootless-режиме порты
+ниже 1024 недоступны — наши (8088/8090) выше, поэтому это не мешает, но при переносе на 80/443
+помешает.
+
+---
+
 ## §8 M11.6 — Pages-хаб одной страницей (dark-neon, двуязычный, recommendation)
 
 **Статус:** доставлен (issue #12, расширенный scope). Зависит от: LOCAL_MODELS §3/§5/§6 (источник формул).

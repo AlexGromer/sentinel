@@ -577,6 +577,36 @@ not crippleware). Enterprise = managed/EMS provisioning · license issuing · mu
 
 ---
 
+## §7b Podman — measured compatibility (ADR-110)
+
+Verified 2026-08-02 on podman 5.8.3, using the stock `docker compose` **against podman's socket**:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+SENTINEL_VERSION=v0.1.0-rc1 docker compose -f docker-compose.ghcr.yml --profile demo run --rm demo
+```
+
+| check | docker | podman |
+|---|---|---|
+| `config -q` on both stacks | ✔ | ✔ |
+| anonymous image pull from GHCR | ✔ | ✔ |
+| `--profile demo` (explore through to a plan) | ✔ 8 steps | ✔ 8 steps |
+| a run driven through the `browser` service over CDP | ✔ (`172.19.0.2:9223`) | ✔ (`10.89.1.2:9223`) |
+
+**The `plan_hash` matched byte for byte under both: `edc74498ac7c5db0`.** No divergence on any path
+tested — including the CDP relay, where podman's rootless network differs in its address range and
+in nothing else: the executor's numeric-address substitution makes that difference invisible by
+construction.
+
+⚠ What was NOT tested, and is therefore not promised: the separate `podman-compose` implementation
+(what ran here was `docker compose` over podman's socket — different programs), rootful podman, and
+podman on macOS via a machine. The `webui`/`control-api` profiles publish host ports, and rootless
+mode cannot bind below 1024 — ours (8088/8090) are above it, so this does not bite today, but it
+would if they moved to 80/443.
+
+---
+
 ## §8 M11.6 — Single-page Pages hub (dark-neon, bilingual, recommendation)
 
 **Status:** delivered (issue #12, expanded scope). Depends on: LOCAL_MODELS §3/§5/§6 (formula source).
