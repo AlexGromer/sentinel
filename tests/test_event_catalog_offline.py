@@ -40,7 +40,12 @@ CATALOG = REPO / "brain" / "events.json"
 # Modules that emit diagnostics through the module-level log()/_log() helpers. Kept explicit rather
 # than globbed: a new brain module that logs must be added here deliberately, which is the point.
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
-               "record_bridge", "replay", "server", "budget", "report"]
+               "record_bridge", "replay", "server", "budget", "report", "store", "otel"]
+# `store` and `otel` joined in HEALTH-002, when two long-silent handlers were made to declare: the
+# chats projection (which had not been written by ANY deployment for months, and whose `except: pass`
+# is why nobody noticed) and tracing setup (which left an operator believing spans were being
+# collected). A module that emits and is not scanned is a module whose codes the catalogue cannot
+# vouch for.
 # `report` joined the list in ADR-097, when the report generator gained its first `log()` call. It is
 # listed rather than special-cased: a module that emits and is not scanned is a module whose codes the
 # catalogue cannot vouch for, and the gate said so — it called the new entry a PHANTOM, which was the

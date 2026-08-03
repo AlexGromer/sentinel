@@ -638,8 +638,12 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
             # executor discards the buffered trace and nothing reaches the disk.
             _stop_trace(ex, trace_path, int(report.get("exit_code", 1)))
             ex.call("shutdown")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Said, not swallowed. An executor that will not shut down cleanly usually means a
+            # crashed or desynced subprocess — cheap to ignore for a one-shot CLI run, expensive in
+            # mcp-server mode where the same process is reused across many runs and the next one
+            # inherits the mess.
+            log("system.executor_shutdown_failed", err=str(exc))
         code = report.get("exit_code", 1)
         head = "BASELINE" if baseline else "REPLAY"
         if report.get("reason"):
@@ -919,8 +923,12 @@ def main() -> int:
     # front; this covers brain-direct runs (MCP server / tests) where agentctl isn't in the path.
     try:
         os.chmod(out, 0o700)
-    except OSError:
-        pass
+    except OSError as exc:
+        # A DEGRADATION, not a footnote: this directory holds trace.zip, which THREAT_MODEL names as
+        # possibly carrying input values and session state. If the hardening step fails the artefacts
+        # sit at default permissions, and the operator has to be able to know that without inferring
+        # it from a stat months later.
+        log("system.artifact_dir_not_restricted", err=str(exc))
     setup_tracing()
     # M9.2a (ADR-027): a RunConfig YAML may supply mode/goal/planner/budgets (precedence flag > file > default).
     run_config = os.environ.get("RUN_CONFIG")

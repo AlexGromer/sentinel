@@ -30,8 +30,15 @@ def setup_tracing(service: str = "sentinel-brain") -> None:
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
         trace.set_tracer_provider(provider)
         _tracer = trace.get_tracer("sentinel.brain")
-    except Exception:  # otel missing / misconfigured -> stay no-op
+    except Exception as exc:  # otel missing / misconfigured -> stay no-op
         _tracer = None
+        # Only worth saying when tracing was ASKED FOR. With no endpoint configured this path is the
+        # normal, intended one — announcing it on every offline run would be noise that teaches
+        # people to ignore the channel. With an endpoint set, silence is the problem: the operator
+        # believes spans are being collected and nothing ever says otherwise.
+        if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            from .eventlog import log
+            log("system.tracing_unavailable", err=str(exc))
 
 
 @contextlib.contextmanager

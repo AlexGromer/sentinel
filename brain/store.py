@@ -17,6 +17,8 @@ import secrets
 import sqlite3
 import time
 
+from .eventlog import log
+
 # #23 (THREAT_MODEL ❷): gRPC metadata key carrying the per-run store token. Must match the Go
 # gateway's store.StoreTokenMDKey. Keys are lowercase per the gRPC/HTTP-2 convention.
 STORE_TOKEN_MD_KEY = "x-sentinel-store-token"
@@ -385,8 +387,12 @@ class ChatProjector:
             self._stub.UpsertChat(self._pb.ChatProjection(
                 conversation_id=conversation_id, last_target=last_target, turn_count=int(turn_count or 0),
                 last_goal=last_goal, summary=summary, owner=owner))
-        except Exception:  # best-effort projection — never break the run on a gateway hiccup
-            pass
+        except Exception as exc:
+            # Still best-effort — a gateway hiccup must not break a run — but no longer silent. This
+            # projection (ADR-050) was never written by any deployment for months, and this `pass` is
+            # why nobody noticed: the library simply had no conversations in it and there was nothing
+            # anywhere to suggest that was a failure rather than an absence.
+            log("system.chat_projection_failed", err=str(exc))
 
     def close(self) -> None:
         try:

@@ -1686,6 +1686,51 @@
       "modules": [
         "__main__"
       ]
+    },
+    "system.executor_shutdown_failed": {
+      "lvl": "warn",
+      "cat": "system",
+      "modules": [
+        "__main__"
+      ],
+      "ru": "Исполнитель не завершился штатно: {err}",
+      "en": "The executor did not shut down cleanly: {err}"
+    },
+    "system.artifact_dir_not_restricted": {
+      "lvl": "warn",
+      "cat": "system",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru": "Каталог артефактов не удалось ограничить владельцем ({err}) — его могут прочитать другие локальные пользователи",
+      "en": "Could not restrict the artifact directory to its owner ({err}) — other local users may be able to read it",
+      "ru_verdict": "Артефакты прогона лежат без ограничения доступа: их могут прочитать другие локальные пользователи этой машины.",
+      "en_verdict": "This run's artefacts are not owner-restricted: other local users on this machine may be able to read them."
+    },
+    "system.tracing_unavailable": {
+      "lvl": "warn",
+      "cat": "system",
+      "modules": [
+        "otel"
+      ],
+      "degrades": true,
+      "ru": "Трассировка не запустилась ({err}) — прогон пойдёт без неё",
+      "en": "Tracing did not start ({err}) — the run continues without it",
+      "ru_verdict": "Распределённая трассировка была настроена, но не запустилась: спанов этого прогона в коллекторе нет.",
+      "en_verdict": "Distributed tracing was configured but did not start: this run produced no spans in the collector."
+    },
+    "system.chat_projection_failed": {
+      "lvl": "warn",
+      "cat": "system",
+      "modules": [
+        "store"
+      ],
+      "degrades": true,
+      "ru": "Проекция беседы не записана ({err}) — беседа не появится в библиотеке",
+      "en": "The chat projection was not written ({err}) — this conversation will not appear in the library",
+      "ru_verdict": "Беседа этого прогона не попала в библиотеку: проекция в store не записалась.",
+      "en_verdict": "This run's conversation did not reach the library: its store projection was not written."
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
