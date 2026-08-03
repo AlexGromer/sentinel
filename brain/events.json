@@ -1731,6 +1731,48 @@
       "en": "The chat projection was not written ({err}) — this conversation will not appear in the library",
       "ru_verdict": "Беседа этого прогона не попала в библиотеку: проекция в store не записалась.",
       "en_verdict": "This run's conversation did not reach the library: its store projection was not written."
+    },
+    "fatal.store_unreachable": {
+      "lvl": "error",
+      "cat": "system",
+      "modules": [
+        "health"
+      ],
+      "exit": 3,
+      "ru": "Хранилище объявлено, но не отвечает: {reason}",
+      "en": "A store was declared but does not answer: {reason}"
+    },
+    "fatal.llm_required_unreachable": {
+      "lvl": "error",
+      "cat": "llm",
+      "modules": [
+        "health"
+      ],
+      "exit": 3,
+      "ru": "Этот режим требует модель, а её нет: {reason}. Без неё цель была бы молча проигнорирована, и прогон завершился бы успехом, отвечая не на тот вопрос",
+      "en": "This mode needs a model and there is none: {reason}. Without one the goal would be silently ignored and the run would exit successfully, answering a question nobody asked"
+    },
+    "fatal.orchestrator_unreachable": {
+      "lvl": "error",
+      "cat": "system",
+      "modules": [
+        "health"
+      ],
+      "exit": 3,
+      "ru": "Гейт карты включён, но оркестратор не отвечает: {reason}. Разрешение спрашивать не у кого",
+      "en": "The map gate is on but the orchestrator does not answer: {reason}. There is nobody to ask for permission"
+    },
+    "system.health_check_skipped": {
+      "lvl": "warn",
+      "cat": "system",
+      "modules": [
+        "health"
+      ],
+      "degrades": true,
+      "ru": "Проверка компонента «{component}» пропущена по SENTINEL_HEALTH_SKIP — прогон идёт без неё",
+      "en": "The health check for {component} was skipped via SENTINEL_HEALTH_SKIP — the run proceeds without it",
+      "ru_verdict": "Часть стартовых проверок была отключена вручную: неработоспособный компонент мог остаться незамеченным.",
+      "en_verdict": "Some start-up checks were disabled by hand: an unusable component may have gone unnoticed."
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

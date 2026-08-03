@@ -15,6 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from . import runcontrol
 from .eventlog import log
+from .health import check as _health_check
 from .executor import make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
@@ -416,6 +417,15 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     log("run.chat_resume", conversation_id=conversation_id)
                     # Compiled with the head chosen from the PINNED objective, which is why the peek
                     # above used none: this is the first point at which the right head is known.
+                    # HEALTH-001, the case main() structurally cannot see: a WARM chat turn can
+                    # carry only a message while its objective lives pinned in checkpointer state,
+                    # so this run's environment holds no GOAL while the turn is about to author
+                    # against one. Placed HERE, immediately before the graph authors anything,
+                    # rather than earlier in the turn: refusals must run most-specific first, and
+                    # an earlier placement swallowed `fatal.chat_no_target` — telling someone their
+                    # model was missing when what they had actually forgotten was the address.
+                    if _health_check("chat", True):
+                        return 3   # health.check has already reported which component and why
                     warm_app = build_graph(_NoBrowser(), planner, tx_write,
                                            scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
                     final = warm_app.invoke({"messages": [user_msg], "goal": turn_goal,
@@ -425,6 +435,10 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     if not target:
                         log("fatal.chat_no_target")
                         return 2
+                    # HEALTH-001, after the target check on purpose — see the note in the warm
+                    # branch. A missing address is the more specific failure and must be named first.
+                    if _health_check("chat", True):
+                        return 3   # health.check has already reported which component and why
                     log("run.chat_cold", conversation_id=conversation_id, target=target)
                     trace_path = str((out / "trace.zip").resolve())
                     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
@@ -940,6 +954,21 @@ def main() -> int:
         except Exception as e:
             log("fatal.run_config_invalid", path=run_config, error=e)
             return 3
+
+    # --- HEALTH-001: refuse rather than degrade ------------------------------------------------
+    # HERE, and not in agentctl, for a reason that is easy to get wrong: `--run-config` can set
+    # GOAL/DESCRIBE from a YAML file, and that merge happens directly above this line, inside the
+    # brain. A check in Go inspecting `--goal` would be right for the simple case and wrong for
+    # exactly the runs most worth checking. This is also the one point all four launch paths
+    # converge on — agentctl, control-api (which shells out to agentctl), the standalone
+    # orchestrator, and `python -m brain` run directly.
+    #
+    # The case that made this necessary: goal mode with no model. make_backend returns None, the
+    # planner silently falls back to the heuristic, the goal is ignored, and the run exits 0 — a
+    # success that answered a question nobody asked.
+    _objective = bool(os.environ.get("GOAL", "").strip() or os.environ.get("DESCRIBE", "").strip())
+    if _health_check(run_mode, _objective):
+        return 3   # health.check has already reported which component and why
 
     # --- no-browser modes (M3/M4) --------------------------------------------
     if run_mode == "clear-quarantine":
