@@ -103,6 +103,17 @@ func (s *server) routes() []routeSpec {
 		{pattern: "POST /v1/logout", access: accessOpen, h: s.handleLogout,
 			why: "ends whatever token was sent. Requiring a live one would make logging out fail exactly when it matters — on an expired or already-dropped session"},
 		{pattern: "GET /v1/me", access: accessAuthed, h: s.handleMe},
+		// ADR-111: the live video mode, proxied from the browser service. `authed`, not `open`: the
+		// browser service's live port has no credential of its own (same as its CDP port — internal
+		// network is the whole control), so this route IS the credential. A screencast shows whatever
+		// the browser has open, including a logged-in application under test.
+		//
+		// No `domain`: these name no row. The picture is of the browser SERVICE, which is shared by
+		// construction — one browser, whoever is driving it — and a per-run scoping here would be a
+		// promise the topology cannot keep. That is stated in the UI rather than implied.
+		{pattern: "GET /v1/live/status", access: accessAuthed, h: s.handleLiveStatus},
+		{pattern: "GET /v1/live/frame.jpg", access: accessAuthed, h: s.handleLiveFrame},
+		{pattern: "GET /v1/live/mjpeg", access: accessAuthed, h: s.handleLiveStream},
 		{pattern: "POST /v1/users", access: accessAdmin, h: s.handleCreateUser},
 		{pattern: "GET /v1/users", access: accessAdmin, h: s.handleListUsers},
 		{pattern: "DELETE /v1/users/{id}", access: accessAdmin, h: s.handleDeleteUser},

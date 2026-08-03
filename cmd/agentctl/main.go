@@ -219,8 +219,17 @@ func writeTraceRemovedMarker(runDir, reason string, keep, ttlHours int) {
 		"removed_by": "retention", "reason": reason, "keep": keep, "ttl_hours": ttlHours,
 		"removed_at": time.Now().UTC().Format(time.RFC3339),
 	}
-	if b, err := json.Marshal(m); err == nil {
-		_ = os.WriteFile(filepath.Join(runDir, "trace-removed.json"), b, 0o600)
+	b, err := json.Marshal(m)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(runDir, "trace-removed.json"), b, 0o600)
+	}
+	// Best-effort, but SAID. This marker exists for exactly one reason: to stop "swept" and "never
+	// captured" looking identical. If the write fails after the trace has already been deleted, the
+	// run silently returns to the state this function was written to fix — so the failure is
+	// reported at the one moment the cause is still knowable.
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[agentctl] trace-removed marker not written for %s: %v — "+
+			"that run will look as though it never had a trace\n", runDir, err)
 	}
 }
 

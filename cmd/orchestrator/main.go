@@ -213,7 +213,28 @@ func main() {
 	orch := newOrchestrator(*planLimit, *healLimit, *totalLimit)
 	g := grpc.NewServer()
 	pb.RegisterRunControlServer(g, orch)
-	go func() { _ = g.Serve(lis) }()
+	// The serve error is REPORTED and it KILLS THE PROCESS, rather than being discarded into a
+	// goroutine nobody hears from.
+	//
+	// This is the whole control channel: budget reconciliation, the abort signal, operator
+	// takeover/return and the map-decision gate all arrive over it. With `_ = g.Serve(lis)`, a
+	// failure to serve left main() sailing on into StartRun and the watchdog loop with a brain
+	// pointed at a socket nothing was listening to — and every one of those features degrades to
+	// "continue" without a word. That is the same shape as the incident that made grpcaddr.py
+	// necessary: a channel that was dead in every deployment for months because both ends were
+	// built to never complain.
+	//
+	// GracefulStop makes a normal shutdown return nil from Serve, so the only path that reaches the
+	// exit below is a real failure. store-gateway's identical call has always been checked
+	// (cmd/store-gateway/main.go) — this was an inconsistency between two files, not a convention.
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- g.Serve(lis) }()
+	go func() {
+		if err := <-serveErr; err != nil {
+			fmt.Fprintf(os.Stderr, "orchestrator: serve %s: %v\n", sock, err)
+			os.Exit(1)
+		}
+	}()
 	defer g.GracefulStop()
 	orch.StartRun(context.Background(), &pb.StartRunRequest{
 		RunId: runID, PlanTokenLimit: *planLimit, HealTokenLimit: *healLimit, TotalTokenLimit: *totalLimit})

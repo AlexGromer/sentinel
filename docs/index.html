@@ -3509,7 +3509,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     /* Switching is a VIEW change, so nothing is refetched and nothing is lost: the frame stays the
        frame that was last received, the action list keeps its rows. Reloading here would make the
        toggle destructive, which is the opposite of what a toggle is for. */
-    if (mode === 'video') lvRenderVideo();
+    /* ADR-111: leaving the video mode must CLOSE the stream. A screencast nobody is looking at still
+       costs the browser every frame it encodes, and an abandoned reader would hold the connection
+       open for the tab's lifetime. */
+    if (mode === 'video') lvRenderVideo(); else lvVideoStop();
   }
   ['frame','actions','video'].forEach(function(m){
     var b = ge('lv-mode-'+m);
@@ -3550,15 +3553,119 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     box.scrollTop = box.scrollHeight;
   }
 
-  /* Video is the one mode with no backend yet (there is no CDP screencast in the executor). It says so
-     PLAINLY instead of showing an empty box: a mode that looks broken and a mode that is not built are
-     different things, and only one of them is a bug worth reporting. */
-  function lvRenderVideo(){
+  /* ---- ADR-111: the video mode, live from the browser service --------------------------------
+     A real screencast now exists (cdp-service.ts) and control-api proxies it with the credential.
+     Two facts shape this code:
+
+     1. `<img src>` CANNOT be used, even though MJPEG is exactly what an <img> renders natively: an
+        <img> carries no Authorization header, and the stream is token-gated. So the multipart is
+        read with fetch + a stream reader and each part becomes a blob URL. Same reason lvShowFrame
+        fetches instead of pointing an <img> at the artifact route.
+     2. A deployment WITHOUT a browser service is the normal single-container case, not a fault. The
+        status route answers `available:false` with a reason, and that reason is shown as-is — "not
+        configured here" and "configured and broken" must not look the same. */
+  var lvVideoAbort = null, lvVideoUrl = null;
+
+  function lvVideoStop(){
+    if (lvVideoAbort){ try { lvVideoAbort.abort(); } catch(e){} lvVideoAbort = null; }
+    if (lvVideoUrl){ URL.revokeObjectURL(lvVideoUrl); lvVideoUrl = null; }
+  }
+
+  async function lvRenderVideo(){
     var box = ge('lv-video'); if (!box) return;
-    box.innerHTML = '<p class="hint">'
-      + bi('видео-режим (CDP screencast) пока не поддерживается этим развёртыванием — исполнитель не открывает CDP-сессию. Пока это доступно как поток КАДРОВ: вкладка «Браузер» обновляется на каждом шаге.',
-           'the video mode (CDP screencast) is not supported by this deployment yet — the executor opens no CDP session. Until then it is available as a stream of FRAMES: the Browser tab updates on every step.')
-      + '</p>';
+    lvVideoStop();
+    if (!capiBase()){
+      box.innerHTML = '<p class="hint">'+bi('нет подключения к control-API','not connected to a control-API')+'</p>';
+      return;
+    }
+    box.innerHTML = '<p class="hint">'+bi('подключаюсь к живому виду…','connecting to the live view…')+'</p>';
+
+    var st;
+    try {
+      var rs = await fetch(capiBase()+'/v1/live/status', {headers: authHdr()});
+      st = await rs.json();
+    } catch(e){
+      box.innerHTML = '<p class="fail">'+bi('не удалось спросить состояние живого вида: ','could not ask for the live-view state: ')+esc(e.message)+'</p>';
+      return;
+    }
+    if (!st || !st.available){
+      /* Not built vs not configured vs broken — the reason comes from the server, unedited. */
+      box.innerHTML = '<p class="hint">'
+        + bi('видео недоступно в этом развёртывании: ','video is unavailable in this deployment: ')
+        + esc((st && st.reason) || '?')
+        + '<br><br>' + bi('Видео отдаёт сервис браузера. Поднимите его и укажите адрес control-API:',
+                          'Video comes from the browser service. Start it and point control-api at it:')
+        + '<br><code>docker compose --profile browser up -d browser</code>'
+        + '<br><code>CONTROL_API_CDP_LIVE=http://browser:9224</code>'
+        + '<br><br>' + bi('Пока его нет, вкладка «Браузер» показывает по кадру на каждый шаг — это работает всегда.',
+                          'Until then the Browser tab shows one frame per step, which always works.')
+        + '</p>';
+      return;
+    }
+    var up = st.upstream || {};
+    if (!up.has_page){
+      box.innerHTML = '<p class="hint">'+bi('браузер поднят, но страницы ещё нет — запустите прогон.',
+                                            'the browser is up but has no page yet — start a run.')+'</p>';
+      return;
+    }
+
+    box.innerHTML = '<img id="lv-video-img" alt="live" style="max-width:100%;border-radius:8px">'
+                  + '<div class="libmeta" id="lv-video-meta"></div>';
+    var img = ge('lv-video-img'), meta = ge('lv-video-meta');
+    lvVideoAbort = new AbortController();
+    var frames = 0, t0 = Date.now();
+
+    try {
+      var r = await fetch(capiBase()+'/v1/live/mjpeg', {headers: authHdr(), signal: lvVideoAbort.signal});
+      if (!r.ok || !r.body) throw new Error('HTTP '+r.status);
+      var reader = r.body.getReader();
+      var buf = new Uint8Array(0);
+      var BOUND = '--sentinelframe';
+      for(;;){
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        var merged = new Uint8Array(buf.length + chunk.value.length);
+        merged.set(buf); merged.set(chunk.value, buf.length);
+        buf = merged;
+        /* Parse whole parts out of the buffer; a partial tail stays for the next chunk. Working on
+           bytes rather than text throughout — decoding JPEG payloads as UTF-8 would corrupt them. */
+        for(;;){
+          var head = lvIndexOf(buf, BOUND);
+          if (head < 0) break;
+          var hdrEnd = lvIndexOf(buf, '\r\n\r\n', head);
+          if (hdrEnd < 0) break;
+          var hdrs = new TextDecoder().decode(buf.subarray(head, hdrEnd));
+          var m = /Content-Length:\s*(\d+)/i.exec(hdrs);
+          if (!m) { buf = buf.subarray(hdrEnd + 4); continue; }
+          var len = parseInt(m[1], 10), start = hdrEnd + 4;
+          if (buf.length < start + len) break;          /* the frame has not fully arrived yet */
+          var bytes = buf.slice(start, start + len);
+          buf = buf.subarray(start + len);
+          var url = URL.createObjectURL(new Blob([bytes], {type:'image/jpeg'}));
+          var old = lvVideoUrl; lvVideoUrl = url; img.src = url;
+          if (old) URL.revokeObjectURL(old);            /* revoked AFTER the swap, never before */
+          frames++;
+          if (meta) meta.textContent = frames + bi(' кадр(ов), ',' frame(s), ')
+                                     + Math.round((Date.now()-t0)/1000) + bi(' с',' s');
+        }
+      }
+      if (meta) meta.textContent += bi(' — поток закрыт',' — stream closed');
+    } catch(e){
+      if (e && e.name === 'AbortError') return;         /* the operator switched modes; not an error */
+      box.innerHTML = '<p class="fail">'+bi('поток прерван: ','the stream broke: ')+esc(e.message)+'</p>';
+    }
+  }
+
+  /** Index of a plain-ASCII needle inside a byte array, from `from`. */
+  function lvIndexOf(hay, needle, from){
+    var n = [], i;
+    for (i=0;i<needle.length;i++) n.push(needle.charCodeAt(i));
+    for (i=(from||0); i<=hay.length-n.length; i++){
+      var ok = true;
+      for (var j=0;j<n.length;j++) if (hay[i+j] !== n[j]) { ok = false; break; }
+      if (ok) return i;
+    }
+    return -1;
   }
 
   /* The run flow: the same events, laid out so the two audiences are visible at once rather than
