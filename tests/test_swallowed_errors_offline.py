@@ -115,6 +115,15 @@ _allow("otel.py::extract_context::0",
        "trace-context extraction; a miss costs cross-process correlation, not the run")
 _allow("executor.py::Executor.close::0",
        "the except body IS the recovery: it falls through to proc.kill()")
+# 7. brain/health.py — caught by this gate the hour after it was written, which is the gate working.
+#    Both handlers RETURN the reason as a string; the caller reports it with the component and the
+#    run's mode, which is more useful than this file restating it one frame earlier.
+_allow("health.py::_llm_configured::0",
+       "a backend that cannot even be constructed is not a usable one; check() reports the component")
+_allow("health.py::_executor_runnable::0",
+       "returns the parse failure as the reason; check() reports it with the component")
+_allow("health.py::_grpc_answers::0",
+       "returns the connection failure as the reason; check() reports it with the component")
 _allow("eventlog.py::_render::0",
        "falls back to the unformatted template — the message is still emitted, only unfilled")
 

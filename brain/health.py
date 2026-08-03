@@ -69,25 +69,25 @@ def _skipped() -> "set[str]":
 
 
 def _llm_configured() -> bool:
-    """Would make_backend('planner') return a real backend?
+    """Would this run get a real planner backend? ASKS make_backend rather than mirroring it.
 
-    Mirrors brain/llm.py's own branches rather than probing the network: the mandatory tier must cost
-    nothing and must work in the air-gapped bundle, where the endpoint is a LAN address with no key.
-    Being a mirror is a liability — llm.py can change underneath it — so the gate that covers this
-    asserts the two agree rather than trusting the copy.
+    The first version copied make_backend's branches to avoid constructing anything. It was wrong
+    within the hour, and the way it was wrong is the argument against ever doing that: a test (and
+    the MCP sampling path) can inject a backend WITHOUT env vars, so the copy read "no model" while
+    the product had one, and a chat turn stating a goal after small talk was refused. The mirror
+    was checking the configuration; the question is whether a backend exists.
+
+    Costs nothing a run does not already pay: make_backend reads config and constructs a client
+    object — no network, no request. It logs its own reason when it returns None (no key, no model,
+    unknown provider), so the operator gets the specific cause without this file restating it.
     """
-    def _env(name: str) -> str:
-        return os.environ.get(f"LLM_{name}_PLANNER") or os.environ.get(f"LLM_{name}") or ""
-
-    provider = (_env("BACKEND") or "anthropic").lower()
-    if provider == "anthropic":
-        return bool(_env("API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
-    if provider == "openai":
-        if not (_env("MODEL")):
-            return False
-        return bool(_env("API_KEY") or os.environ.get("OPENAI_API_KEY") or _env("BASE_URL"))
-    # An unknown provider is not "configured" — make_backend logs backend_unknown and returns None.
-    return False
+    try:
+        from .llm import make_backend
+        return make_backend("planner") is not None
+    except Exception:
+        # A backend that cannot even be constructed is not a usable one. Reported by the caller with
+        # the component and the run's mode, which is more useful than an SDK import error here.
+        return False
 
 
 def _executor_runnable() -> "str | None":

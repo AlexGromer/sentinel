@@ -393,17 +393,6 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                              planner, rc, tx_write)
                     kind, objective = ("goal", goal) if goal else ("describe", describe)
                 intent = {"kind": kind, "text": objective}
-                # HEALTH-001, second call site — the one case the gate in main() structurally cannot
-                # see. A WARM chat turn can carry only a message while its objective lives pinned in
-                # checkpointer state, so this run's environment holds no GOAL and no DESCRIBE while
-                # the turn is about to author against a pinned one. Gating on the env alone would let
-                # through exactly the run most worth refusing.
-                #
-                # Placed after `pinned`/`kind` resolve and before any authoring, so a refusal costs
-                # nothing and changes nothing. A purely conversational turn has already returned
-                # above, via _run_converse — that path is designed to degrade, and must not be gated.
-                if _health_check("chat", True):
-                    return 3   # health.check has already reported which component and why
                 # The turn's instruction is its MESSAGE; a turn that sends none is restating the
                 # objective, which is what every turn did before the two were separated.
                 turn_text = message or objective
@@ -428,6 +417,15 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     log("run.chat_resume", conversation_id=conversation_id)
                     # Compiled with the head chosen from the PINNED objective, which is why the peek
                     # above used none: this is the first point at which the right head is known.
+                    # HEALTH-001, the case main() structurally cannot see: a WARM chat turn can
+                    # carry only a message while its objective lives pinned in checkpointer state,
+                    # so this run's environment holds no GOAL while the turn is about to author
+                    # against one. Placed HERE, immediately before the graph authors anything,
+                    # rather than earlier in the turn: refusals must run most-specific first, and
+                    # an earlier placement swallowed `fatal.chat_no_target` — telling someone their
+                    # model was missing when what they had actually forgotten was the address.
+                    if _health_check("chat", True):
+                        return 3   # health.check has already reported which component and why
                     warm_app = build_graph(_NoBrowser(), planner, tx_write,
                                            scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
                     final = warm_app.invoke({"messages": [user_msg], "goal": turn_goal,
@@ -437,6 +435,10 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     if not target:
                         log("fatal.chat_no_target")
                         return 2
+                    # HEALTH-001, after the target check on purpose — see the note in the warm
+                    # branch. A missing address is the more specific failure and must be named first.
+                    if _health_check("chat", True):
+                        return 3   # health.check has already reported which component and why
                     log("run.chat_cold", conversation_id=conversation_id, target=target)
                     trace_path = str((out / "trace.zip").resolve())
                     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
