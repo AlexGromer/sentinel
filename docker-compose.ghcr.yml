@@ -114,6 +114,11 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
       CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
+      # ADR-111: where the live VIDEO mode gets its frames. Point it at the `browser` service's live
+      # port; unset means this deployment has no browser service, and the UI says exactly that
+      # instead of showing an empty box.
+      #   CONTROL_API_CDP_LIVE=http://browser:9224
+      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE:-}
       PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
     ports:
       - "127.0.0.1:8090:8090"

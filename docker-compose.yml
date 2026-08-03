@@ -138,6 +138,11 @@ services:
       # ADR-062/063 service tier: point at the `store` profile below to enable PUT/GET /v1/config and
       # persisted-config-driven runs. Unset (default) = standalone tier (config is 501, per-run llm still works).
       CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
+      # ADR-111: where the live VIDEO mode gets its frames. Point it at the `browser` service's live
+      # port; unset means this deployment has no browser service, and the UI says exactly that
+      # instead of showing an empty box.
+      #   CONTROL_API_CDP_LIVE=http://browser:9224
+      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE:-}
     ports:
       - "127.0.0.1:8090:8090"
 
