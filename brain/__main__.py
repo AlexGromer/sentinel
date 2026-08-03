@@ -15,6 +15,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from . import runcontrol
 from .eventlog import log
+from .health import check as _health_check
 from .executor import make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
@@ -392,6 +393,17 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                              planner, rc, tx_write)
                     kind, objective = ("goal", goal) if goal else ("describe", describe)
                 intent = {"kind": kind, "text": objective}
+                # HEALTH-001, second call site — the one case the gate in main() structurally cannot
+                # see. A WARM chat turn can carry only a message while its objective lives pinned in
+                # checkpointer state, so this run's environment holds no GOAL and no DESCRIBE while
+                # the turn is about to author against a pinned one. Gating on the env alone would let
+                # through exactly the run most worth refusing.
+                #
+                # Placed after `pinned`/`kind` resolve and before any authoring, so a refusal costs
+                # nothing and changes nothing. A purely conversational turn has already returned
+                # above, via _run_converse — that path is designed to degrade, and must not be gated.
+                if _health_check("chat", True):
+                    return 3   # health.check has already reported which component and why
                 # The turn's instruction is its MESSAGE; a turn that sends none is restating the
                 # objective, which is what every turn did before the two were separated.
                 turn_text = message or objective
@@ -940,6 +952,21 @@ def main() -> int:
         except Exception as e:
             log("fatal.run_config_invalid", path=run_config, error=e)
             return 3
+
+    # --- HEALTH-001: refuse rather than degrade ------------------------------------------------
+    # HERE, and not in agentctl, for a reason that is easy to get wrong: `--run-config` can set
+    # GOAL/DESCRIBE from a YAML file, and that merge happens directly above this line, inside the
+    # brain. A check in Go inspecting `--goal` would be right for the simple case and wrong for
+    # exactly the runs most worth checking. This is also the one point all four launch paths
+    # converge on — agentctl, control-api (which shells out to agentctl), the standalone
+    # orchestrator, and `python -m brain` run directly.
+    #
+    # The case that made this necessary: goal mode with no model. make_backend returns None, the
+    # planner silently falls back to the heuristic, the goal is ignored, and the run exits 0 — a
+    # success that answered a question nobody asked.
+    _objective = bool(os.environ.get("GOAL", "").strip() or os.environ.get("DESCRIBE", "").strip())
+    if _health_check(run_mode, _objective):
+        return 3   # health.check has already reported which component and why
 
     # --- no-browser modes (M3/M4) --------------------------------------------
     if run_mode == "clear-quarantine":
