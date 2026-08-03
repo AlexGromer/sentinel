@@ -336,11 +336,20 @@ def test_a_frame_and_a_stream_arrive_while_a_run_drives_the_browser():
 
         streamer = threading.Thread(target=collect, daemon=True)
         streamer.start()
-        time.sleep(6)   # let the run attach and open a page
 
-        code, body = _get(f"http://127.0.0.1:{st.api_port}/v1/live/status", TOKEN)
-        doc = json.loads(body)
-        up = doc.get("upstream") or {}
+        # WAIT FOR THE STATE, not for a guessed number of seconds. This slept 6s and measured a page
+        # that appears at about 6s — a bet, and one that loses on a loaded machine or a slower
+        # runner. The project has paid for that shape before (CI-FLAKE-HUB: two guessed sleeps of 25
+        # and 22 seconds). The ceiling is generous and, when it is reached, says plainly that the run
+        # never opened a page rather than blaming the thing being tested.
+        deadline, doc, up = time.time() + 60, {}, {}
+        while time.time() < deadline:
+            code, body = _get(f"http://127.0.0.1:{st.api_port}/v1/live/status", TOKEN)
+            doc = json.loads(body)
+            up = doc.get("upstream") or {}
+            if up.get("has_page"):
+                break
+            time.sleep(0.5)
         assert not up.get("error"), f"the page lookup failed and said so: {up.get('error')}"
         assert up.get("has_page") is True, (
             f"no page seen while a run was driving the browser: {doc}. The observer connection "

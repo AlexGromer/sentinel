@@ -1732,16 +1732,6 @@
       "ru_verdict": "Беседа этого прогона не попала в библиотеку: проекция в store не записалась.",
       "en_verdict": "This run's conversation did not reach the library: its store projection was not written."
     },
-    "fatal.executor_not_runnable": {
-      "lvl": "error",
-      "cat": "browser",
-      "modules": [
-        "health"
-      ],
-      "exit": 3,
-      "ru": "Исполнитель не запускается: {reason}",
-      "en": "The executor cannot be started: {reason}"
-    },
     "fatal.store_unreachable": {
       "lvl": "error",
       "cat": "system",

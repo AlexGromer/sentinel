@@ -118,10 +118,11 @@ _allow("executor.py::Executor.close::0",
 # 7. brain/health.py — caught by this gate the hour after it was written, which is the gate working.
 #    Both handlers RETURN the reason as a string; the caller reports it with the component and the
 #    run's mode, which is more useful than this file restating it one frame earlier.
+_allow("executor.py::make_executor::0",
+       "records the parse failure as `why` and raises it four lines later — the same "
+       "diagnostic-one-level-up shape as the replay.py group above")
 _allow("health.py::_llm_configured::0",
        "a backend that cannot even be constructed is not a usable one; check() reports the component")
-_allow("health.py::_executor_runnable::0",
-       "returns the parse failure as the reason; check() reports it with the component")
 _allow("health.py::_grpc_answers::0",
        "returns the connection failure as the reason; check() reports it with the component")
 _allow("eventlog.py::_render::0",

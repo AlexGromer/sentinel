@@ -40,7 +40,6 @@ import shutil
 from .eventlog import log
 
 # Components, named once so the skip list, the probes and the messages cannot drift apart.
-EXECUTOR = "executor"
 STORE = "store"
 LLM = "llm"
 ORCHESTRATOR = "orchestrator"
@@ -90,36 +89,6 @@ def _llm_configured() -> bool:
         return False
 
 
-def _executor_runnable() -> "str | None":
-    """Can the executor command actually be run? Returns a reason when it cannot.
-
-    Deliberately NOT a spawn: initialising the executor launches a real browser, which is expensive
-    and is exactly what happens today — too late, and after the run has already been reported as
-    started. A path check catches the case that actually occurs (a wrong PW_EXECUTOR_CMD, a missing
-    dist/ because nobody ran the build) at a cost of two stat calls.
-    """
-    cmd = os.environ.get("PW_EXECUTOR_CMD", "").strip()
-    if not cmd:
-        return "PW_EXECUTOR_CMD is not set"
-    try:
-        parts = shlex.split(cmd)
-    except ValueError as exc:
-        return f"PW_EXECUTOR_CMD is not parseable: {exc}"
-    if not parts:
-        return "PW_EXECUTOR_CMD is empty"
-    interpreter = parts[0]
-    if not (shutil.which(interpreter) or pathlib.Path(interpreter).exists()):
-        return f"{interpreter!r} is not on PATH and is not a file"
-    # The script argument, when there is one. `node dist/server.js` is the shipped shape.
-    for arg in parts[1:]:
-        if arg.startswith("-"):
-            continue
-        if not pathlib.Path(arg).exists():
-            return f"{arg!r} does not exist — has pw-executor been built?"
-        break
-    return None
-
-
 def _grpc_answers(target: str, timeout: float = 2.0) -> "str | None":
     """Does something answer gRPC at `target`? Returns a reason when it does not.
 
@@ -153,7 +122,12 @@ def requirements(run_mode: str, has_objective: bool) -> "set[str]":
     if run_mode in {"clear-quarantine", "export-spec", "report", "calibrate", "import", "revisions"}:
         return set()
 
-    need = {EXECUTOR}
+    # The executor is deliberately NOT required here. Its check was a path test on the executor
+    # command — a SURROGATE for "will this run get an executor", and wrong in the one place the two
+    # differ: a caller that substitutes make_executor (the tests do; an injected executor would)
+    # never runs that command at all. The validation moved INTO make_executor, where it sees the
+    # command actually being used, and `fatal.executor_cmd_unset` already covers the unset case.
+    need = set()
     if has_objective:
         need.add(LLM)
         # The map gate asks a human through the orchestrator. Only required when it is switched on
@@ -169,9 +143,7 @@ def requirements(run_mode: str, has_objective: bool) -> "set[str]":
 
 def _report(component: str, reason: str) -> None:
     """Emit the fatal code for a component, as a literal the catalogue can vouch for."""
-    if component == EXECUTOR:
-        log("fatal.executor_not_runnable", reason=reason)
-    elif component == STORE:
+    if component == STORE:
         log("fatal.store_unreachable", reason=reason)
     elif component == LLM:
         log("fatal.llm_required_unreachable", reason=reason)
@@ -197,9 +169,7 @@ def check(run_mode: str, has_objective: bool) -> "list[tuple[str, str]]":
             log("system.health_check_skipped", component=component)
             continue
 
-        if component == EXECUTOR:
-            why = _executor_runnable()
-        elif component == LLM:
+        if component == LLM:
             why = None if _llm_configured() else (
                 "no usable planner backend: set LLM_BACKEND/LLM_MODEL/LLM_BASE_URL, or an API key")
         elif component == STORE:

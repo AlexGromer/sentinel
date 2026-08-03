@@ -131,8 +131,40 @@ class McpExecutor:
 
 
 def make_executor(cmd: str):
-    """McpExecutor when MCP_TRANSPORT=mcp (ADR-016), else the default JSON-RPC Executor."""
+    """McpExecutor when MCP_TRANSPORT=mcp (ADR-016), else the default JSON-RPC Executor.
+
+    HEALTH-001: the command is validated HERE, in the function that uses it, rather than in a
+    start-up health check. That placement matters twice over. It is the only place that sees the
+    command actually being used, so a caller who substitutes this function — the tests do, and so
+    would an injected executor — bypasses the validation naturally instead of tripping over a check
+    that was reasoning about a string nobody was going to run. And it turns the failure a person
+    actually hits (a fresh clone where `npm run build` was never run) from a Node module-resolution
+    error into a sentence naming the missing file.
+    """
     import os
+    import shlex
+    import pathlib as _pathlib
+    import shutil
+
+    why = None
+    try:
+        parts = shlex.split(cmd or "")
+    except ValueError as exc:
+        parts, why = [], f"PW_EXECUTOR_CMD is not parseable: {exc}"
+    if not why and not parts:
+        why = "PW_EXECUTOR_CMD is empty"
+    if not why and not (shutil.which(parts[0]) or _pathlib.Path(parts[0]).exists()):
+        why = f"{parts[0]!r} is not on PATH and is not a file"
+    if not why:
+        for arg in parts[1:]:
+            if arg.startswith("-"):
+                continue
+            if not _pathlib.Path(arg).exists():
+                why = f"{arg!r} does not exist — has pw-executor been built? (npm --prefix pw-executor run build)"
+            break
+    if why:
+        raise RuntimeError(f"the executor cannot be started: {why}")
+
     if os.environ.get("MCP_TRANSPORT") == "mcp":
         return McpExecutor(cmd)
     return Executor(cmd)
