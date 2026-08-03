@@ -1601,12 +1601,37 @@ try {
     await idPage.click('.rail a[data-nav="settings"]');
     await idPage.waitForTimeout(200);
   };
+  // WAIT FOR THE STATE THE ASSERTIONS DEPEND ON, not for a guessed interval. This slept 800 ms, and
+  // POST /v1/login MEASURES 1.0-1.6 s on this hardware because verifying a password is 600 000
+  // PBKDF2 iterations by design (internal/identity/password.go). So the three identity checks were
+  // asserting against a page still showing «вхожу…», and they failed for a reason that had nothing
+  // to do with what they claim to measure — a slow login is not a broken one.
+  //
+  // Why nobody saw it: CI's criterion for this gate is a FLOOR on the number of checks that passed
+  // (>= 45 of 57), so a check that fails every time still leaves the step green. A gate that cannot
+  // fail and a gate whose failures are not read are the same gate.
   const signIn = async (name, password) => {
     await openSettings();
     await idPage.fill('#id-name', name);
     await idPage.fill('#id-pass', password);
     await idPage.click('#id-login');
-    await idPage.waitForTimeout(800);
+    // The status line, not the identity line. Waiting for #id-who to CHANGE looks equivalent and is
+    // not: the page runs its own idRefresh() on load, so an unrelated repaint satisfies that wait
+    // while the login request is still in flight — measured, and it is how the first attempt at this
+    // fix still failed. #id-status is written only by the click handler, so ✓/✗ is the one signal
+    // that belongs to this action.
+    //
+    // Both outcomes are accepted deliberately: a wait that only accepts success turns a genuine
+    // refusal into a timeout, and a timeout names the harness instead of the product.
+    await idPage.waitForFunction(() => {
+      const st = document.getElementById('id-status');
+      return !!st && /[✓✗]/.test(st.textContent || '');
+    }, null, { timeout: 30_000 });
+    // ✓ is set BEFORE the handler awaits idRefresh(), so the identity line is repainted a moment
+    // later. #id-logout appears only for a signed-in session, so it is the paint's own signal.
+    if (/✓/.test(await idPage.locator('#id-status').innerText())) {
+      await idPage.locator('#id-logout').waitFor({ state: 'visible', timeout: 15_000 });
+    }
   };
 
   await check('identity: the hub can sign in, and says who is working', async () => {

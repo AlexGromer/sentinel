@@ -357,29 +357,29 @@
       }
     },
     {
-      "id": "webui-profile",
+      "id": "webui-service",
       "group": "Deployment",
       "severity": "medium",
       "title_ru": "Браузерный UI (webui)",
       "title_en": "Browser UI (webui)",
-      "how_ru": "docker compose --profile webui up — раздать хаб и мастер локально.",
-      "how_en": "docker compose --profile webui up — serve the hub and wizard locally.",
+      "how_ru": "docker compose up — хаб и мастер раздаются локально на :8088, без флагов.",
+      "how_en": "docker compose up — the hub and wizard are served locally on :8088, no flags.",
       "access": {
-        "kind": "profile",
+        "kind": "service",
         "ref": "webui"
       }
     },
     {
-      "id": "store-profile",
+      "id": "store-service",
       "group": "Deployment",
       "severity": "medium",
       "title_ru": "Постоянное хранилище (store)",
       "title_en": "Persistent store",
-      "how_ru": "docker compose --profile store up — store-gateway для персистентности прогонов/сценариев/метрик (ADR-050).",
-      "how_en": "docker compose --profile store up — the store-gateway for persisting runs/scenarios/metrics (ADR-050).",
+      "how_ru": "docker compose up — store-gateway поднимается и подключается сам; control-api уже указывает на него (ADR-050).",
+      "how_en": "docker compose up — the store-gateway comes up and is wired in; control-api already points at it (ADR-050).",
       "access": {
-        "kind": "profile",
-        "ref": "store"
+        "kind": "service",
+        "ref": "store-gateway"
       }
     },
     {

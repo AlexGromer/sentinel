@@ -51,9 +51,9 @@ docker compose build                                      # build the image once
 docker compose run --rm sentinel --help                   # agentctl help
 docker compose run --rm sentinel run \
     --target "https://your-app.example.com"              # explore against a real AUT
+docker compose up                                         # THE PRODUCT: control-api + store + browser + hub
 docker compose --profile demo up                          # zero-dep demo (fixture file://)
 docker compose --profile ollama up -d ollama             # local model (OpenAI-compat)
-docker compose --profile webui up                        # setup-WebUI + calculators locally → localhost:8088/setup/
 ```
 
 ### Services
@@ -71,9 +71,9 @@ The only difference between the three modes is who serves the browser UI:
 
 | Mode | How to start | Ports | CORS | Token in the UI |
 |---|---|---|---|---|
-| 1 — headless | `docker compose --profile control-api up control-api` | 8090 | not needed | no UI; the client sends `Bearer` itself |
-| 2 — split (the previous default) | `docker compose --profile control-api --profile webui up` | 8088 + 8090 | an allowlist is required (`CONTROL_API_CORS_ORIGINS`) | the operator copy-pastes it into Settings |
-| 3 — single-service (recommended) | `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api` → open `http://localhost:8090/` | 8090 | none — same-origin requests are not CORS requests, so the allowlist can be left empty | the one-time `?bootstrap=<nonce>` link printed at startup |
+| 1 — headless | `docker compose up control-api` | 8090 | not needed | no UI; the client sends `Bearer` itself |
+| 2 — split (the compose default) | `docker compose up` | 8088 + 8090 | an allowlist is required (`CONTROL_API_CORS_ORIGINS`) | the operator copy-pastes it into Settings |
+| 3 — single-service (recommended) | `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api` → open `http://localhost:8090/` | 8090 | none — same-origin requests are not CORS requests, so the allowlist can be left empty | the one-time `?bootstrap=<nonce>` link printed at startup |
 
 **Token lifecycle (all modes).** You no longer have to invent `CONTROL_API_TOKEN` before the first start: if the
 variable is unset, control-api generates 32 random bytes (hex) itself and atomically persists them to

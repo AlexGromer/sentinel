@@ -12,6 +12,7 @@ So every entry carries an ACCESS ref, and this gate verifies that ref RESOLVES i
   http    -> a route registered via HandleFunc in cmd/control-api
   mode    -> a RUN_MODE value the brain dispatches on
   profile -> a docker-compose profile
+  service -> a docker-compose service in the DEFAULT stack (started by `docker compose up`)
   env     -> an environment variable read by non-test product code
   code    -> a token present in a named source file
   file    -> a path that exists
@@ -88,6 +89,19 @@ def main() -> int:
         elif kind == "profile":
             assert f'profiles: ["{ref}"]' in compose, (
                 f"{cid}: docker-compose profile {ref!r} does not exist")
+        elif kind == "service":
+            # A capability of the DEFAULT stack: `docker compose up` and it is there. Both halves
+            # matter. Existence alone would keep passing if someone put the service back behind a
+            # profile, and then the catalogue would promise a thing the documented command does not
+            # start — the precise failure this catalogue exists to prevent, one level up.
+            m = re.search(rf"(?m)^  {re.escape(ref)}:\s*$", compose)
+            assert m, f"{cid}: docker-compose service {ref!r} does not exist"
+            tail = compose[m.end():]
+            nxt = re.search(r"(?m)^  [a-z0-9][\w-]*:\s*$|^[a-zA-Z_][\w-]*:\s*$", tail)
+            body = tail[: nxt.start()] if nxt else tail
+            assert not re.search(r"(?m)^    profiles:", body), (
+                f"{cid}: service {ref!r} is behind a profile, so `docker compose up` does not start "
+                f"it and the catalogue's access path is a flag the reader was not told to pass")
         elif kind == "env":
             assert ref in product_src, (
                 f"{cid}: env var {ref!r} is read by no non-test product code — dead or renamed?")

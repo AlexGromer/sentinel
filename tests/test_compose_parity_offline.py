@@ -16,6 +16,19 @@ other `image:` from GHCR, and pinning the bodies would forbid the very differenc
 
 The offline suite has no docker, so this reads the YAML rather than running `docker compose config`;
 that also means it gates on a PR, where the drift is introduced.
+
+2026-08-03 — the second half. Profile parity said the two files AGREED; it could not say the agreed
+answer was any good. Every long-running service sat behind its own profile, so `docker compose up`
+started nothing a person could open, and the four profiles had to be typed in the right combination
+before the product existed. Alex's decision: the default IS the product. That is a property of the
+files, so it is asserted here rather than left to a README that nobody diffs.
+
+The wiring is asserted for the same reason and with better evidence: the two files had ALREADY
+diverged on it silently. `control-api` in the pulled stack named PW_CDP_ENDPOINT; in the built stack
+it did not — and a YAML merge key replaces the `environment:` mapping wholesale rather than
+deepening it, so the anchor's value never reached that service at all. Runs started through the API
+launched their own browser, and the live view could only ever show the browser service's idle page.
+Nothing was red. Set parity does not see inside a service body, which is exactly where this lived.
 """
 import pathlib
 import re
@@ -23,6 +36,9 @@ import re
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BUILT = REPO / "docker-compose.yml"
 PULLED = REPO / "docker-compose.ghcr.yml"
+
+# The services `docker compose up` must start with no flags — the product, not a menu of parts.
+DEFAULT_STACK = {"control-api", "store-gateway", "browser", "webui"}
 
 
 def _services(path: pathlib.Path) -> "dict[str, set[str]]":
@@ -52,6 +68,28 @@ def _services(path: pathlib.Path) -> "dict[str, set[str]]":
             profiles = {p.strip().strip("\"'") for p in pm.group(1).split(",") if p.strip()}
         out[name] = profiles
     assert out, f"{path.name}: parsed zero services — the parser, not the file, is what broke"
+    return out
+
+
+def _segments(path: pathlib.Path) -> "dict[str, str]":
+    """service name -> the text of its own block, ending where the next service begins.
+
+    Separate from _services() because the questions below are about what is INSIDE a service body,
+    and the boundary has to be exact for that: a segment that ran one line into its neighbour would
+    let an assertion pass on the neighbour's key.
+    """
+    text = path.read_text()
+    m = re.search(r"(?m)^services:\s*$", text)
+    assert m, f"{path.name} has no top-level `services:` block"
+    body = text[m.end():]
+    end = re.search(r"(?m)^[a-zA-Z_][\w-]*:\s*$", body)
+    if end:
+        body = body[: end.start()]
+    starts = [(mm.group(1), mm.start(), mm.end()) for mm in re.finditer(r"(?m)^  ([a-z0-9][\w-]*):\s*$", body)]
+    out: "dict[str, str]" = {}
+    for i, (name, _s, e) in enumerate(starts):
+        stop = starts[i + 1][1] if i + 1 < len(starts) else len(body)
+        out[name] = body[e:stop]
     return out
 
 
@@ -105,6 +143,78 @@ def test_the_pulled_stack_never_builds_and_the_browser_port_is_never_published()
             f"{path.name}: the `browser` service publishes ports. CDP is unauthenticated by "
             f"construction — anything that reaches that port drives the browser and reads its "
             f"cookies. Reachability is the ONLY control there is.")
+
+
+def test_up_with_no_flags_starts_the_product():
+    """The default set is a product decision, so it is pinned rather than merely compared.
+
+    Asserted as an EQUALITY, not a subset. A subset check would stay green if someone dropped the
+    last profile off `ollama` and made `docker compose up` pull a multi-gigabyte model image — the
+    failure mode on the other side of the same decision.
+    """
+    for path in (BUILT, PULLED):
+        svc = _services(path)
+        assert len(svc) >= 6, f"only {len(svc)} services parsed from {path.name} — parser drift"
+        default = {name for name, profiles in svc.items() if not profiles}
+        assert default == DEFAULT_STACK, (
+            f"{path.name}: `docker compose up` would start {sorted(default) or ['nothing']}, "
+            f"not {sorted(DEFAULT_STACK)}. The default has to BE the product: a person who types "
+            f"the command from the README must end up with something they can open, and anything "
+            f"heavier than the product (a local model, a fixture run) has to stay behind a profile.")
+
+
+def test_the_default_stack_is_wired_to_itself():
+    """Four services on one network are not a stack until each knows the others' addresses.
+
+    Every value is checked in the `${VAR-fallback}` form (ONE dash): with `:-`, an operator who
+    exports an empty value to opt out of the store or the browser gets the fallback substituted
+    anyway and has no way to say "no store" from the environment at all.
+    """
+    wiring = {
+        "CONTROL_API_STORE_ADDR": "unix:/app/state/store.sock",
+        "CONTROL_API_CDP_LIVE": "http://browser:9224",
+        # The one that was missing from the built stack entirely, which is why runs started through
+        # the API never attached to the browser service they were meant to share.
+        "PW_CDP_ENDPOINT": "http://browser:9223",
+    }
+    for path in (BUILT, PULLED):
+        seg = _segments(path)["control-api"]
+        for var, target in wiring.items():
+            m = re.search(r"(?m)^      " + var + r":\s*(\S.*)$", seg)
+            assert m, (
+                f"{path.name}: control-api does not name {var} in its OWN environment block. A YAML "
+                f"merge key replaces that mapping rather than deepening it, so inheriting it from "
+                f"the anchor does not work — this exact omission shipped once and cost the live view.")
+            value = m.group(1).strip()
+            assert value == "${" + var + "-" + target + "}", (
+                f"{path.name}: control-api sets {var} to {value!r}, expected "
+                f"'${{{var}-{target}}}' — the sibling service as the default, in the single-dash "
+                f"form so an explicit empty value still opts out.")
+
+
+def test_control_api_waits_for_what_it_only_probes_once():
+    """`depends_on` here is correctness, not tidiness.
+
+    control-api probes the store-gateway ONCE at startup and remembers a miss for the lifetime of
+    the process (cmd/control-api/store.go::newStoreClient), and an unreachable CDP endpoint fails a
+    run hard rather than falling back to a browser nobody asked for. Starting all four at once
+    without a condition would therefore produce a stack that is up and quietly half-wired — the
+    exact failure this whole wave exists to remove.
+    """
+    for path in (BUILT, PULLED):
+        seg = _segments(path)
+        dep = seg["control-api"]
+        assert re.search(r"(?m)^    depends_on:\s*$", dep), (
+            f"{path.name}: control-api declares no depends_on, so it races the two services it "
+            f"cannot re-probe later.")
+        for name in ("store-gateway", "browser"):
+            assert re.search(r"(?m)^      " + re.escape(name) + r":\s*\n\s+condition: service_healthy\s*$", dep), (
+                f"{path.name}: control-api does not wait for {name} to be HEALTHY. "
+                f"`service_started` is not enough — the container exists long before the socket or "
+                f"the CDP relay does.")
+            assert re.search(r"(?m)^    healthcheck:\s*$", seg[name]), (
+                f"{path.name}: {name} has no healthcheck, so `condition: service_healthy` on it "
+                f"can never be satisfied and the stack would hang instead of starting.")
 
 
 if __name__ == "__main__":

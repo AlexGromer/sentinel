@@ -367,9 +367,15 @@ func validUserName(name string) string {
 }
 
 // storeAbsentReason is the same sentence the run/scenario listings use, so a deployment with no
-// gateway explains itself identically wherever a caller meets it.
-const storeAbsentReason = "this deployment has no store-gateway, so nothing is persisted — start it " +
-	"with `docker compose --profile store up -d store-gateway` and set CONTROL_API_STORE_ADDR"
+// gateway explains itself identically wherever a caller meets it. The comment above said "the same
+// sentence" while main.go::storeMarker held a hand-copied duplicate of it; the two are one constant
+// now, which is what the comment always claimed.
+//
+// The remedy changed on 2026-08-03: the store-gateway is part of the default compose stack and
+// control-api is pointed at it by default, so `--profile store` no longer names anything.
+const storeAbsentReason = "this deployment has no store-gateway, so nothing is persisted — in the " +
+	"compose stack `docker compose up` starts one and control-api is already pointed at it; " +
+	"elsewhere run store-gateway and set CONTROL_API_STORE_ADDR"
 
 func sessionTTL() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("CONTROL_API_SESSION_TTL")); v != "" {

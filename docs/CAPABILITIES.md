@@ -56,8 +56,8 @@
 | **Windows как клиент** | install.ps1 — ставит `agentctl.exe` нативно, без admin. Прогон при этом требует Python/uv + Node + браузеры на хосте, поэтому поддерживаемый путь — `agentctl` к control-API в контейнере или на другой машине (ADR-110). |
 | **Локальная модель (ollama)** | docker compose --profile ollama up -d ollama — локальный OpenAI-совместимый эндпоинт моделей. |
 | **Роутер моделей (LiteLLM)** | docker compose --profile litellm up -d litellm — роутер поверх многих провайдеров за LLM_BASE_URL (ADR-045). |
-| **Браузерный UI (webui)** | docker compose --profile webui up — раздать хаб и мастер локально. |
-| **Постоянное хранилище (store)** | docker compose --profile store up — store-gateway для персистентности прогонов/сценариев/метрик (ADR-050). |
+| **Браузерный UI (webui)** | docker compose up — хаб и мастер раздаются локально на :8088, без флагов. |
+| **Постоянное хранилище (store)** | docker compose up — store-gateway поднимается и подключается сам; control-api уже указывает на него (ADR-050). |
 
 ---
 

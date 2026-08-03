@@ -261,7 +261,8 @@ rendered string. Collapsing repeats (`×N`) and nesting stack frames happen on t
 ### 12. The store marker on list endpoints — ADR-069
 
 Five list endpoints (`scenarios`/`tests`/`chats`/`results`/`trends`) carry `store: false` plus a
-`store_reason` naming the remedy (`--profile store` + `CONTROL_API_STORE_ADDR`) beside the data. A `501`
+`store_reason` naming the remedy (in the compose stack `docker compose up` starts one; elsewhere run
+`store-gateway` and set `CONTROL_API_STORE_ADDR`) beside the data. A `501`
 would be wrong here: an empty list is **valid** with a live store. Before ADR-069 an empty `200` meant
 both "nothing saved yet" and "this deployment saves nothing at all" — and "the library will not load"
 was a correct reading of a silent interface.

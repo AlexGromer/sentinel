@@ -1,12 +1,21 @@
 # Sentinel — one-command quickstart (Foundation cycle).
 #
-# Build once, then drive the agent. The `demo` profile proves ZERO-external-dependency
-# operation: heuristic planner (no LLM / no API key) + a bundled file:// fixture (no network).
-#
 #   docker compose build
+#   docker compose up                            # THE PRODUCT: control-api + store + browser + hub
 #   docker compose run --rm sentinel run --target "file:///app/testdata/site/index.html"
-#   docker compose --profile demo up            # bundled zero-dep explore -> runs/demo/plan.json
+#   docker compose --profile demo up             # bundled zero-dep explore -> runs/demo/plan.json
 #   docker compose --profile ollama up -d ollama # optional local-model endpoint (OpenAI-compat /v1)
+#
+# WHY `up` STARTS FOUR SERVICES AND NOT ONE (Alex's decision 2026-08-03). Until now every
+# long-running service sat behind its own profile, so the command in the README started nothing a
+# person could open. Four profiles had to be typed in the right combination before the product
+# existed, and the newest feature — the live view — needed the one profile nobody would guess.
+# A default that is not the product teaches the wrong thing about the product.
+#
+# What stays behind a profile is what a deployment genuinely may not want: a local model (`ollama`,
+# `litellm` — heavy, and usually already running elsewhere), the bundled fixture run (`demo`), and
+# the one-shot CLI (`cli`). The CLI needs no flag anyway: `docker compose run` enables the target
+# service's own profiles, so `run --rm sentinel …` above works unchanged (verified, not assumed).
 #
 # Model selection is config-only (ADR-019): set the LLM_* env block below or per-run. With no key
 # set, the run falls back to the deterministic heuristic planner / L1–L6 heal (still useful offline).
@@ -44,9 +53,19 @@ services:
   # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name:
   #   docker compose run --rm sentinel run --target <URL> [--goal "..."] [--planner heuristic|llm|goal]
   #   docker compose run --rm sentinel run --target <URL> --run-config /config/run.yaml
+  # `cli` rather than no profile: this container runs one command and exits, so leaving it in the
+  # default set would make `docker compose up` end with an exited container next to the four that
+  # are meant to stay. `docker compose run --rm sentinel …` enables the profile itself.
   sentinel:
     <<: *sentinel-base
+    profiles: ["cli"]
     command: ["--help"]
+    # NO browser-service default here, deliberately, unlike control-api below. `docker compose run`
+    # starts the target service and its declared dependencies — not the rest of the stack — so a
+    # default endpoint would make the zero-dependency one-shot fail against a service that is not
+    # running, and it fails HARD by design (an unreachable CDP endpoint must not silently fall back
+    # to a browser nobody asked for: tests/test_cdp_endpoint_offline.py). Set PW_CDP_ENDPOINT
+    # yourself to point a CLI run at the service.
 
   # Zero-external-dependency demo: deterministic explore against a bundled fixture.
   # Swap the target for testdata/fixtures/l1..l5.html to exercise login/validation/tabs/shadow-DOM.
@@ -91,12 +110,11 @@ services:
       - "4000:4000"
 
   # Local, air-gapped setup-WebUI + chat-front + calculators (bundled into the image under /app/docs).
-  #   docker compose --profile webui up   →   open http://localhost:8088/setup/  (also /chat/ and /calculators/)
+  #   docker compose up   →   open http://localhost:8088/setup/  (also /chat/ and /calculators/)
   # Static files only; no network, no API key — the generators run entirely in your browser.
-  # The chat-front (/chat/) drives the `control-api` profile below for live authoring/runs (ADR-040).
+  # The chat-front (/chat/) drives the `control-api` service below for live authoring/runs (ADR-040).
   webui:
     <<: *sentinel-base
-    profiles: ["webui"]
     entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
     ports:
       - "8088:8088"
@@ -107,26 +125,29 @@ services:
   # THREE DEPLOYMENT MODES (ADR-064) — the difference is only who serves the browser UI:
   #
   #   1 · headless  — no UI at all (CI, scripts, an MCP host). One port, no CORS.
-  #       docker compose --profile control-api up control-api
+  #       docker compose up control-api
   #
-  #   2 · split     — the `webui` service above serves the pages on :8088, this API answers on :8090.
-  #       Two origins, so CONTROL_API_CORS_ORIGINS must list the UI's origin, and the token is
-  #       copy-pasted into the page's Settings field.
-  #       docker compose --profile control-api --profile webui up
+  #   2 · split (the default here) — the `webui` service above serves the pages on :8088, this API
+  #       answers on :8090. Two origins, so CONTROL_API_CORS_ORIGINS must list the UI's origin, and
+  #       the token is copy-pasted into the page's Settings field.
+  #       docker compose up
   #
   #   3 · single-service (recommended) — control-api serves the UI from its OWN port. One port,
   #       same-origin (so the CORS allowlist can be emptied), and the page picks up its token from
   #       the one-time ?bootstrap=<nonce> link printed at startup.
   #       CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= \
-  #         docker compose --profile control-api up control-api      → http://localhost:8090/
+  #         docker compose up control-api                            → http://localhost:8090/
   #
   # The bearer token is no longer something you must invent first (ADR-064): unset, control-api
   # generates one and persists it to ./state/control-api.token (0600), reusing it across restarts.
   # Set CONTROL_API_TOKEN to manage it yourself, or CONTROL_API_AUTOTOKEN=0 for a read-only instance.
   control-api:
     <<: *sentinel-base
-    profiles: ["control-api"]
     entrypoint: ["/app/bin/control-api"]
+    # Every default below uses `${VAR-fallback}` (a single dash, not `:-`): setting the variable to
+    # an EMPTY value opts out and keeps the previous standalone behaviour, while leaving it unset
+    # gets the wired stack. `:-` would substitute the fallback for an explicit empty too, so there
+    # would be no way to say "no store" / "no browser" from the environment.
     environment:
       CONTROL_API_ADDR: "0.0.0.0:8090"
       CONTROL_API_AGENTCTL: /app/bin/agentctl
@@ -135,36 +156,62 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # ADR-064 mode 3: serve the embedded UI from this port. Empty/unset = modes 1-2 (unchanged).
       CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
-      # ADR-062/063 service tier: point at the `store` profile below to enable PUT/GET /v1/config and
-      # persisted-config-driven runs. Unset (default) = standalone tier (config is 501, per-run llm still works).
-      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
-      # ADR-111: where the live VIDEO mode gets its frames. Point it at the `browser` service's live
-      # port; unset means this deployment has no browser service, and the UI says exactly that
-      # instead of showing an empty box.
-      #   CONTROL_API_CDP_LIVE=http://browser:9224
-      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE:-}
+      # ADR-062/063 service tier: the `store-gateway` service below. Defaulted rather than left to
+      # the operator because the gateway is now part of the default stack, and control-api probes it
+      # ONCE at startup — a miss is remembered for the process lifetime (cmd/control-api/store.go::
+      # newStoreClient), which is why `depends_on` waits for it to be healthy instead of racing.
+      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR-unix:/app/state/store.sock}
+      # ADR-111: where the live VIDEO mode gets its frames — the `browser` service's live port.
+      # Empty means this deployment has no browser service, and the UI says exactly that instead of
+      # showing an empty box.
+      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE-http://browser:9224}
+      # ⚠ MEASURED DEFECT, fixed here. This service defines its own `environment:` block, and a YAML
+      # merge key replaces that mapping wholesale rather than deepening it — so PW_CDP_ENDPOINT from
+      # the *sentinel-base anchor never reached control-api at all. Every run started through the
+      # API (which is every run started from the UI) therefore launched its own browser, and the
+      # live view could only ever show the browser service's own idle page, never the run's. The
+      # documented `PW_CDP_ENDPOINT=… docker compose --profile browser up -d browser` set it on the
+      # browser service, which ignores it. `PW_` passes agentctl's env allowlist, so naming it here
+      # is all that is needed (cmd/agentctl/main.go::filteredEnv).
+      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:9223}
+    # `service_healthy`, not `service_started`, for both: the store is probed once at startup (see
+    # above), and an unreachable CDP endpoint fails a run HARD by design rather than falling back to
+    # a browser nobody asked for (tests/test_cdp_endpoint_offline.py). Waiting costs a few seconds
+    # once; racing costs a stack that is up and quietly half-wired.
+    depends_on:
+      store-gateway:
+        condition: service_healthy
+      browser:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8090:8090"
 
   # Dedicated store-gateway for the control-API config/runs domains (M13, ADR-062) — the SERVICE tier.
   # Enables PUT/GET /v1/config and persisted-config-driven runs (ADR-063). Listens on a Unix socket in the
-  # shared ./state volume; control-api reaches it via CONTROL_API_STORE_ADDR=unix:/app/state/store.sock.
-  #   CONTROL_API_TOKEN=secret CONTROL_API_STORE_ADDR=unix:/app/state/store.sock \
-  #     docker compose --profile store --profile control-api --profile webui up -d
+  # shared ./state volume; control-api reaches it via CONTROL_API_STORE_ADDR=unix:/app/state/store.sock,
+  # which is now the default rather than something to remember.
   # Both services run the same image (same UID), so the store-gateway peer-cred guard accepts control-api;
   # cross-container socket sharing over ./state is verified on the live host. --no-auth keeps the local
   # demo keyless (the socket is already owner-restricted, 0600 + peer-cred).
   store-gateway:
     <<: *sentinel-base
-    profiles: ["store"]
     entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
+    # The socket EXISTING is the readiness signal control-api actually depends on — it dials that
+    # path and gives up on the first miss. Testing the file rather than the process also survives a
+    # stale socket left by an unclean shutdown: the gateway unlinks and re-creates it on start.
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /app/state/store.sock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   # A Chromium that OUTLIVES a run, reachable over CDP by everything else in this stack (ADR-110).
   # Until now every run launched a browser inside its own process, so there was nothing for a second
   # consumer — the live view, a co-pilot session — to attach to.
   #
-  #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser up -d browser
-  #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser run --rm sentinel \
+  #   docker compose up -d browser        # control-api is already pointed at it by default
+  #   PW_CDP_ENDPOINT=http://browser:9223 docker compose run --rm sentinel \
   #     run --target <URL> --planner heuristic
   #
   # Chromium is NOT started directly here: it binds its debugging port to 127.0.0.1 and silently
@@ -180,8 +227,18 @@ services:
   # "who can reach localhost". Do not put this stack on a shared/multi-tenant host as-is.
   browser:
     <<: *sentinel-base
-    profiles: ["browser"]
     entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
+    # /live/status answers 200 whether or not a page is open (cdp-service.ts), so it reports that the
+    # SERVICE is up without also demanding that a run be in progress. Chromium's first launch is the
+    # slow part, hence the generous start_period. `node` rather than curl: node is guaranteed present
+    # in this image, curl is not, and a healthcheck that depends on a package we never declared would
+    # report unhealthy for the wrong reason.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:9224/live/status',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
 volumes:
   ollama:

@@ -6,6 +6,7 @@
 # toolchain, no build:
 #
 #   curl -fsSLO https://raw.githubusercontent.com/AlexGromer/sentinel/main/docker-compose.ghcr.yml
+#   docker compose -f docker-compose.ghcr.yml up                         # the product, four services
 #   docker compose -f docker-compose.ghcr.yml --profile demo up          # zero-dep smoke run
 #   docker compose -f docker-compose.ghcr.yml run --rm sentinel run --target <URL>
 #
@@ -21,8 +22,10 @@
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 #
 # THE SERVICE AND PROFILE SETS ARE THE SAME AS docker-compose.yml, deliberately: someone who learned
-# `--profile control-api` from one file must not find it missing from the other. That is not left to
-# discipline — tests/test_compose_parity_offline.py compares the two sets and fails on drift.
+# `--profile ollama` from one file must not find it missing from the other. That is not left to
+# discipline — tests/test_compose_parity_offline.py compares the two sets and fails on drift, and
+# since 2026-08-03 it also compares how the default stack is WIRED TOGETHER: the two files had
+# already diverged there silently (control-api carried PW_CDP_ENDPOINT here and not there).
 #
 # Not to be confused with docker-compose.offline.yml, which is the air-gapped bundle's stack: that
 # one resolves images from `docker load` only (pull_policy: never) and has no registry at all.
@@ -47,8 +50,10 @@ x-sentinel-ghcr: &sentinel-ghcr
 
 services:
   # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name.
+  # `cli`, so `up` is not left holding an exited container — `docker compose run` enables it itself.
   sentinel:
     <<: *sentinel-ghcr
+    profiles: ["cli"]
     command: ["--help"]
 
   # Zero-external-dependency demo: deterministic explore against a fixture baked into the image.
@@ -90,10 +95,9 @@ services:
       - "4000:4000"
 
   # Static hub + setup wizard + calculators, served from inside the image (no network, no key).
-  #   docker compose -f docker-compose.ghcr.yml --profile webui up   ->   http://localhost:8088/
+  #   docker compose -f docker-compose.ghcr.yml up   ->   http://localhost:8088/
   webui:
     <<: *sentinel-ghcr
-    profiles: ["webui"]
     entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
     ports:
       - "8088:8088"
@@ -101,10 +105,12 @@ services:
   # HTTP control-API (ADR-032/064). Published to host localhost only. Mode 3 (recommended) serves
   # the UI from this same port — see docker-compose.yml for the full mode walkthrough.
   #   CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= \
-  #     docker compose -f docker-compose.ghcr.yml --profile control-api up control-api
+  #     docker compose -f docker-compose.ghcr.yml up control-api
+  #
+  # The three service addresses below are DEFAULTS, written `${VAR-fallback}` (one dash) so that an
+  # explicitly empty value still opts out — see docker-compose.yml for the reasoning behind each.
   control-api:
     <<: *sentinel-ghcr
-    profiles: ["control-api"]
     entrypoint: ["/app/bin/control-api"]
     environment:
       CONTROL_API_ADDR: "0.0.0.0:8090"
@@ -113,21 +119,29 @@ services:
       CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS-http://localhost:8088,https://alexgromer.github.io}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
-      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR:-}
-      # ADR-111: where the live VIDEO mode gets its frames. Point it at the `browser` service's live
-      # port; unset means this deployment has no browser service, and the UI says exactly that
-      # instead of showing an empty box.
-      #   CONTROL_API_CDP_LIVE=http://browser:9224
-      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE:-}
-      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
+      CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR-unix:/app/state/store.sock}
+      # ADR-111: where the live VIDEO mode gets its frames — the `browser` service's live port.
+      CONTROL_API_CDP_LIVE: ${CONTROL_API_CDP_LIVE-http://browser:9224}
+      # Runs spawned through this API attach to the browser service instead of launching their own.
+      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:9223}
+    depends_on:
+      store-gateway:
+        condition: service_healthy
+      browser:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8090:8090"
 
   # Persistence for the control-API domains (ADR-062) — the SERVICE tier.
   store-gateway:
     <<: *sentinel-ghcr
-    profiles: ["store"]
     entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /app/state/store.sock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   # A Chromium that outlives a run, reachable over CDP (ADR-110). See docker-compose.yml for why it
   # is not started as a bare `chromium --remote-debugging-port`, and pw-executor/src/cdp-service.ts
@@ -136,8 +150,13 @@ services:
   # ⚠ NO `ports:` KEY, DELIBERATELY — CDP is unauthenticated and cannot be given a credential.
   browser:
     <<: *sentinel-ghcr
-    profiles: ["browser"]
     entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:9224/live/status',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
 volumes:
   ollama:

@@ -56,8 +56,8 @@ A catalogue of features that work but are hard to reach because nothing named th
 | **Windows as a client** | install.ps1 — installs `agentctl.exe` natively, no admin. A run also needs Python/uv + Node + browsers on the host, so the supported path is `agentctl` against a control-API in a container or on another machine (ADR-110). |
 | **Local model (ollama)** | docker compose --profile ollama up -d ollama — a local OpenAI-compatible model endpoint. |
 | **Model router (LiteLLM)** | docker compose --profile litellm up -d litellm — a router over many providers behind LLM_BASE_URL (ADR-045). |
-| **Browser UI (webui)** | docker compose --profile webui up — serve the hub and wizard locally. |
-| **Persistent store** | docker compose --profile store up — the store-gateway for persisting runs/scenarios/metrics (ADR-050). |
+| **Browser UI (webui)** | docker compose up — the hub and wizard are served locally on :8088, no flags. |
+| **Persistent store** | docker compose up — the store-gateway comes up and is wired in; control-api already points at it (ADR-050). |
 
 ---
 

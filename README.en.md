@@ -83,13 +83,17 @@ docker compose run --rm sentinel run --target "https://your-app.example" --goal 
 ```
 **Live UI as a single service (the recommended path, ADR-064):**
 ```bash
-CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api
+CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api
 ```
 → open the `?bootstrap=…` link control-API prints at startup: one port (`:8090`), no CORS, and the UI picks up
 its token by itself (one-time). The token is generated automatically and kept in `state/control-api.token` —
 you no longer have to invent one up front.
 
-**setup-WebUI as a separate service (static, air-gapped, part of the bundle):** `docker compose --profile webui up` →
+**The whole stack in one command:** `docker compose up` starts the control-API, the store, the browser
+service (the live view) and the setup-WebUI — four services, wired to each other by default. Flags are
+only for what a deployment may not want: `--profile ollama`, `--profile litellm`, `--profile demo`.
+
+**setup-WebUI (static, air-gapped, part of the bundle)** is part of that same `up` →
 open `http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.
 
 **Local model** (no cloud): uncomment the `LLM_*` block in [`docker-compose.yml`](docker-compose.yml) and

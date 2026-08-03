@@ -32,7 +32,7 @@ With no API key / local model, the run uses the deterministic heuristic planner 
 **Configure with no hand-written YAML** — the setup-WebUI wizard:
 
 ```bash
-docker compose --profile webui up           # → http://localhost:8088/setup/
+docker compose up                           # → http://localhost:8088/setup/ (the whole stack, no flags)
 # then: docker compose run --rm sentinel run --run-config /config/run.yaml
 ```
 
@@ -68,6 +68,6 @@ Details: `docs/DISTRIBUTION.md` §6.
 - The full testing guide and run model: `docs/TESTING.md`.
 - The local-model and runtime catalog: `docs/LOCAL_MODELS.md`.
 - The co-pilot UI (a vertical rail: chat · run · live · library · results · logs · settings — ADR-066): `docs/index.html` — the fastest way to bring it up (ADR-064,
-  single-service, no CORS wiring): `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api`,
+  single-service, no CORS wiring): `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api`,
   then open the one-time link `http://127.0.0.1:8090/?bootstrap=<nonce>` printed in the startup log (valid for 5
   minutes, fills in the address and token itself). The three UI deployment modes and the access token — `docs/DISTRIBUTION.md` §2.

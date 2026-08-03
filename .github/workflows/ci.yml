@@ -108,13 +108,24 @@ jobs:
         # cannot fail is indistinguishable from a gate that passes. The number is a floor, not
         # the current count: raising it on every added check would make it a maintenance tax
         # rather than a tripwire.
+        #
+        # 2026-08-03: TWO corrections, both copied from the pages-static step below, which had them
+        # from the start. (1) The floor now applies to the TOTAL, not to the number that PASSED —
+        # `n` drops when a check fails, which is not the thing a deleted-check tripwire is for.
+        # (2) `n -ne t` fails the step. Without it a check that failed on every single run still
+        # left this step green: three of them had, since the identity checks landed, and the reason
+        # turned out to be a guessed 800 ms sleep against a login that measures 1.0-1.6 s.
         run: |
           out=$(node scripts/wizard-dom-check.mjs 2>&1) || true; echo "$out"   # see the hub gate below for why `|| true`
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
-          if [ "$n" -lt 15 ]; then
-            echo "::error::only $n checks ran in scripts/wizard-dom-check.mjs — expected at least 15"; exit 1
+          t=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f2 | cut -d' ' -f1)
+          if [ "$n" -ne "$t" ]; then
+            echo "::error::$n of $t checks passed in scripts/wizard-dom-check.mjs"; exit 1
+          fi
+          if [ "$t" -lt 15 ]; then
+            echo "::error::only $t checks ran in scripts/wizard-dom-check.mjs — expected at least 15"; exit 1
           fi
 
 
@@ -131,6 +142,13 @@ jobs:
         # cannot fail is indistinguishable from a gate that passes. The number is a floor, not
         # the current count: raising it on every added check would make it a maintenance tax
         # rather than a tripwire.
+        #
+        # 2026-08-03: TWO corrections, both copied from the pages-static step below, which had them
+        # from the start. (1) The floor now applies to the TOTAL, not to the number that PASSED —
+        # `n` drops when a check fails, which is not the thing a deleted-check tripwire is for.
+        # (2) `n -ne t` fails the step. Without it a check that failed on every single run still
+        # left this step green: three of them had, since the identity checks landed, and the reason
+        # turned out to be a guessed 800 ms sleep against a login that measures 1.0-1.6 s.
         run: |
           # `out=$(cmd)` under `bash -e` aborts the STEP when cmd fails, so the gate's own output
           # was discarded exactly when it was needed: a red run showed the step definition and
@@ -140,8 +158,12 @@ jobs:
           echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
             echo "::error::gate printed no pass line — it did not run to the end"; exit 1; }
           n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
-          if [ "$n" -lt 45 ]; then
-            echo "::error::only $n checks ran in scripts/hub-dom-check.mjs — expected at least 45"; exit 1
+          t=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f2 | cut -d' ' -f1)
+          if [ "$n" -ne "$t" ]; then
+            echo "::error::$n of $t checks passed in scripts/hub-dom-check.mjs"; exit 1
+          fi
+          if [ "$t" -lt 45 ]; then
+            echo "::error::only $t checks ran in scripts/hub-dom-check.mjs — expected at least 45"; exit 1
           fi
 
       - name: Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)
