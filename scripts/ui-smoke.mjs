@@ -30,7 +30,12 @@ function arg(name, fallback) {
 const BASE = (arg('base', 'http://127.0.0.1:8090')).replace(/\/+$/, '');
 const TOKEN = arg('token', '');
 const OUT = arg('out', path.join(REPO, 'ui-smoke'));
-const TARGET = arg('target', `file:///app/testdata/site/index.html`);
+// The bundled fixture BY THE PATH THIS PROCESS CAN SEE. The default used to be the in-container
+// path (`file:///app/testdata/…`), which is right for a compose deployment and wrong everywhere
+// else: on a runner the run starts, navigates to a path that does not exist, and comes back
+// non-zero — the exact ADR-078 trap the run form warns about, in mirror image. Pass --target to
+// aim at a deployment whose filesystem is not this one.
+const TARGET = arg('target', `file://${path.join(REPO, 'testdata', 'site', 'index.html')}`);
 
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -71,13 +76,16 @@ async function main() {
     await check('the hub loads from the deployment that serves it', async () => {
       const r = await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
       ok(r && r.ok(), `GET / answered ${r && r.status()}`);
-      await page.waitForTimeout(800);
+      // The rail is the last thing the hub paints, so its presence is "the page is up" — a sleep
+      // here is either too long on a fast machine or too short on a loaded one, and the second is
+      // how a gate ends up asserting against a half-drawn page.
+      await page.waitForSelector('.rail a[data-nav="settings"]', { state: 'visible', timeout: 20000 });
       await shot(page, 'hub-loaded');
     });
 
     await check('it connects with a credential and unlocks its controls', async () => {
       await page.evaluate(() => { location.hash = '#v=settings'; });
-      await page.waitForTimeout(300);
+      await page.waitForSelector('#capi', { state: 'visible', timeout: 10000 });
       await page.fill('#capi', BASE);
       if (TOKEN) await page.fill('#capitok', TOKEN);
       await page.click('#cap-check');
@@ -92,32 +100,75 @@ async function main() {
 
     await check('the run form accepts a target and starts a run', async () => {
       await page.evaluate(() => { location.hash = '#v=run'; });
-      await page.waitForTimeout(400);
+      await page.waitForSelector('#b-target', { state: 'visible' });
+      // EXPLORE, not the form's default. `goal` needs a model, and since HEALTH-001 a goal run with
+      // none is REFUSED rather than quietly downgraded — so the default mode turns this smoke into a
+      // test of the refusal against a stack that was never given a model. Explore is the mode that
+      // genuinely needs nothing, which is what a smoke should exercise. (The refusal has its own
+      // check below; it is a promise worth keeping, not an accident to route around.)
+      await page.selectOption('#b-mode', 'explore');
       await page.fill('#b-target', TARGET);
       await shot(page, 'run-form');
       await page.click('#b-run');
-      // The run id appears in the page once control-api has accepted it.
+      // The run log is written by the submit handler itself, so it is a signal about THIS click.
+      // The previous version waited for any 8-hex-digit run of characters anywhere in the body —
+      // satisfied by a token, an artifact path, or a golden hash already on the page.
       await page.waitForFunction(
-        () => /[0-9a-f]{8,}/.test(document.body.innerText),
+        () => /run_id=|✗/.test((document.getElementById('b-runlog') || {}).innerText || ''),
         undefined, { timeout: 30000 });
+      const log = await page.locator('#b-runlog').innerText();
+      ok(!/✗/.test(log), `the hub refused to start the run: ${log.split('\n').slice(0, 3).join(' / ')}`);
       await shot(page, 'run-started');
     });
 
     await check('the run reaches a verdict and the hub shows it', async () => {
+      // The verdict BADGE, not a regex over the whole page: «ПРОЙДЕНО» also appears in the prose of
+      // other views, so a body-wide match can be satisfied without a run having finished at all.
       await page.waitForFunction(
-        () => /ПРОЙДЕНО|PASSED|ПРОБЛЕМ|FAILED|exit\s*\d/i.test(document.body.innerText),
+        () => ((document.getElementById('b-verdict') || {}).innerText || '').trim().length > 0,
         undefined, { timeout: 180000 });
+      const v = await page.locator('#b-verdict').innerText();
+      ok(/exit\s*0/.test(v), `an explore run against the bundled fixture did not pass: ${v.split('\n')[0]}`);
       await shot(page, 'verdict');
+    });
+
+    await check('a goal run with no model is refused rather than quietly downgraded (HEALTH-001)', async () => {
+      // The promise HEALTH-001 made: `goal` without a reachable model does not fall back to the
+      // heuristic planner and exit 0 — it stops. Asserted as "not green", deliberately: the WORDING
+      // of that verdict is what HEALTH-004 is about to change, and pinning today's sentence here
+      // would make an improvement look like a regression.
+      await page.evaluate(() => { location.hash = '#v=run'; });
+      await page.waitForSelector('#b-mode', { state: 'visible' });
+      await page.selectOption('#b-mode', 'goal');
+      await page.fill('#b-goal', 'open the actions page');
+      await page.fill('#b-target', TARGET);
+      await page.click('#b-run');
+      await page.waitForFunction(
+        () => ((document.getElementById('b-verdict') || {}).innerText || '').trim().length > 0,
+        undefined, { timeout: 180000 });
+      const v = await page.locator('#b-verdict').innerText();
+      ok(!/exit\s*0/.test(v),
+         `a goal run with no model came back green — the silent downgrade HEALTH-001 removed: ${v.split('\n')[0]}`);
+      await shot(page, 'goal-without-a-model');
     });
 
     await check('the live area offers all three modes and says what each one is', async () => {
       await page.evaluate(() => { location.hash = '#v=chat'; });
-      await page.waitForTimeout(500);
+      await page.waitForSelector('#lv-mode-frame', { state: 'visible' });
       for (const mode of ['frame', 'actions', 'video']) {
         const btn = await page.$(`#lv-mode-${mode}`);
         ok(btn, `the live area has no ${mode} mode button`);
         await btn.click();
-        await page.waitForTimeout(1200);
+        // Wait for the pane to be SHOWN — the thing the assertions below are about — instead of
+        // guessing how long the switch takes. The video mode then goes to the network, so it is
+        // given its own wait for content rather than a shared sleep.
+        await page.waitForSelector(`#lv-${mode}`, { state: 'visible', timeout: 10000 });
+        if (mode === 'video') {
+          await page.waitForFunction(
+            () => ((document.getElementById('lv-video') || {}).innerText || '').trim().length > 20
+                  || !!document.querySelector('#lv-video img'),
+            undefined, { timeout: 20000 });
+        }
         const pane = await page.$(`#lv-${mode}`);
         ok(pane && !(await pane.evaluate((e) => e.hidden)), `the ${mode} pane did not become visible`);
         const text = (await pane.innerText()).trim();
@@ -133,7 +184,9 @@ async function main() {
     await check('the library and results views load without erroring', async () => {
       for (const view of ['library', 'results', 'logs']) {
         await page.evaluate((v) => { location.hash = `#v=${v}`; }, view);
-        await page.waitForTimeout(1500);
+        // The section becoming visible is the state; what it then fetches is captured by the
+        // screenshot and by the pageerror listener, which is what this check is actually for.
+        await page.waitForSelector(`[data-view="${view}"]`, { state: 'visible', timeout: 15000 });
         await shot(page, `view-${view}`);
       }
     });

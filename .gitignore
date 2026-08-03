@@ -1227,6 +1227,9 @@ runs/
 # Sentinel interim local store (M2; moves to Go store-gateway at M2b)
 state/
 
+# UI-smoke screenshots (scripts/ui-smoke.mjs default --out) — regenerated per run, uploaded by CI
+ui-smoke/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALLOW LIST (OVERRIDE IGNORES)
 # ─────────────────────────────────────────────────────────────────────────────
