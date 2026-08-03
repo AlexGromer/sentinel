@@ -213,6 +213,54 @@ jobs:
 
       # Ship only compiled outputs; node_modules / browsers / .venv are reinstalled
       # by downstream jobs (cheaper than dragging them through artifact storage).
+      - name: End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)
+        # The three DOM gates above check PROPERTIES of the page. None of them answers the one
+        # question a person asks — does the assembled, running product look like something usable.
+        # This drives the stack the way an operator would (connect → start a run → verdict → the
+        # three live modes → the accumulated views) and leaves PNGs behind.
+        #
+        # It runs HERE rather than in its own job because this job already has everything it needs:
+        # the Go binaries, pw-executor/dist, the Playwright browser and the brain venv. A separate
+        # job would reinstall all four to gain nothing.
+        #
+        # Waits are on STATE, never on a guessed interval — the lesson from the hub gate, whose
+        # three identity checks failed on every run for weeks behind an 800 ms sleep.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -e
+          # A short socket path: a unix address is capped near 108 bytes and a longer one fails with
+          # a bare "bind: invalid argument" that reads as a build problem.
+          SOCK=/tmp/ui-smoke-store.sock
+          ./bin/store-gateway --addr "$SOCK" --db /tmp/ui-smoke-store.db --no-auth &
+          for i in $(seq 1 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
+          [ -S "$SOCK" ] || { echo "::error::store-gateway socket never appeared"; exit 1; }
+          CONTROL_API_ADDR=127.0.0.1:8090 \
+          CONTROL_API_TOKEN=ui-smoke-token \
+          CONTROL_API_AGENTCTL="$PWD/bin/agentctl" \
+          CONTROL_API_SERVE_UI=1 \
+          CONTROL_API_UI_DIR="$PWD/docs" \
+          CONTROL_API_CORS_ORIGINS= \
+          CONTROL_API_STORE_ADDR="unix:$SOCK" \
+            ./bin/control-api > /tmp/ui-smoke-api.log 2>&1 &
+          for i in $(seq 1 200); do
+            curl -sf http://127.0.0.1:8090/healthz >/dev/null && break; sleep 0.1
+          done
+          curl -sf http://127.0.0.1:8090/healthz >/dev/null || {
+            echo "::error::control-api never answered /healthz"; sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
+          node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token \
+            --out "$PWD/ui-smoke" || {
+              echo "::error::the UI smoke failed — see the screenshots artifact"; sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1; }
+
+      - name: Upload UI smoke screenshots
+        # `always()`: a failing smoke is exactly when the pictures are worth having.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-smoke-screenshots
+          path: ui-smoke/
+          if-no-files-found: warn
+
       - name: Upload build artifact (bin/ + pw-executor/dist/)
         uses: actions/upload-artifact@v7
         with:

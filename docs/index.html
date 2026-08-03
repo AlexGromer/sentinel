@@ -1086,8 +1086,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
               <span id="lv-status" class="hint" style="margin-left:auto"></span>
             </div>
             <div id="lv-frame" class="lv-pane"><p class="hint" data-lang="ru">Кадры появятся, когда пойдёт прогон.</p><p class="hint" data-lang="en">Frames appear once a run is under way.</p></div>
-            <div id="lv-actions" class="lv-pane" hidden></div>
-            <div id="lv-video" class="lv-pane" hidden></div>
+            <!-- The standing hint is markup, not something JS remembers to write: an empty pane reads
+                 as broken and is indistinguishable from it. `lvAddAction` removes it on the first row
+                 (see #lv-actions-idle there) — this is the same promise the frame pane above makes,
+                 and the UI smoke enforces it for all three modes. -->
+            <div id="lv-actions" class="lv-pane" hidden><p class="hint" id="lv-actions-idle"><span data-lang="ru">Действия появятся, когда пойдёт прогон: сюда пишется, что инструмент делает по шагам.</span><span data-lang="en">Actions appear once a run is under way: this is where the tool writes what it does, step by step.</span></p></div>
+            <!-- Same rule. The video path replaces this wholesale the moment the mode is chosen
+                 (lvVideoStart writes either the stream, or the sentence saying why there is none),
+                 so the hint only covers the window before anyone has asked. -->
+            <div id="lv-video" class="lv-pane" hidden><p class="hint"><span data-lang="ru">Выберите этот режим, чтобы запросить живое видео у сервиса браузера.</span><span data-lang="en">Choose this mode to ask the browser service for live video.</span></p></div>
           </div>
 
           <!-- The run as it happens. The business/tool split already exists in the catalogue
@@ -3546,6 +3553,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
   function lvAddAction(kind, text){
     var box = ge('lv-actions'); if (!box) return;
+    /* The standing "nothing yet" hint goes the moment there IS something. Left in place it would
+       sit above the rows claiming the opposite of what is on screen. */
+    var idle = ge('lv-actions-idle'); if (idle) idle.remove();
     var row = document.createElement('div');
     row.className = 'rf-row rf-'+(kind === 'tool' ? 'tool' : 'business');
     row.innerHTML = '<span class="rf-src">'+esc(kind)+'</span><span>'+text+'</span>';
