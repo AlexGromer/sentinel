@@ -63,7 +63,19 @@ func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/live/status", nil)
+	// The request-construction error is CHECKED, not dropped: `base` comes from an operator's
+	// CONTROL_API_CDP_LIVE, so a typo makes NewRequest return nil, and `Do(nil)` dereferences it. A
+	// config mistake would reach the operator as a stack trace instead of as the sentence below —
+	// and proxyLive two functions down already gets this right, which made it an inconsistency
+	// rather than a considered choice.
+	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/live/status", nil)
+	if rerr != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"available": false,
+			"reason":    fmt.Sprintf("CONTROL_API_CDP_LIVE is not a usable URL (%q): %v", base, rerr),
+		})
+		return
+	}
 	resp, err := liveClient.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{

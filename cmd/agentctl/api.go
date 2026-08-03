@@ -48,6 +48,16 @@ var apiVerbs = []apiVerb{
 	{Verb: "health", Method: "GET", Path: "/readyz", Help: "readiness: store, LLM endpoint, config"},
 	{Verb: "health live", Method: "GET", Path: "/healthz", Help: "liveness only (no dependency probes)"},
 
+	// ADR-111 — the live view from a terminal. `frame` and `stream` are Stream verbs: the response is
+	// JPEG (or a multipart of JPEGs), so it is copied through untouched and redirected to a file.
+	// A capability that exists in the UI and not here is the gap ADR-107 exists to close, and a
+	// screenshot of what the browser is doing is exactly what a CI job or a remote operator wants
+	// without opening a browser to look at a browser.
+	//   agentctl live frame > shot.jpg
+	{Verb: "live status", Method: "GET", Path: "/v1/live/status", Help: "is a live view available, and is a page open"},
+	{Verb: "live frame", Method: "GET", Path: "/v1/live/frame.jpg", Stream: true, Help: "one JPEG of what the browser sees, to stdout"},
+	{Verb: "live stream", Method: "GET", Path: "/v1/live/mjpeg", Stream: true, Help: "the live screencast as multipart JPEG, to stdout (Ctrl-C to stop)"},
+
 	{Verb: "config schema", Method: "GET", Path: "/v1/config-schema", Help: "every knob the product has, with its env name and default"},
 	{Verb: "config get", Method: "GET", Path: "/v1/config", Help: "the persisted config document"},
 	{Verb: "config set", Method: "PUT", Path: "/v1/config", Stdin: true, Help: "replace the persisted config from a JSON file (--file, or - for stdin)"},
@@ -361,6 +371,20 @@ func cmdAPI(repo string, v *apiVerb, rest []string) int {
 	}
 
 	raw, _ := io.ReadAll(resp.Body)
+
+	// A FAILED stream verb writes its body to STDERR, never stdout. `agentctl live frame > shot.jpg`
+	// is the intended use, and on a 503 the old path put the server's explanation INTO shot.jpg —
+	// producing a file that looks like a corrupt image and hides a message that was perfectly clear.
+	// Non-stream verbs keep printing to stdout: their output is text a person is reading, and a
+	// pipeline consuming it wants the error where the data would have been.
+	if v.Stream {
+		if len(raw) > 0 {
+			fmt.Fprintf(os.Stderr, "%s\n", strings.TrimRight(string(raw), "\n"))
+		}
+		fmt.Fprintf(os.Stderr, "error: %s %s -> %d\n", v.Method, path, resp.StatusCode)
+		return 4
+	}
+
 	// Re-indent JSON so a person reading a terminal sees structure; anything else is passed through
 	// byte-for-byte rather than mangled into a quoted string.
 	var pretty any

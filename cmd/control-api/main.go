@@ -1608,8 +1608,18 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 // is monotonic. It carries no foreign text — only the artifact name and a timestamp.
 func markDownloaded(artifactDir, name string) {
 	m := map[string]any{"downloaded": name, "at": time.Now().UTC().Format(time.RFC3339)}
-	if b, err := json.Marshal(m); err == nil {
-		_ = os.WriteFile(filepath.Join(artifactDir, "downloaded.json"), b, 0o600)
+	b, err := json.Marshal(m)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(artifactDir, "downloaded.json"), b, 0o600)
+	}
+	// Best-effort, but not SILENT. A failed marker write makes a run that WAS downloaded
+	// indistinguishable from one that never was — and the retention policy this marker exists to
+	// feed would then delete it as unclaimed. The download itself still succeeds (the operator has
+	// the bytes; refusing it because a marker failed would be worse), so this reports rather than
+	// fails — but "the record of it is missing" must be knowable, not inferred later from a
+	// deletion nobody expected.
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] download marker not written for %s: %v\n", artifactDir, err)
 	}
 }
 

@@ -15,7 +15,9 @@ package main
 // to look at what happened so far. SIGKILL follows only if the tree ignores it.
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -78,6 +80,7 @@ func (s *server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 
 	// Wait briefly for the graceful exit, then force it. Bounded so the request cannot hang.
 	forced := false
+	forceErr := ""
 	deadline := time.Now().Add(cancelGrace)
 	for time.Now().Before(deadline) {
 		s.mu.RLock()
@@ -93,14 +96,30 @@ func (s *server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if stillRunning {
 		forced = true
-		_ = killProcTree(pid, true)
+		// The SIGKILL result is checked, like the SIGTERM one four lines above. It was discarded,
+		// which meant the response said `"forced": true` whether or not the kill landed — telling a
+		// caller a run was force-stopped while it may still be running is the one answer worse than
+		// admitting the stop failed. Reported rather than returned as an error: the cancellation
+		// path has already done everything it can, and the caller needs the outcome, not a 500 that
+		// hides which half worked.
+		if err := killProcTree(pid, true); err != nil {
+			forceErr = err.Error()
+			fmt.Fprintf(os.Stderr, "[control-api] force-kill of run %s (pid %d) failed: %v\n", rec.ID, pid, err)
+		}
 	}
 
 	s.mu.RLock()
 	state, code := rec.State, rec.ExitCode
 	s.mu.RUnlock()
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"run_id": id, "canceled": true, "signalled": true, "forced": forced,
 		"state": state, "exit_code": code,
-	})
+	}
+	// Present ONLY when the force-kill failed. A caller that sees `forced:true` with no
+	// `force_error` knows the kill landed; one that sees both knows the process may still be alive.
+	// An always-present empty string would make the distinction easy to miss.
+	if forceErr != "" {
+		resp["force_error"] = forceErr
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

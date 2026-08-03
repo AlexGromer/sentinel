@@ -118,6 +118,8 @@ let liveLastAsk = 0;
 let liveIdleTimer: NodeJS.Timeout | null = null;
 /** Waiters woken by each new frame — this is what makes the MJPEG endpoint a stream, not a poll. */
 let liveWaiters: Array<() => void> = [];
+/** Acks that failed. Non-zero means the stream has stopped or is about to. */
+let liveAckErrors = 0;
 
 /**
  * A SECOND Playwright client, attached over CDP to the very Chromium this process launched.
@@ -177,9 +179,17 @@ async function liveStart(): Promise<string | null> {
     const woken = liveWaiters;
     liveWaiters = [];
     for (const w of woken) w();
-    // The ack is what keeps frames coming: without it Chromium sends exactly one and stops. So a
-    // failure here is not cosmetic — it is the feature ending silently.
-    try { await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }); } catch { /* page gone */ }
+    // The ack is what keeps frames coming: without it Chromium sends exactly one and stops. The
+    // comment here used to say exactly that and then swallow the failure anyway, which left the
+    // live view able to go dark mid-run with the operator's only clue being "the picture stopped".
+    // It is now COUNTED and SAID: /live/status carries ack_errors, so a stalled stream has a
+    // number behind it rather than a guess.
+    try {
+      await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId });
+    } catch (e) {
+      liveAckErrors += 1;
+      if (liveAckErrors === 1) log('screencast ack failed — frames will stop:', (e as Error).message);
+    }
   });
   await cdp.send('Page.startScreencast', {
     format: 'jpeg', quality: FRAME_QUALITY,
@@ -219,7 +229,7 @@ async function liveStart(): Promise<string | null> {
 async function liveStop(reason: string): Promise<void> {
   if (!liveSession) return;
   const s = liveSession;
-  liveSession = null; livePage = null; liveFrame = null;
+  liveSession = null; livePage = null; liveFrame = null; liveAckErrors = 0;
   try { await s.send('Page.stopScreencast'); } catch { /* page gone */ }
   try { await s.detach(); } catch { /* already detached */ }
   log(`screencast stopped (${reason})`);
@@ -254,6 +264,7 @@ function startLiveServer(): Promise<http.Server> {
         has_page: !!p,
         url: p ? p.url() : null,
         last_frame_ts: liveFrame ? liveFrame.ts : null,
+        ack_errors: liveAckErrors,
         error: lookupError,
       }));
     }
