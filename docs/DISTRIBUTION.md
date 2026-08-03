@@ -51,9 +51,9 @@ docker compose build                                      # собрать об�
 docker compose run --rm sentinel --help                   # справка agentctl
 docker compose run --rm sentinel run \
     --target "https://your-app.example.com"              # explore против реального AUT
+docker compose up                                         # ПРОДУКТ: control-api + store + browser + хаб
 docker compose --profile demo up                          # zero-dep демо (fixture file://)
 docker compose --profile ollama up -d ollama             # локальная модель (OpenAI-compat)
-docker compose --profile webui up                        # setup-WebUI + калькуляторы локально → localhost:8088/setup/
 ```
 
 ### Сервисы
@@ -71,9 +71,9 @@ docker compose --profile webui up                        # setup-WebUI + кал�
 
 | Режим | Как запустить | Порты | CORS | Токен в UI |
 |---|---|---|---|---|
-| 1 — headless | `docker compose --profile control-api up control-api` | 8090 | не нужен | UI не запускается; клиент сам шлёт `Bearer` |
-| 2 — split (прежний дефолт) | `docker compose --profile control-api --profile webui up` | 8088 + 8090 | нужен allowlist (`CONTROL_API_CORS_ORIGINS`) | оператор копирует токен вручную в Settings |
-| 3 — single-service (рекомендуется) | `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api` → открыть `http://localhost:8090/` | 8090 | не нужен — same-origin запросы не являются CORS-запросами, allowlist можно оставить пустым | одноразовая ссылка `?bootstrap=<nonce>`, печатается при старте |
+| 1 — headless | `docker compose up control-api` | 8090 | не нужен | UI не запускается; клиент сам шлёт `Bearer` |
+| 2 — split (дефолт compose) | `docker compose up` | 8088 + 8090 | нужен allowlist (`CONTROL_API_CORS_ORIGINS`) | оператор копирует токен вручную в Settings |
+| 3 — single-service (рекомендуется) | `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api` → открыть `http://localhost:8090/` | 8090 | не нужен — same-origin запросы не являются CORS-запросами, allowlist можно оставить пустым | одноразовая ссылка `?bootstrap=<nonce>`, печатается при старте |
 
 **Жизненный цикл токена (все режимы).** Больше не нужно придумывать `CONTROL_API_TOKEN` перед первым запуском:
 если переменная не задана, control-api сам генерирует 32 случайных байта (hex) и атомарно сохраняет их в

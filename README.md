@@ -83,13 +83,17 @@ docker compose run --rm sentinel run --target "https://your-app.example" --goal 
 ```
 **Живой UI одним сервисом (рекомендуемый путь, ADR-064):**
 ```bash
-CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose --profile control-api up control-api
+CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api
 ```
 → открой ссылку `?bootstrap=…`, которую control-API печатает при старте: один порт (`:8090`), никакого CORS,
 токен подставляется в UI сам (одноразово). Токен генерируется автоматически и хранится в
 `state/control-api.token` — придумывать его заранее больше не нужно.
 
-**Setup-WebUI отдельным сервисом (статика, air-gapped, в составе бандла):** `docker compose --profile webui up` →
+**Весь стек одной командой:** `docker compose up` поднимает control-API, хранилище, сервис браузера
+(живой вид) и setup-WebUI — четыре сервиса, связанные между собой по умолчанию. Отдельные флаги нужны
+только тому, что развёртывание может не хотеть: `--profile ollama`, `--profile litellm`, `--profile demo`.
+
+**Setup-WebUI (статика, air-gapped, в составе бандла)** входит в этот же `up` →
 открой `http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
 
 **Локальная модель** (без облака): раскомментируйте блок `LLM_*` в [`docker-compose.yml`](docker-compose.yml) и

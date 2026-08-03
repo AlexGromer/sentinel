@@ -113,7 +113,7 @@ Start the service in single-service mode. The access token is generated automati
 ```powershell
 $env:CONTROL_API_SERVE_UI = "1"
 $env:CONTROL_API_CORS_ORIGINS = ""
-docker compose --profile control-api up -d control-api    # 127.0.0.1:8090
+docker compose up -d control-api                          # 127.0.0.1:8090
 docker compose logs -f control-api                        # find the line "open http://127.0.0.1:8090/?bootstrap=<nonce>"
 ```
 

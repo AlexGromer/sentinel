@@ -1654,11 +1654,8 @@ func (s *server) storeMarker() map[string]any {
 	if s.store != nil {
 		return map[string]any{"store": true}
 	}
-	return map[string]any{
-		"store": false,
-		"store_reason": "this deployment has no store-gateway, so nothing is persisted — start it with " +
-			"`docker compose --profile store up -d store-gateway` and set CONTROL_API_STORE_ADDR",
-	}
+	// One constant, not a second copy — see session.go::storeAbsentReason.
+	return map[string]any{"store": false, "store_reason": storeAbsentReason}
 }
 
 // withStore merges the store marker into a response body.

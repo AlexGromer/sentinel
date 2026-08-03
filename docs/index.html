@@ -373,7 +373,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       Работают калькуляторы, генераторы конфигурации и мастер.
       Чтобы страница ожила, поднимите свой control-API и впишите его адрес в «Подключение»
       (⚙&nbsp;Настройки):
-      <code>docker compose -f docker-compose.ghcr.yml --profile control-api up control-api</code>.
+      <code>docker compose -f docker-compose.ghcr.yml up</code>.
       С https-страницы браузер пускает только <code>http://localhost</code> — это исключение для
       локального адреса, и работает оно в Chrome и Edge.</span>
     <span data-lang="en"><b>This is a showcase.</b> The page is open with no control-API behind it,
@@ -381,7 +381,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       disabled here. The calculators, the config generators and the wizard work.
       To bring it to life, start your own control-API and enter its address under “Connection”
       (⚙&nbsp;Settings):
-      <code>docker compose -f docker-compose.ghcr.yml --profile control-api up control-api</code>.
+      <code>docker compose -f docker-compose.ghcr.yml up</code>.
       From an https page the browser only allows <code>http://localhost</code> — that is the
       local-address exemption, and it works in Chrome and Edge.</span>
   </div>
@@ -762,8 +762,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <span data-lang="en">Full run configuration lives in the <a href="./setup/">setup wizard</a>: it reads the schema from the server and saves the config back to it. It picks up the token from this tab on its own, as long as this tab stays open.</span>
     </p>
     <p class="hint" style="margin-top:.6rem">
-      <span data-lang="ru">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (mixed-content). Control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла (<code>docker compose --profile control-api up</code>, порт 8090) ограничений нет.</span>
-      <span data-lang="en">From GitHub Pages live mode only works against <code>http://localhost</code> (mixed-content exemption). The control-API must emit CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). From the bundle (<code>docker compose --profile control-api up</code>, port 8090) there is no such restriction.</span>
+      <span data-lang="ru">С GitHub Pages «живой» режим работает только против <code>http://localhost</code> (mixed-content). Control-API должен слать CORS на этот origin (<code>CONTROL_API_CORS_ORIGINS</code>). Из бандла (<code>docker compose up</code>, порт 8090) ограничений нет.</span>
+      <span data-lang="en">From GitHub Pages live mode only works against <code>http://localhost</code> (mixed-content exemption). The control-API must emit CORS for that origin (<code>CONTROL_API_CORS_ORIGINS</code>). From the bundle (<code>docker compose up</code>, port 8090) there is no such restriction.</span>
     </p>
   </section>
 
@@ -3593,10 +3593,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       box.innerHTML = '<p class="hint">'
         + bi('видео недоступно в этом развёртывании: ','video is unavailable in this deployment: ')
         + esc((st && st.reason) || '?')
-        + '<br><br>' + bi('Видео отдаёт сервис браузера. Поднимите его и укажите адрес control-API:',
-                          'Video comes from the browser service. Start it and point control-api at it:')
-        + '<br><code>docker compose --profile browser up -d browser</code>'
-        + '<br><code>CONTROL_API_CDP_LIVE=http://browser:9224</code>'
+        + '<br><br>' + bi('Видео отдаёт сервис браузера. В compose-стеке он входит в дефолтный запуск, '
+                          + 'и control-API уже указывает на него:',
+                          'Video comes from the browser service. In the compose stack it is part of the '
+                          + 'default start-up and control-api already points at it:')
+        + '<br><code>docker compose up</code>'
+        + '<br><br>' + bi('Вне compose поднимите его сами и задайте адрес:',
+                          'Outside compose, start it yourself and set the address:')
+        + '<br><code>CONTROL_API_CDP_LIVE=http://&lt;host&gt;:9224</code>'
         + '<br><br>' + bi('Пока его нет, вкладка «Браузер» показывает по кадру на каждый шаг — это работает всегда.',
                           'Until then the Browser tab shows one frame per step, which always works.')
         + '</p>';
@@ -4237,10 +4241,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       host.innerHTML = '<div class="lgverdict"><b>'+
         bi('Это развёртывание ничего не сохраняет','This deployment does not persist anything')+'</b><br>'+
         bi('Библиотека, прогоны, беседы и результаты хранятся в store-gateway, а он не подключён. '+
-           'Поднять: <code>docker compose --profile store up -d store-gateway</code> и задать '+
+           'Поднять: <code>docker compose up -d store-gateway</code> и задать '+
            '<code>CONTROL_API_STORE_ADDR</code>.',
            'The library, runs, conversations and results live in the store-gateway, which is not wired. '+
-           'Start it: <code>docker compose --profile store up -d store-gateway</code> and set '+
+           'Start it: <code>docker compose up -d store-gateway</code> and set '+
            '<code>CONTROL_API_STORE_ADDR</code>.')+'</div>';
       return true;
     }
