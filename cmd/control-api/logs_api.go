@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	eventcatalog "github.com/AlexGromer/sentinel/brain"
+	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
 // A page is bounded so one request cannot pull a multi-megabyte run into a browser tab.
@@ -154,19 +155,9 @@ func sameRecord(a, b *logRecord) bool {
 
 // logRank maps a level name to its ordering. An empty or unknown name yields 0, so an absent `lvl`
 // filter admits everything rather than silently excluding records.
-func logRank(lvl string) int {
-	switch strings.ToLower(strings.TrimSpace(lvl)) {
-	case "debug":
-		return 10
-	case "info":
-		return 20
-	case "warn":
-		return 30
-	case "error":
-		return 40
-	}
-	return 0
-}
+// logRank orders the levels. Delegates to svclog so the level vocabulary that decides what is WRITTEN
+// and the one that decides what is SHOWN cannot drift apart.
+func logRank(lvl string) int { return svclog.Rank(lvl) }
 
 // handleEventsCatalog serves the catalogue verbatim so the browser can render the reader's language
 // without the server doing any i18n.

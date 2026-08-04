@@ -162,6 +162,14 @@ func (s *server) routes() []routeSpec {
 // the decisions only they can make — what to read, what to write, what the answer looks like.
 func (s *server) guard(sp routeSpec) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// HEALTH-005: every call is journalled from HERE, the one place all 42 routes pass through.
+		// Forty-two hand-placed log lines is how ADR-109's defect was produced, and the ones that were
+		// forgotten looked exactly like the ones that were not.
+		started := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		w = rec
+		defer func() { s.journalCall(sp, rec, r, started) }()
+
 		needsCredential := sp.access == accessAuthed || sp.access == accessAdmin
 		if sp.legacyOpen && !s.accountsExist() {
 			needsCredential = false
@@ -208,6 +216,11 @@ func (s *server) mayTouch(w http.ResponseWriter, r *http.Request, domain ownedDo
 		return true
 	}
 	// Foreign. Answer as though it were missing — see the note at the top of this file.
+	// HEALTH-005: mark it for the journal HERE. Inferring "foreign" from the 404 downstream would file
+	// every genuinely missing row as somebody reaching for another account's data.
+	if sr, ok := w.(*statusRecorder); ok {
+		sr.foreign = true
+	}
 	if r.Method == http.MethodDelete {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 		return false

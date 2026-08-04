@@ -28,6 +28,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -380,6 +381,11 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.invalidateReadiness()
+		// HEALTH-005: which SECTIONS changed, not the document. The values are the operator's settings
+		// and can carry endpoints and budgets; the journal answers "who changed what area, and when",
+		// which is what makes "who turned the map gate off" answerable without storing the config twice.
+		s.journalEvent("service.config_changed", "info",
+			"Changed the configuration (standalone file tier)", r, "sections: "+sectionNames(global, personal))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
 		return
@@ -413,6 +419,11 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		written["personal"] = globalSectionsIn(personal)
 	}
 	s.invalidateReadiness() // the "config" check just changed; do not serve a stale 503 for 3 more seconds
+	// Global and personal are distinguished on purpose: changing the tool for everybody and changing
+	// your own defaults are different events, and one word for both would hide the first inside the second.
+	s.journalEvent("service.config_changed", "info",
+		"Changed the configuration", r, "sections: "+sectionNames(global, personal),
+		"global: "+written["global"], "personal: "+written["personal"])
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written})
 }
@@ -514,4 +525,22 @@ func (s *server) loadStartupConfig() {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "control-api: config %q loaded (updated_at=%s)\n", rec.Key, rec.UpdatedAt)
+}
+
+// sectionNames lists the sections a config write touched, for the journal. Names only — the VALUES are
+// the operator's settings and carry endpoints, budgets and paths; recording them would make the journal
+// a second copy of the configuration, with none of the protection the first one has.
+func sectionNames(global, personal map[string]json.RawMessage) string {
+	out := make([]string, 0, len(global)+len(personal))
+	for k := range global {
+		out = append(out, k)
+	}
+	for k := range personal {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return "(none)"
+	}
+	return strings.Join(out, " ")
 }

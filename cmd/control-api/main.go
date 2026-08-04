@@ -50,6 +50,7 @@ import (
 	"time"
 
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
+	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
 // version is stamped by the release build (`go build -ldflags "-X main.version=<tag>"`, .github/workflows/
@@ -224,6 +225,10 @@ type server struct {
 	// accounts memoizes "does this deployment have any account?" — the question that decides whether
 	// the pre-identity open reads still answer without a credential (cmd/control-api/access.go).
 	accounts accountsMemo
+	// journal is the SERVICE-plane log (HEALTH-005): what the tool itself did, as opposed to what a
+	// run did. Nil when it could not be opened — every call site tolerates that, because a service
+	// must not refuse to start over its own log file, and the failure is reported once by svclog.Open.
+	journal *svclog.Writer
 	mu       sync.RWMutex
 	runs     map[string]*run
 
@@ -2255,12 +2260,29 @@ func main() {
 			s.corsAllow[o] = true
 		}
 	}
+	// HEALTH-005: the service journal opens BEFORE anything else worth recording happens — the store
+	// dial, the token decision and the first request all belong in it. `state` rather than the repo
+	// root because that is the directory already mounted as a volume in every compose stack, so the
+	// journal survives `docker compose down` exactly as the SQLite databases beside it do.
+	s.journal = svclog.Open(filepath.Join(repo, "state"), "control-api")
+	defer func() {
+		s.journalEvent("service.stopped", "info", "Service control-api stopped: process exit", nil)
+		s.journal.Close()
+	}()
+	s.journalEvent("service.started", "info",
+		"Service control-api started: version "+version+", brought up by "+svclog.Supervisor()+
+			", pid "+strconv.Itoa(os.Getpid()), nil, "addr: "+addr)
+
 	// M13 (ADR-050): connect to a persistent store-gateway if configured; else runs stay in-memory
 	// (standalone/offline path, unchanged). Fail-open — an unreachable gateway only warns.
 	if sa := os.Getenv("CONTROL_API_STORE_ADDR"); sa != "" {
 		s.storeAddr = sa // remembered even on failure — see server.storeAddr / configTier (ADR-075)
 		if sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN")); err != nil {
 			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q unreachable: %v (runs stay in-memory, lost on restart)\n", sa, err)
+			// The one event a store-backed journal could never record: the store being unreachable.
+			s.journalEvent("service.store_unreachable", "warn",
+				"A store was declared ("+sa+") and did not answer at start: "+err.Error()+
+					" — runs stay in memory", nil)
 		} else {
 			s.store = sc
 			defer sc.close()
@@ -2274,6 +2296,10 @@ func main() {
 	for _, w := range tokWarnings {
 		fmt.Fprintf(os.Stderr, "control-api: WARNING — %s\n", w)
 	}
+	// HEALTH-005: where the machine token came from. The VALUE is never journalled — only which of the
+	// three decisions was taken, which is what answers "why does my script's token no longer work".
+	s.journalEvent("service.token_source", "info", "Machine token: "+string(tokSrc), nil,
+		"warnings: "+strconv.Itoa(len(tokWarnings)))
 	switch tokSrc {
 	case tokenDisabled:
 		fmt.Fprintln(os.Stderr, "control-api: WARNING — no bearer token (CONTROL_API_AUTOTOKEN=0); POST /v1/runs will 403 (read-only).")

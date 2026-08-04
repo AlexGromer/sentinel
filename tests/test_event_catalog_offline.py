@@ -58,8 +58,13 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # ADR-089 widened this to the Go control-api: its human-facing lines were outside the catalogue
 # entirely, arriving in the UI through the `system.unclassified` catch-all at `info` — so a Go
 # warning was filed at the same severity as "browser launched".
+# A value may name a FILE or a DIRECTORY. control-api became a directory in HEALTH-005: the gate read
+# only main.go, so a code emitted from any other file of the same binary was invisible to it — a blind
+# spot in the one check whose job is "the catalogue cannot claim a message nothing sends". The service
+# codes live in access.go/session.go/configfile.go, and the widening is what lets them be checked at
+# all rather than a concession made to let them pass.
 EMITTERS = {"pw-executor": "pw-executor/src/server.ts",
-            "control-api": "cmd/control-api/main.go"}
+            "control-api": "cmd/control-api"}
 
 # An emission is `log("<code>"` with a literal first argument. A non-literal call (a code built at
 # runtime) is deliberately unmatched and reported separately: the catalogue cannot vouch for a code it
@@ -82,8 +87,13 @@ def emitter_codes() -> dict[str, set[str]]:
         if not path.exists():
             fail(f"EMITTERS names {name} -> {rel}, which does not exist")
             continue
-        src = path.read_text()
-        for code in re.findall(r"['\"]((?:app|test|ui)\.[\w.]+)['\"]", src):
+        files = sorted(path.glob("*.go")) if path.is_dir() else [path]
+        # Test files are excluded on purpose: a code that appears only in a _test.go is emitted by
+        # nothing the product ships, and counting it would let a phantom entry pass by being mentioned
+        # in its own gate.
+        files = [f for f in files if not f.name.endswith("_test.go")]
+        src = "\n".join(f.read_text() for f in files)
+        for code in re.findall(r"['\"]((?:app|test|ui|service)\.[\w.]+)['\"]", src):
             found.setdefault(code, set()).add(name)
     return found
 

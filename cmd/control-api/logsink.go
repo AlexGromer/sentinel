@@ -40,6 +40,7 @@ import (
 	"time"
 
 	eventcatalog "github.com/AlexGromer/sentinel/brain"
+	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
 // The wire format brain/eventlog.py emits: `[warn|llm] llm.no_anthropic_key: message`.
@@ -66,37 +67,12 @@ func logEnvMB(name string, def int) int {
 	return n
 }
 
-// logRecord is one line of run.jsonl. Field names are short because a long run writes many of them.
-type logRecord struct {
-	Seq int    `json:"seq"`
-	TS  string `json:"ts"`
-	Lvl string `json:"lvl"`
-	Cat string `json:"cat"`
-	// Src is the source axis (tool / application / testing), derived from Cat so the two cannot
-	// disagree. It answers "is my app misbehaving or the tool?" before any subsystem question.
-	Src      string `json:"src,omitempty"`
-	Mod      string `json:"mod,omitempty"`
-	Code     string `json:"code"`
-	Msg      string `json:"msg"`
-	Phase    string `json:"phase,omitempty"`
-	Degrades bool   `json:"degrades,omitempty"`
-	// Fault is set only on a record that can END the run (HEALTH-004): whose problem the ending is.
-	// It rides on the record rather than being recomputed by readers so run.jsonl stays self-describing
-	// — the file is what a person greps after the fact, when neither the process nor the UI is around.
-	Fault string `json:"fault,omitempty"`
-	// N is set by the READER, never on disk: handleRunLogs collapses consecutive identical records
-	// and reports how many there were. It is what makes a stuck run legible — a loop reads as one row
-	// with a count instead of 34 identical rows nobody scrolls through.
-	N int `json:"n,omitempty"`
-	// Parent links a stack-trace frame to the error record above it, so one Node failure renders as
-	// one problem that expands rather than twenty rows that look like twenty problems.
-	Parent int `json:"parent,omitempty"`
-	// Raw carries the original line for an unclassified record, so run.jsonl stays self-describing
-	// and a person grepping it is never left without the source text.
-	Raw string `json:"raw,omitempty"`
-	// Step is the run step this record happened during, correlated at the boundary (see logSink.step).
-	Step int `json:"step,omitempty"`
-}
+// logRecord is one line of run.jsonl — and, since HEALTH-005, of the SERVICE journal too. The struct
+// moved to internal/svclog because a second stream now shares the format, and the one thing a wire
+// format must never become is two structs: this codebase has already paid for that with `lvKindOf`
+// disagreeing with the event catalogue about audiences. The alias keeps every existing reference and
+// every test reading as it did.
+type logRecord = svclog.Record
 
 type logSink struct {
 	mu       sync.Mutex
