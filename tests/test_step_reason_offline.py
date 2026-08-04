@@ -87,6 +87,36 @@ def test_the_classifier_asks_the_transport_not_the_message():
 # --------------------------------------------------------------------------------------------
 # 2. The emitter: the domain picks the CODE, so the split lands in the audience filter.
 # --------------------------------------------------------------------------------------------
+def test_the_real_executor_boundary_raises_the_transport_type():
+    """The classifier is only as good as the boundary that feeds it.
+
+    Added after a mutation SURVIVED: replacing `raise ExecutorTransportError` with a plain
+    `RuntimeError` in brain/executor.py left every test above green, because the fakes raise the
+    transport type directly and never touch the real raise site. That is this project's recurring
+    trap — measuring a copy of the capability instead of the capability.
+
+    So this drives the SHIPPED `Executor` against a subprocess that exits immediately: the read
+    returns nothing, which is exactly what a dead executor looks like.
+    """
+    from brain.executor import Executor
+    ex = Executor(f"{sys.executable} -c pass")
+    try:
+        ex.call("browser.click", locator={"role": "button"})
+    except ExecutorTransportError as e:
+        check("a subprocess that closed raises the TRANSPORT type from the real client", True)
+        check("...and the classifier then owns it", _fault_of(e) == "tool")
+    except Exception as e:                      # noqa: BLE001 — the point is which type arrived
+        check("a subprocess that closed raises the TRANSPORT type from the real client", False,
+              f"got {type(e).__name__}: {e}")
+        check("...and the classifier then owns it", False, f"_fault_of -> {_fault_of(e)}")
+    else:
+        check("a subprocess that closed raises the TRANSPORT type from the real client", False,
+              "the call returned normally against a dead subprocess")
+        check("...and the classifier then owns it", False, "no exception to classify")
+    finally:
+        ex.close()
+
+
 def test_the_two_failures_land_in_different_audiences():
     app_line = emitted({"step_id": 4, "type": "assert", "outcome": "failed", "fault": "app",
                         "assert": {"condition": "text_equals", "expect_ok": True,
@@ -114,6 +144,12 @@ def test_the_reason_reaches_the_line_and_not_only_the_artifact():
                                "observed": False, "actual": "Ошибка 500"}})
     check("the assertion's condition is on the line", "text_equals" in line, line)
     check("WHAT THE PAGE ACTUALLY SHOWED is on the line", "Ошибка 500" in line, line)
+    # Asserted on the OBSERVATION SLOT, not just on the value appearing somewhere. A mutation that
+    # dropped `actual` from _observed_of survived the line above, because the same string also reaches
+    # the sentence through `reason` — the assertion was satisfied by a different channel than the one
+    # it meant to test.
+    check("the observation slot carries the captured value, not the boolean",
+          "observed Ошибка 500" in line, line)
 
     thrown = emitted({"step_id": 8, "type": "click", "outcome": "failed", "fault": "app",
                       "error": "browser.click: Timeout 30000ms exceeded waiting for locator"})
