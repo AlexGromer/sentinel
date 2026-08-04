@@ -142,6 +142,48 @@ def check_exit_promises_match_the_code(events):
     return checked
 
 
+def check_source_overrides(cat, events):
+    """HEALTH-004: an event may override the SOURCE its category implies, and must justify it.
+
+    The source axis is derived (cat -> sources -> audiences) precisely so the two cannot disagree, and
+    every override weakens that guarantee. So the override is allowed, narrow, and has to argue for
+    itself: without `src_why` the gate refuses it. An unexplained override is how a second, quietly
+    diverging classification starts — this page already carries one (`lvKindOf`).
+
+    The case it exists for: `heal.drift_*` are emitted by the healer and are statements about the
+    APPLICATION. Their category stays `heal` — drift is a healing concept and a `heal` filter must
+    show it — but with the derived source the `business` audience hid the product's only report that
+    the interface under test had moved.
+    """
+    valid_sources = set(cat["sources"])
+    overrides = {c: e for c, e in events.items() if e.get("src")}
+    for code, e in overrides.items():
+        if e["src"] not in valid_sources:
+            fail(f"{code}: src override {e['src']!r} is not a declared source ({sorted(valid_sources)})")
+        if not (e.get("src_why") or "").strip():
+            fail(f"{code}: overrides its source with no `src_why` — an override that cannot argue for "
+                 f"itself is how a second, silently diverging classification begins")
+        if e["src"] == cat_source(cat, e["cat"]):
+            fail(f"{code}: overrides its source to {e['src']!r}, which is what the category already "
+                 f"implies — a no-op override is noise that will outlive the reason it was added")
+
+    # The drift codes by name: this is the whole point of the mechanism, and a future edit that
+    # re-derives them has to argue with this line rather than quietly change a filter's meaning.
+    for code in ("heal.drift_rebind", "heal.drift_reground", "heal.drift_summary"):
+        if events[code].get("src") != "application":
+            fail(f"{code} must be sourced to the application: «the interface changed» is a fact about "
+                 f"the application under test, and with the derived source the business filter hides "
+                 f"the only place the product says so")
+    return len(overrides)
+
+
+def cat_source(cat, category):
+    for src, meta in cat["sources"].items():
+        if category in meta["cats"]:
+            return src
+    return ""
+
+
 def check_fault_axis(cat, events):
     """HEALTH-004: every code that can END a run says WHOSE problem the ending is.
 
@@ -291,6 +333,7 @@ def main() -> int:
     # the run carries the answer and the exit_codes entry is only the fallback. Both must declare it,
     # or a run whose outcome nobody can attribute reaches the dashboard as the coarse word `problem`.
     terminal_codes, extra_faults = check_fault_axis(cat, events)
+    overrides = check_source_overrides(cat, events)
 
     # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
     # matching that template against the rendered string. If the two drift, the UI silently falls back
@@ -397,7 +440,7 @@ def main() -> int:
           f"{len(cat['audiences'])} audiences, "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
           f"{terminal_codes} terminal + {extra_faults} decisive codes attributed across "
-          f"{len(cat['faults'])} faults, "
+          f"{len(cat['faults'])} faults, {overrides} source override(s), "
           f"{len(patterns)} foreign patterns; RU/EN complete")
     return 0
 

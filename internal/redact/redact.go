@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"strings"
 
+	eventcatalog "github.com/AlexGromer/sentinel/brain"
 	"github.com/AlexGromer/sentinel/internal/configguard"
 )
 
@@ -72,6 +73,27 @@ func Line(line string) string {
 		out = strings.ReplaceAll(out, redactedMark+" "+redactedMark, redactedMark)
 	}
 	return out
+}
+
+// isOurEventCode reports whether `name` is a catalogued event code — in which case the `code:` that
+// opens every one of our log lines is a LABEL, not a credential assignment.
+//
+// The defect this fixes, measured 2026-08-04 on a real run and caught by a SCREENSHOT rather than by
+// any gate: the sink writes `[warn|llm] llm.no_anthropic_key: No AI key (planner) …`, the scanner read
+// `llm.no_anthropic_key` as a credential name (it ends in `key`) and blanked what followed the colon —
+// so the product's own message reached the operator as `[REDACTED] AI key (planner)`, having lost its
+// first word. `fatal.secret_would_leak_to_trace` lost "Stopped:" the same way. Both are codes whose
+// names mention credentials precisely because their MESSAGES are about credential handling, which is
+// the worst possible set to silently truncate.
+//
+// This is not a hole. Nothing is skipped: the message itself is still scanned in full, and a genuine
+// `api_key=…` further along the same line is still redacted. Only the code TOKEN stops being read as
+// a name. The exemption is keyed on the catalogue rather than on the line's shape, so a hostile line
+// from the tested application cannot claim it by imitating our prefix — it would have to name a real
+// code, and real codes label our sentences, not someone's credential.
+func isOurEventCode(name string) bool {
+	_, ok := eventcatalog.Lookup(name)
+	return ok
 }
 
 // isNameChar reports whether a byte may appear in a credential NAME as written in a log line.
@@ -128,7 +150,7 @@ func scanNamedSecrets(line string) string {
 			k--
 		}
 		name := cur[k:nameEnd]
-		if name == "" || !configguard.Secretish(name) {
+		if name == "" || !configguard.Secretish(name) || isOurEventCode(name) {
 			b.WriteByte(c)
 			i++
 			continue

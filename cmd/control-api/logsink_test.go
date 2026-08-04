@@ -256,6 +256,38 @@ func atoiOrZero(s string) int {
 	return n
 }
 
+// HEALTH-004 PR-1c: three codes override the source their category implies, and the SINK is what
+// stamps that onto every record — so this drives the sink, not the accessor.
+//
+// Written because a mutation survived: replacing the override lookup in eventcatalog.SourceOfCode
+// with a no-op left everything green. The Python gate checks the catalogue's DATA (the entries say
+// `application`), and nothing checked that the Go side reads it — while the Go side is the only
+// thing that decides what lands in run.jsonl, and therefore what the audience filter can find.
+func TestSinkHonoursTheSourceOverride(t *testing.T) {
+	recs, _, _, _ := drain(t, []string{
+		// Emitted by the healer, and a statement about the application: the interface moved.
+		`[info|heal] heal.drift_rebind: The interface changed, but the element was found again`,
+		// The healer's own diagnostics must NOT move with it.
+		`[warn|heal] heal.budget_exhausted: the heal budget is spent`,
+	})
+	if len(recs) != 2 {
+		t.Fatalf("want 2 records, got %d: %+v", len(recs), recs)
+	}
+	if recs[0].Src != "application" {
+		t.Errorf("heal.drift_rebind must be sourced to the application (the interface is what moved), got %q. "+
+			"With the derived source, a reader filtering `business` sees nothing about the one thing that "+
+			"changed under their test.", recs[0].Src)
+	}
+	if recs[0].Cat != "heal" {
+		t.Errorf("the CATEGORY must stay `heal`, got %q — drift is a healing concept and someone "+
+			"filtering self-healing has to keep finding it", recs[0].Cat)
+	}
+	if recs[1].Src != "tool" {
+		t.Errorf("heal.budget_exhausted must stay with the tool, got %q — an override applied to the "+
+			"whole category would re-file our own exhausted budget as the application's fault", recs[1].Src)
+	}
+}
+
 // ADR-067: the source axis and the step correlation. Both are what let a tester ask "which step went
 // wrong, and was it my application or the tool?" — the question the Logs view exists to answer.
 func TestSinkTagsSourceAndStep(t *testing.T) {

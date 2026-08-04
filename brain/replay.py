@@ -198,6 +198,35 @@ def _expect_params(s: dict) -> dict:
     return p
 
 
+def note_load_speed(res: dict, url: str) -> None:
+    """HEALTH-004: say so when the APPLICATION was slow to answer.
+
+    The catalogue had no code about speed at all — "the request failed" existed, "the request was
+    slow" did not — while Async Wait is the most frequent cause of flake in the literature.
+
+    The number is the browser's own PerformanceNavigationTiming for the document exchange, read from
+    the page (pw-executor `browser.navigate`). NOT the wall time of our step: that includes locator
+    resolution, healing and RPC, so a slow TOOL would be reported as a slow application — the exact
+    substitution this axis exists to stop.
+
+    WHAT THIS DOES NOT COVER, said out loud: only navigations. A click that takes four seconds to
+    settle is invisible here, because there is no settled per-interaction number to read without
+    inventing one. Web Vitals and per-step budgets stay in `[PROD-PERF]`.
+
+    Off unless a threshold is set, and the threshold has no product default on purpose: "slow" is a
+    property of the application under test, not of Sentinel, and a default would either fire on every
+    real site or never fire at all.
+    """
+    t = (res or {}).get("timing") or {}
+    ms = t.get("dom_ms") or t.get("response_ms")
+    if not ms:
+        return
+    limit = _env_int("SENTINEL_SLOW_LOAD_MS", 0)
+    if limit <= 0 or ms < limit:
+        return
+    log("app.slow_load", url=_basename(url), ms=int(ms), limit=limit)
+
+
 def _fault_of(exc: "BaseException | None") -> str:
     """HEALTH-004: whose problem a failed step is — recorded where the failure HAPPENS.
 
@@ -297,7 +326,8 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         if kind == "navigate":
             tgt = (s.get("target") or "").replace(old_base, new_base)
             try:
-                ex.call("browser.navigate", url=tgt)
+                nav = ex.call("browser.navigate", url=tgt)
+                note_load_speed(nav, tgt)   # HEALTH-004: the application's own load timing
                 rec["outcome"], rec["url"] = "ok", tgt
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False

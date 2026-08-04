@@ -186,7 +186,9 @@ func (s *logSink) write(line string) {
 	if rec == nil {
 		return
 	}
-	rec.Src = eventcatalog.SourceOf(rec.Cat)
+	// Per CODE, not per category: three codes are emitted by the healer and are statements about the
+	// application (see eventcatalog.SourceOfCode). Everything else still derives from the category.
+	rec.Src = eventcatalog.SourceOfCode(rec.Code, rec.Cat)
 	// HEALTH-004: a code the catalogue marks terminal carries WHOSE problem the ending is, and that is
 	// the only place the precise answer exists — see the lastFault field for why the exit code cannot
 	// supply it. Recorded on the line AND remembered for the verdict; two readers, one decision.

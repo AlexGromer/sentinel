@@ -42,6 +42,12 @@ type Event struct {
 	// diverge. It is what lets a refusal to start (our model is down) stop reading as `integrity`,
 	// which sent the reader to check a plan_hash that was never involved.
 	Fault string `json:"fault"`
+	// Src overrides the source the category implies. Empty for almost every code — the axis is derived
+	// (cat -> sources -> audiences) so the two cannot disagree, and an override weakens that on purpose
+	// only where the emitter and the subject differ. The drift codes are the case: the healer emits
+	// them and they are statements about the APPLICATION. The catalogue gate refuses an override that
+	// does not justify itself in `src_why`.
+	Src string `json:"src"`
 }
 
 // ExitInfo is one row of the `exit_codes` table: the bilingual, severity-tagged meaning of a process
@@ -172,6 +178,22 @@ func SourceOf(cat string) string {
 		return s
 	}
 	return "tool"
+}
+
+// SourceOfCode answers whose log a RECORD is, for a code whose subject differs from its emitter.
+// Falls through to the category rule for everything else, which is all but three codes today.
+//
+// Asked per code rather than per category because the exception is genuinely per code: `heal` is the
+// tool's own category and belongs there, while `heal.drift_*` report that the application changed.
+// Moving the whole category would take the healer's real diagnostics with it; moving the drift codes
+// to another category would hide them from a `heal` filter, where a reader looking at self-healing
+// expects to find them.
+func SourceOfCode(code, cat string) string {
+	load()
+	if s := parsed.Events[code].Src; s != "" {
+		return s
+	}
+	return SourceOf(cat)
 }
 
 // SourcesOf resolves a filter word to the set of SOURCES it stands for. An audience name expands to
