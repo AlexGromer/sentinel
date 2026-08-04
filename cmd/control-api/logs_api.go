@@ -64,6 +64,18 @@ func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 	// ADR-067: `src` is the coarse axis a tester reaches for first (is it my app or the tool?), `step`
 	// narrows to one step of the run — together they answer "what went wrong, and where".
 	wantSrc, wantStep := q.Get("src"), q.Get("step")
+	// ADR-068 / HEALTH-004: `src` accepts an AUDIENCE name as well as a source, which is what
+	// agentctl has advertised all along ("--src takes a source OR an audience name"). It was an exact
+	// string match, so `src=business` matched nothing and answered 200 with an empty list — and an
+	// empty list reads as "this run has no business-side records", not as "that word means nothing
+	// here". Resolved through the catalogue, so the two sides of the boundary cannot disagree about
+	// what `business` contains; the hub already expands it the same way, client-side.
+	srcSet := map[string]bool{}
+	if wantSrc != "" {
+		for _, s := range eventcatalog.SourcesOf(wantSrc) {
+			srcSet[s] = true
+		}
+	}
 	needle := strings.ToLower(q.Get("q"))
 	after, _ := strconv.Atoi(q.Get("after"))
 	limit := logsDefaultLimit
@@ -99,7 +111,7 @@ func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 			(wantCat != "" && rec.Cat != wantCat) ||
 			(wantMod != "" && rec.Mod != wantMod) ||
 			(wantCode != "" && rec.Code != wantCode) ||
-			(wantSrc != "" && rec.Src != wantSrc) ||
+			(wantSrc != "" && !srcSet[rec.Src]) ||
 			(wantStep != "" && strconv.Itoa(rec.Step) != wantStep) ||
 			(needle != "" && !strings.Contains(strings.ToLower(rec.Msg), needle)) {
 			continue

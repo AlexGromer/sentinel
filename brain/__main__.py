@@ -218,6 +218,27 @@ def _assert_reason(a: dict) -> str:
     return str(cond)
 
 
+def _heal_reason(h: dict) -> str:
+    """HEALTH-004: the sentence for the commonest failure of all — no healing tier could re-find the
+    element.
+
+    That path throws nothing and asserts nothing: `replay.py` records the heal RESULT and moves on, so
+    the reason line rendered the "no reason recorded" fallback. Measured live 2026-08-04 on a replay
+    against a page with none of the frozen elements: three of eight failures said exactly that, and
+    they were the three the backlog entry is about ("we could not find the button").
+
+    The information was in the record the whole time — which tier ran and what it concluded.
+    """
+    if not h:
+        return ""
+    outcome = h.get("outcome") or "no candidate"
+    strategy = h.get("strategy")
+    conf = h.get("confidence")
+    tail = f" (стратегия/strategy {strategy}, уверенность/confidence {conf})" if strategy else ""
+    return (f"локатор не найден, самопочинка не подобрала замену: {outcome}{tail} / "
+            f"the locator did not resolve and healing found no replacement: {outcome}{tail}")
+
+
 def _observed_of(a: dict) -> object:
     """What the page actually showed. `actual` when the executor captured a value, else the boolean
     outcome; an em dash when the step failed for a reason that has no observation at all (a thrown
@@ -257,7 +278,11 @@ def log_step_outcome(r: dict) -> None:
             confidence=(r.get("heal") or {}).get("confidence"))
     elif outcome in ("failed", "fail", "error"):
         a = r.get("assert") or {}
-        reason = r.get("error") or _assert_reason(a) or "причина не записана / no reason recorded"
+        # Ordered by how specific the source is: the driver's own words beat a reconstruction, a
+        # mismatched assertion beats a heal summary, and the fallback is last because a run that
+        # reaches it has a shape nobody has described yet — which is worth saying rather than hiding.
+        reason = (r.get("error") or _assert_reason(a) or _heal_reason(r.get("heal") or {})
+                  or "причина не записана / no reason recorded")
         if r.get("fault") == "tool":
             log("test.step_unresolved", step=sid, type=stype, reason=reason)
         else:

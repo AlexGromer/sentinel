@@ -86,6 +86,11 @@ type catalogue struct {
 	Sources    map[string]srcEntry `json:"sources"`
 	ExitCodes  map[string]ExitInfo `json:"exit_codes"`
 	Faults     map[string]struct{} `json:"faults"`
+	Audiences  map[string]audEntry `json:"audiences"`
+}
+
+type audEntry struct {
+	Sources []string `json:"sources"`
 }
 
 type srcEntry struct {
@@ -167,6 +172,23 @@ func SourceOf(cat string) string {
 		return s
 	}
 	return "tool"
+}
+
+// SourcesOf resolves a filter word to the set of SOURCES it stands for. An audience name expands to
+// its members; anything else stands for itself.
+//
+// That is what makes `src=application` and `src=business` the same syntax — one names a source, the
+// other a set of them, and a caller does not have to know which the reader meant. `agentctl` has
+// promised exactly this since ADR-068 ("--src takes a source OR an audience name"), and the server
+// matched the string exactly, so `src=business` answered with an EMPTY LIST. Empty reads as "there
+// are no business-side records", not as "that word was not understood" — the vacuous answer this
+// codebase keeps hunting. Measured 2026-08-04 against a live run whose every step had failed.
+func SourcesOf(name string) []string {
+	load()
+	if a, ok := parsed.Audiences[name]; ok && len(a.Sources) > 0 {
+		return a.Sources
+	}
+	return []string{name}
 }
 
 // FaultOf returns the fault domain a code declares, or "" when it declares none. Only terminal codes

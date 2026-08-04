@@ -156,12 +156,17 @@ def test_the_reason_reaches_the_line_and_not_only_the_artifact():
     check("a thrown verb puts the driver's own words on the line",
           "Timeout 30000ms" in thrown, thrown)
 
-    # Heal exhausted: no exception and no assertion. This is the case that would quietly render an
-    # empty reason — a placeholder that reads as "we did not look".
+    # Heal exhausted: no exception and no assertion. THE COMMONEST FAILURE THERE IS, and the one the
+    # backlog entry names ("we could not find the button"). Measured live on 2026-08-04: three of eight
+    # failures in a real replay took this path and rendered the "no reason recorded" fallback, because
+    # the first version of this change only read `error` and `assert`. The information was in the
+    # record the whole time.
     exhausted = emitted({"step_id": 9, "type": "click", "outcome": "failed", "fault": "app",
                          "heal": {"outcome": "no_candidate", "strategy": None}})
-    check("a step that failed with neither exception nor assertion still says something",
-          len(exhausted.strip()) > 0 and "{reason}" not in exhausted, exhausted)
+    check("a heal-exhausted step says the locator did not resolve",
+          "no_candidate" in exhausted, exhausted)
+    check("...and does NOT fall back to 'no reason recorded'",
+          "не записана" not in exhausted and "no reason recorded" not in exhausted, exhausted)
     check("...and never renders a blank observation",
           "observed=" not in exhausted or "observed=None" not in exhausted, exhausted)
 

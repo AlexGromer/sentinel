@@ -158,6 +158,45 @@ func TestLogsFilters(t *testing.T) {
 	}
 }
 
+// ADR-068 / HEALTH-004: `src` takes an AUDIENCE name as well as a source — the syntax agentctl has
+// advertised since the axis existed ("--src takes a source OR an audience name (business|tool)").
+//
+// The server matched the string exactly, so `src=business` answered 200 with an EMPTY LIST. That is
+// the worst available answer: it reads as "this run produced nothing about your application", which
+// is a statement about the run rather than about the query. Measured live on 2026-08-04 against a
+// replay whose every step had failed — every record was business-side and the filter returned none.
+//
+// The zero-row cases matter as much as the others: a fix that resolved everything to "match all"
+// would satisfy the positive rows alone.
+func TestLogsSrcAcceptsAnAudienceName(t *testing.T) {
+	repo := t.TempDir()
+	id := writeRunLogs(t, repo, []string{
+		// src is what the sink derives from cat; written here as the sink would write it.
+		`{"seq":1,"lvl":"error","cat":"test","src":"testing","code":"test.step_failed","msg":"a step failed"}`,
+		`{"seq":2,"lvl":"error","cat":"app","src":"application","code":"app.js_error","msg":"the page threw"}`,
+		`{"seq":3,"lvl":"error","cat":"browser","src":"tool","code":"test.step_unresolved","msg":"we could not act"}`,
+		`{"seq":4,"lvl":"info","cat":"run","src":"tool","code":"run.store_mode","msg":"local"}`,
+	})
+	for _, tc := range []struct {
+		query string
+		want  int
+		why   string
+	}{
+		{"?src=business", 2, "an audience must expand to the sources it contains (testing + application)"},
+		{"?src=tool", 2, "the other audience has exactly one source, and must not swallow the rest"},
+		{"?src=testing", 1, "a plain source name must keep working"},
+		{"?src=application", 1, "the other plain source"},
+		{"?src=nonsense", 0, "an unknown word matches nothing rather than everything"},
+		{"?src=business&lvl=error", 2, "an audience composes with the other filters"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			if recs := recordsOf(t, getLogs(t, repo, id, tc.query)); len(recs) != tc.want {
+				t.Fatalf("%s: got %d want %d — %s (%+v)", tc.query, len(recs), tc.want, tc.why, recs)
+			}
+		})
+	}
+}
+
 // Degradations are gathered from the WHOLE file, never only the page returned — a paged-out or
 // filtered-out degradation would let a run that never used the LLM look clean on its verdict. They are
 // also DEDUPED and ordered by first occurrence: the verdict renders one sentence per lost quality, and
