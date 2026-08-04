@@ -42,11 +42,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
@@ -229,8 +231,8 @@ type server struct {
 	// run did. Nil when it could not be opened — every call site tolerates that, because a service
 	// must not refuse to start over its own log file, and the failure is reported once by svclog.Open.
 	journal *svclog.Writer
-	mu       sync.RWMutex
-	runs     map[string]*run
+	mu      sync.RWMutex
+	runs    map[string]*run
 
 	// M11.5 PR-5 (ADR-062): /readyz. llmBaseURL is the env-configured LLM endpoint ("" = not configured);
 	// probes fall back to the persisted config's llm.base_url. ready guards its own state, NOT s.mu —
@@ -2269,6 +2271,21 @@ func main() {
 		s.journalEvent("service.stopped", "info", "Service control-api stopped: process exit", nil)
 		s.journal.Close()
 	}()
+	// A `defer` alone records nothing when the process is SIGNALLED, and being signalled is the normal
+	// way this service ends: `systemctl stop` and `docker compose down` both send SIGTERM. Measured
+	// live — two starts and ZERO stops in the journal, so every shutdown looked like a crash. The
+	// handler writes the obituary and then dies of the same signal, so the exit status a supervisor
+	// sees is unchanged.
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		got := <-sig
+		s.journalEvent("service.stopped", "info",
+			"Service control-api stopped: signal "+got.String(), nil)
+		s.journal.Close()
+		signal.Stop(sig)
+		_ = syscall.Kill(syscall.Getpid(), got.(syscall.Signal))
+	}()
 	s.journalEvent("service.started", "info",
 		"Service control-api started: version "+version+", brought up by "+svclog.Supervisor()+
 			", pid "+strconv.Itoa(os.Getpid()), nil, "addr: "+addr)
@@ -2298,7 +2315,11 @@ func main() {
 	}
 	// HEALTH-005: where the machine token came from. The VALUE is never journalled — only which of the
 	// three decisions was taken, which is what answers "why does my script's token no longer work".
-	s.journalEvent("service.token_source", "info", "Machine token: "+string(tokSrc), nil,
+	// Worded away from the redactor: `token: <value>` is a named credential to internal/redact, so the
+	// first version of this line published the SOURCE as [REDACTED] — measured live, not predicted.
+	// The catalogue entry was fixed by the PR-1c property gate; this string is built in Go and the gate
+	// cannot see it, which is a blind spot recorded in the backlog rather than papered over.
+	s.journalEvent("service.token_source", "info", "The machine token came from "+string(tokSrc), nil,
 		"warnings: "+strconv.Itoa(len(tokWarnings)))
 	switch tokSrc {
 	case tokenDisabled:
