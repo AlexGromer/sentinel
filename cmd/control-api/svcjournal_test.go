@@ -128,6 +128,22 @@ func TestTheDefaultLevelHidesReadsAndKeepsMutations(t *testing.T) {
 		t.Errorf("status/actor missing — a journal that records every call as 200 by nobody looks complete "+
 			"and says nothing: %+v", last)
 	}
+
+	// A NON-200, because the check above cannot fail. `journalCall` defaults an unstamped status to
+	// 200, so asserting "a status is present" is satisfied by the fallback rather than by the capture —
+	// measured: a mutation that removed the capture entirely walked straight through it. A refused call
+	// is the case where the recorded number has to come from the handler.
+	unauth := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader("{}"))
+	mux.ServeHTTP(httptest.NewRecorder(), unauth)
+	recs = readJournal(t, s.repo)
+	last = recs[len(recs)-1]
+	if last.Status != http.StatusForbidden {
+		t.Errorf("a refused call was journalled as %d — the status is being defaulted, not captured, "+
+			"so every refusal in this journal reads as a success: %+v", last.Status, last)
+	}
+	if last.Code != "service.api_refused" || last.Lvl != "warn" {
+		t.Errorf("a refusal must be its own code at `warn` — it is what somebody comes looking for: %+v", last)
+	}
 }
 
 func TestASignInFailureIsRecordedAndThePasswordIsNot(t *testing.T) {
