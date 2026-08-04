@@ -142,6 +142,73 @@ def check_exit_promises_match_the_code(events):
     return checked
 
 
+def check_fault_axis(cat, events):
+    """HEALTH-004: every code that can END a run says WHOSE problem the ending is.
+
+    The rule is derived, not listed: an entry declaring `exit` is by definition one that terminates a
+    run, so that same set must declare `fault`. A hand-kept list would let the next terminal code
+    arrive without one, and a run whose fault nobody declared falls back to the exit code — which is
+    precisely the conflation this axis exists to remove (exit 3 was `integrity` for a corrupt plan AND
+    for a refusal to start because ollama was down; the hub told the second one to go check plan_hash).
+
+    `none` is deliberately a MEMBER of the vocabulary rather than an absent field: "this run harmed
+    nobody" is an answer, and an empty string would be indistinguishable from "we never decided".
+    """
+    faults = cat.get("faults")
+    if not faults:
+        fail("no `faults` vocabulary — the fault axis cannot be a closed set without one")
+    if "none" not in faults:
+        fail("`faults` has no `none` member — a clean run has no fault, and that must be sayable")
+    for name, val in faults.items():
+        for lang in ("ru", "en"):
+            if not val.get(f"{lang}_hint"):
+                fail(f"faults.{name}: missing `{lang}_hint` — the hub renders the hint next to the "
+                     f"verdict, and a domain nobody can explain is a label, not an answer")
+
+    for code, entry in cat["exit_codes"].items():
+        if entry.get("fault") not in faults:
+            fail(f"exit_codes.{code}: fault {entry.get('fault')!r} is not in `faults`")
+
+    terminal = {c: e for c, e in events.items() if "exit" in e}
+    if not terminal:
+        fail("no entry declares an exit — this check would be vacuous")
+    for code, entry in terminal.items():
+        if entry.get("fault") not in faults:
+            fail(f"{code}: declares `exit` but its fault {entry.get('fault')!r} is not in `faults` — "
+                 f"a code that ends a run must say whose problem the ending is")
+
+    # The whole point is DISCRIMINATION: an axis whose every member is the same word answers nothing.
+    # This caught nothing when written and is here so that collapsing the map into a constant fails.
+    distinct = {e["fault"] for e in terminal.values()}
+    if len(distinct) < 3:
+        fail(f"terminal codes name only {sorted(distinct)} — the fault axis is supposed to tell "
+             f"'we broke' apart from 'your application did', and it currently cannot")
+
+    # The one the product could not say before HEALTH-004, pinned by name so a future edit that
+    # re-attributes it to the application has to argue with this line.
+    if events["fatal.llm_required_unreachable"]["fault"] != "tool":
+        fail("fatal.llm_required_unreachable must be `tool`: a run refused BECAUSE OUR MODEL IS "
+             "UNREACHABLE is not a finding about the application under test")
+    if events["fatal.internal_error"]["fault"] != "tool":
+        fail("fatal.internal_error must be `tool` — its own message says so in both languages")
+
+    # A code may name a fault WITHOUT declaring an exit, and these five have to. Measured live on
+    # 2026-08-04: a goal run whose model endpoint answered 404 emitted plan.scenario_error_empty
+    # (degrades, src=tool, the 404 quoted in the message), authored zero steps and exited 1 — and the
+    # verdict blamed `app`, because exit 1 alone means "the test found a problem in the application".
+    # The product KNEW whose problem it was and the badge said the opposite. These codes end a run in
+    # every sense except declaring a number, so they carry the answer.
+    for code in ("plan.scenario_error_empty", "plan.scenario_budget_empty",
+                 "plan.describe_error_empty", "plan.describe_budget_empty",
+                 "plan.output_unparseable"):
+        if events[code].get("fault") != "tool":
+            fail(f"{code} must be `tool`: authoring that produced nothing failed on OUR endpoint, OUR "
+                 f"budget or OUR parser — attributing it to the application sends the reader to debug "
+                 f"the one thing that was working")
+    extra = sum(1 for c, e in events.items() if e.get("fault") and "exit" not in e)
+    return len(terminal), extra
+
+
 def main() -> int:
     cat = json.loads(CATALOG.read_text())
     events = cat["events"]
@@ -185,7 +252,7 @@ def main() -> int:
             if not entry.get(lang):
                 fail(f"{code}: missing `{lang}` text (RU/EN parity is mandatory)")
     for table in ("category_labels", "level_labels", "phases", "modes", "exit_codes",
-                  "narrative", "heal_strategies", "heal_outcomes", "sources", "audiences"):
+                  "narrative", "heal_strategies", "heal_outcomes", "sources", "audiences", "faults"):
         for key, val in cat[table].items():
             for lang in ("ru", "en"):
                 if not val.get(lang):
@@ -218,6 +285,12 @@ def main() -> int:
     # ADR-087: the vocabulary check above proves the code EXISTS; this proves the process
     # really returns it. Four entries promised 3 while returning 2 until it was written.
     check_exit_promises_match_the_code(events)
+
+    # HEALTH-004: the FAULT axis — whose problem the outcome is. An exit code alone cannot answer it
+    # (exit 3 is a refusal to start, a corrupt plan AND a malformed request), so the code that ENDED
+    # the run carries the answer and the exit_codes entry is only the fallback. Both must declare it,
+    # or a run whose outcome nobody can attribute reaches the dashboard as the coarse word `problem`.
+    terminal_codes, extra_faults = check_fault_axis(cat, events)
 
     # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
     # matching that template against the rendered string. If the two drift, the UI silently falls back
@@ -323,6 +396,8 @@ def main() -> int:
           f"{len(degrading)} silent degradations, {len(cat['sources'])} sources in "
           f"{len(cat['audiences'])} audiences, "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
+          f"{terminal_codes} terminal + {extra_faults} decisive codes attributed across "
+          f"{len(cat['faults'])} faults, "
           f"{len(patterns)} foreign patterns; RU/EN complete")
     return 0
 

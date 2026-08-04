@@ -80,6 +80,10 @@ type logRecord struct {
 	Msg      string `json:"msg"`
 	Phase    string `json:"phase,omitempty"`
 	Degrades bool   `json:"degrades,omitempty"`
+	// Fault is set only on a record that can END the run (HEALTH-004): whose problem the ending is.
+	// It rides on the record rather than being recomputed by readers so run.jsonl stays self-describing
+	// — the file is what a person greps after the fact, when neither the process nor the UI is around.
+	Fault string `json:"fault,omitempty"`
 	// N is set by the READER, never on disk: handleRunLogs collapses consecutive identical records
 	// and reports how many there were. It is what makes a stuck run legible — a loop reads as one row
 	// with a count instead of 34 identical rows nobody scrolls through.
@@ -109,6 +113,16 @@ type logSink struct {
 	// stackParent is the seq of the last error a stack frame may attach to, or 0 when the last line
 	// was not an error. Frames arrive back-to-back with their error, so this needs no timer.
 	stackParent int
+	// lastFaultCode/lastFault remember the most recent record that declared a fault — i.e. one the
+	// catalogue says can END a run. The exit code alone cannot say whose problem the ending is: exit 3
+	// is a refusal to start (tool), a corrupt plan (test) AND a malformed request (config), and until
+	// HEALTH-004 all three reached the dashboard as "integrity / plan_hash mismatch".
+	//
+	// LAST wins rather than first: a run can log a recoverable terminal-class code and carry on (a
+	// skipped import file is exit 1 but the run keeps importing), and what decided the ending is the
+	// one nearest the end. Read after cmd.Wait, so every line has already been through write().
+	lastFaultCode string
+	lastFault     string
 	// step is the last step number seen on an AG-UI step.progress frame. Both streams share ONE ordered
 	// pipe, so a diagnostic that arrives after step N's frame happened during step N — which is how a
 	// record learns which step it belongs to without any protocol change. It is what turns "the site
@@ -173,6 +187,13 @@ func (s *logSink) write(line string) {
 		return
 	}
 	rec.Src = eventcatalog.SourceOf(rec.Cat)
+	// HEALTH-004: a code the catalogue marks terminal carries WHOSE problem the ending is, and that is
+	// the only place the precise answer exists — see the lastFault field for why the exit code cannot
+	// supply it. Recorded on the line AND remembered for the verdict; two readers, one decision.
+	if f := eventcatalog.FaultOf(rec.Code); f != "" {
+		rec.Fault = f
+		s.lastFaultCode, s.lastFault = rec.Code, f
+	}
 	// A summary belongs to the run, not to whichever step happened to be last. Stamping it would be
 	// temporally true and semantically noise — "Explore finished … step 3" invites reading the summary
 	// as a fact about step 3.
@@ -180,6 +201,19 @@ func (s *logSink) write(line string) {
 		rec.Step = s.step
 	}
 	s.emit(rec)
+}
+
+// terminalFault reports the last code that declared a fault, and that fault. Empty when the run
+// logged no terminal code at all — which is the normal case for a run that simply passed or whose
+// steps simply failed, and is why the caller falls back to the exit code rather than to "unknown".
+// Nil-safe: a run whose log files could not be created still has to produce a verdict.
+func (s *logSink) terminalFault() (code, fault string) {
+	if s == nil {
+		return "", ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastFaultCode, s.lastFault
 }
 
 // noteStep remembers the step number from a step.progress frame. Parsed narrowly and failure-tolerantly:

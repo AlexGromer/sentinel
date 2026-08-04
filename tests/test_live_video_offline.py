@@ -50,6 +50,10 @@ CDP_SERVICE = REPO / "pw-executor" / "dist" / "cdp-service.js"
 CONTROL_API = REPO / "bin" / "control-api"
 AGENTCTL = REPO / "bin" / "agentctl"
 TOKEN = "live-video-gate-token"
+# How long a run may take to attach to the browser service and open its first page. ONE constant for
+# every wait on that one condition: the two waits in the streaming test used to be 12s and 60s, and
+# the shorter one failed the suite under load while the longer one was still patiently succeeding.
+PAGE_WAIT_S = 60
 
 
 def _skip(reason: str) -> None:
@@ -301,7 +305,14 @@ def test_a_frame_and_a_stream_arrive_while_a_run_drives_the_browser():
             # Retry while the answer is 503 "no page yet": the run needs a moment to attach and open
             # one, and a viewer who opened the live view first is the ordinary case, not an error.
             # This mirrors what the UI does rather than giving the test an easier path than a person.
-            open_deadline = time.time() + 12
+            #
+            # The budget is the SAME 60s the main thread gives the identical condition below. It was 12s
+            # against the main thread's 60s — two waits for one state with different patience — so on a
+            # loaded machine this thread gave up at 12s, the main thread waited happily to 60s, and the
+            # run failed with "the stream never became available (503 throughout)". That reads as a
+            # broken product; it was an impatient test. Measured on this repo 2026-08-04: fails under
+            # concurrent suite load, passes in isolation.
+            open_deadline = time.time() + PAGE_WAIT_S
             r = None
             while time.time() < open_deadline and r is None:
                 req = urllib.request.Request(f"http://127.0.0.1:{st.api_port}/v1/live/mjpeg")
@@ -342,7 +353,7 @@ def test_a_frame_and_a_stream_arrive_while_a_run_drives_the_browser():
         # runner. The project has paid for that shape before (CI-FLAKE-HUB: two guessed sleeps of 25
         # and 22 seconds). The ceiling is generous and, when it is reached, says plainly that the run
         # never opened a page rather than blaming the thing being tested.
-        deadline, doc, up = time.time() + 60, {}, {}
+        deadline, doc, up = time.time() + PAGE_WAIT_S, {}, {}
         while time.time() < deadline:
             code, body = _get(f"http://127.0.0.1:{st.api_port}/v1/live/status", TOKEN)
             doc = json.loads(body)

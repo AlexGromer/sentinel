@@ -233,8 +233,24 @@ matching the English template against the server-rendered string. Axes:
 - **source** derived from the category (`brain/embed.go::SourceOf`): the tool · the application · testing;
 - **audience** (ADR-068 rev.2) — a layer above the sources: `business` (application+testing) versus `tool`;
   the gate requires audiences to partition sources **exactly**;
-- **`degrades: true`** (16 codes) — the one legitimate crossing from diagnostics into the narrative: a run
-  that exits zero with the LLM absent must be able to say so on its verdict rather than hide in the log.
+- **`degrades: true`** (34 codes) — the one legitimate crossing from diagnostics into the narrative: a run
+  that exits zero with the LLM absent must be able to say so on its verdict rather than hide in the log;
+- **fault** (`fault`, ADR-113) — WHOSE problem this is: `none` · `app` · `tool` · `test` · `config`. Only
+  codes that can END a run carry it, and that rule is derived rather than listed: an entry declaring
+  `exit` terminates a run by definition, so the same set must say whose problem the ending is. The axis
+  is deliberately orthogonal to the verdict — `problem` stays the OUTCOME, and "whose" is answered
+  separately, because folding them together would need one word per (outcome × domain) pair. A record
+  carrying a `fault` stamps it on the `run.jsonl` line too, so the file stays self-describing for
+  whoever greps it later.
+
+**Why the axis was needed.** The verdict word fused three different endings into one: `exit 1` ("a step
+failed" — a fact about the application), `exit 4` ("our own code threw", ADR-087) and `exit -1` ("we were
+killed by a signal") all reached the reader as `problem`, i.e. as an invitation to go and debug their
+application. Worse, HEALTH-001 gave refusals-to-start `exit 3`, which already meant `integrity` — so a run
+refused because the model endpoint was unreachable rendered as "plan_hash/golden mismatch" when no plan
+and no baseline were involved. The precise answer is known not by the exit code but by the code that
+ENDED the run, so that is what decides (`cmd/control-api/fault.go`); `exit_codes[N].fault` is only the
+fallback for a run whose log could not be read.
 
 The gate `tests/test_event_catalog_offline.py` holds this in both directions: every code a module emits
 exists in the catalogue and names that module; every catalogue entry names modules that really emit it.

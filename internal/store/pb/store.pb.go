@@ -1256,8 +1256,13 @@ type ResultRecord struct {
 	CreatedAt       string                 `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Found           bool                   `protobuf:"varint,13,opt,name=found,proto3" json:"found,omitempty"`
 	Owner           string                 `protobuf:"bytes,14,opt,name=owner,proto3" json:"owner,omitempty"` // ADR-109
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// HEALTH-004: none | app | tool | test | config — WHOSE problem the outcome is, orthogonal to
+	// `verdict`. The verdict is the OUTCOME and stays coarse on purpose; adding "whose" to it would
+	// multiply words combinatorially (problem x 4 domains, regression x 4). Decided once by control-api
+	// from the terminal catalogue code, falling back to exit_codes[N].fault (brain/events.json).
+	FaultDomain   string `protobuf:"bytes,15,opt,name=fault_domain,json=faultDomain,proto3" json:"fault_domain,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResultRecord) Reset() {
@@ -1384,6 +1389,13 @@ func (x *ResultRecord) GetFound() bool {
 func (x *ResultRecord) GetOwner() string {
 	if x != nil {
 		return x.Owner
+	}
+	return ""
+}
+
+func (x *ResultRecord) GetFaultDomain() string {
+	if x != nil {
+		return x.FaultDomain
 	}
 	return ""
 }
@@ -2597,7 +2609,7 @@ const file_store_proto_rawDesc = "" +
 	"\x05owner\x18\x03 \x01(\tR\x05owner\"_\n" +
 	"\bChatList\x12=\n" +
 	"\x05chats\x18\x01 \x03(\v2'.sentinel.persistence.v1.ChatProjectionR\x05chats\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\x8b\x03\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\xae\x03\n" +
 	"\fResultRecord\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12\x12\n" +
@@ -2616,7 +2628,8 @@ const file_store_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\f \x01(\tR\tcreatedAt\x12\x14\n" +
 	"\x05found\x18\r \x01(\bR\x05found\x12\x14\n" +
-	"\x05owner\x18\x0e \x01(\tR\x05owner\"T\n" +
+	"\x05owner\x18\x0e \x01(\tR\x05owner\x12!\n" +
+	"\ffault_domain\x18\x0f \x01(\tR\vfaultDomain\"T\n" +
 	"\x0eListResultsReq\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x14\n" +

@@ -17,6 +17,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -36,6 +37,26 @@ type Event struct {
 	Modules  []string `json:"modules"`
 	Degrades bool     `json:"degrades"`
 	Exit     *int     `json:"exit"`
+	// Fault is the HEALTH-004 axis: whose problem this outcome is (none/app/tool/test/config). Only
+	// codes that END a run carry it — the catalogue gate ties it to `exit` so the two sets cannot
+	// diverge. It is what lets a refusal to start (our model is down) stop reading as `integrity`,
+	// which sent the reader to check a plan_hash that was never involved.
+	Fault string `json:"fault"`
+}
+
+// ExitInfo is one row of the `exit_codes` table: the bilingual, severity-tagged meaning of a process
+// exit code. The table has been in the catalogue since ADR-087 and had NO product consumer — Go
+// hardcoded four words in verdictEnum and the hub hardcoded a third copy, so both lost exit 4 (the
+// tool crashed) and exit -1 (killed / never spawned) into a generic word. Reading it here is what
+// collapses the three tables into one.
+type ExitInfo struct {
+	Icon     string `json:"icon"`
+	Severity string `json:"severity"`
+	Fault    string `json:"fault"`
+	RU       string `json:"ru"`
+	EN       string `json:"en"`
+	RUHint   string `json:"ru_hint"`
+	ENHint   string `json:"en_hint"`
 }
 
 // Foreign is one boundary-classification rule for output we do not instrument (Playwright, Node,
@@ -63,6 +84,8 @@ type catalogue struct {
 	Categories []string            `json:"categories"`
 	Levels     []string            `json:"levels"`
 	Sources    map[string]srcEntry `json:"sources"`
+	ExitCodes  map[string]ExitInfo `json:"exit_codes"`
+	Faults     map[string]struct{} `json:"faults"`
 }
 
 type srcEntry struct {
@@ -144,6 +167,31 @@ func SourceOf(cat string) string {
 		return s
 	}
 	return "tool"
+}
+
+// FaultOf returns the fault domain a code declares, or "" when it declares none. Only terminal codes
+// (those with an `exit`) declare one, so "" is the normal answer for the vast majority and means
+// "this record did not end the run", NOT "nobody is at fault" — that answer is spelled `none`.
+func FaultOf(code string) string {
+	load()
+	return parsed.Events[code].Fault
+}
+
+// ExitInfoOf returns the catalogue's meaning for a process exit code. `ok` is false for a code the
+// catalogue never declared, which a caller must render as "unknown exit N" rather than inventing a
+// meaning — an exit code we cannot explain is itself a fact worth showing.
+func ExitInfoOf(code int) (ExitInfo, bool) {
+	load()
+	e, ok := parsed.ExitCodes[strconv.Itoa(code)]
+	return e, ok
+}
+
+// IsFault reports whether name is a member of the closed fault vocabulary. Used at the boundary so a
+// value from an older or newer brain cannot smuggle an unrenderable domain into the store.
+func IsFault(name string) bool {
+	load()
+	_, ok := parsed.Faults[name]
+	return ok
 }
 
 // ForeignRules returns the ordered classification rules for third-party output.
