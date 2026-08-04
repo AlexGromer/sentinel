@@ -79,7 +79,10 @@ def test_messages_carry_the_fields_the_proto_declares():
         "RunRecord": ["run_id", "state", "owner"],
         "Scenario": ["scenario_id", "plan_hash", "owner"],
         "TestRecord": ["test_id", "owner"],
-        "ResultRecord": ["run_id", "verdict", "owner"],
+        # fault_domain (HEALTH-004) rides next to `verdict` on purpose: the two answer different
+        # questions (WHAT happened vs WHOSE problem it is), and a stub that carried only the first
+        # would drop the second on the wire without a word — the failure mode this whole file is about.
+        "ResultRecord": ["run_id", "verdict", "fault_domain", "owner"],
         "MetricPoint": ["run_id", "name", "value", "owner"],
         "User": ["user_id", "name", "pw_hash", "is_admin"],
     }

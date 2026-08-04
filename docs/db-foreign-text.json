@@ -364,6 +364,10 @@
         "owner": {
           "foreign": "none",
           "note": "ADR-109: the local account id that owns the row. Ours, not the tested application's — a user_id minted by control-api, never derived from a page, a goal or any typed value. Empty for every row written before identity existed and for every deployment with no accounts."
+        },
+        "fault_domain": {
+          "foreign": "none",
+          "note": "HEALTH-004: one word from a CLOSED vocabulary we author (none|app|tool|test|config, brain/events.json §faults). Decided by control-api from the run's own terminal event code, never from a page, a goal or any typed value — so nothing of the tested application can reach it. Empty on rows written before the column existed: 'we never decided', which is deliberately not the same as 'none'."
         }
       }
     },

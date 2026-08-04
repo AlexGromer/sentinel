@@ -79,6 +79,11 @@ type run struct {
 	// ADR-109: the local account that started this run, "" when nobody is logged in or the caller was
 	// the machine token. Serialized so a UI can say whose a run is; scoping reads it, not the reverse.
 	Owner string `json:"owner,omitempty"`
+	// FaultDomain (HEALTH-004) says WHOSE problem a non-green outcome is: none | app | tool | test |
+	// config. Computed ONCE when the run finishes (see faultDomain) and read by three consumers — this
+	// JSON, the run.finished frame and the Results record — because deriving it three times is how the
+	// verdict and the artifact came to disagree before ADR-076.
+	FaultDomain string `json:"fault_domain,omitempty"`
 
 	stream *runStream // live stdout/stderr capture + SSE fan-out (not serialized)
 	sink   *logSink   // M9-LIVE: on-disk log artifacts under the run's dir (not serialized)
@@ -845,6 +850,9 @@ func (s *server) spawnRun(req runRequest) *run {
 			s.mu.Lock()
 			rec.State, rec.Error = "failed", err.Error()
 			rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+			// HEALTH-004: a run that could not be spawned is OURS. Set before upsertRun so the stored
+			// row and the frame below say the same thing about the same run.
+			rec.FaultDomain = faultDomain("failed", -1, "")
 			finishedAt := rec.FinishedAt
 			s.mu.Unlock()
 			if s.store != nil {
@@ -853,7 +861,7 @@ func (s *server) spawnRun(req runRequest) *run {
 			lw.flush()
 			rec.sink.close()
 			rec.stream.append(aguiLine("run.finished", rec.ID, finishedAt,
-				map[string]any{"exit_code": -1, "state": "failed"}))
+				map[string]any{"exit_code": -1, "state": "failed", "fault_domain": rec.FaultDomain}))
 			rec.stream.finish()
 			return
 		}
@@ -889,6 +897,14 @@ func (s *server) spawnRun(req runRequest) *run {
 		if rec.State == "failed" {
 			exitForEvent = -1
 		}
+		// HEALTH-004: decided ONCE, here, where the terminal state and the run's own log are both in
+		// hand — and stored on the record so /v1/runs, the run.finished frame and the Results row all
+		// quote one decision. `exitForEvent` rather than rec.ExitCode: a failed spawn leaves ExitCode at
+		// its zero value, and asking the catalogue what exit 0 means would attribute a run that never
+		// started to nobody.
+		faultCode, _ := rec.sink.terminalFault()
+		rec.FaultDomain = faultDomain(rec.State, exitForEvent, faultCode)
+		faultForEvent := rec.FaultDomain
 		stateForEvent := rec.State
 		finishedAt := rec.FinishedAt
 		// ADR-089: the report is built while the run still reads as `running`, and the terminal state is
@@ -917,7 +933,10 @@ func (s *server) spawnRun(req runRequest) *run {
 		// M14 tail 1: the control-API injects run.finished — the one AG-UI event only it can know (the
 		// process exit). Must precede finish(): append() no-ops once the stream is done. WS subscribers
 		// get a typed run.finished frame (wsAGUIFrame); SSE gets the raw line inside a log event.
-		rec.stream.append(aguiLine("run.finished", rec.ID, finishedAt, map[string]any{"exit_code": exitForEvent, "state": stateForEvent}))
+		// HEALTH-004: the frame carries the fault alongside the exit code, so a live watcher learns
+		// whose problem it is at the moment the run ends rather than on the next poll of /v1/runs.
+		rec.stream.append(aguiLine("run.finished", rec.ID, finishedAt, map[string]any{
+			"exit_code": exitForEvent, "state": stateForEvent, "fault_domain": faultForEvent}))
 		rec.stream.finish() // release SSE subscribers
 	}()
 	return rec
@@ -1168,6 +1187,7 @@ func (s *server) persistResult(rec *run) {
 	}
 	s.mu.RLock()
 	state, exit, startedAt, finishedAt, mode, target := rec.State, rec.ExitCode, rec.StartedAt, rec.FinishedAt, rec.Mode, rec.Target
+	fault := rec.FaultDomain
 	s.mu.RUnlock()
 	// A run that never executed (State="failed": agentctl couldn't spawn) has no real exit code — its
 	// zero-value ExitCode 0 would map verdictEnum→"pass" and inflate the pass-rate. Skip it: the runs
@@ -1179,6 +1199,11 @@ func (s *server) persistResult(rec *run) {
 	rr := &storepb.ResultRecord{
 		RunId: rec.ID, Mode: mode, Verdict: verdictEnum(exit), Owner: rec.Owner, // ADR-109: inherits the run
 		ExitCode: int64(exit), DurationMs: durationMs(startedAt, finishedAt),
+		// HEALTH-004: quoted from the run record, not recomputed. `verdict` says WHAT happened and is
+		// still one of the coarse four; `fault_domain` says WHOSE problem it is, which is the question
+		// a dashboard reader actually has and which exit 1 / exit 4 / exit -1 all answered with the
+		// same word until now.
+		FaultDomain: fault,
 	}
 	var stepN, regN int64
 	var tok *tokensBlock // M15.1: per-run token totals, from whichever report the run produced
@@ -1499,7 +1524,11 @@ func (s *server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 
 	sendState := func() {
 		s.mu.RLock()
-		data, _ := json.Marshal(map[string]any{"state": rec.State, "exit_code": rec.ExitCode, "error": rec.Error})
+		// HEALTH-004: the SSE `state` frame is what the hub renders its verdict from (it only falls back
+		// to polling /v1/runs when the stream is unavailable), so the fault has to ride here too — or the
+		// live path would show the coarse badge and the polled path the attributed one, for the same run.
+		data, _ := json.Marshal(map[string]any{"state": rec.State, "exit_code": rec.ExitCode,
+			"error": rec.Error, "fault_domain": rec.FaultDomain})
 		s.mu.RUnlock()
 		fmt.Fprintf(w, "event: state\ndata: %s\n\n", data)
 		flusher.Flush()

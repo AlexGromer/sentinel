@@ -2355,30 +2355,72 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                            sub:bi('ни один шаг не упал — build покраснел из-за ошибок самого приложения',
                                   'no step failed — the build went red on the application’s own errors')}
   };
+  /* Colour is the ONE thing the catalogue does not carry, because it is a property of this page and not
+     of the product. Keyed by the catalogue's own `severity` vocabulary rather than by exit code, so a
+     new code inherits a colour by declaring what kind of thing it is. */
+  var B_SEVCOL={pass:'var(--ok)', finding:'var(--warn)', regression:'var(--warn)',
+                integrity:'var(--no)', not_started:'var(--no)', tool_failure:'var(--no)'};
+
+  /* HEALTH-004: the exit-code badge is now READ FROM THE CATALOGUE (`exit_codes`), not hardcoded here.
+     That table has been in brain/events.json since ADR-087, bilingual and severity-tagged, and had no
+     consumer at all: Go hardcoded four words in verdictEnum and this function hardcoded a third copy.
+     Both copies lost the same two codes — exit 4 (our own code threw, ADR-087) and exit -1 (killed or
+     never spawned) fell into `else` and rendered as the bare string "exit 4".
+
+     And one copy was not merely coarse but WRONG: HEALTH-001 gave a refusal-to-start exit 3, which this
+     table read as "несовпадение plan_hash/golden — нужен человек". A run refused because the model
+     endpoint was unreachable told the operator to go and inspect a plan_hash that never existed. That
+     screenshot (06-goal-without-a-model.png) is why this reads from one table now. */
+  function bExitInfo(code){
+    var t = lgCatalog && lgCatalog.exit_codes;
+    return (t && t[String(code)]) || null;
+  }
+  function bFaultInfo(name){
+    var t = lgCatalog && lgCatalog.faults;
+    return (name && t && t[name]) || null;
+  }
   function renderBuildVerdict(st, cause, report, degradations){
-    var code=st.exit_code, state=st.state, icon, col, head;
-    if      (state==='failed'){ icon='✖'; col='var(--no)';   head=bi('ПРОГОН НЕ ЗАПУСТИЛСЯ','RUN DID NOT START'); }
-    else if (code===0)        { icon='✓'; col='var(--ok)';   head=bi('ПРОЙДЕНО','PASSED'); }
-    else if (code===1)        { icon='⚠'; col='var(--warn)'; head=bi('ТЕСТ НАШЁЛ ПРОБЛЕМУ','TEST FOUND A PROBLEM'); }
-    else if (code===2)        { icon='⚠'; col='var(--warn)'; head=bi('РЕГРЕССИЯ ОТ ЭТАЛОНА','REGRESSION VS BASELINE'); }
-    else if (code===3)        { icon='✖'; col='var(--no)';   head=bi('ЦЕЛОСТНОСТЬ / КОНФИГУРАЦИЯ','INTEGRITY / CONFIG'); }
-    else                      { icon='•'; col='var(--mut)';  head='exit '+esc(code); }
-    var sub={0:bi('сценарий отработал без ошибок','the scenario ran without errors'),
-             1:bi('шаг не прошёл или проверка провалилась','a step failed or an assertion did not hold'),
-             2:bi('расхождение с golden-эталоном — можно обновить эталон кнопкой 📌','differs from the golden baseline — you can update it with 📌'),
-             3:bi('несовпадение plan_hash/golden — нужен человек','plan_hash/golden mismatch — needs a human')}[code];
+    var code=st.exit_code, state=st.state, icon, col, head, sub;
+    /* A spawn failure leaves exit_code at its zero value in the run record, and asking the table what
+       exit 0 means would render a run that never started as PASSED. -1 is what the run.finished frame
+       carries for the same event, and what the catalogue documents as "could not be spawned, or was
+       killed by a signal" — so the special case is only about WHICH code to look up. */
+    var lookup = (state==='failed') ? -1 : code;
+    var info = bExitInfo(lookup);
+    if (info){
+      icon = info.icon; col = B_SEVCOL[info.severity] || 'var(--mut)';
+      head = bi(info.ru, info.en); sub = bi(info.ru_hint, info.en_hint);
+    } else {
+      /* An exit code the catalogue never declared. Say so plainly instead of inventing a meaning —
+         an unexplainable exit is itself the finding. */
+      icon='•'; col='var(--mut)';
+      head=bi('НЕИЗВЕСТНЫЙ КОД ЗАВЕРШЕНИЯ','UNKNOWN EXIT CODE'); sub=null;
+    }
     /* The run's own word outranks the exit-code reading — but only when it is one of the four we can
        render. An unknown state from a newer brain falls back to the coarse badge rather than to a blank
        one (same rule the Logs view applies to an unknown event code, and the same whitelist the Go side
        applies before the store, cmd/control-api/main.go::resultVerdict). */
     var refined = (state!=='failed' && report && B_REFINED[report.verdict]) ? B_REFINED[report.verdict] : null;
     if (refined){ icon=refined.icon; col=refined.col; head=refined.head; sub=refined.sub; }
+    /* WHOSE problem it is — the axis the product could not express at all (HEALTH-004). Composed with
+       the outcome rather than folded into it: the chip says whose, the head says what. Folding them
+       would need a word per (outcome x domain) pair, and two mechanisms describing one fact drift —
+       this page already carries that wound in lvKindOf disagreeing with the catalogue about audiences.
+       The domain's hint REPLACES the exit-code hint when both exist: it answers the question the reader
+       actually has, and for exit 3 the exit-code hint is the one that used to mislead. */
+    var fault = bFaultInfo(st.fault_domain);
+    if (fault && st.fault_domain !== 'none') sub = bi(fault.ru_hint, fault.en_hint);
     var html='<div style="display:flex;align-items:center;gap:.6rem;padding:.6rem .8rem;border-radius:9px;'
       +'border:1px solid '+col+';background:color-mix(in srgb,'+col+' 12%,transparent)">'
       +'<span style="font-size:1.5rem;line-height:1;color:'+col+'">'+icon+'</span>'
       +'<div style="min-width:0"><div style="font-weight:750;letter-spacing:.02em;color:'+col+'" id="b-verdict-head">'+head
+      +(fault && st.fault_domain !== 'none'
+        ? ' <span id="b-verdict-fault" data-fault="'+esc(st.fault_domain)+'" style="border:1px solid '+col
+          +';border-radius:6px;padding:0 .35rem;font-weight:700;font-size:.78em;text-transform:uppercase">'
+          +esc(bi(fault.ru, fault.en))+'</span>'
+        : '')
       +' <span style="opacity:.65;font-weight:600;font-size:.82em">exit '+esc(code==null?'?':code)+'</span></div>';
-    if (state!=='failed' && sub) html+='<div style="font-size:.86rem;color:var(--mut)">'+sub+'</div>';
+    if (sub) html+='<div style="font-size:.86rem;color:var(--mut)">'+sub+'</div>';
     if ((state==='failed' || (code!=null && code!==0)) && cause)
       html+='<div style="font-size:.86rem;margin-top:.15rem"><b>'+bi('причина','cause')+':</b> '+cause+'</div>'; // cause is HTML-safe (see bExtractCause)
     html+='</div></div>';
@@ -3109,11 +3151,26 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('results-charts').innerHTML='';
     ge('results-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
     var noStoreR=false;
+    // The fault chips below are labelled from the catalogue, so it has to be here before the first
+    // paint — otherwise the column renders empty on the initial load and fills in only after some
+    // other view happens to fetch it, which reads as "these runs harmed nobody".
+    await loadEventCatalog();
     try { var r=await fetch(capiBase()+'/v1/results',{headers:authHdr()}); var j=await r.json();
           tResults=j.results||[]; noStoreR=(j.store===false); }
     catch(e){ tResults=[]; }
     if (!tResults.length && tStoreBanner('results-list', {store: !noStoreR ? true : false})) { ge('results-charts').innerHTML=''; return; }
     tRenderResults();
+  }
+  /* One chip, two callers (the results list and, through bFaultInfo, the run badge) — the label and the
+     tooltip both come from the catalogue, so a domain added there needs no edit here. Silent for an
+     unknown value rather than printing it raw: a word this page cannot explain is worse than no chip,
+     because the reader would take it for a diagnosis. */
+  function resFaultChip(d){
+    var f = bFaultInfo(d);
+    if (!f || d === 'none') return '';
+    return ' <span class="libmeta" data-fault="'+esc(d)+'" title="'+esc(bi(f.ru_hint, f.en_hint))
+      +'" style="border:1px solid var(--mut);border-radius:5px;padding:0 .3rem;font-size:.78em;'
+      +'text-transform:uppercase">'+esc(bi(f.ru, f.en))+'</span>';
   }
   function tRenderResults(){
     if(!tResults.length){ ge('results-charts').innerHTML=''; ge('results-list').innerHTML='<p class="hint">'+bi('результатов пока нет — запусти прогон','no results yet — run a test')+'</p>'; return; }
@@ -3128,7 +3185,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var html='';
     tResults.forEach(function(rr){
       html+='<div class="runitem"><div class="libitem-row">'+
-        '<div><code>'+esc(rr.run_id)+'</code> <span style="color:'+verdictColor(rr.verdict)+'">'+verdictIcon(rr.verdict)+' '+esc(rr.verdict||'')+'</span> <span class="libmeta">'+esc(rr.mode||'')+'</span></div>'+
+        '<div><code>'+esc(rr.run_id)+'</code> <span style="color:'+verdictColor(rr.verdict)+'">'+verdictIcon(rr.verdict)+' '+esc(rr.verdict||'')+'</span>'+
+          /* HEALTH-004: this list is THE dashboard the backlog entry describes — the place a person
+             reads `problem` and walks off to debug their own application when it was us that broke.
+             The verdict stays the outcome; the chip says whose. Absent on rows written before the
+             column existed, and on `none`, so a clean run is not decorated with a non-answer. */
+          resFaultChip(rr.fault_domain)+
+          ' <span class="libmeta">'+esc(rr.mode||'')+'</span></div>'+
         '<div class="libmeta">'+(rr.coverage?'cov '+Math.round(rr.coverage*100)+'% · ':'')+(rr.duration_ms?fmtDur(rr.duration_ms)+' · ':'')+'heal '+(rr.healed||0)+' · fail '+(rr.failed||0)+'</div>'+
         '</div></div>';
     });
@@ -3743,7 +3806,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       agHitlBanner(true, p.data && p.data.reason, p.data && p.data.count);
       return;
     }
-    if (p.type==='run.finished'){ var fd=p.data||{}; agAddEvent('verdict', '⏹ run.finished exit_code='+esc(fd.exit_code)+(fd.state?' ('+esc(fd.state)+')':'')); return; }
+    /* HEALTH-004: the frame carries the fault, so the live timeline says whose problem it is at the
+       moment the run ends — the same answer the badge gives, from the same decision, rather than a
+       second one computed here. */
+    if (p.type==='run.finished'){ var fd=p.data||{};
+      agAddEvent('verdict', '⏹ run.finished exit_code='+esc(fd.exit_code)+(fd.state?' ('+esc(fd.state)+')':'')
+        +resFaultChip(fd.fault_domain)); return; }
     // run.started / state.transition / step.progress / tool.call / heal / verdict — generic timeline chip
     agAddEvent(agClassFor(p.type), '<b>'+esc(p.type)+'</b> #'+esc(p.seq!=null?p.seq:'?')+' '+esc(JSON.stringify(p.data||{})));
   }

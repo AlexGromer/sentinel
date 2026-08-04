@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE TABLE IF NOT EXISTS results (
   run_id TEXT PRIMARY KEY, plan_id TEXT, mode TEXT, verdict TEXT, exit_code INTEGER,
   healed INTEGER, failed INTEGER, regressions_json TEXT, steps_json TEXT, coverage REAL,
-  duration_ms INTEGER, created_at TEXT, owner TEXT
+  duration_ms INTEGER, created_at TEXT, owner TEXT, fault_domain TEXT
 );
 CREATE TABLE IF NOT EXISTS metrics (
   run_id TEXT, ts REAL, name TEXT, value REAL, labels_json TEXT, owner TEXT
@@ -130,6 +130,12 @@ func New(path string) (*Server, error) {
 		if err = ensureColumn(db, t, "owner"); err != nil {
 			return nil, err
 		}
+	}
+	// HEALTH-004: pre-fault databases get the column. Empty on every existing row, which reads as "we
+	// never decided whose problem this was" — deliberately NOT `none`, because backfilling an answer we
+	// do not have would make old rows claim a clean bill of health they were never given.
+	if err = ensureColumn(db, "results", "fault_domain"); err != nil {
+		return nil, err
 	}
 	// The index comes AFTER the column, and that ordering is the whole point. It first lived in
 	// storeSchema, which runs before this loop — so on a FRESH database it worked (the column is created

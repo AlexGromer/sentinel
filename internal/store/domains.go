@@ -356,14 +356,14 @@ func (s *Server) SaveResult(_ context.Context, r *pb.ResultRecord) (*pb.Empty, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO results(run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,owner)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO results(run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,owner,fault_domain)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(run_id) DO UPDATE SET plan_id=excluded.plan_id,mode=excluded.mode,verdict=excluded.verdict,
 		   exit_code=excluded.exit_code,healed=excluded.healed,failed=excluded.failed,
 		   regressions_json=excluded.regressions_json,steps_json=excluded.steps_json,coverage=excluded.coverage,
-		   duration_ms=excluded.duration_ms,owner=excluded.owner`,
+		   duration_ms=excluded.duration_ms,owner=excluded.owner,fault_domain=excluded.fault_domain`,
 		r.RunId, r.PlanId, r.Mode, r.Verdict, r.ExitCode, r.Healed, r.Failed, r.RegressionsJson,
-		r.StepsJson, r.Coverage, r.DurationMs, nowRFC3339(r.CreatedAt), r.Owner)
+		r.StepsJson, r.Coverage, r.DurationMs, nowRFC3339(r.CreatedAt), r.Owner, r.FaultDomain)
 	return &pb.Empty{}, err
 }
 
@@ -371,10 +371,10 @@ func (s *Server) GetResult(_ context.Context, id *pb.RunId) (*pb.ResultRecord, e
 	r := &pb.ResultRecord{RunId: id.RunId}
 	err := s.db.QueryRow(
 		`SELECT plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,
-		        COALESCE(owner,'')
+		        COALESCE(owner,''),COALESCE(fault_domain,'')
 		 FROM results WHERE run_id=?`, id.RunId).Scan(
 		&r.PlanId, &r.Mode, &r.Verdict, &r.ExitCode, &r.Healed, &r.Failed, &r.RegressionsJson,
-		&r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner)
+		&r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner, &r.FaultDomain)
 	if err == sql.ErrNoRows {
 		return &pb.ResultRecord{Found: false}, nil
 	}
@@ -393,7 +393,7 @@ func (s *Server) ListResults(_ context.Context, q *pb.ListResultsReq) (*pb.Resul
 	}
 	rows, err := s.db.Query(
 		`SELECT run_id,plan_id,mode,verdict,exit_code,healed,failed,regressions_json,steps_json,coverage,duration_ms,created_at,
-		        COALESCE(owner,'')
+		        COALESCE(owner,''),COALESCE(fault_domain,'')
 		 FROM results`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`,
 		append(args, listCap(q.Limit), q.Offset)...)
 	if err != nil {
@@ -403,7 +403,8 @@ func (s *Server) ListResults(_ context.Context, q *pb.ListResultsReq) (*pb.Resul
 	for rows.Next() {
 		r := &pb.ResultRecord{Found: true}
 		if err := rows.Scan(&r.RunId, &r.PlanId, &r.Mode, &r.Verdict, &r.ExitCode, &r.Healed, &r.Failed,
-			&r.RegressionsJson, &r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner); err != nil {
+			&r.RegressionsJson, &r.StepsJson, &r.Coverage, &r.DurationMs, &r.CreatedAt, &r.Owner,
+			&r.FaultDomain); err != nil {
 			return nil, err
 		}
 		out.Results = append(out.Results, r)

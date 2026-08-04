@@ -208,6 +208,7 @@
     "0": {
       "icon": "✓",
       "severity": "pass",
+      "fault": "none",
       "ru": "Пройдено",
       "en": "Passed",
       "ru_hint": "проверка прошла без замечаний",
@@ -216,6 +217,7 @@
     "1": {
       "icon": "⚠",
       "severity": "finding",
+      "fault": "app",
       "ru": "Тест нашёл проблему",
       "en": "The test found a problem",
       "ru_hint": "шаг не выполнился — это результат работы, а не поломка инструмента",
@@ -224,6 +226,7 @@
     "2": {
       "icon": "🖼",
       "severity": "regression",
+      "fault": "app",
       "ru": "Расхождение с эталоном",
       "en": "Golden/visual regression",
       "ru_hint": "страница отличается от сохранённого эталона",
@@ -232,6 +235,7 @@
     "3": {
       "icon": "✖",
       "severity": "integrity",
+      "fault": "test",
       "ru": "Проблема целостности или настройки",
       "en": "Integrity or configuration problem",
       "ru_hint": "нужен человек: план или настройки не сходятся",
@@ -240,6 +244,7 @@
     "-1": {
       "icon": "⛔",
       "severity": "not_started",
+      "fault": "tool",
       "ru": "Не запустился",
       "en": "Did not start",
       "ru_hint": "процесс не удалось запустить или он был прерван сигналом",
@@ -248,6 +253,7 @@
     "4": {
       "icon": "💥",
       "severity": "tool_failure",
+      "fault": "tool",
       "ru": "Инструмент сломался",
       "en": "The tool itself failed",
       "ru_hint": "это НАША ошибка, а не находка в вашем приложении — приложите вывод к отчёту о баге",
@@ -577,6 +583,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 3,
+      "fault": "config",
       "ru": "Заданы одновременно цель и описание потока — нужно выбрать одно",
       "en": "A goal and a flow description were both given — pick one",
       "modules": [
@@ -587,6 +594,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 3,
+      "fault": "config",
       "ru": "Для беседы нужна цель или описание потока — не указано ни то, ни другое",
       "en": "Chat mode needs a goal or a flow description — neither was given",
       "modules": [
@@ -597,6 +605,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 3,
+      "fault": "config",
       "ru": "Цель принадлежит беседе и не меняется: запрос назвал другую. Уточнения присылайте сообщением, для новой цели начните новую беседу",
       "en": "The objective belongs to the conversation and does not change: this request named a different one. Send refinements as a message; for a new objective start a new conversation",
       "modules": [
@@ -607,6 +616,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 2,
+      "fault": "config",
       "ru": "Новая беседа начинается с адреса страницы — он не указан",
       "en": "A new conversation starts from a page address — none was given",
       "modules": [
@@ -617,6 +627,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 2,
+      "fault": "config",
       "ru": "Для беседы нужен её идентификатор — он не передан",
       "en": "Chat mode requires a conversation id — it was not passed",
       "modules": [
@@ -627,6 +638,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 2,
+      "fault": "config",
       "ru": "Не указан адрес проверяемой страницы — запускать нечего",
       "en": "No target page address — there is nothing to run",
       "modules": [
@@ -637,6 +649,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Файл плана не найден: {path}",
       "en": "Plan file not found: {path}",
       "modules": [
@@ -647,6 +660,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Нечего выгружать — файл плана не найден: {path}",
       "en": "Nothing to export — plan file not found: {path}",
       "modules": [
@@ -657,6 +671,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "test",
       "ru": "Файл плана повреждён и не читается — нужен человек",
       "en": "The plan file is corrupt and cannot be read — needs a human",
       "modules": [
@@ -667,6 +682,7 @@
       "lvl": "error",
       "cat": "heal",
       "exit": 3,
+      "fault": "tool",
       "ru": "Отчёт о починке не найден в {dir} — перепрогон не состоялся",
       "en": "No healing report in {dir} — the replay did not happen",
       "modules": [
@@ -677,6 +693,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 3,
+      "fault": "config",
       "ru": "Принудительный перепрогон запрещён в автоматическом режиме",
       "en": "Forced replay is not allowed in CI mode",
       "modules": [
@@ -687,6 +704,7 @@
       "lvl": "error",
       "cat": "system",
       "exit": 3,
+      "fault": "config",
       "ru": "Прогон остановлен: план вводит секрет, а запись трассы включена — секрет попал бы в файл трассы",
       "en": "Stopped: the plan fills a secret while trace recording is on — the secret would land in the trace file",
       "modules": [
@@ -697,6 +715,7 @@
       "lvl": "error",
       "cat": "run",
       "exit": 3,
+      "fault": "config",
       "ru": "Файл настроек прогона {path} не читается: {error}",
       "en": "Run-config file {path} is invalid: {error}",
       "modules": [
@@ -707,6 +726,7 @@
       "lvl": "error",
       "cat": "browser",
       "exit": 3,
+      "fault": "tool",
       "ru": "Не задана команда запуска браузера — прогон невозможен",
       "en": "The browser launch command is unset — the run cannot proceed",
       "modules": [
@@ -1466,7 +1486,8 @@
       "modules": [
         "__main__"
       ],
-      "exit": 4
+      "exit": 4,
+      "fault": "tool"
     },
     "test.report_failed": {
       "lvl": "warn",
@@ -1581,6 +1602,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Импорт: каталог не найден: {path}",
       "en": "Import: directory not found: {path}",
       "modules": [
@@ -1591,6 +1613,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Импорт: в каталоге нет *.spec.ts: {path}",
       "en": "Import: no *.spec.ts under: {path}",
       "modules": [
@@ -1601,6 +1624,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 1,
+      "fault": "test",
       "ru": "Импорт: {count} файл(ов) НЕ прочитаны и не импортированы: {sources}. Прогон краснеет намеренно — молча пропущенный файл выглядел бы успехом",
       "en": "Import: {count} file(s) were NOT read and not imported: {sources}. The run is red on purpose — a silently skipped file would have looked like success",
       "modules": [
@@ -1631,6 +1655,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "test",
       "ru": "Импорт: карта explore нечитаема: {path} ({error})",
       "en": "Import: explore map unreadable: {path} ({error})",
       "modules": [
@@ -1641,6 +1666,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 2,
+      "fault": "config",
       "ru": "Ревизии: не указан тест (--test <id>)",
       "en": "Revisions: no test given (--test <id>)",
       "modules": [
@@ -1651,6 +1677,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Ревизии: у теста {test_id} нет ревизии {revision}",
       "en": "Revisions: test {test_id} has no revision {revision}",
       "modules": [
@@ -1661,6 +1688,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 3,
+      "fault": "config",
       "ru": "Ревизии: у теста {test_id} всего {have} — сравнивать нечего",
       "en": "Revisions: test {test_id} has only {have} — nothing to compare",
       "modules": [
@@ -1671,6 +1699,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 2,
+      "fault": "config",
       "ru": "Ревизии: откат требует явную ревизию (--rev <id>)",
       "en": "Revisions: rollback needs an explicit revision (--rev <id>)",
       "modules": [
@@ -1681,6 +1710,7 @@
       "lvl": "error",
       "cat": "plan",
       "exit": 2,
+      "fault": "config",
       "ru": "Ревизии: неизвестная операция {op}",
       "en": "Revisions: unknown operation {op}",
       "modules": [
@@ -1739,6 +1769,7 @@
         "health"
       ],
       "exit": 3,
+      "fault": "tool",
       "ru": "Хранилище объявлено, но не отвечает: {reason}",
       "en": "A store was declared but does not answer: {reason}"
     },
@@ -1749,6 +1780,7 @@
         "health"
       ],
       "exit": 3,
+      "fault": "tool",
       "ru": "Этот режим требует модель, а её нет: {reason}. Без неё цель была бы молча проигнорирована, и прогон завершился бы успехом, отвечая не на тот вопрос",
       "en": "This mode needs a model and there is none: {reason}. Without one the goal would be silently ignored and the run would exit successfully, answering a question nobody asked"
     },
@@ -1759,6 +1791,7 @@
         "health"
       ],
       "exit": 3,
+      "fault": "tool",
       "ru": "Гейт карты включён, но оркестратор не отвечает: {reason}. Разрешение спрашивать не у кого",
       "en": "The map gate is on but the orchestrator does not answer: {reason}. There is nobody to ask for permission"
     },
@@ -1891,6 +1924,39 @@
       "sources": [
         "tool"
       ]
+    }
+  },
+  "$comment_faults": "The FAULT axis — WHOSE PROBLEM the outcome is, which is the first thing a person asks when a run is not green and the one thing the product could not answer (HEALTH-004). It is deliberately ORTHOGONAL to the verdict: `problem` stays the OUTCOME, and the fault says whose. Adding words to the verdict instead would multiply combinatorially — `problem` x 4 domains, then `regression` x 4 — and two mechanisms describing one fact drift apart, which is exactly what `lvKindOf` already did against this catalogue. An exit code alone cannot decide it: exit 3 is a refusal to start (tool), a corrupt plan (test) AND a malformed request (config), so the terminal `fatal.*` code decides and the `exit_codes` entry is only the fallback for a run whose log we could not read.",
+  "faults": {
+    "none": {
+      "ru": "без чьей-либо вины",
+      "en": "nobody's fault",
+      "ru_hint": "прогон сделал то, о чём его просили",
+      "en_hint": "the run did what it was asked"
+    },
+    "app": {
+      "ru": "приложение",
+      "en": "the application",
+      "ru_hint": "это ФАКТ О ПРОВЕРЯЕМОМ ПРИЛОЖЕНИИ и результат работы — смотреть надо в приложение",
+      "en_hint": "this is a FACT ABOUT THE APPLICATION UNDER TEST and a result of the work — look at the application"
+    },
+    "tool": {
+      "ru": "инструмент",
+      "en": "the tool",
+      "ru_hint": "сломались МЫ или недоступен объявленный компонент — это НЕ находка в вашем приложении",
+      "en_hint": "WE broke, or a declared component is unreachable — this is NOT a finding about your application"
+    },
+    "test": {
+      "ru": "сам тест",
+      "en": "the test itself",
+      "ru_hint": "план, эталон или импортированный материал не сходятся сами с собой — нужен человек",
+      "en_hint": "the plan, the baseline or the imported material does not add up — needs a human"
+    },
+    "config": {
+      "ru": "запрос",
+      "en": "the request",
+      "ru_hint": "прогон попросили неправильно — ничего не выполнялось, чинить надо сам запрос",
+      "en_hint": "the run was asked for incorrectly — nothing executed; fix the request"
     }
   }
 }
