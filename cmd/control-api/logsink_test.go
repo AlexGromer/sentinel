@@ -263,7 +263,10 @@ func TestSinkTagsSourceAndStep(t *testing.T) {
 		`[info|run] run.config: Run abc started: mode explore`,
 		`@@AGUI {"type":"step.progress","run_id":"abc","seq":4,"data":{"n":4,"total":40,"desc":"click cart"}}`,
 		`[error|app] app.js_error: The page under test threw an error: TypeError: cart.total is undefined`,
-		`[error|test] test.step_failed: Step 4 (click) — FAILED. This is the step that went wrong`,
+		// The line the product actually emits since HEALTH-004 PR-1b — it carries the REASON now. The
+		// fixture said "This is the step that went wrong", a sentence nothing produces any more; a
+		// fixture built on text the product has stopped writing tests only itself.
+		`[error|test] test.step_failed: Step 4 (click) FAILED — the application did not answer as expected: browser.click: Timeout 30000ms exceeded. Expected True, observed —`,
 		`@@AGUI {"type":"step.progress","run_id":"abc","seq":5,"data":{"n":5,"total":40,"desc":"pay"}}`,
 		`[warn|app] app.http_error: The site answered 500 to POST /api/pay`,
 	})

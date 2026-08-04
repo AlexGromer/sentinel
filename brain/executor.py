@@ -12,6 +12,24 @@ def log(*a: object) -> None:
     print("[brain]", *a, file=sys.stderr, flush=True)
 
 
+class ExecutorTransportError(RuntimeError):
+    """We could not TALK to the executor — as distinct from the executor telling us something failed.
+
+    HEALTH-004: the two are opposite answers to "whose problem is this" and used to be the same
+    exception. A dead subprocess or an unreadable response is OUR failure and says nothing whatever
+    about the application under test; a remote error means the executor is alive, reached the page,
+    and is reporting what it found there.
+
+    Asked at the boundary where the two genuinely differ — which raise site fired — rather than by
+    matching driver text later. A step classifier reading `str(e)` for "Timeout" or "ECONNRESET" is a
+    SURROGATE for that question: it happens to correlate today, drifts the first time Playwright
+    rewords a message, and gives a confident wrong answer when it does.
+
+    Subclasses RuntimeError so every existing `except Exception` and `except RuntimeError` around a
+    call keeps behaving exactly as before; only code that asks the new question sees a difference.
+    """
+
+
 class Executor:
     def __init__(self, cmd: str) -> None:
         self.proc = subprocess.Popen(
@@ -36,9 +54,16 @@ class Executor:
         self.proc.stdin.flush()
         line = self.proc.stdout.readline()
         if not line:
-            raise RuntimeError(f"executor closed during '{method}'")
-        resp = json.loads(line)
+            # The subprocess is gone. Nothing was learned about the page.
+            raise ExecutorTransportError(f"executor closed during '{method}'")
+        try:
+            resp = json.loads(line)
+        except ValueError as e:
+            # A response we cannot read is a broken channel, not a finding — and it used to surface as
+            # a bare JSONDecodeError that read like a malformed page.
+            raise ExecutorTransportError(f"executor sent an unreadable response to '{method}': {e}") from e
         if resp.get("error"):
+            # The executor answered. Whatever it reports is about the browser and the page it drove.
             raise RuntimeError(f"{method}: {resp['error']['message']}")
         return resp.get("result") or {}
 
@@ -106,15 +131,21 @@ class McpExecutor:
         if method in ("initialize", "shutdown"):
             return {}
         if self._session is None:
-            raise RuntimeError("MCP session not initialized")
+            raise ExecutorTransportError("MCP session not initialized")
         tool = method.replace("browser.", "browser_")
         from .otel import inject_context           # M8: W3C trace-context → pw-executor (no-op if off)
         meta = inject_context({})
         if meta:
             params = {**params, "_meta": meta}
         fut = asyncio.run_coroutine_threadsafe(self._session.call_tool(tool, params), self._loop)
-        res = fut.result(timeout=60)
+        try:
+            res = fut.result(timeout=60)
+        except TimeoutError as e:
+            # OUR RPC deadline, not the page's. A caller that reads this as a slow application would
+            # be debugging the wrong system.
+            raise ExecutorTransportError(f"the executor did not answer '{method}' within 60s") from e
         if getattr(res, "isError", False):
+            # The executor answered — the report is about the browser and the page.
             raise RuntimeError(f"{method}: {''.join(getattr(c, 'text', '') for c in res.content)}")
         for c in res.content:
             if getattr(c, "type", "") == "text":

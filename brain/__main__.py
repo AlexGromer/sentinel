@@ -203,6 +203,70 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         tx.close()
 
 
+def _assert_reason(a: dict) -> str:
+    """HEALTH-004: the sentence for an assertion that did not hold — the one failure with no exception.
+
+    Built from the record rather than from the driver, because there is nothing from the driver here:
+    `browser.expect` is non-throwing by design (M9.1), so a mismatched assertion reaches this point as
+    plain data and used to reach the log as nothing at all.
+    """
+    if not a:
+        return ""
+    cond = a.get("condition") or "assert"
+    if a.get("actual") is not None:
+        return f"{cond}: {a['actual']!r}"
+    return str(cond)
+
+
+def _observed_of(a: dict) -> object:
+    """What the page actually showed. `actual` when the executor captured a value, else the boolean
+    outcome; an em dash when the step failed for a reason that has no observation at all (a thrown
+    verb). Never blank — a placeholder rendering as empty reads as "we did not look"."""
+    if not a:
+        return "—"
+    return a["actual"] if a.get("actual") is not None else a.get("observed", "—")
+
+
+def log_step_outcome(r: dict) -> None:
+    """One step's outcome, as the filterable record a person searches (HEALTH-004, PR-1b).
+
+    Two things used to be lost here, and both mattered to the reader of the LOG rather than of an
+    artifact:
+
+    THE REASON. replay.py builds a rich record — the exception text, the assertion's
+    condition/expected/observed, the healing outcome — and this line carried the step number and the
+    verb. "The application returned the wrong value" and "we could not find the button" were the same
+    sentence, and the difference lived only in heal-report.json, which replay/baseline runs produce
+    and goal/explore runs do not.
+
+    WHOSE PROBLEM. The domain is decided at the failure SITE (replay._fault_of, from the exception
+    TYPE at the executor boundary) and picks the CODE here, so the split appears in the AUDIENCE
+    FILTER rather than only in prose the reader has to interpret: `test.*` is source `testing` ->
+    audience `business`, `browser.*` is `tool`. A code per domain rather than one code with a field,
+    because audience is derived from the category and a field cannot move a record between filters.
+
+    Exposed (no leading underscore) because the gate drives THIS function. An extracted copy would be
+    a test of the copy — the mistake this project has already paid for more than once.
+    """
+    sid, stype, outcome = r["step_id"], r["type"], r["outcome"]
+    if r.get("regression"):
+        log("test.step_regression", step=sid, type=stype, what=",".join(r["regression"]))
+    elif outcome == "healed":
+        log("test.step_healed", step=sid, type=stype,
+            strategy=(r.get("heal") or {}).get("strategy"),
+            confidence=(r.get("heal") or {}).get("confidence"))
+    elif outcome in ("failed", "fail", "error"):
+        a = r.get("assert") or {}
+        reason = r.get("error") or _assert_reason(a) or "причина не записана / no reason recorded"
+        if r.get("fault") == "tool":
+            log("test.step_unresolved", step=sid, type=stype, reason=reason)
+        else:
+            log("test.step_failed", step=sid, type=stype, reason=reason,
+                expect=a.get("expect_ok", "—"), observed=_observed_of(a))
+    else:
+        log("test.step_passed", step=sid, type=stype)
+
+
 def _conversations_store_path() -> str:
     """M9.10 (ADR-048): the SHARED, NON-ephemeral checkpoint store for multi-turn chat threads — distinct
     from the per-run ARTIFACT_DIR/checkpoint.db (that one is keyed by a unique run_id, so it can't be
@@ -673,16 +737,7 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
               f"exit={code}")
         for r in report["steps"]:
             sid, stype, outcome = r["step_id"], r["type"], r["outcome"]
-            if r.get("regression"):
-                log("test.step_regression", step=sid, type=stype, what=",".join(r["regression"]))
-            elif outcome == "healed":
-                log("test.step_healed", step=sid, type=stype,
-                    strategy=(r.get("heal") or {}).get("strategy"),
-                    confidence=(r.get("heal") or {}).get("confidence"))
-            elif outcome in ("failed", "fail", "error"):
-                log("test.step_failed", step=sid, type=stype)
-            else:
-                log("test.step_passed", step=sid, type=stype)
+            log_step_outcome(r)
             if r.get("quarantined"):
                 log("test.step_quarantined", step=sid, type=stype)
             extra = ""

@@ -1407,8 +1407,18 @@
       "lvl": "error",
       "cat": "test",
       "phase": "verify",
-      "ru": "Шаг {step} ({type}) — НЕ ВЫПОЛНЕН. Это и есть ошибочный шаг",
-      "en": "Step {step} ({type}) — FAILED. This is the step that went wrong",
+      "ru": "Шаг {step} ({type}) НЕ ВЫПОЛНЕН — приложение ответило не так: {reason}. Ожидалось {expect}, наблюдалось {observed}",
+      "en": "Step {step} ({type}) FAILED — the application did not answer as expected: {reason}. Expected {expect}, observed {observed}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "test.step_unresolved": {
+      "lvl": "error",
+      "cat": "browser",
+      "phase": "verify",
+      "ru": "Шаг {step} ({type}) НЕ ВЫПОЛНЕН — не смогли действовать, это НАША поломка, а не находка в приложении: {reason}",
+      "en": "Step {step} ({type}) FAILED — we could not act; this is OUR breakage, not a finding about the application: {reason}",
       "modules": [
         "__main__"
       ]

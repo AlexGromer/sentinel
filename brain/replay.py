@@ -21,6 +21,7 @@ import os
 
 from . import agui
 from . import eventlog
+from .executor import ExecutorTransportError
 from .healing import AUTO as _HEAL_AUTO
 from .healing import is_reground
 from .eventlog import log
@@ -197,6 +198,30 @@ def _expect_params(s: dict) -> dict:
     return p
 
 
+def _fault_of(exc: "BaseException | None") -> str:
+    """HEALTH-004: whose problem a failed step is — recorded where the failure HAPPENS.
+
+    Two answers, and the boundary between them is the executor, not a keyword:
+
+      tool — we could not talk to the executor. The subprocess died, the channel went unreadable, our
+             RPC deadline passed. Nothing at all was learned about the page, so blaming the
+             application would be a confident lie.
+      app  — everything else. Either the executor answered and reported a problem (it is alive, it
+             reached the page, what it reports is about that page), or there was no exception at all:
+             an assertion that did not hold, or a locator no healing tier could re-find. Both are
+             statements about the application under test, which is the RESULT the product exists to
+             produce.
+
+    `exc is None` means the step failed without throwing — the assert-mismatch and heal-exhausted
+    paths — and those are the most app-ish failures there are.
+
+    Deliberately NOT parsing `str(exc)`. Matching driver text for "Timeout" or "ECONNRESET" is a
+    surrogate for "did the transport fail": it correlates today, breaks the first time Playwright
+    rewords a message, and fails silently in the direction that misleads.
+    """
+    return "tool" if isinstance(exc, ExecutorTransportError) else "app"
+
+
 def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                baseline: bool = False, aut_version: str = "", ci: bool = False,
                force: bool = False, run_id: str = "") -> dict:
@@ -276,6 +301,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["outcome"], rec["url"] = "ok", tgt
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False
+                rec["fault"] = _fault_of(e)
         elif kind == "assert":
             # M9.1: non-throwing assert; the step passes iff observed ok == expected polarity.
             # No probe/heal — a zero-count locator may be the very point of the assertion.
@@ -288,8 +314,13 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["assert"] = {"condition": s.get("condition"), "expect_ok": expect_ok, "observed": ok}
                 if res.get("actual") is not None:
                     rec["assert"]["actual"] = res["actual"]
+                if not passed:
+                    # No exception: the executor answered and the answer was not the expected one.
+                    # The most unambiguous "your application" failure the product has.
+                    rec["fault"] = _fault_of(None)
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False
+                rec["fault"] = _fault_of(e)
         elif kind == "press":
             # M9.1: key press; heal only applies to locator-bearing verbs, a global key has none.
             try:
@@ -300,6 +331,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["outcome"], rec["key"] = "ok", s.get("key")
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False
+                rec["fault"] = _fault_of(e)
         elif kind in LOCATOR_VERBS:  # click/fill/type/select: probe -> heal -> act(verb)
             primary = s.get("locator") or {}
             page_path = normalize_url(ex.call("browser.currentUrl").get("url", ""))
@@ -310,6 +342,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                     rec["outcome"], rec["locator"] = "ok", primary
                 except Exception as e:
                     rec["outcome"], rec["error"], passed = "failed", str(e), False
+                    rec["fault"] = _fault_of(e)
             else:
                 snap = ex.call("browser.snapshot")
                 inter = ex.call("browser.interactives").get("elements", [])
@@ -348,14 +381,21 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                               confidence=h.get("confidence"), ok=True)
                     except Exception as e:
                         rec["outcome"], rec["error"], rec["heal"], passed = "failed", str(e), h, False
+                        rec["fault"] = _fault_of(e)
                         _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
                               confidence=h.get("confidence"), ok=False)
                 else:
                     rec["outcome"], rec["heal"], passed = "failed", h, False
+                    # No tier could re-find the element. The tool did its whole job; the interface
+                    # it was pointed at is what moved.
+                    rec["fault"] = _fault_of(None)
                     _emit("heal", run_id, step=s.get("step_id"), strategy=h.get("strategy"),
                           confidence=h.get("confidence"), ok=False)
         else:
             rec["outcome"], rec["error"], passed = "failed", f"unknown action_type: {kind}", False
+            # An imported plan (ADR-105) can carry a verb this executor has no implementation for.
+            # That is the test MATERIAL being unrunnable, and the reason line says so by name.
+            rec["fault"] = "test"
 
         # --- flake quarantine accounting (suppresses exit-1 contribution) ------
         quarantined = store.record_step(plan_id, step_key, passed, aut_version)
