@@ -75,6 +75,14 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
         with open(out / "reconcile-report.json", "w") as f:
             json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
     log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
+    # HEALTH-004: a goal run that grounded 3 of 10 exits 0, reports a counter, and is over. That is the
+    # exact shape `degrades` exists for — green, and quietly worth less than it looks. Describe mode
+    # already reddens on any unmatched (below); goal mode did not and still does not, because a goal is
+    # a direction rather than a specification and demanding every reference bind would make the mode
+    # unusable. So it stays green AND says what it cost.
+    if sc and unmatched:
+        log("plan.partially_grounded", grounded=len(sc), unmatched=len(unmatched),
+            total=len(sc) + len(unmatched))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
           + (" + reconcile-report.json" if is_describe else ""))
     if is_describe and unmatched:

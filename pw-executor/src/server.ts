@@ -543,7 +543,32 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         }
         throw e;
       }
-      return { url: page!.url(), title: await page!.title(), status: resp?.status() ?? null };
+      // HEALTH-004: the application's OWN timing, read from the page it just loaded. The product had
+      // no code about speed at all, and the tempting substitute — how long our step took — is a
+      // surrogate: it includes locator resolution, healing and RPC, so a slow TOOL would be reported
+      // as a slow application. PerformanceNavigationTiming is the browser's measurement of the
+      // document exchange itself, which is the thing being claimed.
+      //
+      // `loadEventEnd` is deliberately absent: we wait for `domcontentloaded`, so the load event may
+      // not have fired and would read as 0 — a fast page and an unfinished one look identical. Only
+      // numbers that are settled at this point are reported.
+      let timing: { response_ms: number; dom_ms: number } | null = null;
+      try {
+        timing = await page!.evaluate(() => {
+          const n = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+          if (!n) return null;
+          return {
+            response_ms: Math.round(n.responseEnd),
+            dom_ms: Math.round(n.domContentLoadedEventEnd || n.responseEnd),
+          };
+        });
+      } catch {
+        // A page that navigated away mid-read, or a context without the API. The navigation itself
+        // succeeded, so this must not turn a working step into a failure — the caller sees null and
+        // says nothing about speed rather than guessing.
+        timing = null;
+      }
+      return { url: page!.url(), title: await page!.title(), status: resp?.status() ?? null, timing };
     }
     case 'browser.snapshot': {
       await ensureBrowser();

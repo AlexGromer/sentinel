@@ -840,6 +840,19 @@
         "planner"
       ]
     },
+    "plan.partially_grounded": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Заземлено {grounded} шаг(ов) из {total}: {unmatched} ссылок не нашли элемента на странице",
+      "en": "Grounded {grounded} of {total} step(s): {unmatched} reference(s) found no element on the page",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "сценарий заземлён НЕ ПОЛНОСТЬЮ: {unmatched} из {total} шагов не привязались к элементам — тест проверяет меньше, чем вы просили",
+      "en_verdict": "the scenario is only PARTLY grounded: {unmatched} of {total} steps bound to no element — the test checks less than you asked for"
+    },
     "plan.budget_exhausted_heuristic": {
       "lvl": "warn",
       "cat": "plan",
@@ -964,8 +977,10 @@
       "lvl": "info",
       "cat": "heal",
       "phase": "heal",
+      "src": "application",
+      "src_why": "«интерфейс изменился» — факт о ПРИЛОЖЕНИИ, а не о починке, которая его заметила. Категория остаётся `heal` (дрейф — понятие самопочинки, и фильтр по `heal` обязан его показывать), но источник переопределён, иначе фильтр «бизнес» скрывает единственное сообщение продукта о том, что тестируемое приложение поменялось под тестом. / \"the interface changed\" is a fact about the APPLICATION, not about the healing that noticed it. The category stays `heal` — drift is a healing concept and a `heal` filter must show it — but the source is overridden, or the business filter hides the product's only statement that the application under test moved.",
       "ru": "Интерфейс изменился, но элемент найден заново по другому ключу: «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — это ремонт теста",
-      "en": "The interface changed, but the element was found again by another key: \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this is repairing the test",
+      "en": "The interface changed, but the element was found again under a different locator — \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this is repairing the test",
       "modules": [
         "replay"
       ]
@@ -974,6 +989,8 @@
       "lvl": "warn",
       "cat": "heal",
       "phase": "heal",
+      "src": "application",
+      "src_why": "«интерфейс изменился» — факт о ПРИЛОЖЕНИИ, а не о починке, которая его заметила. Категория остаётся `heal` (дрейф — понятие самопочинки, и фильтр по `heal` обязан его показывать), но источник переопределён, иначе фильтр «бизнес» скрывает единственное сообщение продукта о том, что тестируемое приложение поменялось под тестом. / \"the interface changed\" is a fact about the APPLICATION, not about the healing that noticed it. The category stays `heal` — drift is a healing concept and a `heal` filter must show it — but the source is overridden, or the business filter hides the product's only statement that the application under test moved.",
       "ru": "Выбран НОВЫЙ ключ с текущей страницы для «{element}» (шаг {step}, стратегия {strategy}, уверенность {confidence}) — этого ключа в замороженном плане не было",
       "en": "A NEW key was chosen from the current page for \"{element}\" (step {step}, strategy {strategy}, confidence {confidence}) — this key was not in the frozen plan",
       "modules": [
@@ -1023,6 +1040,8 @@
       "lvl": "warn",
       "cat": "heal",
       "phase": "report",
+      "src": "application",
+      "src_why": "«интерфейс изменился» — факт о ПРИЛОЖЕНИИ, а не о починке, которая его заметила. Категория остаётся `heal` (дрейф — понятие самопочинки, и фильтр по `heal` обязан его показывать), но источник переопределён, иначе фильтр «бизнес» скрывает единственное сообщение продукта о том, что тестируемое приложение поменялось под тестом. / \"the interface changed\" is a fact about the APPLICATION, not about the healing that noticed it. The category stays `heal` — drift is a healing concept and a `heal` filter must show it — but the source is overridden, or the business filter hides the product's only statement that the application under test moved.",
       "ru": "Прогон прошёл с дрейфом интерфейса: элементов {total} (переприязка {rebind}, новый селектор {reground})",
       "en": "The run passed with interface drift: {total} element(s) ({rebind} re-bound, {reground} re-grounded)",
       "modules": [
@@ -1372,6 +1391,19 @@
       "degrades": true,
       "ru_verdict": "тест прошёл, но приложение сыпало ошибками — посмотрите вкладку Логи, источник «приложение»",
       "en_verdict": "the test passed, but the application was throwing errors — see the Logs view, source \"application\""
+    },
+    "app.slow_load": {
+      "lvl": "warn",
+      "cat": "app",
+      "phase": "act",
+      "ru": "Приложение отдавало страницу «{url}» {ms} мс при пороге {limit} мс",
+      "en": "The application took {ms} ms to serve «{url}», against a {limit} ms threshold",
+      "modules": [
+        "replay"
+      ],
+      "degrades": true,
+      "ru_verdict": "приложение отвечало медленно: {url} — {ms} мс при пороге {limit} мс; медленный отклик это первая по частоте причина флейка",
+      "en_verdict": "the application was slow to answer: {url} took {ms} ms against a {limit} ms threshold; slow responses are the most frequent cause of flake"
     },
     "system.app_faults_unavailable": {
       "lvl": "debug",
@@ -1973,5 +2005,6 @@
       "ru_hint": "прогон попросили неправильно — ничего не выполнялось, чинить надо сам запрос",
       "en_hint": "the run was asked for incorrectly — nothing executed; fix the request"
     }
-  }
+  },
+  "$comment_src_override": "An event may override the SOURCE its category implies, and must justify it in `src_why`. The axis is normally derived (cat -> sources -> audiences) precisely so the two cannot disagree, and every override weakens that — which is why the gate refuses one without a stated reason. Introduced for the drift codes (HEALTH-004): they are emitted by the healer and are statements about the application, and `src == business` was hiding the product's only report that the interface moved."
 }

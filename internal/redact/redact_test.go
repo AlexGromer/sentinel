@@ -118,3 +118,52 @@ func TestOverlappingRedactionsCollapse(t *testing.T) {
 		t.Fatalf("the JWT signature survived: %s", got)
 	}
 }
+
+// HEALTH-004 PR-1c: our own `code:` prefix is a LABEL, not a credential assignment.
+//
+// Measured 2026-08-04 on a real run, and caught by a SCREENSHOT rather than by any gate: the sink
+// writes `[warn|llm] llm.no_anthropic_key: No AI key (planner) …`, this scanner read the code as a
+// credential name (it ends in `key`) and blanked what followed — so the operator was shown
+// `[REDACTED] AI key (planner)`, a sentence missing its first word. Two codes were affected, and both
+// are named after credentials precisely because their messages are ABOUT credential handling.
+//
+// Both directions are asserted, because the fix is only correct if it costs nothing: the message
+// survives AND a real credential on the same line still goes.
+func TestOurOwnEventCodeIsNotReadAsACredentialName(t *testing.T) {
+	for _, tc := range []struct{ name, in, wantContains, wantAbsent string }{
+		{
+			name:         "the message keeps its first word",
+			in:           `[warn|llm] llm.no_anthropic_key: No AI key (planner) — running without AI`,
+			wantContains: "No AI key (planner)",
+			wantAbsent:   redactedMark,
+		},
+		{
+			name:         "the other affected code, which lost «Stopped:»",
+			in:           `[error|system] fatal.secret_would_leak_to_trace: Stopped: the plan fills a secret`,
+			wantContains: "Stopped:",
+			wantAbsent:   redactedMark,
+		},
+		{
+			name:         "a credential LATER on the same line is still redacted",
+			in:           `[warn|llm] llm.no_anthropic_key: No AI key, tried api_key=hunter2sekrit`,
+			wantContains: "No AI key",
+			wantAbsent:   "hunter2sekrit",
+		},
+		{
+			name:         "a name that is NOT a catalogued code keeps being treated as one",
+			in:           `[error|app] app.console_error: password: hunter2sekrit`,
+			wantContains: redactedMark,
+			wantAbsent:   "hunter2sekrit",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Line(tc.in)
+			if !strings.Contains(got, tc.wantContains) {
+				t.Errorf("want %q in output, got: %s", tc.wantContains, got)
+			}
+			if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
+				t.Errorf("want %q ABSENT from output, got: %s", tc.wantAbsent, got)
+			}
+		})
+	}
+}

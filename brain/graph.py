@@ -520,7 +520,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         try:
             at = p["action_type"]
             if at == "navigate":
-                ex.call("browser.navigate", url=p["target"])
+                from .replay import note_load_speed
+                note_load_speed(ex.call("browser.navigate", url=p["target"]), p["target"])
             elif at == "click":
                 ex.call("browser.click", locator=p["locator"])
             elif at in ("fill", "type", "select"):
