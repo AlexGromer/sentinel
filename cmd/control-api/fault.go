@@ -41,8 +41,9 @@ import (
 //
 //  1. A run that never became a process is ours — there is no application in the story yet.
 //  2. A deliberate stop is nobody's fault. It is not a failure and must not be filed as one.
-//  3. The code that ended the run wins, because it is the only witness with the precise answer.
-//  4. Only then the exit code, from the catalogue's own table.
+//  3. A GREEN ending has no fault, whatever happened along the way.
+//  4. The code that ended the run wins, because it is the only witness with the precise answer.
+//  5. Only then the exit code, from the catalogue's own table.
 //
 // Returns "" only when the exit code is one the catalogue never declared. That is deliberate: an
 // unexplainable exit is itself worth surfacing, and inventing `tool` for it would quietly re-create
@@ -54,6 +55,15 @@ func faultDomain(state string, exit int, terminalCode string) string {
 		// attributing this anywhere but to us would be a lie with a plausible shape.
 		return "tool"
 	case "canceled":
+		return "none"
+	}
+	// A run that exited 0 harms nobody, and this rule has to come BEFORE the terminal code. Several
+	// codes that name a fault describe a degradation a run then SURVIVES — falling back to the
+	// heuristic planner is the common one — and without this line the last such code would stick a
+	// blame chip onto a green run. What was lost on the way is a different question, already answered
+	// separately by `degrades` and by the refined pass_with_* verdicts; this axis answers "who broke
+	// this ending", and a green ending is not broken.
+	if exit == 0 {
 		return "none"
 	}
 	if f := eventcatalog.FaultOf(terminalCode); f != "" {

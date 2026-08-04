@@ -2288,14 +2288,23 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('b-baseline').disabled=disabled||noPlan;
     /* Disabled without a reason is its own small mystery, so the buttons carry the reason as a tooltip
        and the note below states it once the run is known to be unreplayable. */
-    var why = bLastRunId && !bLastRunHasPlan
+    /* Two forms of the same sentence, because the two destinations render differently and mixing them
+       up is silent: `bi()` returns data-lang SPANS, so assigning it to textContent or to a title
+       attribute prints the markup at the reader. Both did — visible in the ui-smoke screenshot
+       06-goal-without-a-model.png as a literal `<span data-lang="ru">прогон не оставил плана…`.
+       biPlain exists for exactly the destinations that cannot carry markup. */
+    var whyHtml = bLastRunId && !bLastRunHasPlan
       ? bi('прогон не оставил плана — он упал до заморозки, переигрывать нечего',
            'the run left no plan — it died before the freeze, so there is nothing to replay')
       : '';
-    ge('b-rerun').title = why || 'replay';
-    ge('b-baseline').title = why || 'baseline update';
+    var whyPlain = whyHtml
+      ? biPlain('прогон не оставил плана — он упал до заморозки, переигрывать нечего',
+                'the run left no plan — it died before the freeze, so there is nothing to replay')
+      : '';
+    ge('b-rerun').title = whyPlain || 'replay';
+    ge('b-baseline').title = whyPlain || 'baseline update';
     var note = ge('b-noplan');
-    if (note){ note.textContent = why; note.style.display = why ? '' : 'none'; }
+    if (note){ note.innerHTML = whyHtml; note.style.display = whyHtml ? '' : 'none'; }
   }
   /* Prominent pass/fail badge + a plain-language line + the actionable cause on failure.
      Replaces the old thin one-liner (M9-LIVE: "не видно, что тест прошёл"). */
@@ -2417,14 +2426,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       +(fault && st.fault_domain !== 'none'
         ? ' <span id="b-verdict-fault" data-fault="'+esc(st.fault_domain)+'" style="border:1px solid '+col
           +';border-radius:6px;padding:0 .35rem;font-weight:700;font-size:.78em;text-transform:uppercase">'
-          +esc(bi(fault.ru, fault.en))+'</span>'
+          /* bi() RETURNS MARKUP — escaping it prints the tags at the reader, which is what the first
+             version of this chip did. Escape the catalogue values, then wrap them. */
+          +bi(esc(fault.ru), esc(fault.en))+'</span>'
         : '')
       +' <span style="opacity:.65;font-weight:600;font-size:.82em">exit '+esc(code==null?'?':code)+'</span></div>';
     if (sub) html+='<div style="font-size:.86rem;color:var(--mut)">'+sub+'</div>';
     if ((state==='failed' || (code!=null && code!==0)) && cause)
       html+='<div style="font-size:.86rem;margin-top:.15rem"><b>'+bi('причина','cause')+':</b> '+cause+'</div>'; // cause is HTML-safe (see bExtractCause)
     html+='</div></div>';
-    html+=bDegradedHtml(degradations);
+    // "Completed" means the run reached an ending of its own — not that the ending was green. A refused
+    // start (state failed, or a fault we own before anything executed) is the case the headline lied about.
+    html+=bDegradedHtml(degradations, state!=='failed' && st.fault_domain!=='tool' && st.fault_domain!=='config');
     html+=bVerdictDetail(report);
     ge('b-verdict').innerHTML=html;
   }
@@ -2434,11 +2447,21 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      run produced, and until now they existed only in a log file nobody opens when the build is green.
      The sentence comes from the catalogue's `{ru,en}_verdict` — deliberately NOT the log phrasing: the
      log says what happened, the verdict says what it means for the result. */
-  function bDegradedHtml(codes){
+  /* `completed` decides only the HEADLINE, never whether the block appears: the degradations are true
+     either way and hiding them would trade one wrong sentence for a missing one.
+     Measured 2026-08-04 on the ui-smoke screenshot: a goal run REFUSED at startup (exit 3, nothing
+     executed) still carried "Прогон прошёл с потерей качества — прогон прошёл БЕЗ ИИ" directly under
+     its verdict, because llm.no_anthropic_key fires before health.py refuses. Two sentences about one
+     run that never began, and the other one is what ADR-113 fixed above. */
+  function bDegradedHtml(codes, completed){
     if (!codes || !codes.length) return '';
     var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var head = completed
+      ? bi('Прогон прошёл с потерей качества','The run completed with degraded quality')
+      : bi('По дороге потеряно качество — прогон не дошёл до конца',
+           'Quality was lost on the way — the run did not get to the end');
     return '<div class="lgverdict" id="b-verdict-degraded" style="margin-top:.5rem"><b>⚠ '
-      + bi('Прогон прошёл с потерей качества','The run completed with degraded quality') + '</b><br>'
+      + head + '</b><br>'
       + codes.map(function(code){
           var e = lgCatalog && lgCatalog.events && lgCatalog.events[code];
           return esc((e && e[l+'_verdict']) || code);
@@ -3168,9 +3191,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function resFaultChip(d){
     var f = bFaultInfo(d);
     if (!f || d === 'none') return '';
-    return ' <span class="libmeta" data-fault="'+esc(d)+'" title="'+esc(bi(f.ru_hint, f.en_hint))
+    // The tooltip is an ATTRIBUTE and cannot carry data-lang spans — biPlain is the form for exactly
+    // those destinations. The label is markup, so its VALUES are escaped and then wrapped.
+    return ' <span class="libmeta" data-fault="'+esc(d)+'" title="'+esc(biPlain(f.ru_hint, f.en_hint))
       +'" style="border:1px solid var(--mut);border-radius:5px;padding:0 .3rem;font-size:.78em;'
-      +'text-transform:uppercase">'+esc(bi(f.ru, f.en))+'</span>';
+      +'text-transform:uppercase">'+bi(esc(f.ru), esc(f.en))+'</span>';
   }
   function tRenderResults(){
     if(!tResults.length){ ge('results-charts').innerHTML=''; ge('results-list').innerHTML='<p class="hint">'+bi('результатов пока нет — запусти прогон','no results yet — run a test')+'</p>'; return; }

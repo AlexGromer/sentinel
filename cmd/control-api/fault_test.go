@@ -45,6 +45,19 @@ func TestFaultDomainTellsApartTheThingsExitCodeCannot(t *testing.T) {
 		{"exit 3 because the plan file is corrupt — the test's own material", "done", 3, "fatal.plan_unparseable", "test"},
 		{"exit 3 because the run was asked for wrongly", "done", 3, "fatal.goal_describe_conflict", "config"},
 		{"exit 3 with no terminal code — falls back to the catalogue's reading of 3", "done", 3, "", "test"},
+
+		// Measured live 2026-08-04. A goal run whose model endpoint answered 404 authored zero steps
+		// and exited 1; the product said `plan.scenario_error_empty` with the 404 quoted, and the
+		// verdict said `app`. Exit 1 alone means "the test found a problem in the application", so the
+		// coarse reading actively contradicted what the run had just reported about itself.
+		{"authoring produced nothing because OUR endpoint failed", "done", 1, "plan.scenario_error_empty", "tool"},
+		{"authoring produced nothing because OUR budget ran out", "done", 1, "plan.scenario_budget_empty", "tool"},
+		{"the model's output could not be parsed — ours", "done", 1, "plan.output_unparseable", "tool"},
+
+		// The other side of the same coin: those codes describe a degradation a run can SURVIVE, so
+		// a green ending must not inherit a blame chip from one that fired along the way.
+		{"a run that recovered and passed carries no fault", "done", 0, "plan.scenario_error_empty", "none"},
+		{"a green run with an earlier tool degradation is still nobody's fault", "done", 0, "llm.no_anthropic_key", "none"},
 	}
 	for _, c := range cases {
 		if got := faultDomain(c.state, c.exit, c.terminalCode); got != c.want {

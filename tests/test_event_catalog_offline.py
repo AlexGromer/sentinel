@@ -191,7 +191,22 @@ def check_fault_axis(cat, events):
              "UNREACHABLE is not a finding about the application under test")
     if events["fatal.internal_error"]["fault"] != "tool":
         fail("fatal.internal_error must be `tool` — its own message says so in both languages")
-    return len(terminal)
+
+    # A code may name a fault WITHOUT declaring an exit, and these five have to. Measured live on
+    # 2026-08-04: a goal run whose model endpoint answered 404 emitted plan.scenario_error_empty
+    # (degrades, src=tool, the 404 quoted in the message), authored zero steps and exited 1 — and the
+    # verdict blamed `app`, because exit 1 alone means "the test found a problem in the application".
+    # The product KNEW whose problem it was and the badge said the opposite. These codes end a run in
+    # every sense except declaring a number, so they carry the answer.
+    for code in ("plan.scenario_error_empty", "plan.scenario_budget_empty",
+                 "plan.describe_error_empty", "plan.describe_budget_empty",
+                 "plan.output_unparseable"):
+        if events[code].get("fault") != "tool":
+            fail(f"{code} must be `tool`: authoring that produced nothing failed on OUR endpoint, OUR "
+                 f"budget or OUR parser — attributing it to the application sends the reader to debug "
+                 f"the one thing that was working")
+    extra = sum(1 for c, e in events.items() if e.get("fault") and "exit" not in e)
+    return len(terminal), extra
 
 
 def main() -> int:
@@ -275,7 +290,7 @@ def main() -> int:
     # (exit 3 is a refusal to start, a corrupt plan AND a malformed request), so the code that ENDED
     # the run carries the answer and the exit_codes entry is only the fallback. Both must declare it,
     # or a run whose outcome nobody can attribute reaches the dashboard as the coarse word `problem`.
-    terminal_codes = check_fault_axis(cat, events)
+    terminal_codes, extra_faults = check_fault_axis(cat, events)
 
     # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
     # matching that template against the rendered string. If the two drift, the UI silently falls back
@@ -381,7 +396,8 @@ def main() -> int:
           f"{len(degrading)} silent degradations, {len(cat['sources'])} sources in "
           f"{len(cat['audiences'])} audiences, "
           f"{len(cat['phases'])} phases, {len(cat['exit_codes'])} exit codes, "
-          f"{terminal_codes} terminal codes attributed across {len(cat['faults'])} faults, "
+          f"{terminal_codes} terminal + {extra_faults} decisive codes attributed across "
+          f"{len(cat['faults'])} faults, "
           f"{len(patterns)} foreign patterns; RU/EN complete")
     return 0
 

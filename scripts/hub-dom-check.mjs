@@ -928,6 +928,14 @@ try {
       const why = await vPage.locator('#b-noplan').textContent();
       ok(why && why.trim().length > 0, 'the controls are greyed out with no reason given');
       ok(/плана|plan/.test(why), `the reason does not mention the missing plan: ${why}`);
+      // This check passed for months while the note rendered `<span data-lang="ru">прогон не оставил
+      // плана…` verbatim on screen: the substring it looks for was present INSIDE the markup. Caught
+      // by a screenshot, not by an assertion — so the assertion now covers the form as well.
+      ok(!/<span|data-lang=/i.test(why),
+        `the no-plan note is printing its markup instead of rendering it: ${why}`);
+      const tip = await vPage.locator('#b-rerun').getAttribute('title');
+      ok(!/<span|data-lang=/i.test(tip || ''),
+        `the 🔁 tooltip carries markup a title attribute cannot render: ${tip}`);
 
       ok(vErrors.length === 0, `verdict page error(s): ${vErrors.join(' | ')}`);
       const unexpected404 = notFound.filter((u) => !/\/artifact\?name=/.test(u));
@@ -998,6 +1006,25 @@ try {
         'the refusal was attributed to something other than the tool');
       const chipText = (await chip.textContent()).trim();
       ok(chipText.length > 0, 'the fault chip is empty — an attribution nobody can read is not one');
+      // `bi()` RETURNS MARKUP, so escaping its output prints the tags at the reader. The first version
+      // of this chip did exactly that and the ui-smoke screenshot caught it — the badge read
+      // `<SPAN DATA-LANG="RU">ИНСТРУМЕНТ</SPAN>…`. Asserted over the whole badge because the same
+      // mistake was ALSO sitting on the no-plan note next to it, unnoticed, in the same picture.
+      const badgeText = await fPage.locator('#b-verdict').textContent();
+      ok(!/<span|data-lang=|&lt;span/i.test(badgeText),
+        `the verdict area is printing raw markup instead of rendering it: ${badgeText.slice(0, 200)}`);
+
+      // The SECOND wrong sentence in the same picture. `llm.no_anthropic_key` fires before health.py
+      // refuses, so the degradation notice sat under the verdict claiming «Прогон прошёл с потерей
+      // качества» about a run that never began. The facts stay — only the headline's claim of having
+      // run goes away.
+      const degr = fPage.locator('#b-verdict-degraded');
+      if (await degr.count() === 1) {
+        const dtxt = await degr.textContent();
+        ok(!/Прогон прошёл с потерей|run completed with degraded/i.test(dtxt),
+          `a run that was refused at startup still claims it completed: ${dtxt.slice(0, 160)}`);
+        ok(dtxt.trim().length > 0, 'the degradation notice went empty instead of changing its headline');
+      }
 
       // The sentence that was wrong. This is the whole point of the change, so it is asserted by its
       // ABSENCE on the rendered badge, not by the presence of a new phrasing we happen to prefer today.
