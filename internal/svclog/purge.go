@@ -75,6 +75,12 @@ func Purge(stateDir string, cutoff time.Time) (PurgeReport, error) {
 // passes with the carry-over deleted. This makes the window deterministic instead.
 var purgeAfterSnapshot func()
 
+// purgeBeforeTruncate is the second seam, at the LAST gap: everything read, nothing written yet. This
+// is the window the carry-over above cannot close, and therefore the window the file lock is the only
+// answer to. Without a seam here the lock is untestable — measured, by deleting it and watching every
+// concurrency test stay green, because the carry-over alone happened to cover the timings they hit.
+var purgeBeforeTruncate func()
+
 func purgeOne(path string, cutoff time.Time) (PurgeReport, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0o640)
 	if err != nil {
@@ -130,6 +136,10 @@ func purgeOne(path string, cutoff time.Time) (PurgeReport, error) {
 		if !bytes.HasSuffix(tail, []byte("\n")) {
 			kept.WriteByte('\n')
 		}
+	}
+
+	if purgeBeforeTruncate != nil {
+		purgeBeforeTruncate()
 	}
 
 	if err := f.Truncate(0); err != nil {

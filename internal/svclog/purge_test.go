@@ -228,6 +228,60 @@ func TestARecordFromAWriterThatTakesNoLockIsCarriedOver(t *testing.T) {
 	}
 }
 
+func TestAWriterIsHeldOffForTheLastGapOfARewrite(t *testing.T) {
+	// What the LOCK buys, as opposed to the carry-over. The carry-over closes the window between the
+	// snapshot and the truncate; it cannot close the one between the last read and the truncate itself,
+	// because there is nothing left to re-read. A record landing there is written at the old end of the
+	// file and is destroyed a syscall later.
+	//
+	// Stated as the property rather than as a race: while the rewrite is in that gap, an appender must
+	// NOT get through. With the lock it blocks and its record survives; without it, the append completes
+	// immediately (microseconds) and is truncated away. Measured — with lockFile stubbed to a no-op,
+	// every other test here stayed green.
+	dir := t.TempDir()
+	seed(t, dir, FileName, []Record{
+		{TS: ts(-100 * time.Hour), Lvl: "info", Cat: "service", Code: "service.api_call", Msg: "old record"},
+	})
+	w := Open(dir, "control-api")
+	if w == nil {
+		t.Fatal("could not open a writer")
+	}
+	defer w.Close()
+
+	appended := make(chan struct{})
+	purgeBeforeTruncate = func() {
+		go func() {
+			w.Log(Record{Lvl: "info", Cat: "service", Code: "service.login_ok", Msg: "held off by the lock"})
+			close(appended)
+		}()
+		select {
+		case <-appended:
+			t.Error("a writer appended DURING the rewrite's last gap — the file lock is not being " +
+				"taken, so that record is about to be truncated away")
+		case <-time.After(300 * time.Millisecond):
+			// Correct: it is blocked on the lock. There is no state to wait for here — the property is
+			// that something did NOT happen — so a bounded wait is the honest form. The failing
+			// direction needs no patience at all: an unlocked append completes in microseconds.
+		}
+	}
+	t.Cleanup(func() { purgeBeforeTruncate = nil })
+
+	if _, err := Purge(dir, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	<-appended // released with the lock
+
+	var found bool
+	for _, l := range journalLines(t, dir, FileName) {
+		if strings.Contains(l, "held off by the lock") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the held-off record is not on disk — it was let through and then destroyed")
+	}
+}
+
 func TestTheWriterDoesNotRotateEarlyAfterAPurgeShrankTheFile(t *testing.T) {
 	// A size carried in a counter is wrong the moment anything else changes the file. The consequence is
 	// invisible and in the worst direction: the journal rotates on its next write and throws away the
