@@ -21,11 +21,45 @@
 # set, the run falls back to the deterministic heuristic planner / L1–L6 heal (still useful offline).
 # See docs/LOCAL_MODELS.md for the model/runtime catalog and docs/TESTING.md for the full guide.
 
+# Log rotation for EVERY service (HEALTH-005 PR-C). Measured before this existed: no `logging:` key
+# anywhere, so each container inherited the daemon's default driver — usually json-file with NO size
+# limit — and the log of a long-lived control-api grew until the disk did. Worse for the operator:
+# `docker compose down` destroys those logs entirely, so the one place a container's own output lived
+# was also the place it did not survive.
+#
+# Written as its own anchor and referenced EXPLICITLY by each service rather than folded into the
+# image anchor below. That is not style: a YAML merge key REPLACES a mapping instead of deepening it,
+# so a service that later declares its own `logging:` would silently lose the inherited one — the
+# exact defect that cost this project a live debugging session when `environment:` did it to
+# PW_CDP_ENDPOINT. One line per service is immune to that, and a gate can assert it by counting.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 # Shared base for the agent image (DRY via YAML anchor).
 x-sentinel-base: &sentinel-base
   build:
     context: .
   image: sentinel:local
+  # Run as the INVOKING operator, not as root (HEALTH-005 PR-C). Measured: the image declares no
+  # USER, so `docker run` gives uid 0, and everything the container CREATES under ./runs and ./state
+  # is root-owned on the host. That is not a cosmetic annoyance — it cannot be cleaned up without
+  # sudo (renaming a directory writes to the directory itself, so owning the parent does not help),
+  # it breaks `go test ./...` on a checkout, and it made the service journal this milestone added
+  # UNREADABLE from the host: `-rw-r----- root root`, on the one deployment we actually recommend.
+  #
+  # ⚠ UID/GID are SHELL variables, not environment variables. `docker compose` reads the environment
+  # and .env, so without `export UID GID` (or the lines in .env.example) the substitution silently
+  # yields 1000 for everyone. Named here because a knob that looks like it reads your uid and does
+  # not is worse than no knob.
+  #
+  # ⚠ Measured, so it is not set defensively: uid 1000 and 1001 both have passwd entries in the
+  # Playwright base image (`ubuntu`, `pwuser`) with writable homes; an unlisted uid gets HOME=/ which
+  # is NOT writable — and Chromium launches anyway, because it puts its user-data-dir under /tmp.
+  # So no HOME override is needed, and none is set.
+  user: "${UID:-1000}:${GID:-1000}"
   volumes:
     - ./runs:/app/runs       # plan.json / transcript / heal-report / scenario.json / trace.zip
     - ./state:/app/state     # locator/golden/quarantine SQLite + store-gateway socket
@@ -57,6 +91,7 @@ services:
   # default set would make `docker compose up` end with an exited container next to the four that
   # are meant to stay. `docker compose run --rm sentinel …` enables the profile itself.
   sentinel:
+    logging: *logging
     <<: *sentinel-base
     profiles: ["cli"]
     command: ["--help"]
@@ -70,6 +105,7 @@ services:
   # Zero-external-dependency demo: deterministic explore against a bundled fixture.
   # Swap the target for testdata/fixtures/l1..l5.html to exercise login/validation/tabs/shadow-DOM.
   demo:
+    logging: *logging
     <<: *sentinel-base
     profiles: ["demo"]
     command:
@@ -84,6 +120,7 @@ services:
   # Optional local-model endpoint (OpenAI-compatible at http://ollama:11434/v1).
   # `docker compose --profile ollama up -d ollama`, then `docker compose exec ollama ollama pull <model>`.
   ollama:
+    logging: *logging
     image: ollama/ollama:latest
     profiles: ["ollama"]
     volumes:
@@ -95,6 +132,7 @@ services:
   # `docker compose --profile litellm up -d litellm`; routing + provider keys in deploy/litellm/config.yaml.
   # Then drive Sentinel with LLM_BACKEND=openai LLM_BASE_URL=http://litellm:4000/v1 (see docs/ADAPTERS.md).
   litellm:
+    logging: *logging
     image: docker.litellm.ai/berriai/litellm:latest
     profiles: ["litellm"]
     volumes:
@@ -114,6 +152,7 @@ services:
   # Static files only; no network, no API key — the generators run entirely in your browser.
   # The chat-front (/chat/) drives the `control-api` service below for live authoring/runs (ADR-040).
   webui:
+    logging: *logging
     <<: *sentinel-base
     entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
     ports:
@@ -142,6 +181,7 @@ services:
   # generates one and persists it to ./state/control-api.token (0600), reusing it across restarts.
   # Set CONTROL_API_TOKEN to manage it yourself, or CONTROL_API_AUTOTOKEN=0 for a read-only instance.
   control-api:
+    logging: *logging
     <<: *sentinel-base
     entrypoint: ["/app/bin/control-api"]
     # Every default below uses `${VAR-fallback}` (a single dash, not `:-`): setting the variable to
@@ -194,6 +234,7 @@ services:
   # cross-container socket sharing over ./state is verified on the live host. --no-auth keeps the local
   # demo keyless (the socket is already owner-restricted, 0600 + peer-cred).
   store-gateway:
+    logging: *logging
     <<: *sentinel-base
     entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
     # The socket EXISTING is the readiness signal control-api actually depends on — it dials that
@@ -226,6 +267,7 @@ services:
   # Linux host itself, so the trust boundary is "who can reach this machine's docker network", not
   # "who can reach localhost". Do not put this stack on a shared/multi-tenant host as-is.
   browser:
+    logging: *logging
     <<: *sentinel-base
     entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
     # /live/status answers 200 whether or not a page is open (cdp-service.ts), so it reports that the

@@ -23,8 +23,66 @@
 # air-gapped host has no base images to build FROM, so every service must resolve ONLY from a
 # docker-load'ed image (`pull_policy: never` fails closed if an image is missing, never reaches out).
 
+# Log rotation for EVERY service (HEALTH-005 PR-C). Measured before this existed: no `logging:` key
+# anywhere, so each container inherited the daemon's default driver — usually json-file with NO size
+# limit — and the log of a long-lived control-api grew until the disk did. Worse for the operator:
+# `docker compose down` destroys those logs entirely, so the one place a container's own output lived
+# was also the place it did not survive.
+#
+# Written as its own anchor and referenced EXPLICITLY by each service rather than folded into the
+# image anchor below. That is not style: a YAML merge key REPLACES a mapping instead of deepening it,
+# so a service that later declares its own `logging:` would silently lose the inherited one — the
+# exact defect that cost this project a live debugging session when `environment:` did it to
+# PW_CDP_ENDPOINT. One line per service is immune to that, and a gate can assert it by counting.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Sentinel — air-gapped offline stack (M11.4, ADR-030; standalone half of ADR-053).
+#
+# ZERO external calls at RUNTIME. The bundle is ASSEMBLED ONCE on a connected machine
+# (scripts/build-airgap-bundle.sh — that step DOES pull images/models from the network), then
+# physically transferred to the isolated host, where `docker load` + this file bring the stack up
+# with no registry / DNS / internet access at any point.
+#
+#   Air-gapped host bring-up (after transferring the bundle + `docker load` of every image tar):
+#     echo "OLLAMA_IMAGE_TAG=<tag from MANIFEST.sha256>" > .env    # the exact tag docker save'd
+#     docker volume create sentinel_ollama-models                  # restore the model tar into it
+#     docker compose -f docker-compose.offline.yml --profile demo run --rm demo    # zero-dep smoke
+#     docker compose -f docker-compose.offline.yml --profile ollama up -d ollama   # local model endpoint
+#     docker compose -f docker-compose.offline.yml run --rm sentinel run --target <URL>   # a real run
+#
+# Browsing the bundled docs offline (the files are baked into the image at /app/docs): a webui service
+# is intentionally NOT in this stack — a container whose ONLY network is `internal: true` cannot publish
+# host ports (Docker drops the mapping), so a webui here would be unreachable. Serve them with a single
+# throwaway container on the default bridge instead (a passive file server that initiates no egress):
+#     docker run --rm -p 127.0.0.1:8088:8088 --entrypoint /app/.venv/bin/python \
+#       sentinel:local -m http.server 8088 --directory /app/docs   # -> http://localhost:8088/
+#
+# Unlike docker-compose.yml, the offline base anchor carries NO `build:` key on purpose — a true
+# air-gapped host has no base images to build FROM, so every service must resolve ONLY from a
+# docker-load'ed image (`pull_policy: never` fails closed if an image is missing, never reaches out).
 x-sentinel-offline-base: &sentinel-offline
   image: sentinel:local          # loaded via `docker load` from the bundle — NOT built here
+  # Run as the INVOKING operator, not as root (HEALTH-005 PR-C). Measured: the image declares no
+  # USER, so `docker run` gives uid 0, and everything the container CREATES under ./runs and ./state
+  # is root-owned on the host. That is not a cosmetic annoyance — it cannot be cleaned up without
+  # sudo (renaming a directory writes to the directory itself, so owning the parent does not help),
+  # it breaks `go test ./...` on a checkout, and it made the service journal this milestone added
+  # UNREADABLE from the host: `-rw-r----- root root`, on the one deployment we actually recommend.
+  #
+  # ⚠ UID/GID are SHELL variables, not environment variables. `docker compose` reads the environment
+  # and .env, so without `export UID GID` (or the lines in .env.example) the substitution silently
+  # yields 1000 for everyone. Named here because a knob that looks like it reads your uid and does
+  # not is worse than no knob.
+  #
+  # ⚠ Measured, so it is not set defensively: uid 1000 and 1001 both have passwd entries in the
+  # Playwright base image (`ubuntu`, `pwuser`) with writable homes; an unlisted uid gets HOME=/ which
+  # is NOT writable — and Chromium launches anyway, because it puts its user-data-dir under /tmp.
+  # So no HOME override is needed, and none is set.
+  user: "${UID:-1000}:${GID:-1000}"
   pull_policy: never             # never contact a registry; fail closed if the image is absent
   volumes:
     - ./runs:/app/runs           # plan.json / transcript / heal-report / scenario.json / trace.zip
@@ -37,6 +95,7 @@ services:
   # back to the deterministic heuristic planner / L1–L6 heal — still fully offline. ENTRYPOINT is
   # /app/bin/agentctl; append subcommands.
   sentinel:
+    logging: *logging
     <<: *sentinel-offline
     command: ["--help"]
     networks: [airgap]
@@ -54,6 +113,7 @@ services:
   # than the internal airgap bridge. NOTE: `network_mode` cannot be combined with a `networks:` list,
   # which is exactly why the shared anchor above declares no networks (each service opts in).
   demo:
+    logging: *logging
     <<: *sentinel-offline
     profiles: ["demo"]
     network_mode: none
@@ -74,6 +134,7 @@ services:
   # OLLAMA_NOPRUNE keeps hand-placed blobs. No host `ports:` — verification probes it via
   # `docker compose exec` (a published port would not work on the internal network anyway).
   ollama:
+    logging: *logging
     image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
     pull_policy: never
     profiles: ["ollama"]

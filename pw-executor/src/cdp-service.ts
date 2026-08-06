@@ -33,6 +33,7 @@
 import * as http from 'node:http';
 import * as net from 'node:net';
 import { chromium, Browser, CDPSession, Page } from 'playwright';
+import { journal, startedMsg, stoppedMsg, supervisor } from './svcjournal.js';
 
 const log = (...a: unknown[]): void => console.error('[cdp-service]', ...a);
 
@@ -322,6 +323,10 @@ async function main(): Promise<void> {
   let browser: Browser | undefined;
   const shutdown = async (sig: string): Promise<void> => {
     log(`${sig} — closing browser`);
+    // Journalled BEFORE the close, not after: `docker compose down` sends SIGTERM and then kills, so
+    // a record written after the browser teardown is a record that may never be written at all. The
+    // control-api learned the same thing in PR-A, where every shutdown looked like a crash.
+    journal('service.stopped', 'info', stoppedMsg(`signal ${sig}`));
     try { await browser?.close(); } catch { /* already gone */ }
     process.exit(0);
   };
@@ -334,6 +339,13 @@ async function main(): Promise<void> {
   await waitForCdp(INTERNAL_PORT);
   await startForwarder();
   await startLiveServer();
+
+  // The service plane's own record (HEALTH-005 PR-C). stderr still carries the human lines below —
+  // they are what an operator reads while watching `docker compose up` — but the JOURNAL is what
+  // survives the container and what the hub, the CLI and the API can read.
+  journal('service.started', 'info',
+    startedMsg(process.env.SENTINEL_VERSION ?? 'dev', supervisor(), process.pid,
+      ` — CDP ${LISTEN_ADDR}:${LISTEN_PORT}, live ${LISTEN_ADDR}:${LIVE_PORT}`));
 
   log(`browser up: CDP on ${LISTEN_ADDR}:${LISTEN_PORT} -> 127.0.0.1:${INTERNAL_PORT}`);
   log(`live view on ${LISTEN_ADDR}:${LIVE_PORT} (/live/status, /live/frame.jpg, /live/mjpeg)`);

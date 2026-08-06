@@ -30,8 +30,73 @@
 # Not to be confused with docker-compose.offline.yml, which is the air-gapped bundle's stack: that
 # one resolves images from `docker load` only (pull_policy: never) and has no registry at all.
 
+# Log rotation for EVERY service (HEALTH-005 PR-C). Measured before this existed: no `logging:` key
+# anywhere, so each container inherited the daemon's default driver — usually json-file with NO size
+# limit — and the log of a long-lived control-api grew until the disk did. Worse for the operator:
+# `docker compose down` destroys those logs entirely, so the one place a container's own output lived
+# was also the place it did not survive.
+#
+# Written as its own anchor and referenced EXPLICITLY by each service rather than folded into the
+# image anchor below. That is not style: a YAML merge key REPLACES a mapping instead of deepening it,
+# so a service that later declares its own `logging:` would silently lose the inherited one — the
+# exact defect that cost this project a live debugging session when `environment:` did it to
+# PW_CDP_ENDPOINT. One line per service is immune to that, and a gate can assert it by counting.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Sentinel — the same stack, PULLED instead of built (ADR-110).
+#
+# docker-compose.yml builds from a source checkout. That is the contributor's file, and until the
+# first release it was also the only one: `image:` pointed at a tag nobody had ever published, so
+# every "quickstart" began with a Docker build. This file is the other half — no checkout, no
+# toolchain, no build:
+#
+#   curl -fsSLO https://raw.githubusercontent.com/AlexGromer/sentinel/main/docker-compose.ghcr.yml
+#   docker compose -f docker-compose.ghcr.yml up                         # the product, four services
+#   docker compose -f docker-compose.ghcr.yml --profile demo up          # zero-dep smoke run
+#   docker compose -f docker-compose.ghcr.yml run --rm sentinel run --target <URL>
+#
+# Version: SENTINEL_VERSION pins a release tag; unset means :latest, which a PRE-RELEASE never
+# claims (release.yml only moves :latest for a tag with no dash), so an rc can be pulled explicitly
+# but is never what you get by accident.
+#
+#   SENTINEL_VERSION=v0.1.0 docker compose -f docker-compose.ghcr.yml run --rm sentinel --help
+#
+# Images are signed keyless with cosign; verify before you run something you did not build:
+#   cosign verify ghcr.io/alexgromer/sentinel:latest \
+#     --certificate-identity-regexp 'https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#
+# THE SERVICE AND PROFILE SETS ARE THE SAME AS docker-compose.yml, deliberately: someone who learned
+# `--profile ollama` from one file must not find it missing from the other. That is not left to
+# discipline — tests/test_compose_parity_offline.py compares the two sets and fails on drift, and
+# since 2026-08-03 it also compares how the default stack is WIRED TOGETHER: the two files had
+# already diverged there silently (control-api carried PW_CDP_ENDPOINT here and not there).
+#
+# Not to be confused with docker-compose.offline.yml, which is the air-gapped bundle's stack: that
+# one resolves images from `docker load` only (pull_policy: never) and has no registry at all.
 x-sentinel-ghcr: &sentinel-ghcr
   image: ghcr.io/alexgromer/sentinel:${SENTINEL_VERSION:-latest}
+  # Run as the INVOKING operator, not as root (HEALTH-005 PR-C). Measured: the image declares no
+  # USER, so `docker run` gives uid 0, and everything the container CREATES under ./runs and ./state
+  # is root-owned on the host. That is not a cosmetic annoyance — it cannot be cleaned up without
+  # sudo (renaming a directory writes to the directory itself, so owning the parent does not help),
+  # it breaks `go test ./...` on a checkout, and it made the service journal this milestone added
+  # UNREADABLE from the host: `-rw-r----- root root`, on the one deployment we actually recommend.
+  #
+  # ⚠ UID/GID are SHELL variables, not environment variables. `docker compose` reads the environment
+  # and .env, so without `export UID GID` (or the lines in .env.example) the substitution silently
+  # yields 1000 for everyone. Named here because a knob that looks like it reads your uid and does
+  # not is worse than no knob.
+  #
+  # ⚠ Measured, so it is not set defensively: uid 1000 and 1001 both have passwd entries in the
+  # Playwright base image (`ubuntu`, `pwuser`) with writable homes; an unlisted uid gets HOME=/ which
+  # is NOT writable — and Chromium launches anyway, because it puts its user-data-dir under /tmp.
+  # So no HOME override is needed, and none is set.
+  user: "${UID:-1000}:${GID:-1000}"
   volumes:
     - ./runs:/app/runs       # plan.json / transcript / heal-report / scenario.json / trace.zip
     - ./state:/app/state     # locator/golden/quarantine SQLite + store-gateway socket
@@ -52,12 +117,14 @@ services:
   # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name.
   # `cli`, so `up` is not left holding an exited container — `docker compose run` enables it itself.
   sentinel:
+    logging: *logging
     <<: *sentinel-ghcr
     profiles: ["cli"]
     command: ["--help"]
 
   # Zero-external-dependency demo: deterministic explore against a fixture baked into the image.
   demo:
+    logging: *logging
     <<: *sentinel-ghcr
     profiles: ["demo"]
     command:
@@ -71,6 +138,7 @@ services:
 
   # Optional local-model endpoint (OpenAI-compatible at http://ollama:11434/v1).
   ollama:
+    logging: *logging
     image: ollama/ollama:latest
     profiles: ["ollama"]
     volumes:
@@ -81,6 +149,7 @@ services:
   # Optional model-router over many providers (ADR-045). Needs deploy/litellm/config.yaml from the
   # repo — the one service here that is not self-contained, because the routing table is yours.
   litellm:
+    logging: *logging
     image: docker.litellm.ai/berriai/litellm:latest
     profiles: ["litellm"]
     volumes:
@@ -97,6 +166,7 @@ services:
   # Static hub + setup wizard + calculators, served from inside the image (no network, no key).
   #   docker compose -f docker-compose.ghcr.yml up   ->   http://localhost:8088/
   webui:
+    logging: *logging
     <<: *sentinel-ghcr
     entrypoint: ["/app/.venv/bin/python", "-m", "http.server", "8088", "--directory", "/app/docs"]
     ports:
@@ -110,6 +180,7 @@ services:
   # The three service addresses below are DEFAULTS, written `${VAR-fallback}` (one dash) so that an
   # explicitly empty value still opts out — see docker-compose.yml for the reasoning behind each.
   control-api:
+    logging: *logging
     <<: *sentinel-ghcr
     entrypoint: ["/app/bin/control-api"]
     environment:
@@ -134,6 +205,7 @@ services:
 
   # Persistence for the control-API domains (ADR-062) — the SERVICE tier.
   store-gateway:
+    logging: *logging
     <<: *sentinel-ghcr
     entrypoint: ["/app/bin/store-gateway", "--addr", "/app/state/store.sock", "--db", "/app/state/control-store.db", "--no-auth"]
     healthcheck:
@@ -149,6 +221,7 @@ services:
   #
   # ⚠ NO `ports:` KEY, DELIBERATELY — CDP is unauthenticated and cannot be given a credential.
   browser:
+    logging: *logging
     <<: *sentinel-ghcr
     entrypoint: ["node", "/app/pw-executor/dist/cdp-service.js"]
     healthcheck:
