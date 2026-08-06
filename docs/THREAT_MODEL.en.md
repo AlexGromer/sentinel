@@ -215,6 +215,19 @@ Boundary points ❶–❼ correspond to rows in the table below.
 
 ---
 
+### 4.13 Boundary ⓭ — the service journal as EVIDENCE (HEALTH-005 · ADR-116)
+
+> A boundary that arrived with the journal. Before HEALTH-005 the service plane was logged nowhere, and that was itself a hole: ADR-109 introduced local identity, and identity with no trace of operations is a weakness. The trace now exists, and it has limits of its own that are worth naming, because an audit trail whose limits are not declared gets read as a guarantee.
+
+| Threat | Boundary | STRIDE | Lik / Impact | Existing control | Residual risk | Owner / Milestone |
+|---|---|---|---|---|---|---|
+| **The journal is destroyed and that leaves no trace.** `state/logs/service.jsonl` is an ordinary file. Anyone with disk access under the same uid can rewrite or remove it, and no record of that appears. | operator/attacker → filesystem → journal | **R** | Lik: L / Impact: **H** | The supported deletion path is `agentctl purge-service`, and it **records itself** (`service.log_purged`, `warn`, with counts), so "was anything removed?" stops being answered by silence. Nothing is ever swept automatically — the same posture as ADR-098/100. The rewrite holds `flock`, so a concurrent append is not lost rather than usually not lost. | **This does not catch external deletion.** No hash chain over records, no shipping to separate media, no append-only filesystem mode. 0640 is a floor, not a ceiling: whoever reached the disk reached the journal. A regulated buyer needs an external sink (syslog/OTLP), which does not exist. | **new GAP-SEC-006** / after HEALTH-006 |
+| **The journal shows an account someone else's events.** One record for the whole deployment, readable over HTTP and from the CLI. A naive read would publish the topology and the operations schedule to the weakest credential in it. | account → `GET /v1/service-log` | **I** | Lik: M / Impact: M | Scoping is **per record** (ADR-109): the machine token and an admin see everything; a regular account sees only records it owns; an event with NO owner (service start, global config, store failure) is admin-only. That rule inverts "unowned is public" deliberately, with the reasoning in the code. The predicate runs BEFORE `matched` is counted, so the counts do not leak the volume that was hidden. A partial view says it is partial. | Scoping rests on the record's `Owner` field. An event written WITHOUT an owner where one is known silently becomes admin-only — **which is exactly what happened** to successful sign-ins until a live check showed an account could not see the record of its own sign-in. The gate now drives the product end to end, but the class remains: a new emitter can forget the subject. | HEALTH-005 (fixed in PR-B) / class open |
+| **A browser-service record is lost during a purge.** It writes from Node, where `flock` needs a native module. | browser (Node) → journal ↔ purge (Go) | **R** | Lik: L / Impact: L | The purge **re-reads the tail** appended since its snapshot, so the window is one syscall wide instead of the whole rewrite. The Go writers take the lock and lose nothing. | The window is not zero, and it is declared here and in `docs/OBSERVABILITY.md` §8 rather than left to be discovered. | declared boundary, not a GAP |
+| **Foreign services are not in the journal at all.** `ollama`, `litellm`, `webui` write their own formats to the docker journal. | foreign images → docker | **—** | — | They get docker's rotation (`logging:` with `max-size`/`max-file`, PR-C) and `docker compose logs`. | **A deliberate refusal, not an omission:** parsing someone else's output into a structure it does not have is inventing data. Anyone investigating an incident involving these services must know to look in two places. | declared boundary, not a GAP |
+
+---
+
 ## 5. GAP Tracking Summary Table
 
 | GAP ID | Status | STRIDE | Severity | Short description | Owner / Milestone |
@@ -228,6 +241,7 @@ Boundary points ❶–❼ correspond to rows in the table below.
 | **GAP-OPS-002** | **MITIGATED** | D | MEDIUM | `PW_IGNORE_HTTPS_ERRORS` opt-in + cert classification (`ERR_CERT*`) in `browser.navigate` (this cycle); strict by default. Richer diagnostic in heal-report — M9.4. | M9.4 |
 | **GAP-SEC-003** | **MITIGATED (export boundary)** | I | MEDIUM | `scripts/collect-live-run.sh` blanks `value`/`text` on `fill\|type\|select\|press` steps without a `secretRef` (structural blanking + textual sweep on the staging copy); CI canary `collect-live-run-smoke`. Root cause (authoring schema has no `secretRef`) remains open. | M9-LIVE / M10 |
 | **GAP-SEC-004** | **MITIGATED (export boundary)** | I | MEDIUM | The collector unconditionally excludes `*state*.json` (even with `--with-trace`) + warns loudly. No code-level write-path guard on `STORAGE_STATE_SAVE` yet. | M10 |
+| **GAP-SEC-006** | **OPEN** | R | MEDIUM | The service journal is an ordinary file: external deletion or rewriting leaves no trace. The supported purge records itself (`service.log_purged`), but there is no hash chain, no shipping to separate media and no append-only mode. A regulated buyer needs an external sink (syslog/OTLP). | after HEALTH-006 |
 | **GAP-OPS-006** | **OPEN** | D | LOW | No on-disk run-finished marker; the collector/future M15 dashboard can't distinguish a crash from an in-flight run (the collector deliberately warns rather than fails on missing artifacts). | post-M9-LIVE |
 
 ---

@@ -151,6 +151,31 @@ Fixtures directory: `testdata/fixtures/l1..l5.html` — see `testdata/fixtures/R
 | state | `./state` | SQLite locator/golden/quarantine DB + store-gateway socket |
 | config | `./config` | RunConfig YAML or plan.json (`--run-config /config/run.yaml`) |
 
+**Who owns what appears in them (HEALTH-005 PR-C).** Services built from our image run as
+`${UID:-1000}:${GID:-1000}`, so files a container creates in these volumes belong to the operator and
+not to root. Before this the image declared no `USER`, containers ran as root, and everything they
+created could not be removed without sudo (renaming a directory writes to the directory itself, so
+owning the parent does not help), broke `go test ./...` on a checkout, and made the service journal
+unreadable from the host.
+
+⚠ **`UID`/`GID` are SHELL variables, not environment variables.** Without `export UID GID` (or the
+lines in `.env`) the substitution silently yields 1000 for everybody. On a host where you are uid 1000
+that is true; anywhere else it is not. A template with the reasoning: `.env.example`.
+
+⚠ **Migration, if your stack has run before.** Files created by the earlier root-running containers are
+still root-owned, and the store-gateway will not be able to open its own database under the new user.
+One command, once:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" ./runs ./state ./config
+```
+
+**Log rotation.** Every service in all three compose files carries `logging:` with `max-size: 10m` and
+`max-file: 3`. Before this no driver was configured at all: a container inherited the daemon's default
+— usually json-file with no size limit — and a long-lived control-api grew its log until the disk ran
+out. The service journal (`state/logs/service.jsonl`) survives `docker compose down`, unlike the docker
+journal; what is and is not in it is `docs/OBSERVABILITY.en.md` §8.
+
 ### Full guide
 
 `docs/TESTING.md` — detailed instructions: offline gates, local-model setup, artifact interpretation, exit codes.

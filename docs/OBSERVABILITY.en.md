@@ -261,4 +261,57 @@ verdict — a run can report `exit 0` while the application throws exceptions. T
 in `docs/REGRESSION_MAP.en.md` §6. There is also no write-side redaction for foreign output —
 `GAP-SEC-005`, `docs/THREAT_MODEL.en.md` §4.12.
 
+## 8. Three journal streams, and what is not in them (HEALTH-005 · ADR-116)
+
+Section 7 is about observing a RUN. This one is about observing **the tool itself**: what it did, when,
+and on whose instruction. The measurement behind the section: before HEALTH-005 the service plane was
+logged nowhere — `session.go` and `configfile.go` had ZERO logging lines of either kind, so creating an
+account, changing a password, deleting an account and editing the global config left no trace at all.
+
+| stream | where it lives | what it carries | how it is read |
+|---|---|---|---|
+| **run** | `runs/<id>/logs/run.jsonl` | diagnostics of ONE run (section 7) | the Logs view · `GET /v1/runs/{id}/logs` · `agentctl logs` |
+| **service** | `state/logs/service.jsonl` | what the tool did: sign-ins and FAILED sign-ins, accounts, configuration changes, refusals, services starting and stopping | the Service journal view · `GET /v1/service-log` · `agentctl service-log` |
+| **foreign services** | the docker journal | output of `ollama`, `litellm`, `webui` — programs that are not ours | `docker compose logs <service>` |
+
+**Why the service stream is a FILE and not a store table.** `s.store == nil` is a supported tier
+(ADR-075), and an audit trail absent from the deployment where people most often work alone is not an
+audit trail. And a store that has fallen over must not take down the record of it falling over.
+
+**One file for every service, distinguished by `svc`.** Three writers: `control-api`, `agentctl` (only
+`service.log_purged`) and `browser`. Four files would mean answering "what happened at 14:32" by
+merging them by hand.
+
+**Levels remove VOLUME, not selection** (the directive was: record everything, and have levels). Reads
+are `debug`, mutations `info`, a refusal or a reach for someone else's row `warn`, a 5xx `error`;
+`info` by default. The filter is on the WRITE side, because a journal whose noise is only suppressed by
+a read filter still pays for it in disk.
+
+**Rotation.** `state/logs/service.jsonl` plus one previous generation `.1`; the threshold is
+`SENTINEL_SERVICE_LOG_MAX_MB` (16 by default). Since PR-C the compose services carry `logging:` with
+`max-size: 10m` and `max-file: 3` — before it no driver was configured at all, so there was no rotation
+and the logs died with the container.
+
+### What is NOT in these streams — stated, not left to be discovered
+
+- **Configuration values.** `service.config_changed` records WHICH SECTIONS changed and never their
+  values: those carry endpoints, budgets and paths, and the journal would become a second copy of the
+  configuration with none of the protection the first one has.
+- **Passwords or request bodies.** A failed sign-in records the name that was TRIED and never the
+  password. Request and response bodies are not recorded at all.
+- **The content of what was deleted.** `agentctl purge-service` prints counts and never content — the
+  same posture as `redact-trace` (ADR-098) and `purge-store` (ADR-100).
+- **Browser-service records written during a purge.** It writes from Node, where `flock` needs a native
+  module this project does not take. The purge re-reads whatever was appended since its snapshot, so
+  the window is one syscall wide — but it is not zero. The Go writers do take the lock and lose nothing.
+- **Structure for foreign services.** `ollama`, `litellm` and `webui` write in their own formats and we
+  do NOT parse them: turning someone else's output into a structure it does not have is inventing data.
+  They get docker's rotation and `docker compose logs`; the boundary is here, and it is deliberate.
+- **Who sees what.** A regular account sees events it owns; events with no owner — service start, global
+  config, store failures — are visible only to an admin or the machine token. A partial view SAYS it is
+  partial (`scoped` and `scope_reason` in the answer), because "no records" and "not your records" are
+  different answers and an empty list cannot tell them apart.
+
+---
+
 ---
