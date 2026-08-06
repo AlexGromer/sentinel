@@ -288,21 +288,45 @@ func TestTheWriterDoesNotRotateEarlyAfterAPurgeShrankTheFile(t *testing.T) {
 	// generation somebody was about to read.
 	dir := t.TempDir()
 	t.Setenv("SENTINEL_SERVICE_LOG_MAX_MB", "1")
+	const cap1MiB = 1 << 20
 	w := Open(dir, "control-api")
 	if w == nil {
 		t.Fatal("could not open the journal")
 	}
 	defer w.Close()
-	// Fill most of the 1 MiB cap with removable records.
+
+	// Filled to a MEASURED distance from the cap rather than to a guessed record count. The first
+	// version of this test wrote 900 records "which should be most of 1 MiB", left the counter ~100 KiB
+	// short, and the mutation that deletes the size refresh walked straight through it: one more record
+	// did not cross the cap either way, so the check could not tell a trusted counter from a measured
+	// one. The property needs the counter to be within ONE record of the cap.
+	path := filepath.Join(dir, "logs", FileName)
+	const finalRecord = 4000 // bytes of message in the post-purge write, below
 	filler := strings.Repeat("x", 1000)
-	for i := 0; i < 900; i++ {
+	for {
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Size() > cap1MiB-finalRecord {
+			break
+		}
 		w.Log(Record{TS: ts(-100 * time.Hour), Lvl: "info", Cat: "service", Code: "service.api_call", Msg: filler})
 	}
+	if st, _ := os.Stat(path); st.Size() >= cap1MiB {
+		t.Fatalf("the fill already rotated (%d bytes) — the check below would measure nothing", st.Size())
+	}
+
 	if _, err := Purge(dir, time.Now().Add(-24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	// The file is now nearly empty. One more write must NOT rotate.
-	w.Log(Record{Lvl: "info", Cat: "service", Code: "service.login_ok", Msg: "after the purge"})
+	if st, _ := os.Stat(path); st.Size() > finalRecord {
+		t.Fatalf("the purge left %d bytes — it did not empty the file, so this check proves nothing", st.Size())
+	}
+	// The file is now nearly empty. One more write — large enough that a TRUSTED counter would cross
+	// the cap, small enough that the real size cannot — must NOT rotate.
+	w.Log(Record{Lvl: "info", Cat: "service", Code: "service.login_ok",
+		Msg: "after the purge" + strings.Repeat("y", finalRecord)})
 	if _, err := os.Stat(filepath.Join(dir, "logs", Rotated)); err == nil {
 		t.Error("the writer rotated after a purge shrank the file — the recent generation was discarded " +
 			"because a counter, not the file, was believed about its size")
