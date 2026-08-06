@@ -175,11 +175,39 @@ def main() -> int:
             fail("the write did not actually fail, so this check proved nothing — it must exercise "
                  f"the failure branch, not merely finish. stderr={r.stderr[-200:]!r}")
 
+    # THE CALL SITE, separately from the function.
+    #
+    # Everything above measures the MODULE. Measured by mutation: deleting the `journal(...)` call from
+    # cdp-service.ts leaves every gate in this repository green — the writer works perfectly and
+    # nothing uses it. That is the "cover the call site separately from the function" defect this
+    # project has now met five times.
+    #
+    # ⚠ WHAT THIS CHECK IS AND IS NOT. It reads the source, so it proves the call EXISTS, not that it
+    # RUNS. Proving execution means booting the real service, which launches Chromium and binds two
+    # ports — a genuine flake source against a developer's running stack. The executing proof is the
+    # docker step of the verification matrix, where the record appears in the journal on a live stack;
+    # this is what makes a silent removal fail in CI between those runs.
+    src = open(os.path.join(PW, "src", "cdp-service.ts"), encoding="utf-8").read()
+    for code, when in (("service.started", "when it comes up"), ("service.stopped", "when it is signalled")):
+        if f"journal('{code}'" not in src:
+            fail(f"cdp-service.ts does not journal {code} {when} — the writer exists and the service "
+                 f"does not call it, which is indistinguishable from having no writer at all")
+    if "process.on('SIGTERM'" in src:
+        # The stop record must be written BEFORE the browser teardown: `docker compose down` sends
+        # SIGTERM and then kills, so a record written after the close may never be written. control-api
+        # learned this in PR-A, where every shutdown looked like a crash.
+        after_sigterm = src.split("const shutdown", 1)[-1]
+        j = after_sigterm.find("journal('service.stopped'")
+        c = after_sigterm.find("browser?.close()")
+        if j < 0 or (c >= 0 and j > c):
+            fail("the stop record is written AFTER the browser teardown; SIGTERM is followed by a kill, "
+                 "so that record may never be written and every shutdown will look like a crash")
+
     if failures:
         print_failures()
         return 1
     print("browser journal: OK (202 records in one file, 0640/0750, svc=browser, seq from 1, "
-          "messages match their catalogue templates, unwritable path survived)")
+          "messages match their catalogue templates, unwritable path survived, and cdp-service calls it)")
     return 0
 
 
