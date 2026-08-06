@@ -195,7 +195,7 @@ try {
   console.log(`\nhub-dom-check — hub navigation (ADR-066) + Logs view (ADR-065), port ${PORT}\n`);
 
   /* ---------------------------------------------------------------- ADR-066: navigation */
-  const VIEWS = ['chat', 'run', 'live', 'library', 'results', 'logs', 'tools', 'settings'];
+  const VIEWS = ['chat', 'run', 'live', 'library', 'results', 'logs', 'journal', 'tools', 'settings'];
 
   await check('nav: every rail item reveals its own view and nothing else', async () => {
     for (const v of VIEWS) {
@@ -732,6 +732,78 @@ try {
     await page.click('#lg-expr-clear');
     await page.waitForTimeout(200);
    });
+  });
+
+  /* ------------------------------------------------- HEALTH-005 PR-B: the service journal view */
+  // The stream that had no reader at all until this PR. What is checked is that it reads a DIFFERENT
+  // file from Logs and answers about the tool rather than about a run — a view that silently rendered
+  // the run log again would look perfectly correct on screen.
+  const svRows = () => page.locator('#sv-list .lgrow:not(.child)');
+
+  await check('journal: the service journal has its own view and shows the tool\'s own events', async () => {
+    await page.click('.rail a[data-nav="journal"]');
+    await page.waitForTimeout(300);
+    ok(await page.locator('#sv-list').isVisible(), 'the journal view did not open');
+    ok(!(await page.locator('#sv-err').isVisible()),
+      `the error box is visible: ${await page.locator('#sv-err').innerText()}`);
+    await page.click('#sv-reload');
+    await page.waitForTimeout(800);
+    const n = await svRows().count();
+    ok(n > 0, 'the journal is empty — this server has been signing requests in and out throughout this gate');
+
+    // It is the SERVICE stream, not the run stream rendered twice. Every row must name a writer, and
+    // the codes must be service.* — a view accidentally wired to /v1/runs/{id}/logs would still be
+    // full of plausible rows.
+    const text = await page.locator('#sv-list').innerText();
+    ok(/service\./.test(text), `no service.* code in the journal view: ${text.slice(0, 300)}`);
+    ok(!/run\.(started|finished)/.test(text), 'a RUN event is being rendered in the service journal');
+  });
+
+  await check('journal: the level control changes what is shown, and does it server-side', async () => {
+    await page.click('.rail a[data-nav="journal"]');
+    await page.waitForTimeout(200);
+    await page.selectOption('#sv-lvl', 'debug');
+    await page.waitForTimeout(900);
+    const withDebug = await svRows().count();
+    await page.selectOption('#sv-lvl', 'error');
+    await page.waitForTimeout(900);
+    const errorsOnly = await svRows().count();
+    ok(withDebug > errorsOnly,
+      `the level control changed nothing (${withDebug} -> ${errorsOnly}) — it is decorative`);
+    await page.selectOption('#sv-lvl', 'info');
+    await page.waitForTimeout(700);
+  });
+
+  await check('journal: the writer facet is built from the journal, not from a hand-kept list', async () => {
+    // Asserting that "control-api" is offered would not distinguish the two — a hard-coded list would
+    // contain it too. So a writer NO list could have been written with is appended to the journal and
+    // the facet is required to have learned it. This is the property that makes the browser service
+    // (PR-C) appear in the filter without an edit here.
+    const journal = path.join(REPO, 'state', 'logs', 'service.jsonl');
+    const novel = 'gate-injected-writer';
+    fs.appendFileSync(journal, JSON.stringify({
+      seq: 0, ts: new Date().toISOString(), lvl: 'info', cat: 'service',
+      code: 'service.started', msg: 'a writer this page has never heard of', svc: novel,
+    }) + '\n');
+
+    await page.click('.rail a[data-nav="journal"]');
+    await page.waitForTimeout(200);
+    await page.click('#sv-reload');
+    await page.waitForTimeout(900);
+
+    const opts = await page.locator('#sv-svc option').allTextContents();
+    ok(opts.some((o) => o.includes('control-api')),
+      `control-api wrote this journal and is not in the writer list: ${JSON.stringify(opts)}`);
+    ok(opts.some((o) => o.includes(novel)),
+      `the writer list did not learn ${novel} from the journal — it is a hand-kept list: ${JSON.stringify(opts)}`);
+
+    // And selecting it must actually narrow, or the facet is decorative.
+    await page.selectOption('#sv-svc', novel);
+    await page.waitForTimeout(800);
+    const only = await svRows().count();
+    eq(only, 1, `filtering by ${novel} returned ${only} rows, want exactly the one record it wrote`);
+    await page.selectOption('#sv-svc', '');
+    await page.waitForTimeout(700);
   });
 
   // M9-LIVE fix: the silent downgrade. The most consequential field in the form used to hide behind a

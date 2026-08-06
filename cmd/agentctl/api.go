@@ -71,6 +71,14 @@ var apiVerbs = []apiVerb{
 	{Verb: "logs", Method: "GET", Path: "/v1/runs/{id}/logs", Arg: "run_id",
 		Query: []string{"lvl", "cat", "mod", "code", "src", "step", "q", "after", "limit"},
 		Help:  "a run's structured diagnostics; --src takes a source OR an audience name (business|tool)"},
+	// HEALTH-005 PR-B. The OTHER stream: `logs` is about one run, this is about the tool itself —
+	// sign-ins and failed sign-ins, accounts created and deleted, configuration changes, refusals,
+	// service start and stop. A regular account sees the events it owns; an admin or the machine token
+	// sees the deployment's, which is why this is worth having from a terminal at all: the machine
+	// token is what a CI job and a remote operator already hold.
+	{Verb: "service-log", Method: "GET", Path: "/v1/service-log",
+		Query: []string{"lvl", "code", "svc", "actor", "q", "limit"},
+		Help:  "the service journal: sign-ins, account/config changes, refusals, service start/stop (newest last)"},
 	{Verb: "events-catalog", Method: "GET", Path: "/v1/events-catalog", Help: "every event the brain can emit, with its bilingual phrasing"},
 
 	{Verb: "scenarios list", Method: "GET", Path: "/v1/scenarios", Query: []string{"limit", "offset"}, Help: "saved scenarios"},

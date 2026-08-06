@@ -30,6 +30,7 @@ package svclog
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -199,21 +200,44 @@ func (w *Writer) Log(r Record) {
 	if err != nil {
 		return
 	}
-	w.rotateLocked(int64(len(b)) + 1)
-	n, err := w.f.Write(append(b, '\n'))
+	line := append(b, '\n')
+
+	// The whole-file lock (lock_unix.go) is held across the size read, the rotation decision and the
+	// write, so `agentctl purge-service` cannot rewrite the file underneath any of them.
+	unlock := lockFile(w.f)
+	// The size is read from the FILE, not carried in a counter. A counter is wrong the moment anything
+	// else changes the file — a purge shrinks it — and the failure is invisible in the worst direction:
+	// the journal rotates early and discards the generation somebody was about to read.
+	if sz, serr := w.f.Seek(0, io.SeekEnd); serr == nil {
+		w.size = sz
+	}
+	if w.needsRotate(int64(len(line))) {
+		unlock() // the lock rides the descriptor, and rotation replaces it
+		w.rotateLocked()
+		if w.f == nil {
+			return
+		}
+		unlock = lockFile(w.f)
+	}
+	n, werr := w.f.Write(line)
 	w.size += int64(n)
-	if err != nil && !w.reported {
+	unlock()
+	if werr != nil && !w.reported {
 		w.reported = true
-		fmt.Fprintf(os.Stderr, "%s: service journal write failed: %v (further failures are silent)\n", w.svc, err)
+		fmt.Fprintf(os.Stderr, "%s: service journal write failed: %v (further failures are silent)\n", w.svc, werr)
 	}
 }
 
+// needsRotate reports whether one more record would cross the cap. A maxBytes of zero or less is the
+// operator saying "never rotate" (SENTINEL_SERVICE_LOG_MAX_MB=0), not an absent setting.
+func (w *Writer) needsRotate(incoming int64) bool {
+	return w.maxBytes > 0 && w.size+incoming > w.maxBytes
+}
+
 // rotateLocked keeps ONE previous generation, so a runaway writer cannot fill the disk while the
-// recent past stays readable. The caller holds the lock.
-func (w *Writer) rotateLocked(incoming int64) {
-	if w.maxBytes <= 0 || w.size+incoming <= w.maxBytes {
-		return
-	}
+// recent past stays readable. The caller holds w.mu and must NOT hold the file lock — this replaces
+// the descriptor the lock rides on.
+func (w *Writer) rotateLocked() {
 	_ = w.f.Close()
 	_ = os.Rename(w.path, w.rotated)
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)

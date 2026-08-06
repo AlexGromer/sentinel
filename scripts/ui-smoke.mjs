@@ -182,7 +182,10 @@ async function main() {
     });
 
     await check('the library and results views load without erroring', async () => {
-      for (const view of ['library', 'results', 'logs']) {
+      // `journal` joins the list in HEALTH-005 PR-B. It belongs here for the reason this check
+      // exists at all: the pageerror listener is watching, and a view that throws while fetching
+      // would otherwise show an empty box and no failure anywhere.
+      for (const view of ['library', 'results', 'logs', 'journal']) {
         await page.evaluate((v) => { location.hash = `#v=${v}`; }, view);
         // The section becoming visible is the state; what it then fetches is captured by the
         // screenshot and by the pageerror listener, which is what this check is actually for.

@@ -578,6 +578,59 @@
       }
     },
     {
+      "id": "service-journal",
+      "group": "Observability",
+      "severity": "high",
+      "title_ru": "Журнал сервиса — что делал сам инструмент",
+      "title_en": "Service journal — what the tool itself did",
+      "how_ru": "GET /v1/service-log — входы и неудачные входы, аккаунты, правка настроек, отказы, старт и остановка сервисов. Обычный аккаунт видит свои события, админ и машинный токен — все (HEALTH-005).",
+      "how_en": "GET /v1/service-log — sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005).",
+      "access": {
+        "kind": "http",
+        "ref": "GET /v1/service-log"
+      }
+    },
+    {
+      "id": "service-journal-cli",
+      "group": "Observability",
+      "severity": "medium",
+      "title_ru": "Журнал сервиса из терминала",
+      "title_en": "The service journal from a terminal",
+      "how_ru": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — тот же журнал, тонкий клиент над тем же маршрутом.",
+      "how_en": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — the same journal, a thin client over the same route.",
+      "access": {
+        "kind": "code",
+        "file": "cmd/agentctl/api.go",
+        "ref": "Verb: \"service-log\""
+      }
+    },
+    {
+      "id": "service-journal-purge",
+      "group": "Observability",
+      "severity": "medium",
+      "title_ru": "Уничтожение записей журнала — явной командой, пишущей о себе",
+      "title_en": "Destroying journal records — an explicit command that records itself",
+      "how_ru": "agentctl purge-service --yes [--older-than 720h] — счётчики вместо содержимого, автоматической зачистки нет, и сама чистка пишет service.log_purged.",
+      "how_en": "agentctl purge-service --yes [--older-than 720h] — counts, never content; nothing is ever swept automatically, and the purge writes service.log_purged about itself.",
+      "access": {
+        "kind": "cli",
+        "ref": "purge-service"
+      }
+    },
+    {
+      "id": "ui-journal",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Журнал сервиса в браузере",
+      "title_en": "The service journal in the browser",
+      "how_ru": "Вкладка рядом с «Логи», тот же рендер и тот же каталог сообщений; частичный вид НАЗЫВАЕТ себя частичным, а не выглядит полным.",
+      "how_en": "A view beside Logs, the same renderer and the same message catalogue; a partial view SAYS it is partial rather than looking complete.",
+      "access": {
+        "kind": "ui",
+        "ref": "journal"
+      }
+    },
+    {
       "id": "ui-logs",
       "group": "UI",
       "severity": "high",

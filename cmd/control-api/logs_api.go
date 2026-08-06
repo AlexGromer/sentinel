@@ -9,6 +9,11 @@ package main
 // only the last 1000 lines and dies with the process, so a run from a previous control-API lifetime
 // would otherwise have no logs at all — one of the things that made the milestone's failures hard to
 // discuss after the fact.
+//
+// HEALTH-005 PR-B: the SCAN below is shared with the service journal (svcjournal_read.go). Both
+// streams are the same record shape — `svclog.Record` is one struct for both by construction — so
+// they are one scan with different axes filled in, not two readers that would drift the way the
+// level vocabulary did before `svclog.Rank` became the single one.
 
 import (
 	"bufio"
@@ -57,93 +62,184 @@ func (s *server) handleRunLogs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	defer f.Close()
+	// The open above answers ONE question — "has this run any logs at all?" — because that answer is a
+	// different response shape (`recorded: false`), not an empty page. scanLog opens the file itself.
+	_ = f.Close()
 
 	q := r.URL.Query()
-	minRank := logRank(q.Get("lvl"))
-	wantCat, wantMod, wantCode := q.Get("cat"), q.Get("mod"), q.Get("code")
 	// ADR-067: `src` is the coarse axis a tester reaches for first (is it my app or the tool?), `step`
 	// narrows to one step of the run — together they answer "what went wrong, and where".
-	wantSrc, wantStep := q.Get("src"), q.Get("step")
+	wantSrc := q.Get("src")
 	// ADR-068 / HEALTH-004: `src` accepts an AUDIENCE name as well as a source, which is what
 	// agentctl has advertised all along ("--src takes a source OR an audience name"). It was an exact
 	// string match, so `src=business` matched nothing and answered 200 with an empty list — and an
 	// empty list reads as "this run has no business-side records", not as "that word means nothing
 	// here". Resolved through the catalogue, so the two sides of the boundary cannot disagree about
 	// what `business` contains; the hub already expands it the same way, client-side.
-	srcSet := map[string]bool{}
+	//
+	// The set is built ONLY when `src` was asked for, and is then non-nil even if the catalogue knows
+	// no such audience — so an unknown name matches nothing, rather than silently admitting everything.
+	var srcSet map[string]bool
 	if wantSrc != "" {
+		srcSet = map[string]bool{}
 		for _, s := range eventcatalog.SourcesOf(wantSrc) {
 			srcSet[s] = true
 		}
 	}
-	needle := strings.ToLower(q.Get("q"))
 	after, _ := strconv.Atoi(q.Get("after"))
-	limit := logsDefaultLimit
-	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
-		limit = min(n, logsMaxLimit)
-	}
 
-	records := make([]json.RawMessage, 0, 64)
-	var prev logRecord // the last record appended, for collapsing an identical run of them
-	var scanned, matched int
-	var degradations []string
-	seenDeg := map[string]bool{}
-
-	sc := bufio.NewScanner(f)
-	// A single record can exceed bufio's default 64 KiB — an unparseable-reply diagnostic carries a
-	// 300-char model excerpt, and a collapsed stack trace carries every frame.
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		var rec logRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue // a torn last line during a live run is not a reason to fail the request
-		}
-		scanned++
-		// Degradations are collected across the WHOLE file, never only the returned page: they are
-		// what the verdict badge reads, and a paged-out degradation would make a run look clean.
-		if rec.Degrades && !seenDeg[rec.Code] {
-			seenDeg[rec.Code] = true
-			degradations = append(degradations, rec.Code)
-		}
-		if rec.Seq <= after ||
-			logRank(rec.Lvl) < minRank ||
-			(wantCat != "" && rec.Cat != wantCat) ||
-			(wantMod != "" && rec.Mod != wantMod) ||
-			(wantCode != "" && rec.Code != wantCode) ||
-			(wantSrc != "" && !srcSet[rec.Src]) ||
-			(wantStep != "" && strconv.Itoa(rec.Step) != wantStep) ||
-			(needle != "" && !strings.Contains(strings.ToLower(rec.Msg), needle)) {
-			continue
-		}
-		matched++
-		if len(records) >= limit {
-			continue
-		}
-		// Collapse consecutive identical records into one carrying a count. This is a PRESENTATION
-		// concern, which is why it lives here and not in the sink: holding a record back on the write
-		// side to count its repeats kept a stuck run out of its own log file for as long as the loop
-		// lasted, and real repeats arrive seconds apart, so no write-side deadline could both stay
-		// live and still collapse. On the read side both properties hold at once.
-		if n := len(records); n > 0 && sameRecord(&prev, &rec) {
-			prev.N++
-			b, err := json.Marshal(&prev)
-			if err == nil {
-				records[n-1] = json.RawMessage(b)
-			}
-			continue
-		}
-		prev = rec
-		prev.N = 1
-		records = append(records, json.RawMessage(append([]byte(nil), line...)))
-	}
+	page := scanLog([]string{path}, logQuery{
+		minRank: logRank(q.Get("lvl")),
+		cat:     q.Get("cat"),
+		mod:     q.Get("mod"),
+		code:    q.Get("code"),
+		step:    q.Get("step"),
+		srcSet:  srcSet,
+		needle:  strings.ToLower(q.Get("q")),
+		after:   after,
+		limit:   logLimitOf(q.Get("limit")),
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"run_id": id, "recorded": true, "records": records,
-		"scanned": scanned, "matched": matched, "truncated": matched > len(records),
-		"degradations": degradations,
+		"run_id": id, "recorded": true, "records": page.records,
+		"scanned": page.scanned, "matched": page.matched, "truncated": page.truncated,
+		"degradations": page.degradations,
 	})
+}
+
+// logLimitOf bounds a page so one request cannot pull a multi-megabyte stream into a browser tab.
+func logLimitOf(raw string) int {
+	if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+		return min(n, logsMaxLimit)
+	}
+	return logsDefaultLimit
+}
+
+// logQuery is the filter set BOTH log readers share, AND-combined. Every axis is optional; a zero
+// value admits everything on that axis, so a reader advertises a subset simply by not filling the
+// rest in.
+type logQuery struct {
+	minRank              int
+	cat, mod, code, step string
+	svc, actor           string
+	srcSet               map[string]bool // non-nil ONLY when `src` was asked for
+	needle               string          // already lower-cased by the caller
+	after, limit         int
+	// tail selects WHICH end of the stream a full page comes from. A run's log is finite and is read
+	// from its start; the service journal is unbounded, and the first 500 lines of a month-old file
+	// answer no question anybody has. That is a property of the STREAM, which is why it is one
+	// parameter here rather than a second reader that would drift from this one.
+	tail bool
+	// keep is an extra predicate, applied with the rest — deliberately BEFORE `matched` is counted, so
+	// a scoped reader cannot learn from the counts how much it was not shown.
+	keep func(*logRecord) bool
+}
+
+// admits reports whether one record survives every filter.
+func (q *logQuery) admits(rec *logRecord) bool {
+	// `after` is applied ONLY when it was asked for. Written as `rec.Seq <= q.after` unconditionally it
+	// also drops every record with no sequence at all, silently — and a reader that does not advertise
+	// paging (the service journal, whose seq restarts per writer) would then hide any record a writer
+	// forgot to stamp. A record we cannot place in an order is the last one that should disappear.
+	if (q.after > 0 && rec.Seq <= q.after) ||
+		logRank(rec.Lvl) < q.minRank ||
+		(q.cat != "" && rec.Cat != q.cat) ||
+		(q.mod != "" && rec.Mod != q.mod) ||
+		(q.code != "" && rec.Code != q.code) ||
+		(q.srcSet != nil && !q.srcSet[rec.Src]) ||
+		(q.step != "" && strconv.Itoa(rec.Step) != q.step) ||
+		(q.svc != "" && rec.Svc != q.svc) ||
+		(q.actor != "" && rec.Actor != q.actor) ||
+		(q.needle != "" && !strings.Contains(strings.ToLower(rec.Msg), q.needle)) {
+		return false
+	}
+	return q.keep == nil || q.keep(rec)
+}
+
+// logPage is one answered page. `truncated` says records were CUT BY THE LIMIT — not merely that
+// fewer lines came back than matched, which collapsing alone already causes: five identical records
+// collapse into one, and reporting that as truncation would tell an operator to page for records
+// that were never withheld.
+type logPage struct {
+	records      []json.RawMessage
+	scanned      int
+	matched      int
+	truncated    bool
+	degradations []string
+}
+
+// scanLog reads the named files in order and answers one page. A path that cannot be opened is
+// SKIPPED rather than fatal: the service journal's rotated generation usually does not exist, and a
+// missing older half must not hide the current one.
+func scanLog(paths []string, q logQuery) logPage {
+	page := logPage{records: make([]json.RawMessage, 0, 64)}
+	var prev logRecord // the last record appended, for collapsing an identical run of them
+	seenDeg := map[string]bool{}
+	if q.limit <= 0 {
+		q.limit = logsDefaultLimit
+	}
+
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		// A single record can exceed bufio's default 64 KiB — an unparseable-reply diagnostic carries a
+		// 300-char model excerpt, and a collapsed stack trace carries every frame.
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			line := sc.Bytes()
+			var rec logRecord
+			if err := json.Unmarshal(line, &rec); err != nil {
+				continue // a torn last line during a live run is not a reason to fail the request
+			}
+			page.scanned++
+			// Degradations are collected across the WHOLE file, never only the returned page: they are
+			// what the verdict badge reads, and a paged-out degradation would make a run look clean.
+			if rec.Degrades && !seenDeg[rec.Code] {
+				seenDeg[rec.Code] = true
+				page.degradations = append(page.degradations, rec.Code)
+			}
+			if !q.admits(&rec) {
+				continue
+			}
+			page.matched++
+			if !q.tail && len(page.records) >= q.limit {
+				page.truncated = true
+				continue
+			}
+			// Collapse consecutive identical records into one carrying a count. This is a PRESENTATION
+			// concern, which is why it lives here and not in the sink: holding a record back on the write
+			// side to count its repeats kept a stuck run out of its own log file for as long as the loop
+			// lasted, and real repeats arrive seconds apart, so no write-side deadline could both stay
+			// live and still collapse. On the read side both properties hold at once.
+			if n := len(page.records); n > 0 && sameRecord(&prev, &rec) {
+				prev.N++
+				b, err := json.Marshal(&prev)
+				if err == nil {
+					page.records[n-1] = json.RawMessage(b)
+				}
+				continue
+			}
+			prev = rec
+			prev.N = 1
+			page.records = append(page.records, json.RawMessage(append([]byte(nil), line...)))
+			// Tail mode keeps a bounded window. Trimming at TWICE the limit rather than at every
+			// overflow makes the copying amortised: trimming one element at a time would be O(n·limit)
+			// over a long file, which is precisely the file this mode exists for.
+			if q.tail && len(page.records) >= 2*q.limit {
+				page.records = append(page.records[:0], page.records[q.limit:]...)
+				page.truncated = true
+			}
+		}
+		_ = f.Close()
+	}
+	if q.tail && len(page.records) > q.limit {
+		page.records = page.records[len(page.records)-q.limit:]
+		page.truncated = true
+	}
+	return page
 }
 
 // sameRecord reports whether two records are the same event repeated. Seq/TS are excluded by
