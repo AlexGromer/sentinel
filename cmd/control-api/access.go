@@ -80,6 +80,17 @@ type routeSpec struct {
 	// never asked for accounts. With it, the tightening happens exactly when it starts to mean
 	// something: the first account turns "unscoped" from "single team" into "everybody's rows".
 	legacyOpen bool
+	// probe marks a route whose NON-2XX answer is its contract rather than a failure. /readyz answers
+	// 503 until every configured dependency responds, and a standalone deployment with no LLM
+	// configured answers 503 for as long as it runs — correctly. Without this the journal filed every
+	// one of those as `service.api_refused` at `error`, so an orchestrator polling readiness painted a
+	// healthy deployment red, several times a minute, and buried the one line somebody was looking for.
+	// (Found by looking at a screenshot of the journal view, not by any gate.)
+	//
+	// Declared beside the route rather than matched by path in the journal hook, for the same reason
+	// `access` and `domain` are: a rule about a route belongs to the route, and a hook that knows path
+	// names is a second place that has to be edited when one is added.
+	probe bool
 	// why is mandatory for accessOpen: an open route in a product that has accounts is a decision, and
 	// a decision with no stated reason is an oversight waiting to be copied.
 	why string
@@ -90,9 +101,9 @@ type routeSpec struct {
 // makes the gate below exhaustive by construction rather than by review.
 func (s *server) routes() []routeSpec {
 	return []routeSpec{
-		{pattern: "GET /healthz", access: accessOpen, h: s.handleHealthz,
+		{pattern: "GET /healthz", access: accessOpen, probe: true, h: s.handleHealthz,
 			why: "liveness probe: a process-level fact (version, live-run count) that names no row, read by container orchestration before any credential exists. It must not start failing because someone created an account"},
-		{pattern: "GET /readyz", access: accessOpen, h: s.handleReadyz,
+		{pattern: "GET /readyz", access: accessOpen, probe: true, h: s.handleReadyz,
 			why: "readiness probe, same contract as /healthz. It already withholds the topology from an anonymous caller itself (readyz.go: Detail is blanked unless authed) — the verdict is all it publishes"},
 		{pattern: "GET /v1/config-schema", access: accessOpen, h: s.handleConfigSchema,
 			why: "the SHAPE of configuration, not its values: field names, types, defaults. The setup wizard renders the form from it before a token has been entered, so requiring one would make first-run configuration impossible"},

@@ -384,8 +384,9 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// HEALTH-005: which SECTIONS changed, not the document. The values are the operator's settings
 		// and can carry endpoints and budgets; the journal answers "who changed what area, and when",
 		// which is what makes "who turned the map gate off" answerable without storing the config twice.
+		who, _ := s.actorOf(r)
 		s.journalEvent("service.config_changed", "info",
-			"Changed the configuration (standalone file tier)", r, "sections: "+sectionNames(global, personal))
+			who+" changed the configuration (standalone file tier)", r, "sections: "+sectionNames(global, personal))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
 		return
@@ -421,9 +422,17 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	s.invalidateReadiness() // the "config" check just changed; do not serve a stale 503 for 3 more seconds
 	// Global and personal are distinguished on purpose: changing the tool for everybody and changing
 	// your own defaults are different events, and one word for both would hide the first inside the second.
+	who, _ := s.actorOf(r)
+	// Empty layers are LEFT OUT rather than printed as a dangling label: "personal:" with nothing
+	// after it reads as a value that failed to render, which is worse than not mentioning the layer.
+	detail := []string{"sections: " + sectionNames(global, personal)}
+	for _, layer := range []string{"global", "personal"} {
+		if written[layer] != "" {
+			detail = append(detail, layer+": "+written[layer])
+		}
+	}
 	s.journalEvent("service.config_changed", "info",
-		"Changed the configuration", r, "sections: "+sectionNames(global, personal),
-		"global: "+written["global"], "personal: "+written["personal"])
+		who+" changed the configuration", r, detail...)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written})
 }

@@ -126,7 +126,8 @@ func (s *server) journalCall(sp routeSpec, rec *statusRecorder, r *http.Request,
 	if rec.foreign {
 		s.journal.Log(svclog.Record{
 			Lvl: "warn", Cat: "service", Code: "service.foreign_row",
-			Msg:   redact.Line(actor + " reached for someone else's row: " + r.Method + " " + route),
+			Msg: redact.Line(actor + " reached for someone else's row: " + r.Method + " " + route +
+				" — answered as though it were missing"),
 			Actor: actor, Owner: owner, Method: r.Method, Route: route,
 			Status: status, DurMs: dur, Foreign: true,
 		})
@@ -137,18 +138,57 @@ func (s *server) journalCall(sp routeSpec, rec *statusRecorder, r *http.Request,
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		lvl = "info" // a mutation is what a journal exists for
 	}
-	switch {
-	case status >= 500:
-		code, lvl = "service.api_refused", "error"
-	case status == http.StatusForbidden || status == http.StatusUnauthorized:
-		code, lvl = "service.api_refused", "warn"
+	// A PROBE's non-2xx is its answer, not a fault (routeSpec.probe). /readyz replies 503 for as long
+	// as a dependency is unconfigured, which for a standalone deployment is forever and is correct; an
+	// orchestrator polling it would otherwise write an `error` record every few seconds and bury the
+	// journal under the health of a healthy service.
+	if !sp.probe {
+		switch {
+		case status >= 500:
+			code, lvl = "service.api_refused", "error"
+		case status == http.StatusForbidden || status == http.StatusUnauthorized:
+			code, lvl = "service.api_refused", "warn"
+		}
 	}
-	msg := r.Method + " " + route + " → " + strconv.Itoa(status) +
+	// The word REFUSED is in the sentence, not only in the code: the journal is read by eye, and the
+	// catalogue's template for each code is what the UI matches against to render it in the reader's
+	// language — one message shape under two codes leaves one of them falling back to English.
+	verb := " → "
+	if code == "service.api_refused" {
+		verb = " REFUSED → "
+	}
+	msg := r.Method + " " + route + verb + strconv.Itoa(status) +
 		" in " + strconv.FormatInt(dur, 10) + " ms, called by " + actor
 	s.journal.Log(svclog.Record{
 		Lvl: lvl, Cat: "service", Code: code, Msg: redact.Line(msg),
 		Actor: actor, Owner: owner, Method: r.Method, Route: route, Status: status, DurMs: dur,
 	})
+}
+
+// --- the messages emitted from main() ------------------------------------------------------------
+//
+// Functions rather than expressions assembled at the call site, and not as a style preference. The
+// wording gate (svcjournal_wording_test.go) compares every emitted message against the catalogue's
+// template for its code, because the catalogue's template is what the UI uses to render the sentence
+// in the reader's language: when the two disagree, the extraction fails and a Russian reader silently
+// gets English. A message built inline in main() cannot be reached from a test — which is how four of
+// these came to disagree with the catalogue with every gate green, and stayed that way until somebody
+// looked at a screenshot.
+
+func startedMsg(version, supervisor string, pid int, detail string) string {
+	return "Service control-api started: version " + version + ", brought up by " + supervisor +
+		", pid " + strconv.Itoa(pid) + detail
+}
+
+func stoppedMsg(reason string) string { return "Service control-api stopped: " + reason }
+
+func tokenSourceMsg(source string, warnings int) string {
+	return "The machine token came from " + source + " — warnings: " + strconv.Itoa(warnings)
+}
+
+func storeUnreachableMsg(addr, reason string) string {
+	return "A store was declared (" + addr + ") and did not answer at start: " + reason +
+		" — runs stay in memory"
 }
 
 // journalEvent records a service-plane event that is not an API call — a sign-in, a config write, an
