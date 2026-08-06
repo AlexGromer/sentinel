@@ -20,7 +20,8 @@ it did. This suite pins that behaviour against the REAL built `dist/server.js` �
 not a re-implementation of the rule, because a test that re-derives the rewrite would agree with a
 wrong rewrite.
 
-The hostname is made resolvable through glibc's HOSTALIASES rather than /etc/hosts, so the gate
+The hostname is made resolvable through a bind-mounted /etc/hosts inside an unprivileged mount
+namespace, so the gate
 needs no privileges and leaves nothing behind on the machine that ran it.
 
 What this pins:
@@ -34,6 +35,7 @@ What this pins:
 import json
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
@@ -102,14 +104,50 @@ class _ExternalBrowser:
             self.proc.kill()
 
 
-def _hostaliases(tmp: pathlib.Path) -> str:
-    f = tmp / "hostaliases"
-    f.write_text(f"{ALIAS} localhost\n")
-    return str(f)
+def _alias_prefix(tmp: pathlib.Path) -> "list[str] | None":
+    """A command prefix that makes ALIAS resolve to 127.0.0.1 — or None when it cannot be arranged.
+
+    WHY NOT HOSTALIASES ANY MORE. That is what this gate used, precisely because it needs no root.
+    Measured 2026-08-05 on Debian glibc 2.42: it no longer works by ANY path — `getent ahosts`,
+    `socket.gethostbyname` and Node's `dns.lookup` all answer NOTFOUND with the file present and
+    readable. It only ever lived on the legacy `gethostbyname` route, and everything modern resolves
+    through `getaddrinfo`, which never consulted it. The gate had begun failing on this machine while
+    staying green in CI purely because the runner's glibc is older — a check that flips red on an
+    image bump, at the worst possible moment.
+
+    WHAT REPLACES IT. A private MOUNT namespace with a bind-mounted /etc/hosts. Unprivileged user
+    namespaces give this without root (`--map-root-user`), and the mapping is the real thing every
+    resolver consults rather than a mechanism only one of them ever did.
+
+    ⚠ The NETWORK namespace is deliberately NOT unshared. The stand-in browser is launched outside
+    this prefix and binds its debugging port to 127.0.0.1 (Chrome ignores --remote-debugging-address,
+    ADR-110); isolating the network would make that port unreachable and the gate would fail for a
+    reason that has nothing to do with what it measures.
+    """
+    if not shutil.which("unshare"):
+        return None
+    hosts = tmp / "hosts"
+    hosts.write_text(f"127.0.0.1 {ALIAS}\n127.0.0.1 localhost\n::1 localhost\n")
+    wrapper = tmp / "with-hosts.sh"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f"mount --bind {hosts} /etc/hosts || exit 97\n"
+        'exec "$@"\n')
+    wrapper.chmod(0o755)
+    prefix = ["unshare", "--map-root-user", "--mount", str(wrapper)]
+    # Proven here rather than assumed: a kernel with user namespaces disabled fails at `unshare`, and
+    # a gate that discovered that only through a confusing resolution error would send the reader
+    # looking at the product.
+    probe = subprocess.run(prefix + ["getent", "hosts", ALIAS], capture_output=True, text=True, timeout=60)
+    if probe.returncode != 0 or ALIAS not in probe.stdout:
+        return None
+    return prefix
 
 
-def _drive(env_extra: dict, calls: list) -> "tuple[str, object]":
-    """Drive the REAL executor with extra env. Returns ('ok', results) or ('error', message)."""
+def _drive(env_extra: dict, calls: list, prefix: "list[str] | None" = None) -> "tuple[str, object]":
+    """Drive the REAL executor with extra env. Returns ('ok', results) or ('error', message).
+
+    `prefix` runs the whole thing inside a namespace where ALIAS resolves (see _alias_prefix)."""
     script = (
         'import sys, json; sys.path.insert(0, %r)\n'
         'from brain.executor import Executor\n'
@@ -125,8 +163,8 @@ def _drive(env_extra: dict, calls: list) -> "tuple[str, object]":
         '    pass\n' % (str(REPO), DIST, json.dumps(calls))
     )
     env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1", **env_extra}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=300)
+    r = subprocess.run((prefix or []) + [sys.executable, "-c", script],
+                       capture_output=True, text=True, env=env, timeout=300)
     for line in (r.stdout or "").splitlines():
         if line.startswith("@@OK@@"):
             return "ok", json.loads(line[len("@@OK@@"):])
@@ -156,16 +194,19 @@ def test_a_cdp_endpoint_named_by_hostname_attaches_and_drives_a_page():
             return _skip("the stand-in browser never opened its debugging port")
 
         endpoint = f"http://{ALIAS}:{br.port}"
-        aliases = _hostaliases(tmp)
+        prefix = _alias_prefix(tmp)
+        if prefix is None:
+            return _skip("no way to make a hostname resolve without root on this machine "
+                         "(HOSTALIASES is dead on glibc 2.42; unprivileged user namespaces "
+                         "unavailable) — the rewrite is UNVERIFIED here, not verified")
 
         # --- control: the endpoint genuinely needs the rewrite -------------------------------
         probe = subprocess.run(
-            ["node", "-e",
+            prefix + ["node", "-e",
              "import('playwright-core').then(async m=>{try{const b=await m.chromium."
              f"connectOverCDP('{endpoint}');await b.close();console.log('ACCEPTED');"
              "}catch(e){console.log('REFUSED:'+e.message.split('\\n')[0]);}})"],
-            cwd=str(REPO / "pw-executor"), capture_output=True, text=True, timeout=120,
-            env={**os.environ, "HOSTALIASES": aliases})
+            cwd=str(REPO / "pw-executor"), capture_output=True, text=True, timeout=120)
         control = (probe.stdout or "").strip()
         assert control.startswith("REFUSED"), (
             f"raw connectOverCDP ACCEPTED {endpoint}, so this gate proves nothing: Chrome no longer "
@@ -173,9 +214,9 @@ def test_a_cdp_endpoint_named_by_hostname_attaches_and_drives_a_page():
             f"here. Re-derive the gate before trusting it again. Got: {control!r}")
 
         # --- the property: the shipped executor gets through --------------------------------
-        kind, res = _drive({"PW_CDP_ENDPOINT": endpoint, "HOSTALIASES": aliases},
+        kind, res = _drive({"PW_CDP_ENDPOINT": endpoint},
                            [("browser.navigate", {"url": "file://" + str(FIXTURES / "l1.html")}),
-                            ("browser.interactives", {})])
+                            ("browser.interactives", {})], prefix=prefix)
         assert kind == "ok", (
             f"the executor could not attach over a hostname CDP endpoint: {res}. The rewrite in "
             f"resolveCdpEndpoint() is what makes this work — Chrome refuses the name (see the "
