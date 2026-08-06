@@ -30,6 +30,15 @@ A catalogue of features that work but are hard to reach because nothing named th
 | **Server-side log filtering** | GET /v1/runs/{id}/logs — filter by level/source/category/module/code. |
 | **Config over the API + schema** | GET/PUT /v1/config, GET /v1/config-schema — service config and its schema (ADR-060/062). |
 
+## Observability
+
+| Capability | How to reach it |
+|---|---|
+| **Service journal ⭐** | GET /v1/service-log — what the tool itself did: sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005). |
+| **The service journal in the browser** | A "Service journal" view beside Logs — the same renderer and the same message catalogue; a partial view says it is partial rather than looking complete. |
+| **The service journal from a terminal** | agentctl service-log [--lvl warn --svc control-api --actor alice] — a thin client over the same route. |
+| **Destroying journal records** | agentctl purge-service --yes [--older-than 720h] — counts, never content; nothing is swept automatically, and the purge records itself (service.log_purged). |
+
 ## Runtime & modes
 
 | Capability | How to reach it |

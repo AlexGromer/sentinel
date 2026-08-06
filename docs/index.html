@@ -341,6 +341,9 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   <a href="#v=library" data-nav="library"><span class="ric">📚</span><span data-lang="ru">Библиотека</span><span data-lang="en">Library</span></a>
   <a href="#v=results" data-nav="results"><span class="ric">📊</span><span data-lang="ru">Результаты</span><span data-lang="en">Results</span></a>
   <a href="#v=logs" data-nav="logs"><span class="ric">📜</span><span data-lang="ru">Логи</span><span data-lang="en">Logs</span></a>
+  <!-- HEALTH-005 PR-B — beside Logs, because the question is adjacent and the answer is not: Logs is
+       one run's diagnostics, this is what the tool itself did, across all of them and outside them. -->
+  <a href="#v=journal" data-nav="journal"><span class="ric">🗄</span><span data-lang="ru">Журнал сервиса</span><span data-lang="en">Service journal</span></a>
 
   <div class="rgroup"><span data-lang="ru">Прочее</span><span data-lang="en">Other</span></div>
   <a href="#v=tools" data-nav="tools"><span class="ric">🧰</span><span data-lang="ru">Инструменты</span><span data-lang="en">Tools</span></a>
@@ -1287,6 +1290,48 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       </details>
       <div id="lg-err" class="lgerr" style="display:none"></div>
       <div id="lg-list"></div>
+    </div>
+
+    <!-- HEALTH-005 PR-B: the SERVICE journal. Beside Logs and not inside it, because the two answer
+         different questions: Logs is "what happened in THIS run", picked by a run selector; this is
+         "what has the tool itself done" — sign-ins, accounts, configuration, refusals, start and stop —
+         and belongs to no run at all. Same renderer (lgRowHTML), same catalogue, same level grammar.
+         What a caller sees is scoped by ADR-109: an account sees the events it owns, and the page says
+         so rather than looking complete. -->
+    <div class="subpanel" data-view="journal">
+      <h2><span data-lang="ru">Журнал сервиса</span><span data-lang="en">Service journal</span></h2>
+      <p class="hint">
+        <span data-lang="ru">Что делал сам инструмент: входы и неудачные входы, создание и удаление аккаунтов,
+          правка настроек, отказы в доступе, старт и остановка сервисов. Это не логи прогона — те во вкладке «Логи».</span>
+        <span data-lang="en">What the tool itself did: sign-ins and failed sign-ins, accounts created and deleted,
+          configuration changes, refusals, services starting and stopping. Not a run's logs — those are under Logs.</span>
+      </p>
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Уровень</span><span data-lang="en">Level</span></span>
+        <!-- labels filled by svRefreshOptionLabels(): an <option> cannot host <span data-lang> -->
+        <select id="sv-lvl">
+          <option value="debug"></option>
+          <option value="info" selected></option>
+          <option value="warn"></option>
+          <option value="error"></option>
+        </select>
+        <span class="lglabel"><span data-lang="ru">Сервис</span><span data-lang="en">Service</span></span>
+        <select id="sv-svc"></select>
+        <span class="lglabel"><span data-lang="ru">Кто</span><span data-lang="en">Actor</span></span>
+        <select id="sv-actor"></select>
+        <label class="lgchk" title="add the timestamp, event code, route and status to every row">
+          <input type="checkbox" id="sv-detail"> <span data-lang="ru">подробно</span><span data-lang="en">detailed</span>
+        </label>
+      </div>
+      <div class="lgbar">
+        <span class="lglabel"><span data-lang="ru">Поиск</span><span data-lang="en">Search</span></span>
+        <input id="sv-q" type="search" placeholder="login | config | refused" style="flex:1;min-width:12rem">
+        <button type="button" class="btn" id="sv-reload" data-needs-api disabled>&#8635; <span data-lang="ru">Обновить</span><span data-lang="en">Reload</span></button>
+        <span id="sv-count" class="libmeta"></span>
+      </div>
+      <div id="sv-scope" class="lgverdict" style="display:none"></div>
+      <div id="sv-err" class="lgerr" style="display:none"></div>
+      <div id="sv-list"></div>
     </div>
   </section>
   </div><!-- /panel-tests -->
@@ -4578,6 +4623,43 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
 
   var LG_RANK = {error:0, warn:1, info:2, debug:3};
+  /* ONE row renderer for BOTH streams (HEALTH-005 PR-B).
+     ONE register, two levels of detail. The row always reads as a sentence in the reader's language;
+     «подробно» adds the machine identity above it — full timestamp, event code, and whichever
+     identity that stream carries — which is what gets pasted into an issue. This replaced a
+     human/technical pair that showed the SAME record twice in two wordings: a second language for one
+     event is a dimension nobody asked for, and it made `msg` mean two different strings depending on a
+     toggle. Detail is additive, so the row never moves and nothing is ever hidden by it.
+     No source chip on the compact run row: `src` is DERIVED from `cat`, so printing both says the same
+     thing twice ("приложение приложение"). It stays a filter axis, where coarse is the point.
+     The two views differ ONLY in which identity the row carries — a run record has a step, a module
+     and a source; a service record has a writer, an actor, a route and a status. Everything else is
+     the same grammar, the same level chips, the same catalogue sentence, the same click-to-filter.
+     Two copies of this would drift on the next visual change, and the drift would be invisible,
+     because each copy looks right on its own. */
+  function lgRowHTML(r, o){
+    var kids = o.kids || [];
+    var body =
+      '<span class="lgts">'+esc(o.detail ? (r.ts||'') : (r.ts||'').slice(11,19))+'</span>'+
+      '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(o.detail ? r.lvl : lgLevelLabel(r.lvl))+'</span>'+
+      '<span class="lgcat lgclick" data-f="'+esc(o.chipField)+'" data-v="'+esc(o.chipValue||'')+'">'+
+        esc(o.chip||'')+'</span>'+
+      '<span class="lgmsg">'+
+        (o.detail ? '<span class="lgtech">'+o.tech+'</span><br>' : '')+
+        (o.prefix||'')+
+        esc(lgText(r))+
+        (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
+        (o.detail ? '' : '<span class="lgcode">'+esc(r.code||'')+'</span>')+
+        (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
+      '</span>';
+    return '<div class="lgrow'+(r.degrades?' deg':'')+'">'+body+'</div>' +
+      kids.map(function(k){
+        return '<div class="lgrow child" data-child="'+r.seq+'" style="display:none">'+
+          '<span class="lgts"></span><span></span><span></span>'+
+          '<span class="lgmsg lgtech">'+esc(k.raw||k.msg||'')+'</span></div>';
+      }).join('');
+  }
+
   function lgRender(){
     var list = ge('lg-list'); if (!list) return;
     /* A child frame is shown only with its parent, so filtering never leaves an orphan "at …" line. */
@@ -4610,43 +4692,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     lgRecords.forEach(function(r){ if (r.parent){ (byParent[r.parent]=byParent[r.parent]||[]).push(r); } });
 
     list.innerHTML = shown.map(function(r){
-      var kids = byParent[r.seq] || [];
-      /* ONE register, two levels of detail. The row always reads as a sentence in the reader's
-         language; «подробно» adds the machine identity above it — full timestamp, event code, module
-         and source — which is what gets pasted into an issue. This replaced a human/technical pair
-         that showed the SAME record twice in two wordings: a second language for one event is a
-         dimension nobody asked for, and it made `msg` mean two different strings depending on a
-         toggle. Detail is additive, so the row never moves and nothing is ever hidden by it.
-         No source chip on the compact row: `src` is DERIVED from `cat`, so printing both says the
-         same thing twice ("приложение приложение"). It stays a filter axis, where coarse is the point. */
-      var body =
-        (lgDetail
-          ? '<span class="lgts">'+esc(r.ts||'')+'</span>'
-          : '<span class="lgts">'+esc((r.ts||'').slice(11,19))+'</span>')+
-        '<span class="lvl lvl-'+esc(r.lvl)+'">'+esc(lgDetail ? r.lvl : lgLevelLabel(r.lvl))+'</span>'+
-        '<span class="lgcat lgclick" data-f="cat" data-v="'+esc(r.cat)+'">'+
-          esc(lgDetail ? r.cat : lgCatLabel(r.cat))+'</span>'+
-        '<span class="lgmsg">'+
-          (lgDetail
-            ? '<span class="lgtech">'+
-                '<span class="lgclick" data-f="code" data-v="'+esc(r.code||'')+'">'+esc(r.code||'')+'</span>'+
-                (r.mod ? ' <span class="k">mod=</span><span class="lgclick" data-f="mod" data-v="'+esc(r.mod)+'">'+esc(r.mod)+'</span>' : '')+
-                ' <span class="k">src=</span><span class="lgclick" data-f="src" data-v="'+esc(r.src||'')+'">'+esc(r.src||'')+'</span>'+
-              '</span><br>'
-            : '')+
-          (r.step ? '<span class="lgstep lgclick" data-f="step" data-v="'+r.step+'">'+
-                     bi('шаг ','step ')+r.step+'</span> ' : '')+
-          esc(lgText(r))+
-          (r.n>1 ? '<span class="lgn">×'+r.n+'</span>' : '')+
-          (lgDetail ? '' : '<span class="lgcode">'+esc(r.code||'')+'</span>')+
-          (kids.length ? '<span class="lgexp" data-exp="'+r.seq+'">▸ '+kids.length+'</span>' : '')+
-        '</span>';
-      return '<div class="lgrow'+(r.degrades?' deg':'')+'">'+body+'</div>' +
-        kids.map(function(k){
-          return '<div class="lgrow child" data-child="'+r.seq+'" style="display:none">'+
-            '<span class="lgts"></span><span></span><span></span>'+
-            '<span class="lgmsg lgtech">'+esc(k.raw||k.msg||'')+'</span></div>';
-        }).join('');
+      return lgRowHTML(r, {
+        detail: lgDetail,
+        kids: byParent[r.seq] || [],
+        chip: lgDetail ? r.cat : lgCatLabel(r.cat),
+        chipField: 'cat', chipValue: r.cat,
+        tech:
+          '<span class="lgclick" data-f="code" data-v="'+esc(r.code||'')+'">'+esc(r.code||'')+'</span>'+
+          (r.mod ? ' <span class="k">mod=</span><span class="lgclick" data-f="mod" data-v="'+esc(r.mod)+'">'+esc(r.mod)+'</span>' : '')+
+          ' <span class="k">src=</span><span class="lgclick" data-f="src" data-v="'+esc(r.src||'')+'">'+esc(r.src||'')+'</span>',
+        prefix: r.step ? '<span class="lgstep lgclick" data-f="step" data-v="'+r.step+'">'+
+                          bi('шаг ','step ')+r.step+'</span> ' : ''
+      });
     }).join('');
 
     list.querySelectorAll('.lgexp').forEach(function(el){
@@ -4708,6 +4765,147 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (b) b.addEventListener('click', function(){ if (lgLoaded){ lgRefreshOptionLabels(); lgRenderHelp(); lgRenderSaved(); lgRender(); } });
   });
 
+  /* ================= HEALTH-005 PR-B — the SERVICE journal view =========================
+     The other stream. Logs answers "what happened in this run"; this answers "what has the tool
+     itself done" — and it is deliberately a plain list rather than a second filter language: the
+     journal is a few hundred rare events, not a run's thousands, so the expression compiler that
+     ADR-068 built for Logs would be machinery over a haystack that is not one.
+
+     Filtering happens SERVER-side here, unlike Logs, which pulls one run whole and filters in the
+     tab. The reason is the file: a service journal spans every run this deployment has ever done, so
+     "load it all and filter locally" is a promise about size that this stream cannot keep. The server
+     answers the TAIL, which is what a journal is read from.
+     ===================================================================================== */
+  var svLoaded = false, svRecords = [], svDetail = false, svScoped = false, svMeta = null;
+
+  var SV_LVL_LABEL = {
+    debug: {ru:'debug и выше', en:'debug and above'},
+    info:  {ru:'info и выше',  en:'info and above'},
+    warn:  {ru:'warn и выше',  en:'warn and above'},
+    error: {ru:'только error', en:'error only'}
+  };
+
+  function svRefreshOptionLabels(){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    var sel = ge('sv-lvl'); if (!sel) return;
+    Array.prototype.forEach.call(sel.options, function(o){
+      var lab = SV_LVL_LABEL[o.value]; if (lab) o.textContent = lab[l];
+    });
+    /* The two "any" options are rebuilt with the lists themselves, so they are refreshed there. */
+    svFillFacets();
+  }
+
+  /* The writer and actor lists are built from what is actually IN the journal rather than from a
+     hand-kept list of service names: a deployment that never ran a browser service must not offer to
+     filter by one, and a service added later appears without an edit here. */
+  function svFillFacets(){
+    var l = document.body.classList.contains('lang-en') ? 'en' : 'ru';
+    [['sv-svc','svc',{ru:'любой',en:'any'}], ['sv-actor','actor',{ru:'кто угодно',en:'anyone'}]].forEach(function(spec){
+      var sel = ge(spec[0]); if (!sel) return;
+      var keep = sel.value;
+      var seen = {};
+      svRecords.forEach(function(r){ if (r[spec[1]]) seen[r[spec[1]]] = true; });
+      var names = Object.keys(seen).sort();
+      sel.innerHTML = '<option value="">'+esc(spec[2][l])+'</option>' +
+        names.map(function(n){ return '<option value="'+esc(n)+'">'+esc(n)+'</option>'; }).join('');
+      if (names.indexOf(keep) >= 0) sel.value = keep;
+    });
+  }
+
+  async function svLoad(){
+    var err = ge('sv-err'); if (err) err.style.display = 'none';
+    var qs = [];
+    var lvl = ge('sv-lvl'); if (lvl && lvl.value) qs.push('lvl='+encodeURIComponent(lvl.value));
+    var svc = ge('sv-svc'); if (svc && svc.value) qs.push('svc='+encodeURIComponent(svc.value));
+    var act = ge('sv-actor'); if (act && act.value) qs.push('actor='+encodeURIComponent(act.value));
+    var q = ge('sv-q'); if (q && q.value.trim()) qs.push('q='+encodeURIComponent(q.value.trim()));
+    qs.push('limit=1000');
+    try {
+      var r = await fetch(capiBase()+'/v1/service-log?'+qs.join('&'), {headers:authHdr()});
+      var j = await r.json();
+      if (!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      svRecords = j.records || [];
+      svScoped = !!j.scoped;
+      svMeta = j;
+      svFillFacets();
+      svRender();
+    } catch(e){
+      svRecords = []; svMeta = null;
+      if (err){ err.style.display=''; err.textContent = String(e.message||e); }
+      svRender();
+    }
+  }
+
+  /* Renders from the LAST answer (svMeta), never from an argument. A re-render caused by the detail
+     toggle or a language switch is not a new fetch, and passing null for "no meta this time" is how
+     the scope banner and the counts would silently vanish on exactly those two actions. */
+  function svRender(){
+    var meta = svMeta;
+    var list = ge('sv-list'); if (!list) return;
+
+    /* A partial view says it is partial. Without this an account reads its own journal, sees no
+       service.started, and concludes it was never recorded — the same "no logs" / "no matches"
+       confusion the run reader answers with `recorded: false`. */
+    var scope = ge('sv-scope');
+    if (scope){
+      if (svScoped && meta && meta.scope_reason){
+        scope.style.display = '';
+        scope.innerHTML = '<b>'+bi('Вы видите только свои события','You are seeing only your own events')+'</b><br>'+
+          esc(meta.scope_reason);
+      } else { scope.style.display = 'none'; }
+    }
+
+    var cnt = ge('sv-count');
+    if (cnt) cnt.textContent = meta && meta.matched !== undefined
+      ? svRecords.length + ' / ' + meta.matched : String(svRecords.length);
+
+    if (meta && meta.recorded === false){
+      list.innerHTML = '<p class="hint">'+bi('журнал сервиса ещё не писался','no service journal has been written yet')+
+        ' — <code>'+esc(meta.path||'')+'</code></p>';
+      return;
+    }
+    if (!svRecords.length){
+      list.innerHTML = '<p class="hint">'+bi('под фильтры ничего не подошло','nothing matched the filters')+'</p>';
+      return;
+    }
+    /* Newest FIRST on screen, though the wire order is chronological: a journal is opened to answer
+       "what just happened", and making the reader scroll to the bottom for it is the whole reason
+       people run `tail` instead of `cat`. */
+    list.innerHTML = svRecords.slice().reverse().map(function(r){
+      return lgRowHTML(r, {
+        detail: svDetail,
+        chip: r.svc || '—', chipField: 'svc', chipValue: r.svc || '',
+        tech:
+          '<span>'+esc(r.code||'')+'</span>'+
+          (r.actor ? ' <span class="k">actor=</span>'+esc(r.actor) : '')+
+          (r.route ? ' <span class="k">'+esc(r.method||'')+' </span>'+esc(r.route) : '')+
+          (r.status ? ' <span class="k">→ </span>'+esc(String(r.status)) : '')+
+          (r.dur_ms ? ' <span class="k">'+esc(String(r.dur_ms))+' ms</span>' : '')
+      });
+    }).join('');
+  }
+
+  async function svInit(){
+    svLoaded = true;
+    await loadEventCatalog();   // the same catalogue Logs uses: service.* codes render in the reader's language
+    svRefreshOptionLabels();
+    await svLoad();
+  }
+
+  ['sv-lvl','sv-svc','sv-actor'].forEach(function(id){
+    var el = ge(id); if (el) el.addEventListener('change', function(){ svLoad(); });
+  });
+  (function(){ var q=ge('sv-q'); if (q) q.addEventListener('change', function(){ svLoad(); }); })();
+  (function(){ var b=ge('sv-reload'); if (b) b.addEventListener('click', function(){ svLoad(); }); })();
+  (function(){
+    var d=ge('sv-detail');
+    if (d) d.addEventListener('change', function(){ svDetail = d.checked; svRender(); });
+  })();
+  ['lang-ru','lang-en'].forEach(function(id){
+    var b=document.getElementById(id);
+    if (b) b.addEventListener('click', function(){ if (svLoaded){ svRefreshOptionLabels(); svRender(); } });
+  });
+
 
   /* ================= ADR-066 — view router ===============================================
      One rail, one active view. Implemented by TOGGLING existing nodes rather than moving them: every
@@ -4720,7 +4918,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      match, AND — for a panel that names a `data-subpanel` inside a grouped view — the inner tab must
      match too.
      ===================================================================================== */
-  var VIEWS = ['chat','run','live','library','results','logs','tools','settings'];
+  var VIEWS = ['chat','run','live','library','results','logs','journal','tools','settings'];
   var GROUPED = { library: ['library','runs','chats'], results: ['results','metrics'] };
   var vwActive = 'chat';
   var vwSub = { library: 'library', results: 'results' };
@@ -4931,6 +5129,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (view==='results' && sub==='results' && !tResultsLoaded) tLoadResults();
     if (view==='results' && sub==='metrics' && !tMetricsLoaded) tLoadMetrics();
     if (view==='logs'    && !lgLoaded)      lgInit();
+    if (view==='journal' && !svLoaded)      svInit();     // HEALTH-005 PR-B: the service journal
     if (view==='settings' && !cfgLoaded)    cfgInit();   // ADR-107c: settings are rendered from the schema
   }
 
