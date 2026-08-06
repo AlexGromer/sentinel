@@ -135,6 +135,11 @@ func (s *server) routes() []routeSpec {
 		{pattern: "GET /v1/stream", access: accessAuthed, legacyOpen: true, h: s.handleStream},
 		{pattern: "GET /v1/runs/{id}/events", access: accessAuthed, domain: domainRun, h: s.handleRunEvents},
 		{pattern: "GET /v1/runs/{id}/logs", access: accessAuthed, domain: domainRun, h: s.handleRunLogs},
+		// HEALTH-005 PR-B. `authed` and NOT `admin`: an account must be able to read the record of its
+		// OWN sign-ins and deletions, which is half of what an audit journal is for. No `domain` either —
+		// it names no single row, so there is no owner for the guard to resolve; the scoping is per
+		// RECORD and lives in the handler, the same shape as handleListRuns.
+		{pattern: "GET /v1/service-log", access: accessAuthed, h: s.handleServiceLog},
 		{pattern: "POST /v1/runs/{id}/cancel", access: accessAuthed, domain: domainRun, h: s.handleCancelRun},
 		{pattern: "GET /v1/runs/{id}/artifact", access: accessAuthed, domain: domainRun, h: s.handleRunArtifact},
 		{pattern: "GET /v1/scenarios", access: accessAuthed, h: s.handleListScenarios},

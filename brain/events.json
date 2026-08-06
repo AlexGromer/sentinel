@@ -1962,6 +1962,14 @@
       "ru": "Хранилище объявлено ({addr}), но не ответило при старте: {reason} — прогоны останутся в памяти",
       "en": "A store was declared ({addr}) and did not answer at start: {reason} — runs stay in memory",
       "emitter": "control-api"
+    },
+    "service.log_purged": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Сервисный журнал очищен через agentctl: удалено {removed}, оставлено {kept}, граница {cutoff}",
+      "en": "Service journal purged by agentctl: {removed} record(s) removed, {kept} kept, cutoff {cutoff}",
+      "emitter": "agentctl"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

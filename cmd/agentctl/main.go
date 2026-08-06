@@ -74,6 +74,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl purge-store --tables <a,b> --yes [--older-than 720h] [--vacuum]")
 	fmt.Fprintln(os.Stderr, "                                             # delete stored foreign text (ADR-100); never automatic")
 	fmt.Fprintln(os.Stderr, "  agentctl sweep-downloaded [--dry-run] --yes # delete run dirs a human has downloaded (ADR-103); explicit")
+	fmt.Fprintln(os.Stderr, "  agentctl purge-service --yes [--older-than 720h]")
+	fmt.Fprintln(os.Stderr, "                                             # delete service-journal records (HEALTH-005); writes down that it did")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")
@@ -971,6 +973,8 @@ func main() {
 		code = cmdRedactTrace(os.Args[2:])
 	case "purge-store":
 		code = cmdPurgeStore(repo, os.Args[2:])
+	case "purge-service":
+		code = cmdPurgeService(repo, os.Args[2:])
 	case "sweep-downloaded":
 		code = cmdSweepDownloaded(repo, os.Args[2:])
 	default:

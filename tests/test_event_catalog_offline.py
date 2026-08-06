@@ -63,8 +63,13 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # spot in the one check whose job is "the catalogue cannot claim a message nothing sends". The service
 # codes live in access.go/session.go/configfile.go, and the widening is what lets them be checked at
 # all rather than a concession made to let them pass.
+# HEALTH-005 PR-B added the third: `agentctl` emits `service.log_purged` when an operator destroys
+# journal records. It is the one event the control-API cannot write, because the command that causes
+# it does not go through the control-API — which is also why the catalogue could not vouch for it
+# until this line existed. The gate said so, correctly, by calling the entry a PHANTOM.
 EMITTERS = {"pw-executor": "pw-executor/src/server.ts",
-            "control-api": "cmd/control-api"}
+            "control-api": "cmd/control-api",
+            "agentctl": "cmd/agentctl"}
 
 # An emission is `log("<code>"` with a literal first argument. A non-literal call (a code built at
 # runtime) is deliberately unmatched and reported separately: the catalogue cannot vouch for a code it
