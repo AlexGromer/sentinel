@@ -199,6 +199,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", req.Password)
 	}
 	if !valid {
+		// HEALTH-005: recorded at `warn`, with the name that was TRIED and never the password. The
+		// reply still cannot distinguish "no such name" from "wrong password" — that is a property of
+		// the ANSWER, and writing to our own journal does not weaken it.
+		s.journalEvent("service.login_failed", "warn",
+			"Sign-in FAILED for «"+strings.TrimSpace(req.Name)+"»: invalid name or password", nil)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid name or password"})
 		return
 	}
@@ -215,6 +220,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.store.upsertUser(u)
 		}
 	}
+	s.journalEvent("service.login_ok", "info", "Signed in: "+u.Name, nil)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session": tok, "user": map[string]any{"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin},
 		"expires_in_seconds": int(sessionTTL().Seconds()),
@@ -222,6 +228,9 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Journalled BEFORE the drop: afterwards the session is gone and actorOf has nobody to name, so
+	// every sign-out would be recorded as "anonymous".
+	s.journalEvent("service.logout", "info", "Signed out", r)
 	s.sessions.drop(bearerOf(r))
 	// 200 whether or not the token was live: "you are logged out" is true either way, and reporting
 	// otherwise would tell an unauthenticated caller whether a token they hold is real.
@@ -297,6 +306,8 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// very next request rather than up to accountsMemoTTL later — a window in which a just-created
 	// account's rows would still be readable by an anonymous caller.
 	s.forgetAccounts()
+	s.journalEvent("service.account_created", "info",
+		"Created the account «"+u.Name+"»", r, "admin: "+strconv.FormatBool(u.IsAdmin))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin})
 }
@@ -340,6 +351,15 @@ func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			"error": "an account cannot remove itself — ask another admin, or use the machine token"})
 		return
 	}
+	// Journalled at `warn` and BEFORE the delete, while the name still exists to be written down: an
+	// account id alone answers "which row" and this journal answers "who", and after the row is gone
+	// nothing can turn the id back into a name.
+	name := id
+	if u, ok := s.store.getUser(&storepb.UserRef{UserId: id}); ok && u.Found && u.Name != "" {
+		name = u.Name
+	}
+	s.journalEvent("service.account_deleted", "warn",
+		"DELETED the account «"+name+"» — the rows it owned are NOT removed", r, "user_id: "+id)
 	s.store.deleteUser(&storepb.UserRef{UserId: id})
 	// The rows the account owned are LEFT (internal/store: unowned, not deleted). Its sessions are not:
 	// a live token for an account that no longer exists is access nobody can revoke.

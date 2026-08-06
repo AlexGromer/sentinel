@@ -196,6 +196,33 @@ def test_no_message_hands_its_own_content_to_the_redactor():
                           f"«{name}» sits before the value in: {text[:120]}")
     check("no catalogue sentence puts a credential-shaped word before its own value", True)
 
+    # The blind spot the first version had, found LIVE and not by this gate: control-api builds some
+    # journal messages in Go rather than taking them from the catalogue, so the property above never
+    # looked at them — and `"Machine token: "+string(tokSrc)` published the source as [REDACTED].
+    # Scanned from the source, because that is where those sentences live.
+    import glob
+    bad = []
+    for path in sorted(glob.glob(os.path.join(REPO, "cmd", "control-api", "*.go"))):
+        if path.endswith("_test.go"):
+            continue
+        src = open(path).read()
+        for m in _re.finditer(r'journalEvent\(\s*"[^"]+"\s*,\s*"[^"]+"\s*,\s*"([^"]*)"', src):
+            text = m.group(1)
+            for mm in secretish.finditer(text + '"'):
+                name = mm.group(1).lower().replace("-", "_").replace(".", "_")
+                if any(w == name or name.endswith("_" + w) or name.startswith(w + "_") for w in words):
+                    bad.append(f"{os.path.basename(path)}: «{name}» before the value in {text[:70]!r}")
+            # `X: ` at the very end of a literal is the shape that concatenates a value onto a
+            # credential-shaped name — exactly what `"Machine token: "+src` did.
+            tail = _re.search(r"\b([A-Za-z_][A-Za-z0-9_.-]*)\s*[:=]\s*$", text)
+            if tail:
+                name = tail.group(1).lower().replace("-", "_").replace(".", "_")
+                if any(w == name or name.endswith("_" + w) or name.startswith(w + "_") for w in words):
+                    bad.append(f"{os.path.basename(path)}: «{name}» ends a literal that a value is appended to: {text[:70]!r}")
+    for b in bad:
+        check("a Go-built journal message does not feed its own value to the redactor", False, b)
+    check("Go-built journal messages were scanned too", True)
+
 
 def test_the_degradation_map_is_no_longer_almost_entirely_about_the_tool():
     deg = {c: e for c, e in CAT["events"].items() if e.get("degrades")}

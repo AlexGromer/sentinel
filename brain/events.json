@@ -41,7 +41,8 @@
     "record",
     "system",
     "app",
-    "test"
+    "test",
+    "service"
   ],
   "category_labels": {
     "run": {
@@ -83,6 +84,10 @@
     "test": {
       "ru": "тестирование",
       "en": "testing"
+    },
+    "service": {
+      "ru": "сервис",
+      "en": "the service"
     }
   },
   "level_labels": {
@@ -1853,6 +1858,110 @@
       "en": "The health check for {component} was skipped via SENTINEL_HEALTH_SKIP — the run proceeds without it",
       "ru_verdict": "Часть стартовых проверок была отключена вручную: неработоспособный компонент мог остаться незамеченным.",
       "en_verdict": "Some start-up checks were disabled by hand: an unusable component may have gone unnoticed."
+    },
+    "service.started": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Сервис {svc} запущен: версия {version}, поднят через {supervisor}, pid {pid}{detail}",
+      "en": "Service {svc} started: version {version}, brought up by {supervisor}, pid {pid}{detail}",
+      "emitter": "control-api"
+    },
+    "service.stopped": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Сервис {svc} остановлен: {reason}",
+      "en": "Service {svc} stopped: {reason}",
+      "emitter": "control-api"
+    },
+    "service.api_call": {
+      "lvl": "debug",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{method} {route} → {status} за {dur_ms} мс, вызвал {actor}",
+      "en": "{method} {route} → {status} in {dur_ms} ms, called by {actor}",
+      "emitter": "control-api"
+    },
+    "service.api_refused": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{method} {route} ОТКЛОНЁН ({status}): {reason}; вызвал {actor}",
+      "en": "{method} {route} REFUSED ({status}): {reason}; called by {actor}",
+      "emitter": "control-api"
+    },
+    "service.foreign_row": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{actor} обратился к чужой строке: {method} {route} — отвечено как на отсутствующую",
+      "en": "{actor} reached for someone else's row: {method} {route} — answered as though it were missing",
+      "emitter": "control-api"
+    },
+    "service.login_ok": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Вход выполнен: {actor}",
+      "en": "Signed in: {actor}",
+      "emitter": "control-api"
+    },
+    "service.login_failed": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Вход НЕ выполнен для «{actor}»: {reason}",
+      "en": "Sign-in FAILED for «{actor}»: {reason}",
+      "emitter": "control-api"
+    },
+    "service.logout": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Выход: {actor}",
+      "en": "Signed out: {actor}",
+      "emitter": "control-api"
+    },
+    "service.account_created": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{actor} создал аккаунт «{account}» (админ: {admin})",
+      "en": "{actor} created the account «{account}» (admin: {admin})",
+      "emitter": "control-api"
+    },
+    "service.account_deleted": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{actor} УДАЛИЛ аккаунт «{account}» — принадлежавшие ему строки НЕ удаляются",
+      "en": "{actor} DELETED the account «{account}» — the rows it owned are NOT removed",
+      "emitter": "control-api"
+    },
+    "service.config_changed": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{actor} изменил настройки: ключ {key}, владелец {owner}, тир {tier}",
+      "en": "{actor} changed the configuration: key {key}, owner {owner}, tier {tier}",
+      "emitter": "control-api"
+    },
+    "service.token_source": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Машинный токен получен, источник — {source}{detail}",
+      "en": "The machine token came from {source}{detail}",
+      "emitter": "control-api"
+    },
+    "service.store_unreachable": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Хранилище объявлено ({addr}), но не ответило при старте: {reason} — прогоны останутся в памяти",
+      "en": "A store was declared ({addr}) and did not answer at start: {reason} — runs stay in memory",
+      "emitter": "control-api"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
@@ -1937,7 +2046,8 @@
         "llm",
         "record",
         "system",
-        "browser"
+        "browser",
+        "service"
       ]
     },
     "application": {
