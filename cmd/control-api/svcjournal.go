@@ -196,12 +196,31 @@ func storeUnreachableMsg(addr, reason string) string {
 // columns: the catalogue's sentence is what a person reads, and every one of these is rare enough
 // that a query over it would be a query over dozens of rows, not thousands.
 func (s *server) journalEvent(code, lvl, msg string, r *http.Request, extra ...string) {
+	s.journalSubject(code, lvl, msg, r, "", extra...)
+}
+
+// journalSubject records an event ABOUT a particular account, for the cases where the request cannot
+// name it. There are two, and both were recorded ownerless until a live check found them:
+//
+//	a successful SIGN-IN happens before the session exists, so actorOf(r) sees an anonymous caller;
+//	an account CREATED or DELETED by an admin is not the caller at all — the admin is.
+//
+// Without a subject those records carry no owner, and an ownerless service event is admin-only
+// (svcjournal_read.go). That makes the read route's whole reason for being `authed` rather than
+// `admin` — an account reading the record of its own sign-ins — not work. The unit fixture did not
+// catch it because the fixture SET the owner it then asserted on; the product never did.
+func (s *server) journalSubject(code, lvl, msg string, r *http.Request, subject string, extra ...string) {
 	if s.journal == nil {
 		return
 	}
 	var actor, owner string
 	if r != nil {
 		actor, owner = s.actorOf(r)
+	}
+	if subject != "" {
+		// The SUBJECT wins over the caller: an admin deleting somebody's account is actor=admin,
+		// owner=the other account, which is exactly the case collapsing the two would lose.
+		owner = subject
 	}
 	if len(extra) > 0 {
 		msg += " — " + strings.Join(extra, ", ")

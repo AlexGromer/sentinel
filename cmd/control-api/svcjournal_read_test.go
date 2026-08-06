@@ -281,6 +281,76 @@ func TestTheReaderReadsWhatTheWriterWrote(t *testing.T) {
 	}
 }
 
+func TestAnAccountCanReadTheRecordOfItsOwnSignIn(t *testing.T) {
+	// The reason the read route is `authed` and not `admin`, asserted end to end against records the
+	// PRODUCT wrote — not against a fixture whose owners this test set itself.
+	//
+	// That distinction is the whole point here. The scoping tests above place records with an Owner and
+	// then check the scope honours it, and they passed while this was broken: a successful sign-in is
+	// journalled BEFORE the session exists, so actorOf saw an anonymous caller and the record carried no
+	// owner — which made it admin-only. An account could not see the one line about itself that it has
+	// the clearest right to. Found on a live deployment, by asking as the account.
+	s := journalServer(t, svclog.DefaultLevel)
+	addr := startTestGateway(t, "")
+	sc, err := newStoreClient(addr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+	s.store = sc
+	s.forgetAccounts()
+	mux := s.mux()
+
+	mk := httptest.NewRequest(http.MethodPost, "/v1/users",
+		strings.NewReader(`{"name":"alice","password":"correct-horse-battery"}`))
+	mk.Header.Set("Authorization", "Bearer "+s.token)
+	mkRec := httptest.NewRecorder()
+	mux.ServeHTTP(mkRec, mk)
+	var made struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(mkRec.Body.Bytes(), &made); err != nil || made.UserID == "" {
+		t.Fatalf("could not create the account: %s", mkRec.Body.String())
+	}
+
+	li := httptest.NewRequest(http.MethodPost, "/v1/login",
+		strings.NewReader(`{"name":"alice","password":"correct-horse-battery"}`))
+	liRec := httptest.NewRecorder()
+	mux.ServeHTTP(liRec, li)
+	var sess struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(liRec.Body.Bytes(), &sess); err != nil || sess.Session == "" {
+		t.Fatalf("alice could not sign in: %s", liRec.Body.String())
+	}
+
+	got := codesIn(t, getServiceLog(t, s, sess.Session, ""))
+	var sawLogin, sawCreated bool
+	for _, c := range got {
+		switch c {
+		case "service.login_ok":
+			sawLogin = true
+		case "service.account_created":
+			sawCreated = true
+		}
+	}
+	if !sawLogin {
+		t.Errorf("alice cannot see the record of her own sign-in: %v — which is the reason this route "+
+			"is `authed` rather than `admin`", got)
+	}
+	if !sawCreated {
+		t.Errorf("alice cannot see that her account was created: %v — the record is ABOUT her, and the "+
+			"admin who made it is the actor, not the subject", got)
+	}
+	// The control: she still must not see the deployment's own events, or this would be a test of
+	// scoping being switched off.
+	for _, c := range got {
+		if c == "service.started" || c == "service.token_source" {
+			t.Errorf("alice was shown the deployment event %s", c)
+		}
+	}
+}
+
 func TestARunLogIsStillReadFromItsStart(t *testing.T) {
 	// Non-degradation. The two readers are one function with a flag, so a mistake in the flag would
 	// silently turn the run log — which is read forward, from the first line of a finite file — into a

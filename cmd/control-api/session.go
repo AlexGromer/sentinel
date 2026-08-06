@@ -220,7 +220,9 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.store.upsertUser(u)
 		}
 	}
-	s.journalEvent("service.login_ok", "info", "Signed in: "+u.Name, nil)
+	// The subject is the account that just signed in, not the (anonymous) caller: without it this is
+	// the one record an account most needs and cannot see.
+	s.journalSubject("service.login_ok", "info", "Signed in: "+u.Name, nil, u.UserId)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session": tok, "user": map[string]any{"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin},
 		"expires_in_seconds": int(sessionTTL().Seconds()),
@@ -308,8 +310,8 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// account's rows would still be readable by an anonymous caller.
 	s.forgetAccounts()
 	creator, _ := s.actorOf(r)
-	s.journalEvent("service.account_created", "info",
-		creator+" created the account «"+u.Name+"» (admin: "+strconv.FormatBool(u.IsAdmin)+")", r)
+	s.journalSubject("service.account_created", "info",
+		creator+" created the account «"+u.Name+"» (admin: "+strconv.FormatBool(u.IsAdmin)+")", r, u.UserId)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin})
 }
@@ -361,8 +363,8 @@ func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		name = u.Name
 	}
 	remover, _ := s.actorOf(r)
-	s.journalEvent("service.account_deleted", "warn",
-		remover+" DELETED the account «"+name+"» — the rows it owned are NOT removed", r, "user_id: "+id)
+	s.journalSubject("service.account_deleted", "warn",
+		remover+" DELETED the account «"+name+"» — the rows it owned are NOT removed", r, id, "user_id: "+id)
 	s.store.deleteUser(&storepb.UserRef{UserId: id})
 	// The rows the account owned are LEFT (internal/store: unowned, not deleted). Its sessions are not:
 	// a live token for an account that no longer exists is access nobody can revoke.
