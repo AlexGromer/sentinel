@@ -38,6 +38,12 @@ memory/
 # net above stays intact for everything else. NOTHING SECRET MAY BE ADDED TO IT: it is installed
 # world-readable on every machine that installs the package.
 !packaging/deb/control-api.env
+# Same exception, same rule (HEALTH-005 PR-C): the compose template an operator copies to `.env`.
+# The `.env.*` net above would swallow it, and a template nobody can clone is a template that does
+# not exist — the UID/GID trap it documents would then be discovered the hard way, per operator.
+# EVERY LINE IN IT IS COMMENTED OUT AND CARRIES NO VALUE, and it must stay that way: it is committed
+# to a public repository, and the gitleaks pre-commit gate is the backstop, not the policy.
+!.env.example
 
 # API Keys & Tokens
 *_key
