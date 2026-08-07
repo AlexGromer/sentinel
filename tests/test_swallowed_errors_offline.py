@@ -37,7 +37,19 @@ BRAIN = REPO / "brain"
 
 # Generated protobuf stubs: `except ImportError:` version shims that protoc writes and nobody should
 # annotate. Excluded by directory rather than by pattern — the whole tree is generated.
-EXCLUDED_DIRS = {"pb"}
+#
+# The rest are NOT OUR CODE, and were missing until a stray `uv sync` run from inside brain/ created a
+# virtualenv there. The gate then walked 4733 files instead of 37 — 99% of them third-party — and
+# demanded that zstandard and PyYAML emit codes from OUR event catalogue. Nothing in CI shows this:
+# there the checkout is fresh and the venv lives at the repository root, so the gate's verdict
+# depended on a piece of developer state that has nothing to do with the subject it guards. A check
+# whose result turns on where somebody happened to run `uv sync` is a check that will be switched off.
+#
+# Listed by name rather than derived from .gitignore: these are the four shapes that actually put
+# foreign code under a source tree, and a rule that read .gitignore would silently widen every time
+# that file grew. `.venv` covers the conventional name; `site-packages` catches a virtualenv under any
+# other name, because that is where installed packages land regardless of what the venv is called.
+EXCLUDED_DIRS = {"pb", ".venv", "venv", "site-packages", "node_modules", "__pycache__"}
 
 # --------------------------------------------------------------------------------------------------
 # Sites that swallow deliberately. The reason is the point: an entry with no reason is an omission
