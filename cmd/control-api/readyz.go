@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,9 +79,43 @@ var componentsWithoutProbe = map[string]string{
 	"webui": "in modes 1 and 3 there is no webui process at all (control-api serves the pages from its " +
 		"own port, ADR-064); in mode 2 it is a static file server with no state to be unready about, " +
 		"and a browser reaching it does not go through this API",
-	"browser": "HEALTH-006 adds it. It is the one exemption here that is a GAP rather than a decision: " +
-		"control-api declares `depends_on: browser: service_healthy`, so the component is mandatory at " +
-		"boot and unobserved afterwards",
+}
+
+// probeBrowser closes the gap componentsWithoutProbe called a GAP rather than a decision: control-api
+// declares `depends_on: browser: service_healthy`, so the component is mandatory at boot and, until
+// now, unobserved for every second afterwards. A deployment that demands a component at boot and never
+// asks about it again reports itself ready in precisely the case where it is not.
+//
+// ⚠ THREE THINGS THIS DOES NOT DO, each of which would have made /readyz worse than silent:
+//
+//  1. It does not use liveClient. That client deliberately has NO overall timeout, because
+//     /live/mjpeg is an open-ended stream — probing through it would let a wedged browser service
+//     hang /readyz itself. s.client() carries readyProbeTimeout and refuses redirects.
+//  2. An UNSET CONTROL_API_CDP_LIVE is `skipped`, never `error`. Single-container and standalone
+//     deployments have no browser service at all and are not broken; reporting `error` would make
+//     them permanently 503 — the same failure this file already rules out for store, config and llm.
+//  3. It reads /live/status, whose contract is 200-with-a-reason rather than an HTTP error, so a
+//     browser service that is up but has no page open is `ok` and not a false alarm. Only a service
+//     that cannot be reached at all, or answers a non-200, is an error.
+func (s *server) probeBrowser() readyCheck {
+	base := liveBase()
+	if base == "" {
+		return readyCheck{Status: "skipped", Detail: "CONTROL_API_CDP_LIVE unset (no browser service in this deployment)"}
+	}
+	req, err := http.NewRequest(http.MethodGet, base+liveStatusPath, nil)
+	if err != nil {
+		return readyCheck{Status: "error", Detail: "browser service address is unusable: " + err.Error()}
+	}
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return readyCheck{Status: "error", Detail: "browser service " + base + " did not answer: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readyCheck{Status: "error",
+			Detail: "browser service " + base + " answered " + strconv.Itoa(resp.StatusCode)}
+	}
+	return readyCheck{Status: "ok"}
 }
 
 type readyCheck struct {
@@ -101,6 +136,94 @@ type readyState struct {
 	epoch    uint64
 	inflight bool
 	done     chan struct{}
+}
+
+// readyProbeInterval is how often the PREVENTIVE probe runs, and the number is DECLARED rather than
+// implied, because that is half of what HEALTH-006 is about: a component that died at 14:00 has to be
+// known before somebody asks at 15:00. On demand alone, /readyz only ever tells you about the moment
+// you happened to look.
+//
+// 15s is chosen against two measured costs, not picked for roundness. The store ping is a local unix
+// RPC and effectively free; probeLLM is a NETWORK GET with a readyProbeTimeout budget against whatever
+// the operator configured, and probeBrowser one more. At 15s that is at most four outbound requests a
+// minute against an endpoint the operator did not ask us to poll — small enough not to be a load
+// generator, frequent enough that "known before asked" is true for any human timescale. It is longer
+// than readyCacheTTL on purpose: the preventive tick refreshes a memo that on-demand callers share, so
+// the two mechanisms cooperate instead of each paying for the other's probes.
+const readyProbeInterval = 15 * time.Second
+
+// runReadinessProber is the PREVENTIVE half. It refreshes the memo on a declared interval and — this
+// is the part that matters for a journal people actually read — records only TRANSITIONS.
+//
+// ⚠ TICKS ARE NOT JOURNALLED. svclog rotates at 10 MB across 3 files and ADR-116's whole volume
+// argument is that `info`-level noise buries the one line somebody came looking for. A prober that
+// wrote a record every 15s would produce ~5 700 records a day saying nothing changed, and would bury
+// the single record saying the store went away — the exact outcome the journal exists to prevent.
+//
+// ⚠ IT PUBLISHES THROUGH readiness(), never straight into readyState. Writing the result directly
+// would overwrite invalidateReadiness() after a config PUT and re-serve a stale verdict — the race the
+// `epoch` field exists to stop. readiness() already honours it, so the prober simply asks for a
+// refresh like any other caller and inherits the guarantee.
+type componentTransition struct{ name, was, now, lvl string }
+
+// componentTransitions is the "only transitions" rule as a PURE function, so it can be asserted
+// without waiting out a real interval — and so the rule itself has an owner rather than living inside
+// a goroutine nothing can reach.
+//
+// The FIRST observation deliberately produces nothing: `last` is nil until the prober has seen one
+// round, and reporting every component as "changed" at startup would put a burst of records in the
+// journal saying only that the process started, which `service.started` already says better.
+func componentTransitions(last, cur map[string]string) []componentTransition {
+	if last == nil {
+		return nil
+	}
+	names := make([]string, 0, len(cur))
+	for name := range cur {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic order, so a journal read twice reads the same
+	out := []componentTransition{}
+	for _, name := range names {
+		prev, seen := last[name]
+		if !seen || prev == cur[name] {
+			continue
+		}
+		lvl := "info"
+		if cur[name] == "error" {
+			lvl = "warn" // a component going away is the record somebody comes looking for
+		}
+		out = append(out, componentTransition{name: name, was: prev, now: cur[name], lvl: lvl})
+	}
+	return out
+}
+
+func (s *server) runReadinessProber(stop <-chan struct{}) {
+	t := time.NewTicker(readyProbeInterval)
+	defer t.Stop()
+	var last map[string]string
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			// Force a refresh rather than reading a memo this very tick may have just filled: the memo
+			// TTL is shorter than the interval, so without this the prober would sometimes observe its
+			// own last answer and never notice a change.
+			s.invalidateReadiness()
+			checks, _ := s.readiness()
+			cur := map[string]string{}
+			for name, c := range checks {
+				cur[name] = c.Status
+			}
+			for _, tr := range componentTransitions(last, cur) {
+				s.journalEvent("service.component_changed", tr.lvl, map[string]string{
+					"component": tr.name, "was": tr.was, "now": tr.now,
+					"detail": " — " + checks[tr.name].Detail,
+				}, nil)
+			}
+			last = cur
+		}
+	}
 }
 
 func (s *server) client() *http.Client {
@@ -202,6 +325,7 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 		}
 	}
 	checks["llm"] = s.probeLLM(s.effectiveLLMBase(cfg))
+	checks["browser"] = s.probeBrowser()
 
 	ready := true
 	for _, c := range checks {

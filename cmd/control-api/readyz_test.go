@@ -448,3 +448,94 @@ func TestReadinessCacheExpires(t *testing.T) {
 		t.Fatal("probe did not re-run after the TTL expired")
 	}
 }
+
+// --- HEALTH-006: the browser probe and the preventive prober ------------------------------------
+
+func TestAnUnsetBrowserServiceIsSkippedRatherThanBroken(t *testing.T) {
+	// The failure this rules out is the one that makes a gate get switched off: a single-container or
+	// standalone deployment has no browser service at all, and calling that `error` would make it
+	// permanently 503 while being entirely healthy. Exactly what readyz.go already rules out for
+	// store, config and llm.
+	t.Setenv("CONTROL_API_CDP_LIVE", "")
+	s := newTestServer()
+	c := s.probeBrowser()
+	if c.Status != "skipped" {
+		t.Fatalf("an unset browser service must be skipped, got %q (%s)", c.Status, c.Detail)
+	}
+	if c.Detail == "" {
+		t.Fatal("a skipped component must SAY why — an unexplained skip reads as a check that gave up")
+	}
+}
+
+func TestAnUnreachableBrowserServiceIsAnErrorThatNamesTheAddress(t *testing.T) {
+	// A port nothing listens on: the probe must report, not hang and not lie. The address is in the
+	// detail because "the browser is down" without saying WHICH browser sends an operator hunting.
+	t.Setenv("CONTROL_API_CDP_LIVE", "http://127.0.0.1:1")
+	s := newTestServer()
+	c := s.probeBrowser()
+	if c.Status != "error" {
+		t.Fatalf("an unreachable browser service must be an error, got %q", c.Status)
+	}
+	if !strings.Contains(c.Detail, "127.0.0.1:1") {
+		t.Fatalf("the detail does not name the address that failed: %q", c.Detail)
+	}
+}
+
+func TestALiveBrowserServiceIsOkEvenWithNoPageOpen(t *testing.T) {
+	// /live/status answers 200-with-a-reason rather than an HTTP error when no page is open, and the
+	// probe must honour that contract: a browser service that is up but idle is READY. Treating its
+	// "no page" answer as a failure would put /readyz at 503 for every deployment between runs.
+	// ⚠ The fake answers ONLY the real path, and that is the point. The first version answered any
+	// path, so it passed while the probe asked for "/status" — which the REAL browser service
+	// answers with a 404. A fake that cannot refuse cannot catch a wrong address, and the defect had
+	// to be found by a live docker run instead of here, where it belonged.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != liveStatusPath {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "no page open"})
+	}))
+	defer srv.Close()
+	t.Setenv("CONTROL_API_CDP_LIVE", srv.URL)
+	s := newTestServer()
+	if c := s.probeBrowser(); c.Status != "ok" {
+		t.Fatalf("an idle-but-live browser service must be ok, got %q (%s)", c.Status, c.Detail)
+	}
+}
+
+func TestTheProberReportsTransitionsAndSaysNothingOnATickThatChangedNothing(t *testing.T) {
+	// The volume rule, asserted rather than trusted. A prober that journalled every tick would write
+	// ~5 700 records a day saying nothing changed and would bury the single record saying the store
+	// went away — the outcome ADR-116's whole level design exists to prevent.
+	steady := map[string]string{"store": "ok", "llm": "skipped"}
+	if got := componentTransitions(steady, map[string]string{"store": "ok", "llm": "skipped"}); len(got) != 0 {
+		t.Fatalf("an unchanged tick produced %d record(s) — the journal would fill with silence", len(got))
+	}
+	// The FIRST observation is not a transition either: everything would look "changed" at startup.
+	if got := componentTransitions(nil, steady); len(got) != 0 {
+		t.Fatalf("the first observation produced %d record(s); startup is what service.started says", len(got))
+	}
+	// ⚠ A component that appears for the FIRST TIME in a later round is not a transition either, and
+	// this case was bought by a surviving mutation: dropping the `seen` check passed every assertion
+	// above, because `last` held every name in them. The record it would have produced reads «was ,
+	// now ok» — an empty "was", which is a rendering bug wearing the clothes of a state change.
+	if got := componentTransitions(steady, map[string]string{"store": "ok", "llm": "skipped", "browser": "ok"}); len(got) != 0 {
+		t.Fatalf("a newly appearing component produced %d record(s) with an empty previous state: %+v", len(got), got)
+	}
+	got := componentTransitions(steady, map[string]string{"store": "error", "llm": "ok"})
+	if len(got) != 2 {
+		t.Fatalf("two components changed, got %d record(s)", len(got))
+	}
+	// Deterministic order, so the same history reads the same twice.
+	if got[0].name != "llm" || got[1].name != "store" {
+		t.Fatalf("transitions are not in a stable order: %+v", got)
+	}
+	// A component going AWAY is the record somebody comes looking for, so it outranks one coming back.
+	if got[1].lvl != "warn" {
+		t.Fatalf("a component going to error must be warn, got %q", got[1].lvl)
+	}
+	if got[0].lvl != "info" {
+		t.Fatalf("a component recovering must be info, got %q", got[0].lvl)
+	}
+}

@@ -126,11 +126,21 @@ func TestConcurrentRunReadDuringMutationNoRace(t *testing.T) {
 	<-done
 }
 
-func TestStoreClientFailsFastWhenUnreachable(t *testing.T) {
-	// newStoreClient probes with ListRuns so a dead gateway is detected at startup (fail-open in main()).
-	if _, err := newStoreClient("unix:/nonexistent/definitely-not-a-store.sock", ""); err == nil {
-		t.Fatal("newStoreClient to a dead socket must error, not return a live client")
+func TestStoreClientReportsAnUnreachableGatewayAndKeepsTheClient(t *testing.T) {
+	// ⚠ HEALTH-006 changed the second half of this claim. The probe still SAYS the gateway did not
+	// answer — that is what main() journals and what the operator sees. What it no longer does is
+	// throw the client away: measured, grpc.ClientConn heals on its own (kill the gateway, /readyz
+	// store goes error; bring it back, it goes ok, with no restart of this process). Discarding the
+	// client here was the thing that made a boot miss PERMANENT, and keeping it is what lets a
+	// gateway started one second later be used without a restart.
+	sc, err := newStoreClient("unix:/nonexistent/definitely-not-a-store.sock", "")
+	if err == nil {
+		t.Fatal("a dead socket must be REPORTED — silence here is what leaves an operator guessing")
 	}
+	if sc == nil {
+		t.Fatal("the client was discarded, so a gateway that comes up later stays invisible until a restart")
+	}
+	sc.close()
 }
 
 // --- M14 wave W3: scenarios/tests/chats HTTP surface + scenario-persist-on-finish ------------------
