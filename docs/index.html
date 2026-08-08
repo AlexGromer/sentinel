@@ -1896,23 +1896,39 @@ function loadCapabilities(){
         // says plainly HOW it is reached — "CLI only", "HTTP", "deployment" — because offering a
         // button the server cannot honour is the same lie in a nicer shape, and ADR-104 exists
         // precisely to stop the page promising what the product does not do.
-        var acc = c.access || {}, reach = '';
-        if (acc.kind === 'ui' && acc.ref) {
-          reach = '<button type="button" class="cap-open" data-goto="' + esc(acc.ref) + '"'
+        // ACCESS IS A LIST (2026-08-07). It used to be one object, and one path could only ever say
+        // "reachable somewhere" — which is how a catalogue built to stop the product hiding its own
+        // features ended up unable to say whether a feature was reachable the three ways the project
+        // promises. Rendering EVERY path puts that in front of the reader instead of in a gate: a row
+        // showing only «API» is a row telling you this capability has no button and no command yet.
+        var paths = Array.isArray(c.access) ? c.access : (c.access ? [c.access] : []);
+        var ui = null, chips = [];
+        // «только CLI» is kept as a PHRASE, not softened into a neutral chip. The claim it makes is
+        // the one the catalogue exists for: a reader who finds no button must be told there is none,
+        // rather than left to conclude it from the absence of one. It is true exactly when the entry
+        // has a single path and that path is the terminal.
+        var cliOnly = paths.length === 1 && paths[0].kind === 'cli';
+        paths.forEach(function(a){
+          if (a.kind === 'ui' && a.ref) { ui = a.ref; return; }
+          if (a.kind === 'cli')  chips.push(cliOnly ? (bi('только CLI','CLI only') + ' · <span class="mono">' + esc(a.ref||'') + '</span>')
+                                                     : (bi('терминал','terminal') + ' <span class="mono">' + esc(a.ref||'') + '</span>'));
+          else if (a.kind === 'http') chips.push('API <span class="mono">' + esc(a.ref||'') + '</span>');
+          else if (a.kind === 'env')  chips.push(bi('переменная окружения','environment') + ' <span class="mono">' + esc(a.ref||'') + '</span>');
+          else if (a.kind === 'profile' || a.kind === 'file' || a.kind === 'service')
+            chips.push(bi('развёртывание','deployment'));
+          else if (a.kind === 'mode') chips.push(bi('режим прогона','run mode') + ' <span class="mono">' + esc(a.ref||'') + '</span>');
+        });
+        var reach = '';
+        // A capability the hub can actually open carries a button. Everything else says plainly HOW it
+        // is reached, because offering a button the server cannot honour is the same lie in a nicer
+        // shape — ADR-104 exists precisely to stop the page promising what the product does not do.
+        if (ui) {
+          reach += '<button type="button" class="cap-open" data-goto="' + esc(ui) + '"'
                 + ' style="margin-left:.4rem;font-size:.75rem;padding:.05rem .4rem">'
                 + bi('Открыть','Open') + '</button>';
-        } else if (acc.kind === 'cli') {
-          reach = '<span class="hint" style="margin-left:.4rem">' + bi('только CLI','CLI only')
-                + ' · <span class="mono">' + esc(acc.ref || '') + '</span></span>';
-        } else if (acc.kind === 'http') {
-          reach = '<span class="hint" style="margin-left:.4rem">API · <span class="mono">'
-                + esc(acc.ref || '') + '</span></span>';
-        } else if (acc.kind === 'profile' || acc.kind === 'file') {
-          reach = '<span class="hint" style="margin-left:.4rem">' + bi('развёртывание','deployment')
-                + '</span>';
-        } else if (acc.kind === 'env') {
-          reach = '<span class="hint" style="margin-left:.4rem">' + bi('переменная окружения','environment')
-                + ' · <span class="mono">' + esc(acc.ref || '') + '</span></span>';
+        }
+        if (chips.length) {
+          reach += '<span class="hint" style="margin-left:.4rem">' + chips.join(' · ') + '</span>';
         }
         html += '<div style="font-size:.86rem;border-left:2px solid var(--line);padding-left:.5rem">'
               + '<b>' + star

@@ -89,9 +89,17 @@ def main() -> int:
     # same set), and its neighbour-leak check iterates that list. A view missing from it is a view
     # no browser check ever opens.
     gate = read(os.path.join("scripts", "hub-dom-check.mjs"))
-    if not re.search(r"const VIEWS\s*=\s*\[[^\]]*'journal'", gate):
-        fail("scripts/hub-dom-check.mjs does not list 'journal' in its VIEWS — the view would be "
-             "opened by no browser check, and the leak check would not know it exists")
+    # The assertion moved from "is journal in the gate's list" to "does the gate DERIVE its list".
+    # That is the stronger property and the reason the list was derived at all: a hand-kept copy shows
+    # what is wrong in it and never what is absent from it — measured, the UI smoke's copy held seven
+    # views of nine and the two missing ones were never noticed.
+    if "hubViews()" not in gate:
+        fail("scripts/hub-dom-check.mjs no longer derives its view list from the hub — it is keeping "
+             "a copy again, and a copy cannot show which view is missing from it")
+    smoke = read(os.path.join("scripts", "ui-smoke.mjs"))
+    if "hubViews()" not in smoke:
+        fail("scripts/ui-smoke.mjs no longer derives its view list from the hub — `tools` and "
+             "`settings` were never screenshotted for exactly this reason")
 
     # ---- the destruction path names itself ---------------------------------------------------
     purge = read(os.path.join("cmd", "agentctl", "purge_service.go"))
@@ -112,7 +120,11 @@ def main() -> int:
 
     # ---- and the capability catalogue lists all three, so the reader is told ------------------
     caps = json.loads(read(os.path.join("docs", "capabilities.json")))["capabilities"]
-    kinds = {c["access"]["kind"] for c in caps if "journal" in c["id"] or "service-journal" in c["id"]}
+    # `access` became a LIST of paths (2026-08-07): one path could only ever say "reachable
+    # somewhere", which is exactly the confusion this gate exists to prevent one level down.
+    kinds = {p["kind"]
+             for c in caps if "journal" in c["id"] or "service-journal" in c["id"]
+             for p in c["access"]}
     for want in ("http", "cli", "ui"):
         if want not in kinds:
             fail(f"docs/capabilities.json advertises no {want} path to the service journal — the "

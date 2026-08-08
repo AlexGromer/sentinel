@@ -14,7 +14,14 @@
     "  profile : a docker-compose profile (docker-compose.yml)",
     "  env     : an environment variable read by non-test product code",
     "  code    : a token present in a named source file",
-    "  file    : a path that exists in the repo"
+    "  file    : a path that exists in the repo",
+    "",
+    "access is a LIST of paths, not one. A single path could only ever answer 'reachable somewhere',",
+    "and was read as 'covered' — measured 2026-08-07: of 50 entries, ZERO could be shown reachable",
+    "all three ways, because the shape could not express it. `reach` separates a product CAPABILITY",
+    "(three ways apply) from an ARTIFACT or knob (a Helm chart is not reached 'from the UI').",
+    "`missing` records WHY a path is absent; the CLI reasons are lifted from apiRoutesWithoutCLI,",
+    "which already held them in code."
   ],
   "capabilities": [
     {
@@ -25,9 +32,15 @@
       "title_en": "OpenAI-compatible endpoint",
       "how_ru": "POST /v1/chat/completions — подключите любой OpenAI-клиент (Open WebUI, SDK, curl) к продукту.",
       "how_en": "POST /v1/chat/completions — point any OpenAI client (Open WebUI, SDK, curl) at the product.",
-      "access": {
-        "kind": "http",
-        "ref": "POST /v1/chat/completions"
+      "access": [
+        {
+          "kind": "http",
+          "ref": "POST /v1/chat/completions"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "cli": "the OpenAI-compat shim exists for foreign clients; `agentctl run --mode chat --conversation-id` is the local form"
       }
     },
     {
@@ -38,9 +51,15 @@
       "title_en": "A working Helm chart",
       "how_ru": "deploy/sentinel/ — разверните в Kubernetes; шаблоны, values и секреты уже написаны.",
       "how_en": "deploy/sentinel/ — deploy to Kubernetes; templates, values and secrets are written.",
-      "access": {
-        "kind": "file",
-        "ref": "deploy/sentinel/templates/configmap.yaml"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "deploy/sentinel/templates/configmap.yaml"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -51,9 +70,15 @@
       "title_en": "Install without a checkout",
       "how_ru": "install.sh — ставит агент по checksum + cosign, без клонирования репозитория.",
       "how_en": "install.sh — installs the agent by checksum + cosign, no repository clone.",
-      "access": {
-        "kind": "file",
-        "ref": "install.sh"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "install.sh"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -64,9 +89,15 @@
       "title_en": "Windows as a client",
       "how_ru": "install.ps1 — ставит agentctl.exe нативно, без admin. Прогон при этом требует Python/uv + Node + браузеры на хосте, поэтому поддерживаемый путь — agentctl к control-API в контейнере или на другой машине (ADR-110).",
       "how_en": "install.ps1 — installs agentctl.exe natively, no admin. A run also needs Python/uv + Node + browsers on the host, so the supported path is agentctl against a control-API in a container or on another machine (ADR-110).",
-      "access": {
-        "kind": "file",
-        "ref": "install.ps1"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "install.ps1"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -77,9 +108,15 @@
       "title_en": "Air-gapped bundle with the whole UI",
       "how_ru": "scripts/build-airgap-bundle.sh — поставка кладёт весь браузерный UI, работает без сети.",
       "how_en": "scripts/build-airgap-bundle.sh — the bundle ships the whole browser UI, runs with no network.",
-      "access": {
-        "kind": "file",
-        "ref": "scripts/build-airgap-bundle.sh"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "scripts/build-airgap-bundle.sh"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -90,9 +127,15 @@
       "title_en": "Attach to your own Chrome (CDP)",
       "how_ru": "PW_CDP_ENDPOINT=http://localhost:9222 — инструмент водит ВАШ уже открытый Chrome (ADR-037).",
       "how_en": "PW_CDP_ENDPOINT=http://localhost:9222 — the tool drives YOUR already-open Chrome (ADR-037).",
-      "access": {
-        "kind": "env",
-        "ref": "PW_CDP_ENDPOINT"
+      "access": [
+        {
+          "kind": "env",
+          "ref": "PW_CDP_ENDPOINT"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -103,9 +146,15 @@
       "title_en": "Take over a live run by hand",
       "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление.",
       "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back.",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/stream"
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/stream"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "cli": "a WebSocket with a takeover/return control channel; `runs events` covers the read side over SSE, and driving a takeover from a terminal has no meaning"
       }
     },
     {
@@ -116,10 +165,13 @@
       "title_en": "The brain as an MCP server",
       "how_ru": "RUN_MODE=mcp-server — поднять мозг как MCP-сервер (tools/list + sampling).",
       "how_en": "RUN_MODE=mcp-server — run the brain as an MCP server (tools/list + sampling).",
-      "access": {
-        "kind": "mode",
-        "ref": "mcp-server"
-      }
+      "access": [
+        {
+          "kind": "mode",
+          "ref": "mcp-server"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "chat-mode",
@@ -129,10 +181,13 @@
       "title_en": "Multi-turn chat authoring",
       "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом.",
       "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation.",
-      "access": {
-        "kind": "mode",
-        "ref": "chat"
-      }
+      "access": [
+        {
+          "kind": "mode",
+          "ref": "chat"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "browser-tabs",
@@ -142,10 +197,16 @@
       "title_en": "Tab control",
       "how_ru": "browser.tabs / switchTab — многовкладочные и мультистраничные сценарии (M9.4).",
       "how_en": "browser.tabs / switchTab — multi-tab and multi-page scenarios (M9.4).",
-      "access": {
-        "kind": "code",
-        "ref": "browser.tabs",
-        "file": "pw-executor/src/server.ts"
+      "access": [
+        {
+          "kind": "code",
+          "ref": "browser.tabs",
+          "file": "pw-executor/src/server.ts"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -156,9 +217,15 @@
       "title_en": "Log in once (login-as-test)",
       "how_ru": "STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef.",
       "how_en": "STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef.",
-      "access": {
-        "kind": "env",
-        "ref": "STORAGE_STATE"
+      "access": [
+        {
+          "kind": "env",
+          "ref": "STORAGE_STATE"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -169,10 +236,17 @@
       "title_en": "Download a run's trace",
       "how_ru": "GET /v1/runs/{id}/artifact?name=trace.zip — трейс упавшего прогона доступен без доступа к серверу (ADR-099).",
       "how_en": "GET /v1/runs/{id}/artifact?name=trace.zip — a failed run's trace is reachable without server access (ADR-099).",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/runs/{id}/artifact"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/runs/{id}/artifact"
+        },
+        {
+          "kind": "cli",
+          "ref": "runs artifact"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "export-spec",
@@ -182,10 +256,13 @@
       "title_en": "Export to @playwright/test",
       "how_ru": "agentctl export-spec --plan <plan.json> — замороженный план -> .spec.ts; путь миграции к Playwright.",
       "how_en": "agentctl export-spec --plan <plan.json> — a frozen plan -> .spec.ts; the migration path to Playwright.",
-      "access": {
-        "kind": "cli",
-        "ref": "export-spec"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "export-spec"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "import-cli",
@@ -195,10 +272,13 @@
       "title_en": "Import an existing test suite",
       "how_ru": "agentctl import --from <dir> — транспиляция @playwright/test в наши шаги + отчёт о переписывании (что связалось, что по слабому локатору, что без эквивалента) (ADR-105).",
       "how_en": "agentctl import --from <dir> — transpile @playwright/test into our steps + a rewrite report (what bound, what by a weak locator, what has no equivalent) (ADR-105).",
-      "access": {
-        "kind": "cli",
-        "ref": "import"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "import"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "import-http",
@@ -208,9 +288,15 @@
       "title_en": "Import tests over the API",
       "how_ru": "POST /v1/import — загрузить файлы тестов и получить тот же отчёт о переписывании (канал UI-загрузки, ADR-105).",
       "how_en": "POST /v1/import — upload test files and get the same rewrite report (the UI-upload channel, ADR-105).",
-      "access": {
-        "kind": "http",
-        "ref": "POST /v1/import"
+      "access": [
+        {
+          "kind": "http",
+          "ref": "POST /v1/import"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "cli": "`agentctl import` IS the implementation — the route spawns this binary, so a CLI verb would call itself"
       }
     },
     {
@@ -221,10 +307,13 @@
       "title_en": "Reports (html/json/junit/prom)",
       "how_ru": "agentctl report --run <run-dir> — единственный источник report.html, report.json, junit.xml, metrics.prom.",
       "how_en": "agentctl report --run <run-dir> — the sole source of report.html, report.json, junit.xml, metrics.prom.",
-      "access": {
-        "kind": "cli",
-        "ref": "report"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "report"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "calibrate",
@@ -234,10 +323,13 @@
       "title_en": "Healing calibration",
       "how_ru": "agentctl calibrate — точность самопочинки по стратегиям + вердикты тождества.",
       "how_en": "agentctl calibrate — heal precision by strategy + identity verdicts.",
-      "access": {
-        "kind": "cli",
-        "ref": "calibrate"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "calibrate"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "purge-store",
@@ -247,10 +339,13 @@
       "title_en": "Purge foreign text from the DB",
       "how_ru": "agentctl purge-store --tables <..> --yes — явная зачистка накопленного чужого текста (ADR-100).",
       "how_en": "agentctl purge-store --tables <..> --yes — explicit cleanup of accumulated foreign text (ADR-100).",
-      "access": {
-        "kind": "cli",
-        "ref": "purge-store"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "purge-store"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "redact-trace",
@@ -260,10 +355,13 @@
       "title_en": "Redact a trace",
       "how_ru": "agentctl redact-trace --trace <trace.zip> — вычистить введённые значения и секреты из трейса (ADR-098).",
       "how_en": "agentctl redact-trace --trace <trace.zip> — strip typed values and secrets from a trace (ADR-098).",
-      "access": {
-        "kind": "cli",
-        "ref": "redact-trace"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "redact-trace"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "scenarios-library",
@@ -273,10 +371,17 @@
       "title_en": "Scenario library",
       "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы.",
       "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets.",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/scenarios"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/scenarios"
+        },
+        {
+          "kind": "cli",
+          "ref": "scenarios list"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "promote-test",
@@ -286,10 +391,17 @@
       "title_en": "Promote a scenario to a test",
       "how_ru": "POST /v1/tests/promote — превратить сценарий в именованный тест.",
       "how_en": "POST /v1/tests/promote — turn a scenario into a named test.",
-      "access": {
-        "kind": "http",
-        "ref": "POST /v1/tests/promote"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "POST /v1/tests/promote"
+        },
+        {
+          "kind": "cli",
+          "ref": "tests promote"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "metrics-trends",
@@ -299,10 +411,17 @@
       "title_en": "Metrics and trends",
       "how_ru": "GET /v1/results, GET /v1/trends — исходы прогонов и их динамика, нативно в UI (ADR-051).",
       "how_en": "GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051).",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/trends"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/trends"
+        },
+        {
+          "kind": "cli",
+          "ref": "trends"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "log-filter",
@@ -312,10 +431,17 @@
       "title_en": "Server-side log filtering",
       "how_ru": "GET /v1/runs/{id}/logs — фильтр по уровню/источнику/категории/модулю/коду.",
       "how_en": "GET /v1/runs/{id}/logs — filter by level/source/category/module/code.",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/runs/{id}/logs"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/runs/{id}/logs"
+        },
+        {
+          "kind": "cli",
+          "ref": "logs"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "config-domain",
@@ -325,10 +451,17 @@
       "title_en": "Config over the API + schema",
       "how_ru": "GET/PUT /v1/config, GET /v1/config-schema — служебная конфигурация и её схема (ADR-060/062).",
       "how_en": "GET/PUT /v1/config, GET /v1/config-schema — service config and its schema (ADR-060/062).",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/config-schema"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/config-schema"
+        },
+        {
+          "kind": "cli",
+          "ref": "config schema"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ollama-profile",
@@ -338,9 +471,15 @@
       "title_en": "Local model (ollama)",
       "how_ru": "docker compose --profile ollama up -d ollama — локальный OpenAI-совместимый эндпоинт моделей.",
       "how_en": "docker compose --profile ollama up -d ollama — a local OpenAI-compatible model endpoint.",
-      "access": {
-        "kind": "profile",
-        "ref": "ollama"
+      "access": [
+        {
+          "kind": "profile",
+          "ref": "ollama"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -351,9 +490,15 @@
       "title_en": "Model router (LiteLLM)",
       "how_ru": "docker compose --profile litellm up -d litellm — роутер поверх многих провайдеров за LLM_BASE_URL (ADR-045).",
       "how_en": "docker compose --profile litellm up -d litellm — a router over many providers behind LLM_BASE_URL (ADR-045).",
-      "access": {
-        "kind": "profile",
-        "ref": "litellm"
+      "access": [
+        {
+          "kind": "profile",
+          "ref": "litellm"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -364,9 +509,15 @@
       "title_en": "Browser UI (webui)",
       "how_ru": "docker compose up — хаб и мастер раздаются локально на :8088, без флагов.",
       "how_en": "docker compose up — the hub and wizard are served locally on :8088, no flags.",
-      "access": {
-        "kind": "service",
-        "ref": "webui"
+      "access": [
+        {
+          "kind": "service",
+          "ref": "webui"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -377,9 +528,15 @@
       "title_en": "Persistent store",
       "how_ru": "docker compose up — store-gateway поднимается и подключается сам; control-api уже указывает на него (ADR-050).",
       "how_en": "docker compose up — the store-gateway comes up and is wired in; control-api already points at it (ADR-050).",
-      "access": {
-        "kind": "service",
-        "ref": "store-gateway"
+      "access": [
+        {
+          "kind": "service",
+          "ref": "store-gateway"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -390,9 +547,15 @@
       "title_en": "Environment allowlist",
       "how_ru": "SENTINEL_ENV_ALLOWLIST — что из окружения хоста доходит до мозга; активен по умолчанию (ADR-035).",
       "how_en": "SENTINEL_ENV_ALLOWLIST — which host env reaches the brain; on by default (ADR-035).",
-      "access": {
-        "kind": "env",
-        "ref": "SENTINEL_ENV_ALLOWLIST"
+      "access": [
+        {
+          "kind": "env",
+          "ref": "SENTINEL_ENV_ALLOWLIST"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -403,9 +566,15 @@
       "title_en": "Token budgets",
       "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат; исчерпание = мягкая деградация, не отказ (ADR-021).",
       "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings; running out degrades gracefully, not fails (ADR-021).",
-      "access": {
-        "kind": "env",
-        "ref": "PLAN_TOKEN_LIMIT"
+      "access": [
+        {
+          "kind": "env",
+          "ref": "PLAN_TOKEN_LIMIT"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -416,9 +585,15 @@
       "title_en": "Disable trace screenshots",
       "how_ru": "SENTINEL_TRACE_SCREENSHOTS=0 — не записывать кадры (ADR-098 чистит текст, но не пиксели).",
       "how_en": "SENTINEL_TRACE_SCREENSHOTS=0 — do not record frames (ADR-098 redacts text, not pixels).",
-      "access": {
-        "kind": "env",
-        "ref": "SENTINEL_TRACE_SCREENSHOTS"
+      "access": [
+        {
+          "kind": "env",
+          "ref": "SENTINEL_TRACE_SCREENSHOTS"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -429,9 +604,15 @@
       "title_en": "Ready fixtures to try now",
       "how_ru": "testdata/fixtures/l1..l7 — прогнать против встроенной страницы без сети (file://).",
       "how_en": "testdata/fixtures/l1..l7 — run against a built-in page with no network (file://).",
-      "access": {
-        "kind": "file",
-        "ref": "testdata/fixtures/l2.html"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "testdata/fixtures/l2.html"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -442,10 +623,13 @@
       "title_en": "Import tests straight from git",
       "how_ru": "agentctl import --from-git <url|путь> [--ref <ветка>] — клонирует репозиторий и импортирует его сюиту. Локальный путь работает БЕЗ сети, поэтому канал пригоден в air-gapped-установке.",
       "how_en": "agentctl import --from-git <url|path> [--ref <branch>] — clone a repository and import its suite. A local path works with NO network, so the channel is usable in an air-gapped install.",
-      "access": {
-        "kind": "cli",
-        "ref": "import"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "import"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "export-git",
@@ -455,10 +639,13 @@
       "title_en": "Export tests into your repository",
       "how_ru": "agentctl export-git --spec <файл> --to-git <url|путь> [--branch] [--subdir] [--push] — кладёт авторские тесты туда, где живёт код. Push ТОЛЬКО по явному флагу; локальный checkout пишется на месте.",
       "how_en": "agentctl export-git --spec <file> --to-git <url|path> [--branch] [--subdir] [--push] — put authored tests where the code lives. Push only on the explicit flag; a local checkout is written in place.",
-      "access": {
-        "kind": "cli",
-        "ref": "export-git"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "export-git"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "import-verify",
@@ -468,10 +655,13 @@
       "title_en": "Verify an import against the live application",
       "how_ru": "agentctl import --from <dir> --verify --target <url> — разведает настоящее приложение и заземлит импортированные шаги против ЕГО карты: что связалось, что ссылается на исчезнувший элемент. Выключено по умолчанию, чтобы импорт оставался офлайновым.",
       "how_en": "agentctl import --from <dir> --verify --target <url> — explore the real application and ground the imported steps against ITS map: what binds, what references a gone element. Off by default so import stays offline.",
-      "access": {
-        "kind": "cli",
-        "ref": "import"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "import"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "site-map-artifact",
@@ -481,9 +671,15 @@
       "title_en": "The explore map as an artifact",
       "how_ru": "site-map.json рядом с plan.json — что разведка нашла на приложении (роли, имена, semantic_id). Вход для заземления импорта; скачивается как обычный артефакт прогона.",
       "how_en": "site-map.json beside plan.json — what the explore found in the application (roles, names, semantic_ids). The input grounding needs; fetched like any run artifact.",
-      "access": {
-        "kind": "file",
-        "ref": "brain/graph.py"
+      "access": [
+        {
+          "kind": "file",
+          "ref": "brain/graph.py"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -494,10 +690,13 @@
       "title_en": "A test's history, diff and rollback",
       "how_ru": "agentctl revisions list|show|diff|rollback --test <id> — что менялось в тесте, чем ревизии отличаются пошагово, и вернуть прежнюю. Откат ПЕРЕ-добавляет, а не удаляет: история цела (ADR-106).",
       "how_en": "agentctl revisions list|show|diff|rollback --test <id> — what changed in a test, how two revisions differ step by step, and put a previous one back. Rollback RE-APPENDS rather than deletes: the history stays whole (ADR-106).",
-      "access": {
-        "kind": "cli",
-        "ref": "revisions"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "revisions"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "revisions-http",
@@ -507,9 +706,15 @@
       "title_en": "Test history over the API",
       "how_ru": "GET /v1/tests/{id}/revisions · /diff · /show · POST /revisions/rollback?to=<rev> — та же история для UI и внешних инструментов. Цель отката НИКОГДА не подразумевается.",
       "how_en": "GET /v1/tests/{id}/revisions · /diff · /show · POST /revisions/rollback?to=<rev> — the same history for the UI and outside tools. A rollback target is NEVER assumed.",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/tests/{id}/revisions"
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/tests/{id}/revisions"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "cli": "local `agentctl revisions list` reads the store directly — no server required"
       }
     },
     {
@@ -520,10 +725,13 @@
       "title_en": "Author a test by conversation",
       "how_ru": "Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048).",
       "how_en": "Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048).",
-      "access": {
-        "kind": "ui",
-        "ref": "chat"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "chat"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-run",
@@ -533,10 +741,13 @@
       "title_en": "Start a run from the browser",
       "how_ru": "Цель, планировщик, бюджеты, авторизация и импорт чужой сюиты — всё поле прогона с подсказкой у каждого поля.",
       "how_en": "Goal, planner, budgets, auth and importing someone else's suite — the whole run panel, each field with its own hint.",
-      "access": {
-        "kind": "ui",
-        "ref": "run"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "run"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-live",
@@ -546,10 +757,13 @@
       "title_en": "Live timeline and operator takeover",
       "how_ru": "Смотреть идущий прогон пофазно и перехватить его руками, не останавливая (WS /v1/stream).",
       "how_en": "Watch a run phase by phase and take it over by hand without stopping it (WS /v1/stream).",
-      "access": {
-        "kind": "ui",
-        "ref": "live"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "live"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-library",
@@ -559,10 +773,13 @@
       "title_en": "Scenario and test library",
       "how_ru": "Сохранённые сценарии как переиспользуемые активы, продвижение сценария в именованный тест.",
       "how_en": "Saved scenarios as reusable assets; promoting a scenario into a named test.",
-      "access": {
-        "kind": "ui",
-        "ref": "library"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "library"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-results",
@@ -572,10 +789,13 @@
       "title_en": "Results and trends",
       "how_ru": "Исходы прогонов и их динамика, нативной SVG-графикой без внешних библиотек (ADR-051).",
       "how_en": "Run outcomes and how they move over time, in native SVG with no external libraries (ADR-051).",
-      "access": {
-        "kind": "ui",
-        "ref": "results"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "results"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "service-journal",
@@ -585,10 +805,17 @@
       "title_en": "Service journal — what the tool itself did",
       "how_ru": "GET /v1/service-log — входы и неудачные входы, аккаунты, правка настроек, отказы, старт и остановка сервисов. Обычный аккаунт видит свои события, админ и машинный токен — все (HEALTH-005).",
       "how_en": "GET /v1/service-log — sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005).",
-      "access": {
-        "kind": "http",
-        "ref": "GET /v1/service-log"
-      }
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/service-log"
+        },
+        {
+          "kind": "cli",
+          "ref": "service-log"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "service-journal-cli",
@@ -598,10 +825,16 @@
       "title_en": "The service journal from a terminal",
       "how_ru": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — тот же журнал, тонкий клиент над тем же маршрутом.",
       "how_en": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — the same journal, a thin client over the same route.",
-      "access": {
-        "kind": "code",
-        "file": "cmd/agentctl/api.go",
-        "ref": "Verb: \"service-log\""
+      "access": [
+        {
+          "kind": "code",
+          "file": "cmd/agentctl/api.go",
+          "ref": "Verb: \"service-log\""
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
     },
     {
@@ -612,10 +845,13 @@
       "title_en": "Destroying journal records — an explicit command that records itself",
       "how_ru": "agentctl purge-service --yes [--older-than 720h] — счётчики вместо содержимого, автоматической зачистки нет, и сама чистка пишет service.log_purged.",
       "how_en": "agentctl purge-service --yes [--older-than 720h] — counts, never content; nothing is ever swept automatically, and the purge writes service.log_purged about itself.",
-      "access": {
-        "kind": "cli",
-        "ref": "purge-service"
-      }
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "purge-service"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-journal",
@@ -625,10 +861,13 @@
       "title_en": "The service journal in the browser",
       "how_ru": "Вкладка рядом с «Логи», тот же рендер и тот же каталог сообщений; частичный вид НАЗЫВАЕТ себя частичным, а не выглядит полным.",
       "how_en": "A view beside Logs, the same renderer and the same message catalogue; a partial view SAYS it is partial rather than looking complete.",
-      "access": {
-        "kind": "ui",
-        "ref": "journal"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "journal"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-logs",
@@ -638,10 +877,13 @@
       "title_en": "Logs with a filter language",
       "how_ru": "Фильтр по уровню/источнику/категории/модулю/коду; выражение и элементы управления — одно и то же, а не два разных фильтра (ADR-065).",
       "how_en": "Filter by level/source/category/module/code; the expression and the controls are the same thing, not two filters (ADR-065).",
-      "access": {
-        "kind": "ui",
-        "ref": "logs"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "logs"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-tools",
@@ -651,10 +893,13 @@
       "title_en": "The capability catalogue inside the UI",
       "how_ru": "Этот самый список — в хабе, а не только в документации, с переходом к тому, что умеет открыться (ADR-104).",
       "how_en": "This very list — in the hub, not only in the docs, with a jump to whatever can be opened (ADR-104).",
-      "access": {
-        "kind": "ui",
-        "ref": "tools"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "tools"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "ui-settings",
@@ -664,10 +909,13 @@
       "title_en": "Connection and token",
       "how_ru": "Один адрес и один токен на всё приложение; токен живёт только в памяти вкладки (ADR-064).",
       "how_en": "One address and one token for the whole app; the token lives in the tab's memory only (ADR-064).",
-      "access": {
-        "kind": "ui",
-        "ref": "settings"
-      }
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "settings"
+        }
+      ],
+      "reach": "capability"
     }
   ]
 }
