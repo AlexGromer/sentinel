@@ -57,6 +57,32 @@ const (
 	maxConfigBytes = configguard.MaxConfigBytes
 )
 
+// componentsWithoutProbe names every service of the DEFAULT deployment that /readyz does not probe,
+// each with the reason. It is not documentation: tests/test_readyz_covers_the_stack_offline.py derives
+// the service list from the three compose files and requires each one to be either probed here or
+// named below, so a service added tomorrow cannot arrive unprobed and unnoticed.
+//
+// WHY A DECLARATION RATHER THAN A LIST OF PROBES. The probes were written one at a time, and what a
+// hand-written set of probes cannot show is the service nobody thought about. Measured before this
+// existed: the default stack has four services, /readyz had three checks, and exactly ONE of them
+// (`store`) corresponded to a service at all — `browser` and `webui` were probed by nothing, while
+// control-api refuses to START without a healthy browser. A deployment that demands a component at
+// boot and never asks about it again reports itself ready in precisely the case where it is not.
+//
+// The shape is `apiRoutesWithoutCLI`'s (cmd/agentctl/api.go), for the same reason it works there: an
+// exemption is a recorded decision, not an omission nobody noticed. Entries here are expected to
+// DISAPPEAR — the gate caps how many there may be, and that cap may only go down.
+var componentsWithoutProbe = map[string]string{
+	"control-api": "this process. Probing itself would answer the question /healthz already answers, " +
+		"and a readiness check that fails because the prober is down cannot be delivered anyway",
+	"webui": "in modes 1 and 3 there is no webui process at all (control-api serves the pages from its " +
+		"own port, ADR-064); in mode 2 it is a static file server with no state to be unready about, " +
+		"and a browser reaching it does not go through this API",
+	"browser": "HEALTH-006 adds it. It is the one exemption here that is a GAP rather than a decision: " +
+		"control-api declares `depends_on: browser: service_healthy`, so the component is mandatory at " +
+		"boot and unobserved afterwards",
+}
+
 type readyCheck struct {
 	Status string `json:"status"`           // ok | skipped | error
 	Detail string `json:"detail,omitempty"` // authenticated callers only
