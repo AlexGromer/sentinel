@@ -97,6 +97,14 @@ services:
   sentinel:
     logging: *logging
     <<: *sentinel-offline
+    # `cli`, exactly as in the other two compose files. This container runs ONE command and exits, so
+    # leaving it in the default set makes `up` end with an exited container — which is the reason the
+    # profile exists in docker-compose.yml. It was missing here alone, so the air-gapped file's default
+    # stack differed from the other two for no stated reason; found by the readiness-coverage gate,
+    # which derives the default stack from all three files and asked why nothing probes `sentinel`.
+    # Nothing breaks: every documented air-gapped invocation is `run --rm sentinel …`, and
+    # `docker compose run` enables the target service's own profiles.
+    profiles: ["cli"]
     command: ["--help"]
     networks: [airgap]
     environment:
