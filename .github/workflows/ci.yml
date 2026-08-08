@@ -2,8 +2,8 @@
 #
 # Pipeline shape:
 #   build   -> compiles all three components (Go agentctl, TS pw-executor, Python brain deps),
-#              runs `go vet` + `go test ./...` + the Python offline suite (m3..m9_2b), and
-#              publishes a reusable build artifact.
+#              runs pw-executor's own node:test suite (QA-PWEXEC-CI) + `go vet` + `go test ./...` +
+#              the Python offline suite (m3..m9_2b), and publishes a reusable build artifact.
 #   security-> deterministic gates on push/PR: gitleaks (HARD, secrets) + pip-audit (advisory,
 #              Python). The live-DB supply-chain scanners (govulncheck + npm audit) run nightly
 #              in security-nightly.yml (#8) so a fresh upstream CVE can't redden an unrelated PR.
@@ -55,11 +55,37 @@ jobs:
       - name: Install uv (Python env/dep manager for the brain)
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
-      - name: Build pw-executor (TypeScript -> dist/server.js)
+      # QA-PWEXEC-CI: `pw-executor` ships determinism.test.ts + launch.test.ts (node:test) that no
+      # workflow ever called — `npm test` and `npm run build` were two independent, uncalled-for full
+      # `tsc` passes. Resolved by running `npm test` HERE, in place of `npm run build`: ONE tsc pass
+      # compiles the package AND gates it (PW_CDP_ENDPOINT precedence in resolveLaunchPlan; the
+      # screenshot-determinism constants) instead of a second pass buying nothing new. `postbuild` /
+      # `posttest` (pw-executor/package.json) then strip dist/*.test.js so no consumer of
+      # pw-executor/dist ships test code: this job's own later steps, the artifact uploaded below, and
+      # the Docker image (`RUN npm run build` in the ts-build stage — same postbuild hook, untouched
+      # Dockerfile).
+      #
+      # Floor is on the SOURCE test-file count, not on node:test's summary text (reporter format is
+      # not a CI contract and already differs between a TTY and a pipe). Below the floor,
+      # `dist/*.test.js` also fails to glob-expand and `node --test` errors on the literal string —
+      # belt and suspenders, not either/or (see the discovery-floor pattern below at "offline suite").
+      - name: Build + unit-test pw-executor (TypeScript -> dist/server.js; node:test gates the compile)
         run: |
           cd pw-executor
+          # nullglob (not `ls | wc -l`): under the default `bash -eo pipefail`, `ls` on a
+          # zero-match glob exits 1 and pipefail would abort the step right here, before the
+          # `if` below ever runs its own error message — same hazard the offline-suite step
+          # avoids the same way (see `shopt -s nullglob` there).
+          shopt -s nullglob
+          files=(src/*.test.ts)
+          n=${#files[@]}
+          if [ "$n" -lt 2 ]; then
+            echo "::error::pw-executor: only $n src/*.test.ts found — expected at least 2 (determinism, launch)"
+            exit 1
+          fi
+          echo "pw-executor: $n *.test.ts found (${files[*]})"
           npm ci
-          npm run build
+          npm test
 
       # Browsers land in the machine-global Playwright cache (~/.cache/ms-playwright),
       # so the server resolves them at runtime regardless of cwd.
