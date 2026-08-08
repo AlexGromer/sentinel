@@ -416,3 +416,23 @@ no browser, no live model — `FakeBackend`/injected `fetch`): `tests/test_model
 Which fields MUST agree between models (CI-gate thresholds, an acceptable `finish_reason` set, what
 counts as "a model fit for the PLAN role") is a separate, un-started task, **MODEL-001**. Without the
 numbers this section produces, that decision would be a guess; with them, it is measurable.
+
+### 8.4 What "stable" does NOT mean (measured 2026-08-08)
+
+The harness's classification is called `stable_in_this_invocation`, and the word was chosen after a
+measurement rather than out of caution. One fixture, one set of flags, one model `qwen3:8b`, the live
+ollama:
+
+| what was run | `plan_hash` |
+|---|---|
+| two runs INSIDE one invocation | `df271e5a3bee` both times |
+| three SEPARATE invocations | `29abe04911b5` · `df271e5a3bee` · `906c6715…` |
+
+Agreement is observed within an invocation; reproducibility across invocations is not. The cause is
+in the code, not the model: neither the harness nor `brain/llm.py` passes a `seed`, and
+`canonical_plan_hash` (`brain/state.py:96`) hashes the ENTIRE ordered step list, so any variation in
+what the model picked changes it wholesale.
+
+The practical consequence for `MODEL-001`: "`plan_hash` matches" cannot be required between models
+while sampling is unpinned. The comparable quantity is the grounded step SET, with the hash read as a
+signal that the ORDER changed — which is exactly why the harness reports two numbers rather than one.

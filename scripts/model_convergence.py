@@ -202,7 +202,20 @@ def classify(hashes: list[str], step_sets: list[frozenset]) -> str:
     """The three-way read the task asks for, from two OBSERVED quantities over a group of runs
     (either one model's own M runs, or one representative walk per model across N models):
 
-      - "stable"                 — every plan_hash identical. Nothing left to explain.
+      - "stable_in_this_invocation" — every plan_hash in THIS group is identical.
+
+    ⚠ THE WORD MATTERS AND IT IS NOT "stable". Measured 2026-08-08 against the live ollama, same
+    fixture, same flags, same model (qwen3:8b): two runs inside ONE invocation agreed
+    (df271e5a3bee twice), and three separate invocations produced THREE different hashes
+    (29abe04911b5 · df271e5a3bee · 906c6715…). Nothing pins the model's sampling — neither this
+    harness nor brain/llm.py passes a `seed`, and canonical_plan_hash (brain/state.py:96) hashes the
+    ENTIRE ordered step list, so any variation in what the model chose changes it.
+
+    So the quantity this classifier measures is agreement WITHIN one invocation, and calling that
+    "stable" would promise reproducibility that was measured NOT to hold. The distinction is the
+    whole point of the exercise: MODEL-001 has to decide what must match between models, and it
+    cannot inherit a label that overstates what the numbers support.
+
       - "order_instability"      — hashes differ, but every step SET is the same: the same elements
                                     were picked, in a different order each time.
       - "different_interpretation" — the step SETS themselves differ: distinct runs picked distinct
@@ -217,7 +230,7 @@ def classify(hashes: list[str], step_sets: list[frozenset]) -> str:
     if not hashes or not step_sets:
         raise ConvergenceError("classify() called on an empty group — no data to classify")
     if len(set(hashes)) <= 1:
-        return "stable"
+        return "stable_in_this_invocation"
     if len(set(step_sets)) <= 1:
         return "order_instability"
     return "different_interpretation"

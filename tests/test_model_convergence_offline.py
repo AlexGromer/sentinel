@@ -186,7 +186,7 @@ def test_reordering_the_same_picks_changes_plan_hash_but_not_the_step_set():
 def test_classify_stable_when_every_hash_matches():
     h = ["deadbeef", "deadbeef", "deadbeef"]
     s = [frozenset({("click", "s1", None)})] * 3
-    assert MC.classify(h, s) == "stable"
+    assert MC.classify(h, s) == "stable_in_this_invocation"
 
 
 def test_classify_order_instability_same_set_different_hash():
@@ -379,7 +379,7 @@ def test_aggregate_classifies_each_model_and_the_cross_model_group():
         _run_result("m2", 2, "h3", other_set, truncated=0, total=2),
     ]
     agg = MC.aggregate(results)
-    assert agg["per_model"]["m1"]["classification"] == "stable"
+    assert agg["per_model"]["m1"]["classification"] == "stable_in_this_invocation"
     assert agg["per_model"]["m1"]["truncation_rate"] == 1 / 7
     assert agg["per_model"]["m2"]["classification"] == "order_instability"  # same set, hash h2 != h3
     assert agg["per_model"]["m2"]["truncation_rate"] == 2 / 4
