@@ -38,6 +38,15 @@ import (
 // liveBase is the browser service's live endpoint, e.g. http://browser:9224. Empty means no browser
 // service is configured, which is the normal single-container deployment — the video mode then says
 // so rather than failing in a way that reads as broken.
+// liveStatusPath is the browser service's own status endpoint, named ONCE. Both callers derive it
+// from here: handleLiveStatus (which proxies it to the hub) and probeBrowser (readyz.go).
+//
+// ⚠ Bought by a live run. The readiness probe first guessed "/status" and got a 404 from the real
+// service; every unit test passed, because the fake server in them answered any path at all. Two
+// statements of one path is the same class as two statements of one message format — and the same
+// cure: one declaration, no copy to drift from.
+const liveStatusPath = "/live/status"
+
 func liveBase() string {
 	return strings.TrimRight(os.Getenv("CONTROL_API_CDP_LIVE"), "/")
 }
@@ -68,7 +77,7 @@ func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 	// config mistake would reach the operator as a stack trace instead of as the sentence below —
 	// and proxyLive two functions down already gets this right, which made it an inconsistency
 	// rather than a considered choice.
-	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodGet, base+"/live/status", nil)
+	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodGet, base+liveStatusPath, nil)
 	if rerr != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false,

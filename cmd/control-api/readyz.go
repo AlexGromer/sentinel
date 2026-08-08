@@ -102,7 +102,7 @@ func (s *server) probeBrowser() readyCheck {
 	if base == "" {
 		return readyCheck{Status: "skipped", Detail: "CONTROL_API_CDP_LIVE unset (no browser service in this deployment)"}
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/status", nil)
+	req, err := http.NewRequest(http.MethodGet, base+liveStatusPath, nil)
 	if err != nil {
 		return readyCheck{Status: "error", Detail: "browser service address is unusable: " + err.Error()}
 	}

@@ -485,7 +485,15 @@ func TestALiveBrowserServiceIsOkEvenWithNoPageOpen(t *testing.T) {
 	// /live/status answers 200-with-a-reason rather than an HTTP error when no page is open, and the
 	// probe must honour that contract: a browser service that is up but idle is READY. Treating its
 	// "no page" answer as a failure would put /readyz at 503 for every deployment between runs.
+	// ⚠ The fake answers ONLY the real path, and that is the point. The first version answered any
+	// path, so it passed while the probe asked for "/status" — which the REAL browser service
+	// answers with a 404. A fake that cannot refuse cannot catch a wrong address, and the defect had
+	// to be found by a live docker run instead of here, where it belonged.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != liveStatusPath {
+			http.NotFound(w, r)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "no page open"})
 	}))
 	defer srv.Close()
@@ -507,6 +515,13 @@ func TestTheProberReportsTransitionsAndSaysNothingOnATickThatChangedNothing(t *t
 	// The FIRST observation is not a transition either: everything would look "changed" at startup.
 	if got := componentTransitions(nil, steady); len(got) != 0 {
 		t.Fatalf("the first observation produced %d record(s); startup is what service.started says", len(got))
+	}
+	// ⚠ A component that appears for the FIRST TIME in a later round is not a transition either, and
+	// this case was bought by a surviving mutation: dropping the `seen` check passed every assertion
+	// above, because `last` held every name in them. The record it would have produced reads «was ,
+	// now ok» — an empty "was", which is a rendering bug wearing the clothes of a state change.
+	if got := componentTransitions(steady, map[string]string{"store": "ok", "llm": "skipped", "browser": "ok"}); len(got) != 0 {
+		t.Fatalf("a newly appearing component produced %d record(s) with an empty previous state: %+v", len(got), got)
 	}
 	got := componentTransitions(steady, map[string]string{"store": "error", "llm": "ok"})
 	if len(got) != 2 {
