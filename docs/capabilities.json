@@ -916,6 +916,30 @@
         }
       ],
       "reach": "capability"
+    },
+    {
+      "id": "health-readiness",
+      "group": "Operations",
+      "severity": "high",
+      "title_ru": "Состояние компонентов развёртывания",
+      "title_en": "The state of this deployment's components",
+      "how_ru": "Какие компоненты есть, живы ли они, и НА КАКОЙ МОМЕНТ это измерено. Проверка идёт и по требованию, и сама — фоновая проба обновляет ответ с объявленным интервалом, поэтому компонент, отвалившийся в 14:00, известен раньше, чем о нём спросят (ADR-118).",
+      "how_en": "Which components exist, whether they are alive, and AS OF WHEN that was measured. Checked both on demand and on its own — a background probe refreshes the answer on a declared interval, so a component that died at 14:00 is known before anybody asks (ADR-118).",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /readyz"
+        },
+        {
+          "kind": "cli",
+          "ref": "health"
+        },
+        {
+          "kind": "ui",
+          "ref": "health"
+        }
+      ],
+      "reach": "capability"
     }
   ]
 }

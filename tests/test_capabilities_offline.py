@@ -166,7 +166,12 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 0          # ⚠ may only ever go UP; today's honest number
+    MIN_THREE_WAY = 1          # ⚠ may only ever go UP; today's honest number.
+    #                            HEALTH-006 PR-B moved it off ZERO for the first time in the
+    #                            project's life: readiness is reachable as GET /readyz, as
+    #                            `agentctl health`, and as the `health` view. The number was 0
+    #                            not because nothing was reachable three ways, but because the
+    #                            registry could not SAY so until it held every path per entry.
     assert MIN_THREE_WAY >= 0, (
         "the ratchet floor is negative, which makes it unsatisfiable-proof rather than a floor — a "
         "regression would pass by lowering the number instead of being fixed")

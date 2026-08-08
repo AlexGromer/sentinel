@@ -298,6 +298,10 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 .rf-src { flex:0 0 5.5rem; font-size:.72rem; text-transform:uppercase; letter-spacing:.03em; opacity:.8 }
 @media (max-width:1100px) { #chat3 { grid-template-columns:minmax(0,1fr) } #chat3-right { position:static; max-height:none } }
 
+  .hztab{width:100%;border-collapse:collapse;font-size:.9rem}
+  .hztab th,.hztab td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
+  .hztab th{font-weight:600;opacity:.75}
+  .hz-ok{color:#5fd38d}.hz-error{color:#ff6b6b;font-weight:600}.hz-skipped{opacity:.6}.hz-unknown{opacity:.6}
 </style>
 </head>
 <body class="lang-ru">
@@ -344,6 +348,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   <!-- HEALTH-005 PR-B — beside Logs, because the question is adjacent and the answer is not: Logs is
        one run's diagnostics, this is what the tool itself did, across all of them and outside them. -->
   <a href="#v=journal" data-nav="journal"><span class="ric">🗄</span><span data-lang="ru">Журнал сервиса</span><span data-lang="en">Service journal</span></a>
+  <a href="#v=health" data-nav="health"><span class="ric">🫀</span><span data-lang="ru">Здоровье</span><span data-lang="en">Health</span></a>
 
   <div class="rgroup"><span data-lang="ru">Прочее</span><span data-lang="en">Other</span></div>
   <a href="#v=tools" data-nav="tools"><span class="ric">🧰</span><span data-lang="ru">Инструменты</span><span data-lang="en">Tools</span></a>
@@ -354,7 +359,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <!-- M9-LIVE fix: /readyz has probed the LLM endpoint since ADR-062 and nothing ever showed the
          result, so "is the LLM even connected?" could only be answered by reading llm-transcript.jsonl by
          hand. The dot lives beside the connection dot because it answers the same class of question. -->
-    <span id="rail-llm" title=""><span class="dot"></span><span class="ctxt">LLM</span></span>
+    <span id="rail-health" title=""><span class="dot"></span><span class="ctxt">LLM</span></span>
     <span id="rail-ver"></span>
   </div>
 </nav>
@@ -1358,6 +1363,35 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <div id="sv-err" class="lgerr" style="display:none"></div>
       <div id="sv-list"></div>
     </div>
+
+    <!-- HEALTH-006 PR-B. The rail answers "is anything wrong"; this answers "what, why, and as of
+         when". The three columns are not decoration: a status with no REASON sends an operator
+         hunting, and a reason with no TIME cannot be told apart from one measured an hour ago —
+         which is the whole point of the preventive prober (ADR-118). -->
+    <div class="subpanel" data-view="health">
+      <p class="hint">
+        <span data-lang="ru">Состояние компонентов развёртывания по данным <code>/readyz</code>. Проверка идёт
+          и по требованию, и сама — фоновая проба обновляет ответ каждые 15 секунд, поэтому компонент, отвалившийся
+          в 14:00, известен раньше, чем о нём спросят. «Пропущен» — не поломка: этого компонента в развёртывании
+          просто нет.</span>
+        <span data-lang="en">The state of this deployment's components, from <code>/readyz</code>. Checked both on
+          demand and on its own — a background probe refreshes the answer every 15 seconds, so a component that
+          died at 14:00 is known before anybody asks. «Skipped» is not a fault: that component is simply not part
+          of this deployment.</span>
+      </p>
+      <div class="ctl-row">
+        <button type="button" class="btn" id="hz-refresh" data-needs-api disabled>&#8635;
+          <span data-lang="ru">Проверить сейчас</span><span data-lang="en">Check now</span></button>
+        <span id="hz-when" class="lgcustom"></span>
+      </div>
+      <div id="hz-list">
+        <p class="hint" id="hz-idle">
+          <span data-lang="ru">Пока не проверялось. Подключитесь к control-API в настройках (#8) — состояние появится здесь.</span>
+          <span data-lang="en">Not checked yet. Connect to the control-API in settings (#8) and the state will appear here.</span>
+        </p>
+      </div>
+    </div>
+
   </section>
   </div><!-- /panel-tests -->
 
@@ -2925,38 +2959,101 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      would recreate the ambiguity this fixes. Never throws: an unreachable control-API is the "connected"
      dot's job to report, not this one's. */
   var railLlmTimer = null;
-  async function railLlm(){
-    var host = ge('rail-llm'); if (!host) return;
+  /* HEALTH-006 PR-B: the rail summarises EVERY component, not one.
+     It used to read `j.checks.llm` and nothing else — a hand-picked component out of a set the
+     server derives, so `store` going away left the rail green. The summary is the WORST status
+     present, because a rail that averages tells you nothing you can act on. Detail per component
+     lives in the `health` view; the rail's job is only "is anything wrong". */
+  var hzLast = null;   // the last /readyz answer, shared by the rail and the view
+  function hzWorst(checks){
+    var order = {error: 3, unknown: 2, skipped: 1, ok: 0}, worst = 'ok', n = 0;
+    for (var k in checks) {
+      if (!Object.prototype.hasOwnProperty.call(checks, k)) continue;
+      n++;
+      var st = (checks[k] || {}).status || 'unknown';
+      if ((order[st] || 0) > (order[worst] || 0)) worst = st;
+    }
+    return {status: n ? worst : 'unknown', count: n};
+  }
+  async function railHealth(){
+    var host = ge('rail-health'); if (!host) return;
     var dot = host.querySelector('.dot'), txt = host.querySelector('.ctxt');
     try {
       var r = await fetch(capiBase() + '/readyz', {headers: authHdr()});
       var j = await r.json();
-      var c = (j.checks || {}).llm || {};
-      var st = c.status || 'unknown';
-      // The page's dot classes are `.ok`/`.no` (see the stylesheet). Inventing `.on`/`.bad` would
-      // have left the dot permanently grey — a silent no-op, which is the failure mode this whole
-      // fix exists to remove.
-      dot.className = 'dot ' + (st === 'ok' ? 'ok' : st === 'skipped' ? '' : 'no');
-      txt.textContent = st === 'ok' ? 'LLM ✓' : st === 'skipped' ? 'LLM —' : 'LLM ✕';
-      host.title =
-        st === 'ok'      ? biPlain('LLM отвечает: ' + (c.detail || 'endpoint доступен'),
-                                   'the LLM answers: ' + (c.detail || 'endpoint reachable')) :
-        st === 'skipped' ? biPlain('LLM не настроена — прогоны пойдут на эвристике',
-                                   'no LLM configured — runs will use the heuristic') :
-                           biPlain('LLM настроена, но НЕ отвечает: ' + (c.detail || 'см. /readyz'),
-                                   'an LLM is configured but does NOT answer: ' + (c.detail || 'see /readyz'));
+      hzLast = j;
+      var sum = hzWorst(j.checks || {});
+      /* The page's dot classes are `.ok`/`.no` (see the stylesheet). Inventing `.on`/`.bad` would
+         have left the dot permanently grey — a silent no-op. */
+      dot.className = 'dot ' + (sum.status === 'ok' ? 'ok' : sum.status === 'skipped' ? '' : 'no');
+      txt.textContent = sum.status === 'ok' ? bi('Здоровье ✓','Health ✓')
+                      : sum.status === 'skipped' ? bi('Здоровье —','Health —')
+                      : bi('Здоровье ✕','Health ✕');
+      var bad = [];
+      for (var k in (j.checks || {})) {
+        if (((j.checks[k] || {}).status) === 'error') bad.push(k);
+      }
+      host.title = bad.length
+        ? biPlain('не в порядке: ' + bad.join(', ') + ' — подробности во вкладке «Здоровье»',
+                  'not well: ' + bad.join(', ') + ' — details in the Health tab')
+        : biPlain(sum.count + ' компонент(ов) проверено, отказов нет',
+                  sum.count + ' component(s) checked, no failures');
     } catch (e) {
+      hzLast = null;
       dot.className = 'dot';
-      txt.textContent = 'LLM ?';
-      host.title = biPlain('состояние LLM неизвестно — control-API не ответил',
-                           'LLM state unknown — control-API did not answer');
+      txt.textContent = bi('Здоровье ?','Health ?');
+      host.title = biPlain('состояние неизвестно — control-API не ответил',
+                           'state unknown — the control-API did not answer');
+    }
+    hzRender();
+  }
+  /* The view. Three columns because a status alone sends an operator hunting: WHAT, WHY, and AS OF
+     WHEN. `probed_at` is the answer's measurement time, not the request time — with a background
+     prober those differ, and "ok, as of a moment I cannot name" is the reassurance that turns out
+     worthless exactly when it matters. */
+  function hzRender(){
+    var host = ge('hz-list'); if (!host) return;
+    if (!hzLast || !hzLast.checks) return;               // leave the standing hint in place
+    var names = Object.keys(hzLast.checks).sort();
+    var rows = names.map(function(name){
+      var c = hzLast.checks[name] || {}, st = c.status || 'unknown';
+      var word = st === 'ok' ? bi('в порядке','ok')
+               : st === 'skipped' ? bi('пропущен','skipped')
+               : st === 'error' ? bi('ОТКАЗ','FAILING') : bi('неизвестно','unknown');
+      var why = c.detail ? esc(c.detail)
+              : st === 'ok' ? '<span class="lgcustom">' + bi('причин нет','nothing to report') + '</span>'
+              /* No detail on a non-ok status means an anonymous caller: /readyz strips it. Saying so
+                 beats an empty cell, which reads as a component that failed for no reason at all. */
+              : '<span class="lgcustom">' + bi('причина видна после подключения с токеном',
+                                               'the reason is shown once you connect with a token') + '</span>';
+      return '<tr><td><code>' + esc(name) + '</code></td><td class="hz-' + esc(st) + '">' + word +
+             '</td><td>' + why + '</td></tr>';
+    }).join('');
+    host.innerHTML = '<table class="hztab"><thead><tr>' +
+      '<th>' + bi('Компонент','Component') + '</th>' +
+      '<th>' + bi('Состояние','State') + '</th>' +
+      '<th>' + bi('Причина','Reason') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    var when = ge('hz-when');
+    if (when) {
+      /* ⚠ innerHTML, not textContent. bi() RETURNS `<span data-lang>` markup — the language toggle
+         is what shows one span and hides the other — so assigning it to textContent prints the tags
+         to the reader. Caught by a screenshot, and by nothing else: the DOM check for this line
+         asked whether the words «измерено»/«measured» were PRESENT, and they were… inside the
+         literal markup. Assert the FORM, not the containment. */
+      when.innerHTML = hzLast.probed_at
+        ? bi('измерено ','measured ') + esc(new Date(hzLast.probed_at).toLocaleString())
+        : bi('время измерения не сообщено','no measurement time reported');
     }
   }
+
+  var hzBtn = ge('hz-refresh');
+  if (hzBtn) hzBtn.addEventListener('click', function(){ railHealth(); });
+
   function railLlmStart(){
-    railLlm();
+    railHealth();
     /* 30 s: /readyz memoizes its probes (readyCacheTTL), so polling faster would only burn requests
        without producing a fresher answer. */
-    if (!railLlmTimer) railLlmTimer = setInterval(railLlm, 30000);
+    if (!railLlmTimer) railLlmTimer = setInterval(railHealth, 30000);
   }
 
   /* ADR-078: a file:// target that is not a CONTAINER path. Live runs went out as
@@ -4963,7 +5060,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      match, AND — for a panel that names a `data-subpanel` inside a grouped view — the inner tab must
      match too.
      ===================================================================================== */
-  var VIEWS = ['chat','run','live','library','results','logs','journal','tools','settings'];
+  var VIEWS = ['chat','run','live','library','results','logs','journal','health','tools','settings'];
   var GROUPED = { library: ['library','runs','chats'], results: ['results','metrics'] };
   var vwActive = 'chat';
   var vwSub = { library: 'library', results: 'results' };
