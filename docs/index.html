@@ -1010,7 +1010,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <span data-lang="en">Upload <code>*.spec.ts</code> files — get the rewrite report: what bound, what by a weak locator, which construct has no equivalent. Nothing runs; it transpiles and diagnoses.</span>
     </p>
     <div class="ctl-row">
-      <input type="file" id="imp-files" accept=".ts" multiple style="font-size:.82rem">
+      <!-- aria-label, not a <label>: an <input type=file> has NO text content, so without one its
+           accessible name is empty and a screen reader announces an unlabelled button beside a named
+           one. Found by the per-control sweep in scripts/ui-smoke.mjs, which is the only check that
+           walks every field; the `ru / en` form is the hub's own idiom for attributes, which cannot
+           carry the <span data-lang> markup the visible text uses (biPlain, docs/index.html:1479). -->
+      <input type="file" id="imp-files" accept=".ts" multiple style="font-size:.82rem"
+             aria-label="Файлы *.spec.ts для импорта / *.spec.ts files to import">
       <button type="button" class="btn" id="imp-go" disabled><span data-lang="ru">Импортировать</span><span data-lang="en">Import</span></button>
     </div>
     <div id="imp-out" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem;font-size:.85rem"></div>
