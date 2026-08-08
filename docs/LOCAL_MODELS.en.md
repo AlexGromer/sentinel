@@ -15,6 +15,7 @@
 5. [VRAM-sizing methodology](#5-vram-sizing-methodology)
 6. [Token-cost-per-phase methodology](#6-token-cost-per-phase-methodology)
 7. [Anti-hallucination and cutoff](#7-anti-hallucination-and-cutoff)
+8. [MODEL-002 — cross-model convergence measurement](#8-model-002--cross-model-convergence-measurement)
 
 ---
 
@@ -353,3 +354,65 @@ Lesson C: goal-mode delivers ~87% token savings on planning vs explore under the
   citations) and standard GGUF bpw; it is authoritative, unlike model nomenclature.
 - The calculators implement the §5/§6 formulas **verbatim** (vanilla JS, no network) — any
   discrepancy between a calculator and this document is considered a documentation bug.
+
+---
+
+## 8. MODEL-002 — cross-model convergence measurement
+
+> ⚠️ **Known drift from §1/§6.** The §1 table and the §6.1 breakdown cite the PLAN `propose` output
+> ceiling as ≤200 / scenario ≤800 tok, citing the code (`planner.py:116,177,228,282`). Those lines are
+> stale: `brain/planner.py` (comment at `:37-44`) records that the old 200/800 were replaced by
+> `_PICK_TOKENS=1024` (per-action pick) and `_SCENARIO_TOKENS=3072` (scenario/draft), because it was
+> exactly the 800 ceiling where `qwen3:14b` was measured hitting `finish_reason=length` (thinking,
+> without finishing an answer) on 4 of 6 M9-LIVE fixtures. §1/§6 are not rewritten by this change
+> (re-deriving the whole cost model is a separate task) — this note only records the drift so the
+> stale figure is not read as current.
+
+"Is this model even usable for the PLAN role" is not answered by a benchmark but by a **direct
+measurement on a real explore**: do repeated runs of ONE model agree with each other, do DIFFERENT
+models agree with each other, and what share of calls hits the output ceiling. The tooling is
+`scripts/model_convergence.py` (MODEL-002; a measurement tool — it changes product behavior only
+through two narrow probes in `brain/llm.py`, see FILEMAP.md).
+
+### 8.1 What is measured, and how
+
+One `explore` (no `--goal`, `PLANNER=llm` → `LLMPlanner`, `brain/planner.py`) on ONE fixture from
+`testdata/fixtures/*.html`, N models × M repeated runs each. Per run:
+
+- **`plan_hash`** (`brain/state.py::canonical_plan_hash`) — a deterministic SHA-256 over the WHOLE
+  ordered step list; order-sensitive (`step_id` sits in every entry).
+- **`grounded_step_set`** — the same set of planner choices, order and step 1 discarded (the
+  deterministic initial navigate that `_run_explore` writes BEFORE the first `planner.propose()`
+  call — identical across every model/run by construction).
+- **the `finish_reason=length` share, per ATTEMPT**, never the final per-step decision —
+  `brain/llm.py::complete_structured` sums tokens across retries and keeps only the LAST attempt's
+  `finish_reason`; a successful retry erases the evidence that the first attempt was truncated. The
+  optional per-attempt log (`SENTINEL_LLM_ATTEMPT_LOG`, `_record_attempt`) is the only place this
+  survives.
+
+Comparing the hash AND the set together tells two different failures apart: the hash diverges while
+the set agrees — the model is unstable in the ORDER it picks; the set itself diverges — the model
+picks different elements outright, not merely in a different order.
+
+### 8.2 Running it
+
+```bash
+# the model and fixture lists are DERIVED, never hand-typed here: models from GET {ollama}/api/tags,
+# fixtures from testdata/fixtures/*.html
+scripts/model_convergence.py --dry-run                       # resolves + prints the matrix, spends nothing
+scripts/model_convergence.py --models qwen3:8b,qwen3:14b --runs 3 --max-steps 6
+```
+
+Ceiling isolation (§1 "Env profile"): every (model, run) pair gets its OWN `SENTINEL_LLM_BUDGET_FILE`
+and its own `SENTINEL_LLM_ATTEMPT_LOG` (`build_run_env`/`plan_matrix`) — otherwise a ceiling learned
+by one model leaks into the next (or into the next run of the SAME model) and silences the very
+truncation signal that matters most there.
+
+Full flag list and defaults: `scripts/model_convergence.py --help`; offline logic gate (no network,
+no browser, no live model — `FakeBackend`/injected `fetch`): `tests/test_model_convergence_offline.py`.
+
+### 8.3 What this does NOT decide
+
+Which fields MUST agree between models (CI-gate thresholds, an acceptable `finish_reason` set, what
+counts as "a model fit for the PLAN role") is a separate, un-started task, **MODEL-001**. Without the
+numbers this section produces, that decision would be a guess; with them, it is measurable.
