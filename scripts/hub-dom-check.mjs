@@ -886,10 +886,21 @@ try {
     const title = await host.getAttribute('title');
     ok(/отказов нет|no failures/i.test(title || ''),
       `with nothing broken the tooltip must say so rather than claim a failure: ${title}`);
-    // The summary is over a DERIVED set, so it must report how many components it actually saw — a
-    // summary over zero components would look identical to a healthy one.
-    ok(/[1-9]\d* (компонент|component)/.test(title || ''),
-      `the tooltip must name how many components were checked, or an empty set reads as health: ${title}`);
+    // ⚠ The count is compared against what /readyz ACTUALLY reports, not against a threshold. A
+    // threshold was the first version and a mutation walked straight through it: restoring the old
+    // "read checks.llm only" behaviour leaves a count of 1, which satisfies «at least one component»
+    // perfectly. The summary is over a DERIVED set, so the only honest assertion is that it saw the
+    // WHOLE set — anything less is the hand-picked-component defect wearing a number.
+    const served = await page.evaluate(async (base) => {
+      const r = await fetch(base + '/readyz');
+      const j = await r.json();
+      return Object.keys(j.checks || {}).length;
+    }, `http://127.0.0.1:${PORT}`);
+    ok(served >= 3, `/readyz reported only ${served} component(s); the comparison below would be vacuous`);
+    const claimed = Number((/(\d+) (?:компонент|component)/.exec(title || '') || [])[1] || 0);
+    ok(claimed === served,
+      `the rail summarised ${claimed} component(s) while /readyz reports ${served} — a hand-picked ` +
+      `subset is exactly the defect this indicator was widened to remove: ${title}`);
     const cls = await host.locator('.dot').getAttribute('class');
     ok(!/\bno\b/.test(cls || ''),
       `"not configured" must NOT render as the red/error dot: ${cls}`);
@@ -932,6 +943,15 @@ try {
     // And the measurement time, which is the whole point of a probe that runs on its own.
     const when = (await page.locator('#hz-when').innerText()).trim();
     ok(/измерено|measured/.test(when), `the view must say WHEN the answer was measured, got: ${when}`);
+    // ⚠ AND THE FORM, not only the containment. The first version of this line asserted the words
+    // alone and passed against «<span data-lang="ru">измерено </span><span data-lang="en">measured
+    // </span>8/8/2026…» — bi() returns MARKUP, and assigning it to textContent prints the tags to
+    // the reader. A screenshot caught it; the word test could not, because the word was there.
+    ok(!/<span|data-lang|&lt;span/.test(when),
+      `the measurement line is printing markup to the reader instead of rendering it: ${when}`);
+    // A time must actually be there — the words without a timestamp are a label with no value, the
+    // dangling-label defect this repo has already fixed once in the journal.
+    ok(/\d/.test(when), `the measurement line names no time at all: ${when}`);
     // The standing hint must be GONE once real rows exist — the mistake the run-flow pane made.
     ok(await page.locator('#hz-idle').count() === 0,
       'the "not checked yet" hint is still in the DOM beside real rows, claiming the opposite of what is shown');

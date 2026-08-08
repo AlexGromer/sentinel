@@ -3035,8 +3035,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       '<th>' + bi('Причина','Reason') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
     var when = ge('hz-when');
     if (when) {
-      when.textContent = hzLast.probed_at
-        ? bi('измерено ','measured ') + new Date(hzLast.probed_at).toLocaleString()
+      /* ⚠ innerHTML, not textContent. bi() RETURNS `<span data-lang>` markup — the language toggle
+         is what shows one span and hides the other — so assigning it to textContent prints the tags
+         to the reader. Caught by a screenshot, and by nothing else: the DOM check for this line
+         asked whether the words «измерено»/«measured» were PRESENT, and they were… inside the
+         literal markup. Assert the FORM, not the containment. */
+      when.innerHTML = hzLast.probed_at
+        ? bi('измерено ','measured ') + esc(new Date(hzLast.probed_at).toLocaleString())
         : bi('время измерения не сообщено','no measurement time reported');
     }
   }
