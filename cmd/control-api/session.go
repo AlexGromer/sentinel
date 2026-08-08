@@ -202,8 +202,17 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// HEALTH-005: recorded at `warn`, with the name that was TRIED and never the password. The
 		// reply still cannot distinguish "no such name" from "wrong password" — that is a property of
 		// the ANSWER, and writing to our own journal does not weaken it.
-		s.journalEvent("service.login_failed", "warn",
-			"Sign-in FAILED for «"+strings.TrimSpace(req.Name)+"»: invalid name or password", nil)
+		// ⚠ `reason` is still English PROSE, and deliberately so for now. [JOURNAL-VALUE-I18N] wants it
+		// to be a token the catalogue expands («bad_credentials»), and naming the fields — which this
+		// change does — is what makes that possible at all. But a token without a resolver is worse
+		// than the prose it replaces: the wire rule keeps Russian off the wire, so the hub would
+		// receive `bad_credentials` and, having nothing to expand it with, would show that word to
+		// BOTH readers. The resolver is a catalogue table plus a hub change, and the hub is not this
+		// branch's file. Tokenising here and finishing there would leave main in the worse state in
+		// between, so the prose stays until the resolver lands with it.
+		s.journalEvent("service.login_failed", "warn", map[string]string{
+			"actor": strings.TrimSpace(req.Name), "reason": "invalid name or password",
+		}, nil)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid name or password"})
 		return
 	}
@@ -222,7 +231,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// The subject is the account that just signed in, not the (anonymous) caller: without it this is
 	// the one record an account most needs and cannot see.
-	s.journalSubject("service.login_ok", "info", "Signed in: "+u.Name, nil, u.UserId)
+	s.journalSubject("service.login_ok", "info", map[string]string{"actor": u.Name}, nil, u.UserId)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session": tok, "user": map[string]any{"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin},
 		"expires_in_seconds": int(sessionTTL().Seconds()),
@@ -233,7 +242,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Journalled BEFORE the drop: afterwards the session is gone and actorOf has nobody to name, so
 	// every sign-out would be recorded as "anonymous".
 	actor, _ := s.actorOf(r)
-	s.journalEvent("service.logout", "info", "Signed out: "+actor, r)
+	s.journalEvent("service.logout", "info", map[string]string{"actor": actor}, r)
 	s.sessions.drop(bearerOf(r))
 	// 200 whether or not the token was live: "you are logged out" is true either way, and reporting
 	// otherwise would tell an unauthenticated caller whether a token they hold is real.
@@ -310,8 +319,9 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// account's rows would still be readable by an anonymous caller.
 	s.forgetAccounts()
 	creator, _ := s.actorOf(r)
-	s.journalSubject("service.account_created", "info",
-		creator+" created the account «"+u.Name+"» (admin: "+strconv.FormatBool(u.IsAdmin)+")", r, u.UserId)
+	s.journalSubject("service.account_created", "info", map[string]string{
+		"actor": creator, "account": u.Name, "admin": strconv.FormatBool(u.IsAdmin),
+	}, r, u.UserId)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"user_id": u.UserId, "name": u.Name, "is_admin": u.IsAdmin})
 }
@@ -363,8 +373,9 @@ func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		name = u.Name
 	}
 	remover, _ := s.actorOf(r)
-	s.journalSubject("service.account_deleted", "warn",
-		remover+" DELETED the account «"+name+"» — the rows it owned are NOT removed", r, id, "user_id: "+id)
+	s.journalSubject("service.account_deleted", "warn", map[string]string{
+		"actor": remover, "account": name,
+	}, r, id, "user_id: "+id)
 	s.store.deleteUser(&storepb.UserRef{UserId: id})
 	// The rows the account owned are LEFT (internal/store: unowned, not deleted). Its sessions are not:
 	// a live token for an account that no longer exists is access nobody can revoke.

@@ -95,6 +95,20 @@ func requireMatch(t *testing.T, code, msg string) {
 	}
 }
 
+// ⚠ ADR-117 CHANGED WHAT THIS TEST PROVES, and the backlog entry that asked for the change expected
+// it to be deleted ("гейт формулировок становится не нужен по построению — и тогда его снять").
+// Kept instead, deliberately, because the two claims are not the same one:
+//
+//	BEFORE — "the sentence somebody assembled by hand happens to match the template." Tautological
+//	         now: renderMsg produces the sentence FROM that template, so comparing them compares a
+//	         string to its own source.
+//	AFTER  — "every emitted message actually went through the renderer." NOT tautological, and not
+//	         provable by construction: svclog.Log takes a Msg field, so a new call site can still hand
+//	         it a hand-built string, and this test is the only thing that would notice.
+//
+// Deleting it would have removed the one check standing between main and the next hand-assembled
+// message — which is exactly how the six drifted codes were produced the first time. A gate whose
+// subject changed is worth re-aiming, not discarding.
 func TestEveryServiceMessageMatchesItsCatalogueTemplate(t *testing.T) {
 	s := journalServer(t, "debug") // debug, so reads are recorded and api_call is covered too
 	addr := startTestGateway(t, "")

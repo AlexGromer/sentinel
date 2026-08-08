@@ -58,6 +58,27 @@ var (
 // Applied to EVERY line the sink sees, not only the `app.*` ones: our own diagnostics quote URLs and
 // request bodies too, and a redactor that trusted the source would be trusting the very thing it is
 // there to check. A pure string function, so it is testable without a browser, a run or a disk.
+// Value redacts ONE field value, for a caller that RENDERS a message from a catalogue template
+// instead of assembling it (eventcatalog.Render, ADR-117).
+//
+// WHY A SECOND ENTRY POINT. Line() scans an assembled sentence for `name=value` shapes, because that
+// is all it has: by the time the sentence exists, the name and the value are the same string. A
+// renderer has them apart, and then the NAME is authoritative — no scanning, no guessing at value
+// ends, and no chance of the scanner running over OUR OWN prose. That last part is not theoretical:
+// the catalogue's templates are our words, and a template ending in `token: ` would make Line() blank
+// the sentence after it. The wording for `service.token_source` was already steered away from that
+// shape once, in a comment that says so.
+//
+// Strictly stronger than what it replaces for the case that matters: today a secret in a field is
+// caught only if the assembled string happens to read `token=<value>`; here a secret-shaped NAME
+// blanks the value whatever it looks like.
+func Value(name, value string) string {
+	if configguard.Secretish(name) {
+		return redactedMark
+	}
+	return Line(value)
+}
+
 func Line(line string) string {
 	if line == "" {
 		return line

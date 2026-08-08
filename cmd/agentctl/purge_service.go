@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/AlexGromer/sentinel/internal/eventlog"
 	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
@@ -74,10 +75,20 @@ func cmdPurgeService(repo string, args []string) int {
 	// uses, so it lands in the same file with the same shape rather than being hand-assembled here.
 	w := svclog.Open(stateDir, "agentctl")
 	defer w.Close()
+	// The sentence comes from the catalogue's template, not from concatenation here (ADR-117): this is
+	// the THIRD emitter of `service.*` codes, and a third way of building the same text is exactly how
+	// six codes drifted from their templates in the first place. The code LITERAL stays here, where the
+	// catalogue gate's emitter scan looks for it.
+	msg, ok := eventlog.Render("service.log_purged", map[string]string{
+		"removed": strconv.Itoa(rep.Removed),
+		"kept":    strconv.Itoa(rep.Kept),
+		"cutoff":  cutoff.UTC().Format(time.RFC3339),
+	})
+	if !ok {
+		msg = "eventlog.uncatalogued: service.log_purged is not in the catalogue"
+	}
 	w.Log(svclog.Record{
-		Lvl: "warn", Cat: "service", Code: "service.log_purged",
-		Msg: "Service journal purged by agentctl: " + strconv.Itoa(rep.Removed) + " record(s) removed, " +
-			strconv.Itoa(rep.Kept) + " kept, cutoff " + cutoff.UTC().Format(time.RFC3339),
+		Lvl: "warn", Cat: "service", Code: "service.log_purged", Msg: msg,
 	})
 	return 0
 }
