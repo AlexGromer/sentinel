@@ -188,6 +188,27 @@ async function main() {
       }
     });
 
+    await check('the run flow explains an empty screen instead of leaving it blank', async () => {
+      // No connection has EVER been made to the WS the run-flow rows are drawn from — two runs
+      // already finished in this very session (the explore run and the refused goal run, above) and
+      // #rf-list stays the honest idle state, because bSubmit/chRunFlow hand the fresh run_id to
+      // tFillLiveRunId, which never auto-connects it (M14 keeps the SSE and WS paths separate on
+      // purpose — ADR-108d: "a SECOND consumer of the same stream, never a second stream"). This is
+      // the same claim the check above makes for the three live modes, made for the pane beneath them.
+      await page.evaluate(() => { location.hash = '#v=chat'; });
+      await page.waitForSelector('#rf-list', { state: 'visible' });
+      const text = (await page.locator('#rf-list').innerText()).trim();
+      // Four DIFFERENT sentences, not one generic "nothing yet" — a blank #rf-list here reads as
+      // broken, and the most likely real cause (the stream is not connected) must be named rather
+      // than buried under a placeholder that could just as well mean the run never started.
+      ok(text.length > 20, 'the run-flow pane is empty and silent — indistinguishable from broken');
+      ok(/не подключ|not connected/i.test(text), 'does not say the event stream is disconnected (the common case)');
+      ok(/не начал|has not started/i.test(text), 'does not mention a run that has not started');
+      ok(/шаг/i.test(text) || /step/i.test(text), 'does not mention a run producing no step events');
+      ok(/ещё не пришл|has not arrived/i.test(text), 'does not mention data still in flight');
+      await shot(page, 'run-flow-idle', true);
+    });
+
     await check('the library and results views load without erroring', async () => {
       // EVERY view, derived from the hub itself (scripts/hub-views.mjs). This list used to be written
       // out here and held seven of nine: `tools` and `settings` were never screenshotted, ever, and

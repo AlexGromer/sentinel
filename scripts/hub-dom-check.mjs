@@ -1634,6 +1634,39 @@ try {
     await page.click('#lv-mode-frame');
   });
 
+  await check('three-pane: the run flow explains an empty screen, and the reasons differ', async () => {
+    // Run BEFORE the next check ever calls window.lvOnEvent — this is the pristine, nothing-has-ever-
+    // streamed state, which is also the state a real run started from this very chat leaves the pane
+    // in (bSubmit/chRunFlow hand run_id to tFillLiveRunId, which "never auto-connects" the WS — see
+    // that function's own comment). An empty #rf-list here would be indistinguishable from broken.
+    const text = (await page.locator('#rf-list').innerText()).trim();
+    ok(text.length > 20, 'the run-flow pane is blank — indistinguishable from broken');
+    ok(await page.locator('#rf-idle').isVisible(), 'the idle hint is not the visible content of #rf-list');
+    // Four DIFFERENT sentences, not one generic "nothing yet" — the most frequent cause (the event
+    // stream is not connected) has to be named, because a run in the SAME chat does not connect it.
+    ok(/не подключ|not connected/i.test(text), 'does not say the event stream is disconnected (the common case)');
+    ok(/не начал|has not started/i.test(text), 'does not mention a run that has not started');
+    ok(/шаг/i.test(text) || /step/i.test(text), 'does not mention a run producing no step events');
+    ok(/ещё не пришл|has not arrived/i.test(text), 'does not mention data still in flight');
+    // Not one of the `.rf-*` classes — those are reserved for real rows: rfApplyFilter and the split
+    // count below key off `#rf-list .rf-tool`/`.rf-business`, so a hint tagged that way would be folded
+    // into the rows the tool-filter checkbox hides, or double-counted as a row that carries no event.
+    const idleClass = await page.getAttribute('#rf-idle', 'class');
+    ok(!/(^|\s)rf-/.test(idleClass || ''), `the idle hint carries an rf- class: ${idleClass}`);
+    eq(await page.locator('#rf-list .rf-tool').count(), 0, 'the idle hint is counted as a tool row');
+    eq(await page.locator('#rf-list .rf-business').count(), 0, 'the idle hint is counted as a business row');
+    // The FIRST real row removes it — the same contract #lv-actions-idle makes. `log` is used rather
+    // than `tool.call` deliberately: lvKindOf files `tool.call`/`step.progress`/`step.frame` under
+    // "business" (what happened to the app), and everything else, `log` included, under "tool" (what
+    // Sentinel itself did) — so this also doubles as a live check that the mapping stayed put.
+    await page.evaluate(() => window.lvOnEvent({
+      type: 'log', run_id: 'r-idle-hint', seq: 1, data: { line: 'x' },
+    }));
+    await page.waitForTimeout(150);
+    ok(!(await page.locator('#rf-idle').count()), 'the idle hint is still in the DOM once a real row exists');
+    ok(await page.locator('#rf-list .rf-tool').first().isVisible(), 'the real row the idle hint yielded to is missing');
+  });
+
   await check('three-pane: the run flow separates the tool from the application, visibly', async () => {
     // Driven through the page's own event consumer, so this exercises the shipped code path rather
     // than a copy of it — the same seam the Logs filter checks use.

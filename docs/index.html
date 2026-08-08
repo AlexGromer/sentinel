@@ -1111,7 +1111,26 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
                 <span data-lang="ru">показывать инструмент</span><span data-lang="en">show the tool</span>
               </label>
             </div>
-            <div id="rf-list" style="overflow:auto;flex:1;min-height:6rem;font-size:.84rem"></div>
+            <div id="rf-list" style="overflow:auto;flex:1;min-height:6rem;font-size:.84rem">
+              <!-- Static markup, same promise as #lv-frame/#lv-actions-idle above: an empty pane reads
+                   as broken and is indistinguishable from it. `rfAdd` removes this node on the first
+                   real row (see #rf-idle there).
+                   This one is not optional the way the other two are: #rf-list is filled ONLY by
+                   `rfAdd` <- `lvOnEvent` <- `agHandle` <- the WS `/v1/stream`, and BOTH run launchers in
+                   this very chat (bSubmit, chRunFlow) hand the fresh run_id to `tFillLiveRunId`, whose
+                   own comment says it "never auto-connects" — the SSE path they stream over
+                   (`streamEvents`) only decodes `state`/`log`/`done`, none of which reaches `lvOnEvent`.
+                   So a run started in THIS chat is the common case that leaves this pane empty, not an
+                   edge case — the hint below says that first, not last.
+                   Class deliberately does NOT start with `rf-`: rfApplyFilter and the DOM-gate's row
+                   counts key off `#rf-list .rf-tool`/`.rf-business`, and a hint tagged that way would be
+                   folded into "инструмент" rows the tool-filter checkbox hides — this text must survive
+                   an unchecked filter. -->
+              <p class="hint" id="rf-idle">
+                <span data-lang="ru">Строки сюда пишет только подключённый поток событий (вкладка «Live» → Подключить — тот же <code>/v1/stream</code>, что видит эта лента). Обычно лента пуста потому, что поток не подключён: прогон, запущенный здесь же в чате, стрим не открывает сам. Другие причины: прогон ещё не начался; в этом прогоне пока не было ни одного шага (так бывает, если авто-исследование сразу решает, что смотреть больше нечего); поток подключён, но данные ещё не пришли.</span>
+                <span data-lang="en">Rows here come only from a connected event stream (the «Live» tab → Connect — the same <code>/v1/stream</code> this list reads). It is usually empty because the stream is not connected: a run started right here in the chat does not open it by itself. Other reasons: the run has not started yet; this run has not produced a single step yet (that happens when auto-exploration decides right away there is nothing more to look at); the stream is connected, but no data has arrived yet.</span>
+              </p>
+            </div>
           </div>
 
           <!-- ADR-108d: artefacts are downloaded FROM THE CHAT and viewed on a canvas (Alex's
@@ -3836,6 +3855,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      itself did. The mapping is the catalogue's (ADR-068), not a new vocabulary. */
   function rfAdd(kind, text){
     var box = ge('rf-list'); if (!box) return;
+    /* The standing "why is this empty" hint goes the moment there IS something — the same rule
+       lvAddAction applies to #lv-actions-idle: left in place it would sit above real rows claiming
+       the opposite of what is on screen. */
+    var idle = ge('rf-idle'); if (idle) idle.remove();
     var row = document.createElement('div');
     row.className = 'rf-row rf-'+kind;
     row.dataset.kind = kind;
