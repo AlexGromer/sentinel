@@ -24,6 +24,7 @@ import asyncio
 import contextvars
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -370,6 +371,34 @@ _ADAPTIVE = os.environ.get("LLM_ADAPTIVE_TOKENS", "1").strip().lower() not in ("
 _BUDGET_FILE = os.environ.get("SENTINEL_LLM_BUDGET_FILE") or os.path.join("state", "llm-budget.json")
 _learned_cache: Optional[dict] = None
 
+# MODEL-002 (measurement only, scripts/model_convergence.py): `complete_structured` sums tokens and
+# keeps only the LAST attempt's `finish_reason` — a retry that succeeds after a truncation ERASES the
+# evidence that the first attempt hit "length". The convergence harness needs the per-ATTEMPT
+# truncation rate (which model spends its ceiling on THINK tokens before any answer), and no existing
+# artifact records it: llm-transcript.jsonl (brain/graph.py tx_write) writes one row per PLAN STEP,
+# after retries are already resolved into a single summed result. Opt-in via SENTINEL_LLM_ATTEMPT_LOG
+# (unset by default -> `_record_attempt` is a no-op, zero cost, zero behavior change for every
+# existing caller/test); appends one JSON line per attempt, best-effort (a measurement probe must
+# never break a run).
+_ATTEMPT_LOG = os.environ.get("SENTINEL_LLM_ATTEMPT_LOG", "").strip()
+
+
+def _record_attempt(model: Optional[str], role: Optional[str], attempt: int, cap: int,
+                    finish_reason: Optional[str], parsed: bool) -> None:
+    if not _ATTEMPT_LOG:
+        return
+    try:
+        with open(_ATTEMPT_LOG, "a") as f:
+            f.write(json.dumps({"model": model, "role": role, "attempt": attempt, "cap": cap,
+                                "finish_reason": finish_reason, "parsed": parsed}) + "\n")
+    except Exception as e:
+        # This only fires with SENTINEL_LLM_ATTEMPT_LOG explicitly set (opt-in measurement) — the
+        # early return above means a normal run never reaches here. A stderr line (the weak declare
+        # form tests/test_swallowed_errors_offline.py accepts) is enough: this is a measurement probe,
+        # not a product code path, so it does not belong in brain/events.json's catalogue.
+        print(f"[warn] model-convergence attempt log write failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+
 
 def _learned_budgets() -> dict:
     """Per-model learned ceilings {model: max_tokens}, loaded once (best-effort)."""
@@ -443,6 +472,13 @@ def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
         r = _one_structured(backend, prompt, schema, cap, temperature)
         total_pt += r.prompt_tokens or 0
         total_ct += r.completion_tokens or 0
+        # MODEL-002: record BEFORE the loop can overwrite `r` on a retry — see the module note above
+        # _ATTEMPT_LOG. A no-op unless SENTINEL_LLM_ATTEMPT_LOG is set. `getattr`, not `r.finish_reason`
+        # directly: some callers' fake backends (e.g. tests/test_heal_identity_offline.py `Backend`)
+        # return an ad hoc result object with no `finish_reason` attribute at all — the pre-existing
+        # code below only ever touches it on the r.data is None path, which those fakes never reach,
+        # so this call must not be the first thing in the module to demand the attribute exists.
+        _record_attempt(model, role, attempt, cap, getattr(r, "finish_reason", None), r.data is not None)
         if r.data is not None:
             if cap > max_tokens:  # succeeded only after escalation -> teach the next run
                 _remember_budget(model, cap)
