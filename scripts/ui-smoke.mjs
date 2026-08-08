@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hubViews, MIN_VIEWS } from './hub-views.mjs';
+
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(REPO, 'pw-executor', 'package.json'));
 const { chromium } = require('playwright');
@@ -43,9 +45,14 @@ const results = [];
 const pageErrors = [];
 let shotN = 0;
 
-async function shot(page, name) {
+// `full` is not a flourish. Measured: the per-view sweep shot the viewport only, and the tools view
+// is a calculator ABOVE the capability catalogue — so "look at the screenshot of the tools view"
+// showed the calculator and nothing of the thing that had just been rewritten. A screenshot exists to
+// make a regression impossible to miss; one that stops at the fold makes half of them easy to miss.
+// The flow steps stay viewport-sized on purpose: there the top of the page IS the subject.
+async function shot(page, name, full = false) {
   const file = path.join(OUT, `${String(++shotN).padStart(2, '0')}-${name}.png`);
-  await page.screenshot({ path: file, fullPage: false });
+  await page.screenshot({ path: file, fullPage: full });
   return path.basename(file);
 }
 
@@ -182,15 +189,22 @@ async function main() {
     });
 
     await check('the library and results views load without erroring', async () => {
-      // `journal` joins the list in HEALTH-005 PR-B. It belongs here for the reason this check
-      // exists at all: the pageerror listener is watching, and a view that throws while fetching
-      // would otherwise show an empty box and no failure anywhere.
-      for (const view of ['library', 'results', 'logs', 'journal']) {
+      // EVERY view, derived from the hub itself (scripts/hub-views.mjs). This list used to be written
+      // out here and held seven of nine: `tools` and `settings` were never screenshotted, ever, and
+      // the gap survived a deliberate edit — `journal` was appended and the two absent ones were not
+      // noticed. A hand-kept list does not show what is missing from it.
+      //
+      // Screenshotting chat/run/live again is harmless duplication; the alternative — subtracting the
+      // ones already covered — would be a second hand-kept list with the same failure mode.
+      const views = hubViews();
+      ok(views.length >= MIN_VIEWS,
+        `derived only ${views.length} views — a walk over a short list passes without covering anything`);
+      for (const view of views) {
         await page.evaluate((v) => { location.hash = `#v=${v}`; }, view);
         // The section becoming visible is the state; what it then fetches is captured by the
         // screenshot and by the pageerror listener, which is what this check is actually for.
         await page.waitForSelector(`[data-view="${view}"]`, { state: 'visible', timeout: 15000 });
-        await shot(page, `view-${view}`);
+        await shot(page, `view-${view}`, true);   // whole view, not the fold — see shot()
       }
     });
   } finally {

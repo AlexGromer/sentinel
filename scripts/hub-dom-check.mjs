@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(REPO, 'pw-executor', 'package.json'));
 const { chromium } = require('playwright');
+import { hubViews, MIN_VIEWS } from './hub-views.mjs';
 
 const PORT = Number(process.env.HUB_GATE_PORT || 18744);
 const FIXTURE = `file://${REPO}/testdata/fixtures/l2.html`;
@@ -195,7 +196,14 @@ try {
   console.log(`\nhub-dom-check — hub navigation (ADR-066) + Logs view (ADR-065), port ${PORT}\n`);
 
   /* ---------------------------------------------------------------- ADR-066: navigation */
-  const VIEWS = ['chat', 'run', 'live', 'library', 'results', 'logs', 'journal', 'tools', 'settings'];
+  // Derived from the hub, not restated here (docs/DEVELOPMENT.md §0.5). This was the SECOND
+  // independent copy of the same list; the third one, in ui-smoke, held seven of nine and nobody saw
+  // it. A list that has to be kept in step by hand is a list that eventually is not.
+  const VIEWS = hubViews();
+  if (VIEWS.length < MIN_VIEWS) {
+    throw new Error(`derived only ${VIEWS.length} views, expected >= ${MIN_VIEWS} — the neighbour-leak `
+      + 'check iterates this list, so a short one silently narrows every navigation assertion below');
+  }
 
   await check('nav: every rail item reveals its own view and nothing else', async () => {
     for (const v of VIEWS) {
