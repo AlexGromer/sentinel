@@ -137,6 +137,11 @@ _allow("health.py::_llm_configured::0",
        "a backend that cannot even be constructed is not a usable one; check() reports the component")
 _allow("health.py::_grpc_answers::0",
        "returns the connection failure as the reason; check() reports it with the component")
+_allow("health.py::_llm_answers::0",
+       "HEALTH-003, the same shape one function up: the exception IS the answer. Any failure to "
+       "reach the endpoint is converted into the returned reason string, which check() then reports "
+       "as fatal.llm_required_unreachable with the component and the address. Nothing is hidden — a "
+       "re-raise here would replace a named refusal with a traceback from inside a health check")
 _allow("eventlog.py::_render::0",
        "falls back to the unformatted template — the message is still emitted, only unfilled")
 

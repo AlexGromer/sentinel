@@ -89,6 +89,58 @@ def _llm_configured() -> bool:
         return False
 
 
+# LIVE_PROBE_TIMEOUT is the budget for the OPTIONAL live model probe, and it is the same number Go
+# spends on the same question (cmd/control-api/readyz.go::readyProbeTimeout). Two statements of one
+# budget is the drift class this repo keeps meeting, so tests/test_run_health_offline.py reads BOTH
+# and refuses a mismatch — the number may move, but only in both places at once.
+LIVE_PROBE_TIMEOUT = 2.0
+
+# The env var that turns the probe on. It is OFF by default and that is not caution, it is the rule
+# this module is built on (see the header): refuse when something DECLARED is unreachable, never
+# because something was never configured. A probe on by default would also add a network round trip
+# to every run — including the air-gapped demo, which runs with `network_mode: none` — and would turn
+# a blinking endpoint into a refusal. That is precisely the class of gate operators switch off.
+LIVE_PROBE_ENV = "SENTINEL_LLM_LIVE_PROBE"
+
+
+def _live_probe_enabled() -> bool:
+    return os.environ.get(LIVE_PROBE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _llm_answers(timeout: float = LIVE_PROBE_TIMEOUT) -> "str | None":
+    """Does the configured endpoint actually ANSWER? Returns a reason when it does not, else None.
+
+    The second tier of the LLM check, and deliberately a different question from the first.
+    `_llm_configured()` asks whether a backend would be constructed — cheap, offline, and mandatory.
+    This asks whether the thing at the other end is alive, which costs a network round trip and is
+    therefore optional. Measured 2026-08-03: ollama stopped answering, a goal run started anyway,
+    authoring came back with an empty scenario and exit 1. The product NAMED the cause — the
+    degradation was declared, not silent — but the operator learned it after the run instead of
+    before it.
+
+    ⚠ A PLAIN HTTP GET, never the SDK. Going through the OpenAI client would hand the real budget to
+    the SDK's own retry and timeout defaults, so the number declared above would describe nothing.
+    The same reason `_llm_configured` refuses to mirror make_backend's branches, one level down.
+
+    ⚠ Returns None (i.e. "no objection") when there is no base_url to ask. An Anthropic-native
+    deployment has no `/models` surface of ours to probe, and a probe that failed for the absence of
+    an endpoint it was never given would be refusing a legitimate configuration.
+    """
+    base = os.environ.get("LLM_BASE_URL", "").strip().rstrip("/")
+    if not base:
+        return None
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(base + "/models", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — operator-supplied URL
+            if resp.getcode() >= 400:
+                return f"{base}/models answered HTTP {resp.getcode()}"
+        return None
+    except Exception as exc:  # noqa: BLE001 — any failure to answer is the answer
+        return f"{base}/models did not answer: {type(exc).__name__}: {exc}"
+
+
 def _grpc_answers(target: str, timeout: float = 2.0) -> "str | None":
     """Does something answer gRPC at `target`? Returns a reason when it does not.
 
@@ -172,6 +224,12 @@ def check(run_mode: str, has_objective: bool) -> "list[tuple[str, str]]":
         if component == LLM:
             why = None if _llm_configured() else (
                 "no usable planner backend: set LLM_BACKEND/LLM_MODEL/LLM_BASE_URL, or an API key")
+            # HEALTH-003 — the OPTIONAL second tier, and only ever after the first one passed. A
+            # configured-but-dead endpoint is exactly the case the first tier cannot see: make_backend
+            # constructs a client without speaking to anything, so "a backend exists" and "the model
+            # answers" are different facts and this is the one that costs a round trip.
+            if why is None and _live_probe_enabled():
+                why = _llm_answers()
         elif component == STORE:
             why = _grpc_answers(os.environ["STORE_ADDR"])
         elif component == ORCHESTRATOR:

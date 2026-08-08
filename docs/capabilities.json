@@ -940,6 +940,27 @@
         }
       ],
       "reach": "capability"
+    },
+    {
+      "id": "llm-live-probe",
+      "group": "Operations",
+      "severity": "medium",
+      "title_ru": "Живая проба модели перед стартом прогона",
+      "title_en": "A live model probe before a run starts",
+      "how_ru": "`SENTINEL_LLM_LIVE_PROBE=1` — второй, ОПЦИОНАЛЬНЫЙ ярус проверки здоровья: перед стартом прогона, которому нужна модель, делается обычный GET `<LLM_BASE_URL>/models` с объявленным бюджетом. Настроенный, но мёртвый эндпоинт отказывает ДО работы, а не после неё. Выключено по умолчанию намеренно: проба, включённая всегда, добавляет сетевой ход каждому прогону (включая air-gapped демо с `network_mode: none`) и превращает моргнувший эндпоинт в отказ.",
+      "how_en": "`SENTINEL_LLM_LIVE_PROBE=1` — the second, OPTIONAL tier of the health check: before a run that needs a model starts, a plain GET `<LLM_BASE_URL>/models` runs on a declared budget. A configured-but-dead endpoint refuses BEFORE the work rather than after it. Off by default on purpose: an always-on probe adds a network round trip to every run (including the air-gapped demo, which runs with `network_mode: none`) and turns a blinking endpoint into a refusal.",
+      "access": [
+        {
+          "kind": "env",
+          "ref": "SENTINEL_LLM_LIVE_PROBE"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "http": "the probe is a RUN-START decision made inside the brain, where all four launch paths converge; the service-plane equivalent already exists and is reachable — GET /readyz probes the same endpoint on a declared interval (ADR-118)",
+        "cli": "same reason: it is not an action to invoke but a policy for a run about to start. `agentctl run` carries it as env, like every other run-shaping switch",
+        "ui": "the run panel sets no env; a toggle here would be a fourth place a run's shape is decided. Recorded rather than built — see [UI-BACKEND-PRESETS] for the surface that would own it"
+      }
     }
   ]
 }
