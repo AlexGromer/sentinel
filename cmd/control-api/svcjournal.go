@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AlexGromer/sentinel/internal/redact"
+	"github.com/AlexGromer/sentinel/internal/eventlog"
 	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
@@ -126,8 +126,9 @@ func (s *server) journalCall(sp routeSpec, rec *statusRecorder, r *http.Request,
 	if rec.foreign {
 		s.journal.Log(svclog.Record{
 			Lvl: "warn", Cat: "service", Code: "service.foreign_row",
-			Msg: redact.Line(actor + " reached for someone else's row: " + r.Method + " " + route +
-				" — answered as though it were missing"),
+			Msg: s.renderMsg("service.foreign_row", map[string]string{
+				"actor": actor, "method": r.Method, "route": route,
+			}),
 			Actor: actor, Owner: owner, Method: r.Method, Route: route,
 			Status: status, DurMs: dur, Foreign: true,
 		})
@@ -150,19 +151,34 @@ func (s *server) journalCall(sp routeSpec, rec *statusRecorder, r *http.Request,
 			code, lvl = "service.api_refused", "warn"
 		}
 	}
-	// The word REFUSED is in the sentence, not only in the code: the journal is read by eye, and the
-	// catalogue's template for each code is what the UI matches against to render it in the reader's
-	// language — one message shape under two codes leaves one of them falling back to English.
-	verb := " → "
-	if code == "service.api_refused" {
-		verb = " REFUSED → "
-	}
-	msg := r.Method + " " + route + verb + strconv.Itoa(status) +
-		" in " + strconv.FormatInt(dur, 10) + " ms, called by " + actor
+	// The word REFUSED is in the sentence, not only in the code, and it no longer has to be spliced in
+	// here: the two codes carry two templates, and the sentence comes from whichever one was chosen.
 	s.journal.Log(svclog.Record{
-		Lvl: lvl, Cat: "service", Code: code, Msg: redact.Line(msg),
+		Lvl: lvl, Cat: "service", Code: code,
+		Msg: s.renderMsg(code, map[string]string{
+			"method": r.Method, "route": route,
+			"status": strconv.Itoa(status), "dur_ms": strconv.FormatInt(dur, 10), "actor": actor,
+		}),
 		Actor: actor, Owner: owner, Method: r.Method, Route: route, Status: status, DurMs: dur,
 	})
+}
+
+// renderMsg is the ONE place a service-journal sentence is produced (ADR-117). It renders the
+// catalogue's template for `code`; a code the catalogue does not know gets the honest
+// `eventlog.uncatalogued` line instead of an invented sentence, exactly as brain/eventlog.py does —
+// because a code with no entry is a code the reader's browser cannot render either.
+//
+// ⚠ The code LITERALS stay at the call sites, here in cmd/control-api. tests/test_event_catalog_offline.py
+// maps emitters to paths and finds codes by regexing them inside those paths; a literal that moved
+// into the shared renderer would become a phantom the catalogue gate can no longer see.
+func (s *server) renderMsg(code string, fields map[string]string) string {
+	msg, ok := eventlog.Render(code, fields)
+	if !ok {
+		// Not silent, and not a guess: the same signal the Python side raises, so an emitter that
+		// invents a code is visible in the very journal it was trying to write to.
+		return "eventlog.uncatalogued: " + code + " is not in the catalogue"
+	}
+	return msg
 }
 
 // --- the messages emitted from main() ------------------------------------------------------------
@@ -175,28 +191,47 @@ func (s *server) journalCall(sp routeSpec, rec *statusRecorder, r *http.Request,
 // these came to disagree with the catalogue with every gate green, and stayed that way until somebody
 // looked at a screenshot.
 
-func startedMsg(version, supervisor string, pid int, detail string) string {
-	return "Service control-api started: version " + version + ", brought up by " + supervisor +
-		", pid " + strconv.Itoa(pid) + detail
+// ⚠ These four no longer ASSEMBLE anything — they name their fields and hand them to the catalogue's
+// template. The functions remain (rather than the call sites calling Render directly) because the
+// tests reach them, and because a named function is where the field NAMES for a code are decided
+// once instead of at each caller.
+func renderOrUncatalogued(code string, fields map[string]string) string {
+	msg, ok := eventlog.Render(code, fields)
+	if !ok {
+		return "eventlog.uncatalogued: " + code + " is not in the catalogue"
+	}
+	return msg
 }
 
-func stoppedMsg(reason string) string { return "Service control-api stopped: " + reason }
+func startedMsg(version, supervisor string, pid int, detail string) string {
+	return renderOrUncatalogued("service.started", map[string]string{
+		"svc": "control-api", "version": version, "supervisor": supervisor,
+		"pid": strconv.Itoa(pid), "detail": detail,
+	})
+}
+
+func stoppedMsg(reason string) string {
+	return renderOrUncatalogued("service.stopped", map[string]string{"svc": "control-api", "reason": reason})
+}
 
 func tokenSourceMsg(source string, warnings int) string {
-	return "The machine token came from " + source + " — warnings: " + strconv.Itoa(warnings)
+	return renderOrUncatalogued("service.token_source", map[string]string{
+		"source": source, "detail": " — warnings: " + strconv.Itoa(warnings),
+	})
 }
 
 func storeUnreachableMsg(addr, reason string) string {
-	return "A store was declared (" + addr + ") and did not answer at start: " + reason +
-		" — runs stay in memory"
+	return renderOrUncatalogued("service.store_unreachable", map[string]string{
+		"addr": addr, "reason": reason,
+	})
 }
 
 // journalEvent records a service-plane event that is not an API call — a sign-in, a config write, an
 // account change, the service coming up. `fields` are appended to the message rather than being typed
 // columns: the catalogue's sentence is what a person reads, and every one of these is rare enough
 // that a query over it would be a query over dozens of rows, not thousands.
-func (s *server) journalEvent(code, lvl, msg string, r *http.Request, extra ...string) {
-	s.journalSubject(code, lvl, msg, r, "", extra...)
+func (s *server) journalEvent(code, lvl string, fields map[string]string, r *http.Request, extra ...string) {
+	s.journalSubject(code, lvl, fields, r, "", extra...)
 }
 
 // journalSubject records an event ABOUT a particular account, for the cases where the request cannot
@@ -209,7 +244,16 @@ func (s *server) journalEvent(code, lvl, msg string, r *http.Request, extra ...s
 // (svcjournal_read.go). That makes the read route's whole reason for being `authed` rather than
 // `admin` — an account reading the record of its own sign-ins — not work. The unit fixture did not
 // catch it because the fixture SET the owner it then asserted on; the product never did.
-func (s *server) journalSubject(code, lvl, msg string, r *http.Request, subject string, extra ...string) {
+// ⚠ THE SENTENCE IS NOT A PARAMETER (ADR-117). It used to be, and that is precisely how six codes
+// came to disagree with the catalogue templates the hub matches them against. Now the caller names
+// FIELDS and the template does the rest, so a hand-assembled sentence is not merely discouraged —
+// there is nowhere to pass one.
+//
+// `extra` keeps its old shape and its old job, but it now feeds the template's `{detail}` field
+// instead of being appended after rendering. That distinction is the whole point: appended text sits
+// OUTSIDE the template, so the hub's extractor has to absorb it into whatever placeholder happens to
+// be last, and a template edit silently changes what "the detail" means.
+func (s *server) journalSubject(code, lvl string, fields map[string]string, r *http.Request, subject string, extra ...string) {
 	if s.journal == nil {
 		return
 	}
@@ -223,9 +267,12 @@ func (s *server) journalSubject(code, lvl, msg string, r *http.Request, subject 
 		owner = subject
 	}
 	if len(extra) > 0 {
-		msg += " — " + strings.Join(extra, ", ")
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields["detail"] = fields["detail"] + " — " + strings.Join(extra, ", ")
 	}
 	s.journal.Log(svclog.Record{
-		Lvl: lvl, Cat: "service", Code: code, Msg: redact.Line(msg), Actor: actor, Owner: owner,
+		Lvl: lvl, Cat: "service", Code: code, Msg: s.renderMsg(code, fields), Actor: actor, Owner: owner,
 	})
 }

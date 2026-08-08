@@ -28,9 +28,22 @@ var raw []byte
 // Raw returns the catalogue bytes verbatim, for serving to the browser.
 func Raw() []byte { return raw }
 
-// Event is one diagnostic entry. Only the fields the Go boundary actually uses are decoded; the
-// bilingual text is the browser's business, and decoding it here would invite using it server-side.
+// Event is one diagnostic entry.
+//
+// ⚠ ADR-117 REVERSES half of a decision recorded here. The comment used to read "the bilingual text
+// is the browser's business, and decoding it here would invite using it server-side", and the
+// caution was right about `ru` and wrong about `en`. Measured cost of the old arrangement: Go
+// assembled its journal sentences by concatenation while the catalogue held a template for the same
+// code — two statements of one format, with nothing comparing them. Six codes drifted, and the hub,
+// which extracts values from the EN sentence by the EN template to re-render them in Russian, fell
+// back to English one line at a time. A screenshot found it; no gate could.
+//
+// So `En` is decoded and `Ru` is NOT. The wire rule is unchanged and is the reason: no Russian text
+// travels on the wire (brain/eventlog.py says the same), the browser owns translation, and the
+// server owns exactly one sentence — the one it renders from the template it was given.
 type Event struct {
+	// En is the English template, with `{field}` placeholders. Rendered by Render, never concatenated.
+	En       string   `json:"en"`
 	Lvl      string   `json:"lvl"`
 	Cat      string   `json:"cat"`
 	Phase    string   `json:"phase"`
@@ -85,8 +98,8 @@ type Foreign struct {
 func (f *Foreign) Matches(line string) bool { return f.re != nil && f.re.MatchString(line) }
 
 type catalogue struct {
-	Events     map[string]Event `json:"events"`
-	Foreign    []*Foreign       `json:"foreign_patterns"`
+	Events     map[string]Event    `json:"events"`
+	Foreign    []*Foreign          `json:"foreign_patterns"`
 	Categories []string            `json:"categories"`
 	Levels     []string            `json:"levels"`
 	Sources    map[string]srcEntry `json:"sources"`

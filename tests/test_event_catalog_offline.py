@@ -67,7 +67,16 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # journal records. It is the one event the control-API cannot write, because the command that causes
 # it does not go through the control-API — which is also why the catalogue could not vouch for it
 # until this line existed. The gate said so, correctly, by calling the entry a PHANTOM.
-EMITTERS = {"pw-executor": "pw-executor/src/server.ts",
+# HEALTH-005 PR-C put a journal writer in the BROWSER service (pw-executor/src/cdp-service.ts, via
+# svcjournal.ts), and this map still named one file — so those emissions were outside every scan the
+# catalogue gate performs, exactly the blind spot the control-api widening had already fixed once.
+# A DIRECTORY, therefore, for the same reason and by the same rule: a file added tomorrow is scanned
+# because of where it lives, not because somebody remembered to add a line here.
+EMITTER_FLOORS = {"pw-executor": 9, "control-api": 14, "agentctl": 1}
+
+FILE_SUFFIXES = {"json", "jsonl", "ts", "js", "go", "py", "md", "html", "yml", "yaml", "log"}
+
+EMITTERS = {"pw-executor": "pw-executor/src",
             "control-api": "cmd/control-api",
             "agentctl": "cmd/agentctl"}
 
@@ -92,14 +101,37 @@ def emitter_codes() -> dict[str, set[str]]:
         if not path.exists():
             fail(f"EMITTERS names {name} -> {rel}, which does not exist")
             continue
-        files = sorted(path.glob("*.go")) if path.is_dir() else [path]
+        # ⚠ The directory branch used to glob "*.go" ALONE, which made it silently useless for a
+        # TypeScript package: pointing it at pw-executor/src turned seven live codes into phantoms,
+        # because the walk found no files at all and "never mentions that code" is what an empty scan
+        # says about everything. Sources are taken by EXTENSION, both languages, so an emitter package
+        # is scanned for what it is rather than for what the first emitter happened to be written in.
+        exts = ("*.go", "*.ts")
+        files = sorted(f for e in exts for f in path.glob(e)) if path.is_dir() else [path]
         # Test files are excluded on purpose: a code that appears only in a _test.go is emitted by
         # nothing the product ships, and counting it would let a phantom entry pass by being mentioned
-        # in its own gate.
-        files = [f for f in files if not f.name.endswith("_test.go")]
+        # in its own gate. Same for the TypeScript form (*.test.ts).
+        files = [f for f in files if not f.name.endswith("_test.go") and not f.name.endswith(".test.ts")]
         src = "\n".join(f.read_text() for f in files)
         for code in re.findall(r"['\"]((?:app|test|ui|service)\.[\w.]+)['\"]", src):
+            # ⚠ A quoted dotted string is not automatically a code. Widening the scan to the browser
+            # service immediately produced `service.jsonl` — the journal's FILE NAME, which has the
+            # exact shape of a code and is not one. Filtering by the last segment being a file
+            # extension is narrow on purpose: it removes a class the shape cannot distinguish, and it
+            # cannot hide a real code unless somebody names one `*.json`.
+            if code.rsplit(".", 1)[-1] in FILE_SUFFIXES:
+                continue
             found.setdefault(code, set()).add(name)
+        # ⚠ A FLOOR PER EMITTER, and it was bought by a surviving mutation. Narrowing `pw-executor`
+        # back from the package to `server.ts` alone passed every check: the browser service's
+        # `service.started`/`service.stopped` are ALSO emitted by control-api, so the catalogue's
+        # claim stayed vouched for BY ANOTHER PATH while the emissions this map is supposed to scan
+        # went unread again. A phantom check cannot see coverage that is provided by somebody else —
+        # only a count can. Floors are set just below the measured numbers and may only go UP.
+        if len(found_here := {c for c, who in found.items() if name in who}) < EMITTER_FLOORS[name]:
+            fail(f"emitter {name!r} yielded {len(found_here)} code(s), below the recorded floor of "
+                 f"{EMITTER_FLOORS[name]} — the scan narrowed, and a narrowed scan reports "
+                 f"'nothing to see' in exactly the same words as a clean one")
     return found
 
 
@@ -353,7 +385,11 @@ def main() -> int:
     # A foreign emitter renders the ENGLISH text itself, and the UI recovers the placeholder values by
     # matching that template against the rendered string. If the two drift, the UI silently falls back
     # to English — a degradation with no error, which is the failure mode this milestone is about.
-    exec_src = (REPO / EMITTERS["pw-executor"]).read_text()
+    # APP_MESSAGES lives in ONE file, so this check names it rather than reusing the emitter entry —
+    # which is now a directory, because journal emissions are spread across the package (cdp-service.ts,
+    # svcjournal.ts). The two are different questions: "which code emits" scans the package, "where is
+    # the template table" is a single declaration.
+    exec_src = (REPO / "pw-executor/src/server.ts").read_text()
     block = re.search(r"const APP_MESSAGES: Record<string, string> = \{(.*?)\n\};", exec_src, re.S)
     if not block:
         fail("pw-executor no longer declares APP_MESSAGES — the template equality check went vacuous")

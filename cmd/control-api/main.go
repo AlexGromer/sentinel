@@ -2268,7 +2268,7 @@ func main() {
 	// journal survives `docker compose down` exactly as the SQLite databases beside it do.
 	s.journal = svclog.Open(filepath.Join(repo, "state"), "control-api")
 	defer func() {
-		s.journalEvent("service.stopped", "info", stoppedMsg("process exit"), nil)
+		s.journalEvent("service.stopped", "info", map[string]string{"svc": "control-api", "reason": "process exit"}, nil)
 		s.journal.Close()
 	}()
 	// A `defer` alone records nothing when the process is SIGNALLED, and being signalled is the normal
@@ -2280,13 +2280,15 @@ func main() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 		got := <-sig
-		s.journalEvent("service.stopped", "info", stoppedMsg("signal "+got.String()), nil)
+		s.journalEvent("service.stopped", "info", map[string]string{"svc": "control-api", "reason": "signal " + got.String()}, nil)
 		s.journal.Close()
 		signal.Stop(sig)
 		_ = syscall.Kill(syscall.Getpid(), got.(syscall.Signal))
 	}()
-	s.journalEvent("service.started", "info",
-		startedMsg(version, svclog.Supervisor(), os.Getpid(), " — addr: "+addr), nil)
+	s.journalEvent("service.started", "info", map[string]string{
+		"svc": "control-api", "version": version, "supervisor": svclog.Supervisor(),
+		"pid": strconv.Itoa(os.Getpid()), "detail": " — addr: " + addr,
+	}, nil)
 
 	// M13 (ADR-050): connect to a persistent store-gateway if configured; else runs stay in-memory
 	// (standalone/offline path, unchanged). Fail-open — an unreachable gateway only warns.
@@ -2295,7 +2297,7 @@ func main() {
 		if sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN")); err != nil {
 			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q unreachable: %v (runs stay in-memory, lost on restart)\n", sa, err)
 			// The one event a store-backed journal could never record: the store being unreachable.
-			s.journalEvent("service.store_unreachable", "warn", storeUnreachableMsg(sa, err.Error()), nil)
+			s.journalEvent("service.store_unreachable", "warn", map[string]string{"addr": sa, "reason": err.Error()}, nil)
 		} else {
 			s.store = sc
 			defer sc.close()
@@ -2315,7 +2317,7 @@ func main() {
 	// first version of this line published the SOURCE as [REDACTED] — measured live, not predicted.
 	// The catalogue entry was fixed by the PR-1c property gate; this string is built in Go and the gate
 	// cannot see it, which is a blind spot recorded in the backlog rather than papered over.
-	s.journalEvent("service.token_source", "info", tokenSourceMsg(string(tokSrc), len(tokWarnings)), nil)
+	s.journalEvent("service.token_source", "info", map[string]string{"source": string(tokSrc), "detail": " — warnings: " + strconv.Itoa(len(tokWarnings))}, nil)
 	switch tokSrc {
 	case tokenDisabled:
 		fmt.Fprintln(os.Stderr, "control-api: WARNING — no bearer token (CONTROL_API_AUTOTOKEN=0); POST /v1/runs will 403 (read-only).")

@@ -411,8 +411,9 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// and can carry endpoints and budgets; the journal answers "who changed what area, and when",
 		// which is what makes "who turned the map gate off" answerable without storing the config twice.
 		who, _ := s.actorOf(r)
-		s.journalEvent("service.config_changed", "info",
-			who+" changed the configuration (standalone file tier)", r, "sections: "+sectionNames(global, personal))
+		s.journalEvent("service.config_changed", "info", map[string]string{
+			"actor": who, "detail": " (standalone file tier)",
+		}, r, "sections: "+sectionNames(global, personal))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
 		return
@@ -457,8 +458,7 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			detail = append(detail, layer+": "+written[layer])
 		}
 	}
-	s.journalEvent("service.config_changed", "info",
-		who+" changed the configuration", r, detail...)
+	s.journalEvent("service.config_changed", "info", map[string]string{"actor": who}, r, detail...)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written})
 }

@@ -167,3 +167,27 @@ func TestOurOwnEventCodeIsNotReadAsACredentialName(t *testing.T) {
 		})
 	}
 }
+
+// TestValueJudgesByTheNameNotTheShape covers the entry point ADR-117 added. It is tested HERE rather
+// than only through its caller because the policy is this package's: "when the name and the value are
+// apart, the name decides". A test that only exercised it from eventlog would leave the rule itself
+// unowned — and the rule is the part that is easy to get wrong.
+func TestValueJudgesByTheNameNotTheShape(t *testing.T) {
+	// A secret-shaped NAME blanks the value whatever the value looks like. This is the case Line()
+	// structurally cannot cover: with no `name=value` text to scan, a bare credential reads as
+	// ordinary prose.
+	if got := Value("api_key", "looks-completely-ordinary"); got != redactedMark {
+		t.Fatalf("a secret-shaped name did not blank its value: %q", got)
+	}
+	if got := Value("password", ""); got != redactedMark {
+		t.Fatalf("an empty secret value must still be marked, got %q", got)
+	}
+	// An ordinary name passes its value through the line scanner, so a credential that arrives INSIDE
+	// an innocent field is still caught — the two checks are complementary, not alternatives.
+	if got := Value("actor", "alice"); got != "alice" {
+		t.Fatalf("an ordinary value was altered: %q", got)
+	}
+	if got := Value("detail", "Authorization: Bearer abc.def.ghi"); got == "Authorization: Bearer abc.def.ghi" {
+		t.Fatal("a bearer credential inside an ordinary field survived")
+	}
+}

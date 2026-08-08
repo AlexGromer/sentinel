@@ -196,7 +196,7 @@ func TestTheJournalSurvivesNotBeingOpenable(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("a nil journal changed the response: %d", rec.Code)
 	}
-	s.journalEvent("service.login_ok", "info", "no journal here", nil) // must not panic
+	s.journalEvent("service.login_ok", "info", map[string]string{"actor": "nobody"}, nil) // must not panic
 }
 
 func TestTheRecorderForwardsEveryOptionalWriterInterface(t *testing.T) {
