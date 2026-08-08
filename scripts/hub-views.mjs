@@ -25,7 +25,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * introduces a quieter one: a regex that stops matching yields an EMPTY list, and every check over it
  * passes perfectly. The floor is the only thing that catches that, so it is not optional.
  */
-export const MIN_VIEWS = 9;
+export const MIN_VIEWS = 10;   // HEALTH-006 PR-B added `health`; a floor only ever goes UP
 
 /** Every view name the hub's router will accept, in the hub's own order. */
 export function hubViews() {

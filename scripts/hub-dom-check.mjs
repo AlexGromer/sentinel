@@ -869,16 +869,27 @@ try {
   // stay distinct — `skipped` (nothing configured, heuristic may be intended) vs `error` (configured and
   // unreachable, almost never intended) are different news, and one red dot for both rebuilds the
   // ambiguity this fixes.
-  await check('the rail says whether the LLM is connected, and distinguishes «not configured» from «broken»', async () => {
-    const host = page.locator('#rail-llm');
-    ok(await host.count() === 1, 'the rail must carry an LLM state indicator');
-    // This gate's control-API runs with no LLM configured, so the honest answer is `skipped`.
+  // ⚠ HEALTH-006 PR-B RE-AIMED THIS CHECK RATHER THAN REPLACING IT. The rail used to read ONE
+  // hand-picked component (`checks.llm`) out of a set the server derives, so `store` going away left
+  // it green — the same hand-kept-list failure as everywhere else, in miniature. It now summarises
+  // every component, and the three-state distinction the check was written for moved WITH it: the
+  // summary must still tell «nothing configured» apart from «configured and broken», because one red
+  // dot for both rebuilds exactly the ambiguity this gate exists to prevent.
+  await check('the rail summarises EVERY component, and distinguishes «not configured» from «broken»', async () => {
+    const host = page.locator('#rail-health');
+    ok(await host.count() === 1, 'the rail must carry a health indicator');
+    // This gate's control-API runs with no LLM and no browser configured, so the honest summary is
+    // `skipped` — nothing is broken, several things are simply absent.
     await page.waitForTimeout(500);
     const txt = (await host.innerText()).trim();
-    ok(/LLM/.test(txt), `the indicator must be labelled: ${txt}`);
+    ok(/Здоровье|Health/.test(txt), `the indicator must be labelled: ${txt}`);
     const title = await host.getAttribute('title');
-    ok(/не настроена|not configured/i.test(title || ''),
-      `with no LLM configured the tooltip must say so rather than claim a failure: ${title}`);
+    ok(/отказов нет|no failures/i.test(title || ''),
+      `with nothing broken the tooltip must say so rather than claim a failure: ${title}`);
+    // The summary is over a DERIVED set, so it must report how many components it actually saw — a
+    // summary over zero components would look identical to a healthy one.
+    ok(/[1-9]\d* (компонент|component)/.test(title || ''),
+      `the tooltip must name how many components were checked, or an empty set reads as health: ${title}`);
     const cls = await host.locator('.dot').getAttribute('class');
     ok(!/\bno\b/.test(cls || ''),
       `"not configured" must NOT render as the red/error dot: ${cls}`);
@@ -894,6 +905,36 @@ try {
     });
     ok(/\.dot\.ok/.test(defined) && /\.dot\.no/.test(defined),
       `the dot state classes must exist in the stylesheet: ${defined}`);
+  });
+
+  // HEALTH-006 PR-B: the view behind the rail. The rail answers "is anything wrong"; this answers
+  // "what, why, and as of when", and each of the three is asserted because each has its own way of
+  // going quietly missing — a status with no REASON sends an operator hunting, and a reason with no
+  // TIME cannot be told apart from one measured an hour ago, which is what the preventive prober
+  // exists to fix.
+  await check('the health view names every component, its reason, and WHEN it was measured', async () => {
+    await page.evaluate(() => { location.hash = '#v=health'; });
+    await page.waitForSelector('[data-view="health"]', { state: 'visible', timeout: 10000 });
+    // The rows are written by railHealth() when it lands; wait for the table rather than a sleep.
+    await page.waitForSelector('#hz-list table.hztab tbody tr', { timeout: 15000 });
+    const names = await page.$$eval('#hz-list tbody tr td:first-child', (tds) =>
+      tds.map((t) => t.innerText.trim()));
+    // The set is DERIVED server-side; the floor is what catches a render that walked an empty object
+    // and produced a table that looks complete because it looks like a table.
+    ok(names.length >= 3, `the view listed ${names.length} component(s): ${names.join(', ')}`);
+    ok(names.includes('store') && names.includes('config'),
+      `the view must list what /readyz reports, got: ${names.join(', ')}`);
+    // Every row says something in the reason column — an empty cell reads as a component that failed
+    // for no reason at all, which is the class UX-PR-8 closed for the pane next door.
+    const reasons = await page.$$eval('#hz-list tbody tr td:last-child', (tds) =>
+      tds.map((t) => t.innerText.trim()));
+    ok(reasons.every((r) => r.length > 0), `a component was listed with a blank reason: ${JSON.stringify(reasons)}`);
+    // And the measurement time, which is the whole point of a probe that runs on its own.
+    const when = (await page.locator('#hz-when').innerText()).trim();
+    ok(/измерено|measured/.test(when), `the view must say WHEN the answer was measured, got: ${when}`);
+    // The standing hint must be GONE once real rows exist — the mistake the run-flow pane made.
+    ok(await page.locator('#hz-idle').count() === 0,
+      'the "not checked yet" hint is still in the DOM beside real rows, claiming the opposite of what is shown');
   });
 
   /* ------------------------------------------------- ADR-076: verdict states an exit code cannot carry

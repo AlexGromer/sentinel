@@ -389,7 +389,18 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if ready {
 		verdict, code = "ready", http.StatusOK
 	}
-	writeJSON(w, code, map[string]any{"status": verdict, "version": version, "checks": out})
+	// probed_at is WHEN this answer was measured, not when it was asked for, and the distinction is
+	// the whole of HEALTH-006's preventive half made visible. Without it a reader cannot tell a fresh
+	// probe from a memo the background prober filled fifteen seconds ago — and "ok, as of some moment
+	// I cannot name" is exactly the reassurance that turns out to be worthless when it matters.
+	s.ready.mu.Lock()
+	at := s.ready.at
+	s.ready.mu.Unlock()
+	body := map[string]any{"status": verdict, "version": version, "checks": out}
+	if !at.IsZero() {
+		body["probed_at"] = at.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, code, body)
 }
 
 // --- GET/PUT /v1/config -------------------------------------------------------------------------
