@@ -167,6 +167,9 @@ def main() -> int:
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
     MIN_THREE_WAY = 0          # ⚠ may only ever go UP; today's honest number
+    assert MIN_THREE_WAY >= 0, (
+        "the ratchet floor is negative, which makes it unsatisfiable-proof rather than a floor — a "
+        "regression would pass by lowering the number instead of being fixed")
     MIN_CAPABILITIES = 30      # a floor on the walk itself: classifying everything as `artifact`
     #                            would make the ratchet vacuous, so the population is bounded too
     caps_only = [c for c in caps if c.get("reach") == "capability"]
