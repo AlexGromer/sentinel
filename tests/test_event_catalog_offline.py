@@ -72,6 +72,8 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # catalogue gate performs, exactly the blind spot the control-api widening had already fixed once.
 # A DIRECTORY, therefore, for the same reason and by the same rule: a file added tomorrow is scanned
 # because of where it lives, not because somebody remembered to add a line here.
+EMITTER_FLOORS = {"pw-executor": 9, "control-api": 14, "agentctl": 1}
+
 FILE_SUFFIXES = {"json", "jsonl", "ts", "js", "go", "py", "md", "html", "yml", "yaml", "log"}
 
 EMITTERS = {"pw-executor": "pw-executor/src",
@@ -120,6 +122,16 @@ def emitter_codes() -> dict[str, set[str]]:
             if code.rsplit(".", 1)[-1] in FILE_SUFFIXES:
                 continue
             found.setdefault(code, set()).add(name)
+        # ⚠ A FLOOR PER EMITTER, and it was bought by a surviving mutation. Narrowing `pw-executor`
+        # back from the package to `server.ts` alone passed every check: the browser service's
+        # `service.started`/`service.stopped` are ALSO emitted by control-api, so the catalogue's
+        # claim stayed vouched for BY ANOTHER PATH while the emissions this map is supposed to scan
+        # went unread again. A phantom check cannot see coverage that is provided by somebody else —
+        # only a count can. Floors are set just below the measured numbers and may only go UP.
+        if len(found_here := {c for c, who in found.items() if name in who}) < EMITTER_FLOORS[name]:
+            fail(f"emitter {name!r} yielded {len(found_here)} code(s), below the recorded floor of "
+                 f"{EMITTER_FLOORS[name]} — the scan narrowed, and a narrowed scan reports "
+                 f"'nothing to see' in exactly the same words as a clean one")
     return found
 
 
