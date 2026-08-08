@@ -91,10 +91,24 @@ def exempted() -> "dict[str, str]":
         fail("cmd/control-api/readyz.go has no `componentsWithoutProbe` declaration — without it an "
              "unprobed service has nowhere to record WHY, and this gate would have to accept silence")
         return {}
-    out = {}
-    for key, reason in re.findall(r'"([a-z][\w-]*)":\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+),', m.group(1)):
-        out[key] = reason
-    return out
+    # Parsed line by line rather than with one regex over the whole block. The first version matched
+    # the concatenated Go string with a nested quantifier — `((?:"…"\s*\+?\s*)+)` — and CodeQL was
+    # RIGHT about it: that shape backtracks exponentially on a crafted input. The input here is our own
+    # source, so it was not exploitable; it was also unnecessary, which is the better reason to remove
+    # it. A key is a quoted word at the start of a line, and everything until the next key belongs to
+    # its reason — no backtracking, and easier to read than the regex it replaces.
+    out: "dict[str, str]" = {}
+    key = None
+    for line in m.group(1).split("\n"):
+        head = re.match(r'\s*"([a-z][\w-]*)":\s*(.*)$', line)
+        if head:
+            key = head.group(1)
+            out[key] = head.group(2)
+        elif key is not None:
+            out[key] += " " + line.strip()
+    # A reason is the Go expression as written; strip the quoting and concatenation so an "empty
+    # reason" is recognisable as empty rather than as the two characters `""`.
+    return {k: re.sub(r'["+,]', "", v).strip() for k, v in out.items()}
 
 
 def main() -> int:
