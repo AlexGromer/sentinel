@@ -45,6 +45,15 @@ const results = [];
 const pageErrors = [];
 let shotN = 0;
 
+// Everything the page complained about over the WHOLE session, not per-check. `pageErrors` above is
+// cleared by check() so a failure names its own cause; these three accumulate, because a console
+// error raised while photographing the tools view is still a defect when it surfaces nowhere else.
+// Collected rather than ignored on purpose: a smoke that drives every panel and throws the browser's
+// own complaints away is measuring less than the browser already measured for it.
+const consoleErrors = [];
+const failedRequests = [];
+const badResponses = [];
+
 // `full` is not a flourish. Measured: the per-view sweep shot the viewport only, and the tools view
 // is a calculator ABOVE the capability catalogue — so "look at the screenshot of the tools view"
 // showed the calculator and nothing of the thing that had just been rewritten. A screenshot exists to
@@ -77,7 +86,16 @@ async function main() {
     permissions: ['clipboard-read', 'clipboard-write'],
   });
   const page = await ctx.newPage();
-  page.on('pageerror', (e) => pageErrors.push(e.message));
+  page.on('pageerror', (e) => { pageErrors.push(e.message); consoleErrors.push(`pageerror: ${e.message}`); });
+  page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(`console: ${m.text()}`); });
+  page.on('requestfailed', (r) => {
+    // A favicon the deployment does not ship is not a defect of the product; anything else is.
+    if (!/favicon/.test(r.url())) failedRequests.push(`${r.method()} ${r.url()} — ${r.failure()?.errorText}`);
+  });
+  // A 404 is a SUCCESSFUL response, so `requestfailed` never sees it — the first version of this
+  // sweep reported "20 console errors" with no URL because of exactly that. Every non-2xx is
+  // recorded WITH its URL; which of them count as defects is decided in the check, not here.
+  page.on('response', (r) => { if (r.status() >= 400) badResponses.push(`${r.status()} ${r.url()}`); });
 
   try {
     await check('the hub loads from the deployment that serves it', async () => {
@@ -188,6 +206,27 @@ async function main() {
       }
     });
 
+    await check('the run flow explains an empty screen instead of leaving it blank', async () => {
+      // No connection has EVER been made to the WS the run-flow rows are drawn from — two runs
+      // already finished in this very session (the explore run and the refused goal run, above) and
+      // #rf-list stays the honest idle state, because bSubmit/chRunFlow hand the fresh run_id to
+      // tFillLiveRunId, which never auto-connects it (M14 keeps the SSE and WS paths separate on
+      // purpose — ADR-108d: "a SECOND consumer of the same stream, never a second stream"). This is
+      // the same claim the check above makes for the three live modes, made for the pane beneath them.
+      await page.evaluate(() => { location.hash = '#v=chat'; });
+      await page.waitForSelector('#rf-list', { state: 'visible' });
+      const text = (await page.locator('#rf-list').innerText()).trim();
+      // Four DIFFERENT sentences, not one generic "nothing yet" — a blank #rf-list here reads as
+      // broken, and the most likely real cause (the stream is not connected) must be named rather
+      // than buried under a placeholder that could just as well mean the run never started.
+      ok(text.length > 20, 'the run-flow pane is empty and silent — indistinguishable from broken');
+      ok(/не подключ|not connected/i.test(text), 'does not say the event stream is disconnected (the common case)');
+      ok(/не начал|has not started/i.test(text), 'does not mention a run that has not started');
+      ok(/шаг/i.test(text) || /step/i.test(text), 'does not mention a run producing no step events');
+      ok(/ещё не пришл|has not arrived/i.test(text), 'does not mention data still in flight');
+      await shot(page, 'run-flow-idle', true);
+    });
+
     await check('the library and results views load without erroring', async () => {
       // EVERY view, derived from the hub itself (scripts/hub-views.mjs). This list used to be written
       // out here and held seven of nine: `tools` and `settings` were never screenshotted, ever, and
@@ -206,6 +245,143 @@ async function main() {
         await page.waitForSelector(`[data-view="${view}"]`, { state: 'visible', timeout: 15000 });
         await shot(page, `view-${view}`, true);   // whole view, not the fold — see shot()
       }
+    });
+
+    // ---------------------------------------------------------------------------------------------
+    // EVERY panel, EVERY control, EVERY field — photographed, and the browser's own complaints kept.
+    //
+    // WHY THIS EXISTS BESIDE THE PER-VIEW SWEEP ABOVE. A full-page shot of a view proves the view
+    // rendered; it does not prove that the panel a change touched is legible, because a person
+    // reviewing nine tall screenshots reads the top of each. Measured this session: the run-flow pane
+    // shipped empty and silent for weeks INSIDE a view that was screenshotted on every CI run.
+    //
+    // The list of details is DERIVED from the markup, never written here (docs/DEVELOPMENT.md §0.5).
+    // A hand-kept list of panels would fail exactly the way the smoke's own view list failed — it
+    // held seven of nine and the omission survived a deliberate edit. Floors are the mandatory
+    // companion: a selector that stops matching yields an EMPTY inventory, and every assertion over
+    // it passes perfectly.
+    // Measured, not guessed: the hub marks a view with `data-view` on EVERY section belonging to it
+    // (tools carries nine), and those sections ARE the panels — `.card` sits on the section itself in
+    // 10 of 17 cases and nests inside one only once. A sweep over `[data-view] .card` therefore found
+    // three panels out of two dozen and its floor caught that, which is what the floor is for.
+    const FLOORS = { panels: 20, controls: 60, fields: 100 };
+    const panelSel = '[data-view], [data-view] .card';
+
+    await check('every panel and control is inventoried from the markup, and the floors are met', async () => {
+      const inv = await page.evaluate(() => {
+        const name = (el) => {
+          const lab = el.labels && el.labels[0];
+          return (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder')
+                  || (lab && lab.textContent) || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+        };
+        const byView = new Map();
+        // Every section the router owns, plus any card nested in one. Deduped by ELEMENT: a section
+        // that is itself a `.card` matches both halves of the selector and must be counted once.
+        for (const el of document.querySelectorAll('[data-view], [data-view] .card')) {
+          const host = el.closest('[data-view]');
+          const view = host && host.getAttribute('data-view');
+          if (!view) continue;
+          if (!byView.has(view)) byView.set(view, { view, panels: [], controls: [], fields: [] });
+          const v = byView.get(view);
+          if (v.panels.some((p) => p.el === el)) continue;
+          v.panels.push({
+            el,
+            key: el.id || `${view}-panel-${v.panels.length}`,
+            heading: ((el.querySelector('h1,h2,h3,h4,legend,summary') || {}).textContent || '').trim().slice(0, 60),
+          });
+        }
+        for (const v of byView.values()) {
+          const secs = [...document.querySelectorAll(`[data-view="${v.view}"]`)];
+          const seen = new Set();
+          for (const sec of secs) {
+            for (const b of sec.querySelectorAll('button, summary, [role="button"]')) {
+              if (seen.has(b)) continue; seen.add(b);
+              v.controls.push({ key: b.id || name(b) || '(без имени)', name: name(b) });
+            }
+            for (const f of sec.querySelectorAll('input, select, textarea')) {
+              if (seen.has(f)) continue; seen.add(f);
+              v.fields.push({ key: f.id || name(f) || '(без имени)', name: name(f), type: f.tagName.toLowerCase() });
+            }
+          }
+          v.panels = v.panels.map(({ el, ...rest }) => rest);   // elements do not survive serialisation
+        }
+        return [...byView.values()];
+      });
+      const tot = (k) => inv.reduce((n, v) => n + v[k].length, 0);
+      const counts = { views: inv.length, panels: tot('panels'), controls: tot('controls'), fields: tot('fields') };
+      fs.writeFileSync(path.join(OUT, 'inventory.json'), JSON.stringify({ counts, views: inv }, null, 2));
+      console.log(`  inventory: ${counts.views} views · ${counts.panels} panels · ${counts.controls} controls · ${counts.fields} fields`);
+      ok(counts.views >= MIN_VIEWS, `derived ${counts.views} views, floor is ${MIN_VIEWS} — the walk regressed, not the hub`);
+      ok(counts.panels >= FLOORS.panels, `derived ${counts.panels} panels, floor is ${FLOORS.panels}`);
+      ok(counts.controls >= FLOORS.controls, `derived ${counts.controls} controls, floor is ${FLOORS.controls}`);
+      ok(counts.fields >= FLOORS.fields, `derived ${counts.fields} fields, floor is ${FLOORS.fields}`);
+      // A control nobody can name is a control nobody can describe in a bug report.
+      const nameless = inv.flatMap((v) => [...v.controls, ...v.fields].filter((c) => !c.name).map((c) => `${v.view}:${c.key || '?'}`));
+      ok(nameless.length === 0, `controls with no accessible name: ${nameless.slice(0, 8).join(', ')}`);
+    });
+
+    await check('no panel is both empty and silent, and each one is photographed on its own', async () => {
+      // The generalisation of UX-PR-8: a pane that shows nothing must SAY why. Asserted for every
+      // panel the markup declares, not only the one that was just fixed — otherwise the next silent
+      // pane is found the same way this one was, by somebody looking at a screenshot months later.
+      const views = hubViews();
+      const silent = [];
+      let panelShots = 0;
+      for (const view of views) {
+        await page.evaluate((v) => { location.hash = `#v=${v}`; }, view);
+        await page.waitForSelector(`[data-view="${view}"]`, { state: 'visible', timeout: 15000 });
+        const cards = await page.$$(`[data-view="${view}"], [data-view="${view}"] .card`);
+        for (let i = 0; i < cards.length; i++) {
+          const c = cards[i];
+          if (!(await c.isVisible())) continue;               // a hidden pane makes no promise
+          const id = (await c.getAttribute('id')) || `${view}-panel-${i}`;
+          const text = ((await c.innerText()) || '').trim();
+          const rich = await c.$('img, canvas, svg, input, select, textarea, table');
+          if (text.length < 12 && !rich) silent.push(`${view}/${id}`);
+          try {
+            await c.screenshot({ path: path.join(OUT, `panel-${view}-${id}.png`) });
+            panelShots++;
+          } catch { /* a zero-height pane cannot be photographed; the silence check above still judged it */ }
+        }
+      }
+      console.log(`  ${panelShots} per-panel screenshots`);
+      ok(panelShots >= FLOORS.panels,
+        `photographed ${panelShots} panels, floor is ${FLOORS.panels} — a sweep over nothing passes`);
+      ok(silent.length === 0,
+        `panels that are empty AND say nothing (indistinguishable from broken): ${silent.join(', ')}`);
+    });
+
+    await check('the browser reported no errors while every panel was driven', async () => {
+      // Collected across the WHOLE session (see the listeners in main()). These are the product's own
+      // complaints; a smoke that discards them measures less than the browser already measured.
+      // Not every non-2xx is a defect, and saying so is the difference between a check people keep
+      // and one they switch off. Two answers are CONTRACTS, exactly as routeSpec.probe records them
+      // server-side (ADR-116): /readyz answers 503 forever in a deployment with no model, and the
+      // API answers 403 to a hub that has not signed in yet — that is the product working. Anything
+      // else the browser complained about is kept and fails the check.
+      // The declared contracts, each with the reason it is one — an allowance without a written
+      // reason is how a gate becomes a list of excuses:
+      //   503 /readyz          — permanent and CORRECT in a deployment with no model (readyz.go:10-12)
+      //   401/403              — the API refusing a hub that has not signed in yet; the product working
+      //   404 …/artifact?name= — the hub ASKS whether an optional artifact exists; 404 means "no"
+      //   404 /v1/config       — the standalone tier before the wizard has written anything
+      // ⚠ The artifact probes are a contract but not a virtue: the hub asks one question per name
+      //   from a list it keeps itself (ART_NAMES), so an explore run leaves eleven 404s in the
+      //   console, and a real error is easy to miss among them. Recorded as [UI-ARTIFACT-PROBE-STORM].
+      const contract = (s) => /^503 .*\/readyz/.test(s)
+        || /^40[13] /.test(s)
+        || /^404 .*\/artifact\?name=/.test(s)
+        || /^404 .*\/v1\/config$/.test(s);
+      const noise = /Failed to load resource/;   // the console echo of a response already recorded, with no URL
+      const defects = [
+        ...consoleErrors.filter((e) => !noise.test(e)),
+        ...failedRequests.map((r) => `request failed: ${r}`),
+        ...badResponses.filter((r) => !contract(r)).map((r) => `non-2xx: ${r}`),
+      ];
+      const seen = [...new Set([...consoleErrors, ...failedRequests, ...badResponses])];
+      if (seen.length) fs.writeFileSync(path.join(OUT, 'browser-errors.txt'), seen.join('\n') + '\n');
+      console.log(`  browser reported ${seen.length} line(s); ${defects.length} of them are defects (the rest are declared contracts)`);
+      ok(defects.length === 0, `${defects.length} browser-side defect(s):\n       ${[...new Set(defects)].slice(0, 8).join('\n       ')}`);
     });
   } finally {
     await browser.close();
