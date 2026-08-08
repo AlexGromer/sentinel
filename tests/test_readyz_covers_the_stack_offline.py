@@ -40,7 +40,7 @@ MIN_PROBES = 3
 
 # A CAP, and it may only ever go DOWN. Exemptions are meant to disappear; a number that can grow is a
 # list of excuses with a gate attached.
-MAX_UNPROBED = 3
+MAX_UNPROBED = 2   # HEALTH-006 removed `browser`: the exemption that called itself a GAP is now a probe
 
 # The name a service carries in compose is not always the name a probe carries in the code — the
 # gateway is the `store-gateway` service and the `store` check. Mapped explicitly, because guessing by

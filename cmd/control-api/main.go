@@ -2290,17 +2290,32 @@ func main() {
 		"pid": strconv.Itoa(os.Getpid()), "detail": " — addr: " + addr,
 	}, nil)
 
+	// HEALTH-006: the PREVENTIVE half. Started here, after the journal exists so a transition has
+	// somewhere to be recorded, and given a stop channel tied to the process rather than to a request.
+	proberStop := make(chan struct{})
+	defer close(proberStop)
+	go s.runReadinessProber(proberStop)
+
 	// M13 (ADR-050): connect to a persistent store-gateway if configured; else runs stay in-memory
 	// (standalone/offline path, unchanged). Fail-open — an unreachable gateway only warns.
 	if sa := os.Getenv("CONTROL_API_STORE_ADDR"); sa != "" {
 		s.storeAddr = sa // remembered even on failure — see server.storeAddr / configTier (ADR-075)
-		if sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN")); err != nil {
-			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q unreachable: %v (runs stay in-memory, lost on restart)\n", sa, err)
+		sc, err := newStoreClient(sa, os.Getenv("STORE_TOKEN"))
+		// ⚠ HEALTH-006: the client is kept even when the boot probe failed. grpc.ClientConn heals on
+		// its own (measured: killing and restarting the gateway moved /readyz store error -> ok with
+		// no restart of this process), so what used to make a boot miss PERMANENT was discarding the
+		// client here. Keeping it means a gateway that comes up a second later is simply used, and the
+		// background prober below is what tells the operator when that happened.
+		if sc != nil {
+			s.store = sc
+			defer sc.close()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "control-api: WARNING — store-gateway %q did not answer at start: %v "+
+				"(runs stay in memory until it does; the readiness prober will report when it comes up)\n", sa, err)
 			// The one event a store-backed journal could never record: the store being unreachable.
 			s.journalEvent("service.store_unreachable", "warn", map[string]string{"addr": sa, "reason": err.Error()}, nil)
 		} else {
-			s.store = sc
-			defer sc.close()
 			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
 		}
 	}

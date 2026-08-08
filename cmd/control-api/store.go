@@ -46,20 +46,37 @@ func storeTokenInterceptor(token string) grpc.UnaryClientInterceptor {
 
 // newStoreClient dials the store-gateway at addr (a gRPC target, e.g. "unix:/abs/state/store.sock").
 // grpc.NewClient is lazy — a bad addr surfaces on the first RPC, not here — so we do a cheap ListRuns
-// probe to fail fast at startup when the gateway isn't actually reachable.
+// probe to say at startup whether the gateway is actually reachable.
+//
+// ⚠ HEALTH-006 CHANGED WHAT HAPPENS WHEN THAT PROBE FAILS, and the change is smaller than the task
+// expected because a measurement narrowed it. Measured live: with the client already built, killing
+// the gateway turned /readyz's store check to `error`, and bringing it back turned it to `ok` again
+// WITHOUT restarting control-api. So grpc.ClientConn already heals on its own; the connection was
+// never the thing that remembered the miss.
+//
+// What remembered it was this function CLOSING the conn and returning nil, after which `s.store`
+// stayed nil for the life of the process and a gateway that came up a second later was invisible
+// until a restart. So the conn is kept and returned ALONGSIDE the error: the caller learns the
+// gateway did not answer (and journals it), and the very same client picks the gateway up the moment
+// it appears — no re-dial loop, no mutable `s.store`, and therefore none of the race that making
+// that field mutable would have created across its 33 unsynchronised readers.
+//
+// The two causes of `s.store == nil` stay distinguishable, and in fact become cleaner: nil now means
+// "no address was declared" and nothing else, which is exactly the distinction configfile_test.go
+// records as load-bearing (a process that transiently loses its store must not become
+// indistinguishable from a standalone file-tier deployment).
 func newStoreClient(addr, token string) (*storeClient, error) {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(storeTokenInterceptor(token)))
 	if err != nil {
-		return nil, err
+		return nil, err // a malformed target: there is no client to keep
 	}
 	sc := &storeClient{cl: storepb.NewStoreServiceClient(conn), conn: conn}
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
 	if _, err := sc.cl.ListRuns(ctx, &storepb.ListRunsReq{Limit: 1}); err != nil {
-		_ = conn.Close()
-		return nil, err
+		return sc, err // reachable LATER is still reachable — see the note above
 	}
 	return sc, nil
 }
