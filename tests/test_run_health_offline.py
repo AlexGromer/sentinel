@@ -28,6 +28,7 @@ where the product decision lives ("replay does not need an LLM"), and a subproce
 show that one combination behaved, not that the rule is the rule.
 """
 import os
+import re
 import pathlib
 import subprocess
 import sys
@@ -210,6 +211,124 @@ def test_the_escape_hatch_works_and_announces_itself():
         f"SENTINEL_HEALTH_SKIP=llm did not skip the LLM check:\n{out[-600:]}")
     assert "system.health_check_skipped" in out, (
         f"the skip was honoured SILENTLY — a bypassed check must announce itself:\n{out[-600:]}")
+
+
+
+# --- HEALTH-003: the OPTIONAL live model probe -----------------------------------------------------
+#
+# Asserted at the module level rather than through a subprocess: the property under test is a
+# DECISION (does a dead endpoint refuse a run, and only when asked to), and a subprocess would add a
+# browser, a graph and a minute per case to measure the same branch.
+
+def _health():
+    import importlib
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return importlib.import_module("brain.health")
+
+
+def _with_env(**kv):
+    """Set env for one case and put it back. The probe reads os.environ directly, on purpose: it is
+    what every launch path already carries."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        old = {k: os.environ.get(k) for k in kv}
+        try:
+            for k, v in kv.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            yield
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    return _cm()
+
+
+def test_the_live_probe_is_off_unless_asked_for():
+    """OFF by default, and this is the load-bearing half of the feature.
+
+    A probe on by default adds a network round trip to EVERY run — including the air-gapped demo,
+    which runs with `network_mode: none` — and turns a blinking endpoint into a refusal. That is the
+    class of gate operators switch off, taking the useful half with it.
+    """
+    h = _health()
+    with _with_env(LLM_BASE_URL="http://127.0.0.1:1", SENTINEL_LLM_LIVE_PROBE=None):
+        assert h._live_probe_enabled() is False, "the probe must be off with the variable unset"
+    with _with_env(SENTINEL_LLM_LIVE_PROBE="0"):
+        assert h._live_probe_enabled() is False, "an explicit 0 must not enable the probe"
+    for on in ("1", "true", "YES", "on"):
+        with _with_env(SENTINEL_LLM_LIVE_PROBE=on):
+            assert h._live_probe_enabled() is True, f"{on!r} must enable the probe"
+
+
+def test_a_dead_endpoint_is_named_when_the_probe_is_asked_for():
+    """Port 1 answers nothing. The reason must name the ADDRESS — «the model is down» without saying
+    WHICH model sends an operator hunting through three config layers."""
+    h = _health()
+    with _with_env(LLM_BASE_URL="http://127.0.0.1:1"):
+        why = h._llm_answers(timeout=1.0)
+    assert why, "a dead endpoint produced no objection at all"
+    assert "127.0.0.1:1" in why, f"the reason does not name the endpoint that failed: {why}"
+
+
+def test_no_base_url_is_not_an_objection():
+    """An Anthropic-native deployment has no `/models` surface of ours to ask. A probe that failed
+    for the absence of an endpoint it was never given would be refusing a legitimate configuration —
+    the exact rule this module's header states."""
+    h = _health()
+    with _with_env(LLM_BASE_URL=None):
+        assert h._llm_answers(timeout=1.0) is None, "the probe objected with nothing to probe"
+    with _with_env(LLM_BASE_URL="   "):
+        assert h._llm_answers(timeout=1.0) is None, "a blank base_url objected"
+
+
+def test_a_live_endpoint_raises_no_objection():
+    """The other half of the same claim, against a real socket — a probe that objects to everything
+    is indistinguishable from one that objects to nothing."""
+    import http.server
+    import threading
+    h = _health()
+
+    class _Models(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"data": []}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Models)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        with _with_env(LLM_BASE_URL=f"http://127.0.0.1:{srv.server_port}"):
+            assert h._llm_answers(timeout=2.0) is None, "a live endpoint was reported as unreachable"
+    finally:
+        srv.shutdown()
+
+
+def test_the_probe_budget_is_the_same_number_go_spends():
+    """⚠ A DRIFT GATE, not a style check. Go and Python each answer «does the model answer» with
+    their own timeout, and two statements of one budget is the class this repo keeps meeting — the
+    six drifted journal codes, the three copies of the exit-code table. The number may move; it may
+    not move in one language only."""
+    h = _health()
+    go = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "cmd", "control-api", "readyz.go"), encoding="utf-8").read()
+    m = re.search(r"readyProbeTimeout\s*=\s*(\d+)\s*\*\s*time\.Second", go)
+    assert m, "readyProbeTimeout is no longer a literal in readyz.go — this gate went vacuous"
+    assert float(m.group(1)) == h.LIVE_PROBE_TIMEOUT, (
+        f"Go spends {m.group(1)}s on the same question and Python spends {h.LIVE_PROBE_TIMEOUT}s")
 
 
 if __name__ == "__main__":
