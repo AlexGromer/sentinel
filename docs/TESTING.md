@@ -29,8 +29,8 @@ store-gateway, internal/*; `report-service` удалён 2026-08-09, ADR-119). �
 Запустите все offline-тесты одной командой:
 
 ```bash
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do
-    .venv/bin/python tests/test_${t}_offline.py
+for f in tests/test_*_offline.py; do
+    .venv/bin/python "$f"
 done
 ```
 
@@ -49,10 +49,13 @@ done
 .venv/bin/python tests/test_m9_2b_offline.py # двухфазный goal/describe, reconcile, богатый RunConfig
 ```
 
-Список выше — представительная выборка (`§1.1`-й пример на каждый M-этап); остальные модули
-цикла (`r2_multiturn`, `r3_takeover`, `determinism`, `record_bridge`, `sanitize`, `m13_chats`,
-`m14_agui`, `m14_replay_agui`, `m_structured_out`, `m11_4`) запускаются тем же паттерном
-(`.venv/bin/python tests/test_<module>_offline.py`) — см. полный список в цикле `for` выше.
+Список выше — представительная выборка (по одному примеру на M-этап), не исчерпывающий перечень.
+Полный список офлайн-сьютов не поддерживается вручную (принцип 5, `docs/DEVELOPMENT.md` §0) —
+команда `for` в §1.2 обнаруживает их глобом `tests/test_*_offline.py` и запускает тем же паттерном
+(`.venv/bin/python tests/test_<module>_offline.py`). Число здесь намеренно НЕ записано: оно
+протухает быстрее, чем правится — `ls tests/test_*_offline.py | wc -l`. CI требует не меньше 25
+найденных (ADR-087,
+`.github/workflows/ci.yml`).
 
 Каждый файл выводит `PASS <test_name>` на каждый тест и `ALL PASS (N)` в конце.
 Ненулевой exit code или строка `FAIL` в stdout = блокер.
@@ -427,8 +430,8 @@ docker compose run --rm \
 | Контекст | Минимальный набор команд |
 |---|---|
 | Перед любым коммитом | `go vet ./...` + `cd pw-executor && npx tsc --noEmit` + `gitleaks detect` |
-| PR / feature branch | Все offline-тесты (§1.1–1.5) |
-| Релизный кандидат | Offline-тесты + live demo via docker compose + live run vs. staging (§3) |
+| PR / feature branch, добавляющий компонент или функциональность | Полный офлайн-сьют (§1.1–1.2) + DOM-гейты (setup-wizard, hub Logs-view, static-showcase) + `ui-smoke` скриншоты + докер во ВСЕХ видах поставки + живой прогон изменённого компонента + мутации — этого требует принцип 7 (`docs/DEVELOPMENT.md` §0) на КАЖДОМ таком PR; полный обязывающий перечень — [`docs/PR_ACCEPTANCE.md`](PR_ACCEPTANCE.md) |
+| Релизный кандидат (тег) | Всё из строки выше плюс гейты релизного артефакта: `install-smoke` / `deb-smoke` / `install-ps1-smoke` / `airgap` (`.github/workflows/ci.yml`, `release.yml`) |
 | Новая LLM-модель | `test_b1_offline.py` + smoke-прогон goal-режима vs. `file://` (§3.2) |
 | Изменение pw-executor | `npx tsc --noEmit` + `test_m9_offline.py` |
 | Изменение healing | `test_m3_offline.py` + `test_m8_offline.py` + live replay vs. site-v2 (§3.1) |

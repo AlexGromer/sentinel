@@ -64,8 +64,8 @@ Healedный шаг **всё равно выполняется** (replay про�
 - store получает таблицы `golden_snapshots` + `step_failures` (временно, brain-локальные; → store-gateway @ M2b).
 
 ## GitHub Actions (`.github/workflows/ci.yml`)
-`build` (Go + TS `npm ci`/build + зависимости `uv` + `playwright install` + `go vet`/`go test ./...` + offline-suite m3..m9_2b) → матрица `replay` (SQLite для каждого задания);
-параллельный job `security` (gitleaks/govulncheck/pip-audit/npm audit); задание `explore` ручное/`workflow_dispatch`. Проверяет exit codes. С #4 эти шаги реально исполняются в CI.
+`build` (Go + TS `npm test` [pw-executor node:test гейтит компиляцию, QA-PWEXEC-CI] + зависимости `uv` + `playwright install` + `go vet`/`go test ./...` + DOM-гейты + офлайн-сьют, обнаруживается глобом `tests/test_*_offline.py`, ADR-087) → матрица `replay` (SQLite для каждого задания);
+параллельно: `security` (gitleaks HARD + pip-audit advisory + SBOM), `bilingual`, `airgap`, `install-smoke`/`install-ps1-smoke`, `deb-smoke`, `collect-live-run-smoke`, `lint`; задание `explore` ручное/`workflow_dispatch`. Полный актуальный перечень гейтов — `docs/PR_ACCEPTANCE.md`. Проверяет exit codes. С #4 эти шаги реально исполняются в CI.
 
 ## Acceptance gate (Given/When/Then)
 1. **GIVEN** план, исследованный на `site/`, **WHEN** `agentctl baseline update --plan <p>`, **THEN** goldens существуют для index/page-a/b/c.

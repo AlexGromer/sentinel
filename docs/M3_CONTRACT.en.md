@@ -64,8 +64,8 @@ test robustness; golden-diff = change detection. Both are reported per step.
 - store gains `golden_snapshots` + `step_failures` tables (interim, brain-local; → store-gateway @ M2b).
 
 ## GitHub Actions (`.github/workflows/ci.yml`)
-`build` (Go + TS `npm ci`/build + `uv` deps + `playwright install` + `go vet`/`go test ./...` + offline suite m3..m9_2b) → `replay` matrix (per-job SQLite);
-a parallel `security` job (gitleaks/govulncheck/pip-audit/npm audit); the `explore` job is manual/`workflow_dispatch`. Asserts exit codes. As of #4 these steps are actually executed in CI.
+`build` (Go + TS `npm test` [pw-executor node:test gates the compile, QA-PWEXEC-CI] + `uv` deps + `playwright install` + `go vet`/`go test ./...` + DOM gates + the offline suite, discovered by glob `tests/test_*_offline.py`, ADR-087) → `replay` matrix (per-job SQLite);
+in parallel: `security` (gitleaks HARD + pip-audit advisory + SBOM), `bilingual`, `airgap`, `install-smoke`/`install-ps1-smoke`, `deb-smoke`, `collect-live-run-smoke`, `lint`; the `explore` job is manual/`workflow_dispatch`. The full current list of gates lives in `docs/PR_ACCEPTANCE.en.md`. Asserts exit codes. As of #4 these steps are actually executed in CI.
 
 ## Acceptance gate (Given/When/Then)
 1. **GIVEN** a plan explored on `site/`, **WHEN** `agentctl baseline update --plan <p>`, **THEN** goldens exist for index/page-a/b/c.
