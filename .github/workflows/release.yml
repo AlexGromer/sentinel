@@ -58,7 +58,7 @@ jobs:
           out="sentinel-${TAG}-${GOOS}-${GOARCH}"
           mkdir -p "dist/${out}"
           ext=""; [ "$GOOS" = windows ] && ext=".exe"
-          for c in agentctl control-api orchestrator report-service store-gateway; do
+          for c in agentctl control-api orchestrator store-gateway; do
             go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o "dist/${out}/${c}${ext}" "./cmd/${c}"
           done
           cp LICENSE README.md "dist/${out}/" 2>/dev/null || true

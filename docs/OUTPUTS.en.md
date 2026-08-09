@@ -74,8 +74,10 @@ separate coverage map, and no pending-human-gate-decisions list in this schema.
 ### 3. Exported Playwright Test Code (`.spec.ts`)
 
 A TypeScript Playwright test file generated from `RunState.executed_actions`.
-**Interim/as-built:** `brain/exporter.py` (Python, deterministic; ADR-014); the Go
-`report-service` is the target architecture (deferred).
+**Implementation:** `brain/exporter.py` (Python, deterministic; ADR-014). The target architecture
+"a Go `report-service`" named in that same ADR-014 never arrived: `cmd/report-service` was removed
+2026-08-09, having never run a single day (ADR-119, QA-REPORT-SERVICE) — the Python generator
+remains the sole, permanent implementation, not an interim one.
 
 The generated code uses idiomatic Playwright patterns (`test()` / `expect()`),
 role/text/label-preferred locators (matching the healing strategy hierarchy), and
@@ -95,8 +97,10 @@ workflow: Sentinel generates the skeleton; engineers own and maintain it thereaf
 A full browser execution trace per run: network activity, console output, DOM snapshots,
 screenshots, and the complete action timeline.
 
-Produced by `pw-executor` and written to the shared artifact directory. Served by
-`report-service`. Viewable locally with:
+Produced by `pw-executor` and written to the shared artifact directory; served through control-api's
+artifact whitelist (`GET /v1/runs/{id}/artifact?name=trace.zip`, ADR-099) or read directly from the
+run directory — there is no separate HTTP service for this anymore (`report-service` removed,
+ADR-119). Viewable locally with:
 
 ```bash
 playwright show-trace trace.zip

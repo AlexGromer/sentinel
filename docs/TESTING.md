@@ -21,7 +21,7 @@ go test ./...
 ```
 
 `go test ./...` — unit-тесты ВСЕХ Go-компонентов (agentctl, control-api, orchestrator,
-report-service, store-gateway, internal/*). Ожидаемый результат:
+store-gateway, internal/*; `report-service` удалён 2026-08-09, ADR-119). Ожидаемый результат:
 все пакеты выводят `ok` или `--- PASS`; ненулевой exit code = блокер.
 
 ### 1.2 Python: offline-сьют (весь регресс M3–M9)

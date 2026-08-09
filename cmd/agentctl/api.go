@@ -47,6 +47,11 @@ type apiVerb struct {
 var apiVerbs = []apiVerb{
 	{Verb: "health", Method: "GET", Path: "/readyz", Help: "readiness: store, LLM endpoint, config"},
 	{Verb: "health live", Method: "GET", Path: "/healthz", Help: "liveness only (no dependency probes)"},
+	// QA-REPORT-SERVICE (ADR-119). A Stream verb: the body is Prometheus text, so it is copied through
+	// untouched and redirected to a file — `agentctl metrics > scrape.prom`. The machine token this CLI
+	// already holds is the unscoped credential, which is the one an operator scraping a deployment
+	// wants; a session sees its own runs.
+	{Verb: "metrics", Method: "GET", Path: "/metrics", Stream: true, Help: "aggregate Prometheus scrape over this deployment's runs, to stdout"},
 
 	// ADR-111 — the live view from a terminal. `frame` and `stream` are Stream verbs: the response is
 	// JPEG (or a multipart of JPEGs), so it is copied through untouched and redirected to a file.

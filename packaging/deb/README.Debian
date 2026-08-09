@@ -7,10 +7,11 @@ What this package is
 The Go CONTROL PLANE, statically linked, in /usr/bin:
 
     agentctl         the CLI — everything the product does, from the terminal
-    control-api      HTTP control plane + the browser UI (ADR-064)
+    control-api      HTTP control plane + the browser UI (ADR-064); also
+                     serves GET /metrics, an aggregate Prometheus scrape
+                     across deployment runs
     store-gateway    persistence for runs/scenarios/tests/chats/results/config
     orchestrator     run-control gRPC (pause/resume/takeover)
-    report-service   report generation
 
 What this package is NOT
 ------------------------

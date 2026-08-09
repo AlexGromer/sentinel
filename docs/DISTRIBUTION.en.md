@@ -188,7 +188,9 @@ journal; what is and is not in it is `docs/OBSERVABILITY.en.md` §8.
 
 ### What is delivered
 
-Five Go binaries (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `report-service`) for six platforms:
+Four Go binaries (`agentctl`, `control-api`, `store-gateway`, `orchestrator`) for six platforms
+(a fifth, `report-service`, was removed 2026-08-09, ADR-119 — it was built and signed but never
+launched by anything; the aggregate `/metrics` now lives in control-api):
 
 | Platform | GOOS | GOARCH |
 |---|---|---|
@@ -199,7 +201,7 @@ Five Go binaries (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `r
 | Windows x86-64 | windows | amd64 |
 | Windows ARM64 | windows | arm64 |
 
-Total: 30 binaries (6 platforms × 5 binaries) + Docker image (multi-arch: linux/amd64 + linux/arm64).
+Total: 24 binaries (6 platforms × 4 binaries) + Docker image (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 

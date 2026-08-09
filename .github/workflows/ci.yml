@@ -660,11 +660,11 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-      - name: Build the five control-plane binaries
+      - name: Build the four control-plane binaries
         run: |
           set -euo pipefail
           mkdir -p debbin
-          for c in agentctl control-api store-gateway orchestrator report-service; do
+          for c in agentctl control-api store-gateway orchestrator; do
             CGO_ENABLED=0 go build -ldflags "-X main.version=v0.0.0-citest" -o "debbin/$c" "./cmd/$c"
           done
       - name: Build, install, inspect and remove the package
@@ -675,7 +675,7 @@ jobs:
           sudo apt-get install -y "./$deb"
 
           # The binaries are where the package says they are, and they run.
-          for c in agentctl control-api store-gateway orchestrator report-service; do
+          for c in agentctl control-api store-gateway orchestrator; do
             test -x "/usr/bin/$c" || { echo "::error::/usr/bin/$c missing from the installed package"; exit 1; }
           done
           got="$(agentctl --version)"

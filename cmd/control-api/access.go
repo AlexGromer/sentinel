@@ -105,6 +105,18 @@ func (s *server) routes() []routeSpec {
 			why: "liveness probe: a process-level fact (version, live-run count) that names no row, read by container orchestration before any credential exists. It must not start failing because someone created an account"},
 		{pattern: "GET /readyz", access: accessOpen, probe: true, h: s.handleReadyz,
 			why: "readiness probe, same contract as /healthz. It already withholds the topology from an anonymous caller itself (readyz.go: Detail is blanked unless authed) — the verdict is all it publishes"},
+		// QA-REPORT-SERVICE (ADR-119). Root-level and unversioned like the two probes above, because
+		// `/metrics` is what a scraper is configured to expect and what docs/OBSERVABILITY has promised
+		// since M4 — the /v1 prefix belongs to the product's own surface, not to a convention older than
+		// this repository.
+		//
+		// `authed`, NOT open, and that is the difference between this and the report-service handler it
+		// replaces. That one answered anybody who could reach the port. In Mode 3 the port it would sit
+		// on is the one serving the browser UI, so `open` here would publish every run's numbers to
+		// everyone who can load a page. No `domain` either: an aggregate names no single row, so there is
+		// no {id} for the guard to resolve and the scoping lives in the handler — the same shape, and the
+		// same reason, as handleListRuns and GET /v1/service-log.
+		{pattern: "GET /metrics", access: accessAuthed, h: s.handleMetricsAgg},
 		{pattern: "GET /v1/config-schema", access: accessOpen, h: s.handleConfigSchema,
 			why: "the SHAPE of configuration, not its values: field names, types, defaults. The setup wizard renders the form from it before a token has been entered, so requiring one would make first-run configuration impossible"},
 		{pattern: "GET /v1/events-catalog", access: accessOpen, h: s.handleEventsCatalog,

@@ -4,7 +4,7 @@
 #   scripts/build-deb.sh <version> <arch> <bin-dir> [out-dir]
 #     version   0.1.0            (a leading "v" is accepted and stripped)
 #     arch      amd64 | arm64    (Debian arch names, not GOARCH-by-accident)
-#     bin-dir   directory holding the five control-plane binaries
+#     bin-dir   directory holding the four control-plane binaries
 #     out-dir   default: dist/
 #
 # Deliberately dpkg-deb and nothing else: no nfpm, no goreleaser, no fpm. The binaries
@@ -41,10 +41,10 @@ ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 SRC="$ROOT/packaging/deb"
 command -v dpkg-deb >/dev/null 2>&1 || { echo "ERROR: dpkg-deb is required" >&2; exit 1; }
 
-# The five control-plane binaries. A package that silently ships three of them would
+# The four control-plane binaries. A package that silently ships three of them would
 # install cleanly and fail at the moment someone tries to use the missing one, so a
 # missing input is a HARD error here, not a warning.
-BINARIES="agentctl control-api store-gateway orchestrator report-service"
+BINARIES="agentctl control-api store-gateway orchestrator"
 missing=
 for b in $BINARIES; do
   [ -f "$BIN_DIR/$b" ] || missing="$missing $b"
