@@ -2930,8 +2930,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (ge('b-ci').checked && ge('b-forcereplay').checked){
       var w=ge('b-cifr-warn');
       if (w){ w.style.display='block';
-        w.textContent=bi('CI и force_replay несовместимы: force_replay обходит hard-abort по plan_hash, который CI существует чтобы соблюдать.',
-                         'CI and force_replay are mutually exclusive: force_replay bypasses the plan_hash hard-abort that CI mode exists to enforce.'); }
+        /* innerHTML: bi() is markup. This site is a warning shown next to two ticked checkboxes —
+           exactly the moment a reader is least likely to forgive `<span data-lang="ru">`. */
+        w.innerHTML=bi('CI и force_replay несовместимы: force_replay обходит hard-abort по plan_hash, который CI существует чтобы соблюдать.',
+                       'CI and force_replay are mutually exclusive: force_replay bypasses the plan_hash hard-abort that CI mode exists to enforce.'); }
       return;
     }
     var w2=ge('b-cifr-warn'); if (w2) w2.style.display='none';
@@ -2986,9 +2988,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       /* The page's dot classes are `.ok`/`.no` (see the stylesheet). Inventing `.on`/`.bad` would
          have left the dot permanently grey — a silent no-op. */
       dot.className = 'dot ' + (sum.status === 'ok' ? 'ok' : sum.status === 'skipped' ? '' : 'no');
-      txt.textContent = sum.status === 'ok' ? bi('Здоровье ✓','Health ✓')
-                      : sum.status === 'skipped' ? bi('Здоровье —','Health —')
-                      : bi('Здоровье ✕','Health ✕');
+      /* ⚠ innerHTML, not textContent — see the note on `bi` itself. This line printed
+         `<span data-lang="ru">Здоровье ✕</span>…` at the reader in the PERSISTENT rail, i.e. on
+         every view, until a screenshot caught it (ui-smoke/18-view-health.png, 2026-08-09). The
+         strings are literals; nothing here comes from a response. */
+      txt.innerHTML = sum.status === 'ok' ? bi('Здоровье ✓','Health ✓')
+                    : sum.status === 'skipped' ? bi('Здоровье —','Health —')
+                    : bi('Здоровье ✕','Health ✕');
       var bad = [];
       for (var k in (j.checks || {})) {
         if (((j.checks[k] || {}).status) === 'error') bad.push(k);
@@ -3001,7 +3007,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     } catch (e) {
       hzLast = null;
       dot.className = 'dot';
-      txt.textContent = bi('Здоровье ?','Health ?');
+      txt.innerHTML = bi('Здоровье ?','Health ?');   /* same as above: bi() returns markup */
       host.title = biPlain('состояние неизвестно — control-API не ответил',
                            'state unknown — the control-API did not answer');
     }
@@ -3930,11 +3936,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
           var old = lvVideoUrl; lvVideoUrl = url; img.src = url;
           if (old) URL.revokeObjectURL(old);            /* revoked AFTER the swap, never before */
           frames++;
-          if (meta) meta.textContent = frames + bi(' кадр(ов), ',' frame(s), ')
-                                     + Math.round((Date.now()-t0)/1000) + bi(' с',' s');
+          if (meta) meta.innerHTML = esc(frames) + bi(' кадр(ов), ',' frame(s), ')
+                                   + esc(Math.round((Date.now()-t0)/1000)) + bi(' с',' s');
         }
       }
-      if (meta) meta.textContent += bi(' — поток закрыт',' — stream closed');
+      if (meta) meta.innerHTML += bi(' — поток закрыт',' — stream closed');
     } catch(e){
       if (e && e.name === 'AbortError') return;         /* the operator switched modes; not an error */
       box.innerHTML = '<p class="fail">'+bi('поток прерван: ','the stream broke: ')+esc(e.message)+'</p>';
@@ -5420,8 +5426,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       // Anything else is NAMED as not sent rather than silently dropped.
       var specs = files.filter(function(f){ return /\.(spec|cy)\.(ts|js)$/.test(f.name); });
       var skipped = files.length - specs.length;
-      if (!specs.length){ out.style.display=''; out.textContent = bi('Нет файлов теста (*.spec.ts/.spec.js/.cy.ts/.cy.js).','No test files (*.spec.ts/.spec.js/.cy.ts/.cy.js).'); return; }
-      out.style.display=''; out.textContent = bi('Импорт…','Importing…');
+      if (!specs.length){ out.style.display=''; out.innerHTML = bi('Нет файлов теста (*.spec.ts/.spec.js/.cy.ts/.cy.js).','No test files (*.spec.ts/.spec.js/.cy.ts/.cy.js).'); return; }
+      out.style.display=''; out.innerHTML = bi('Импорт…','Importing…');
       try {
         var payload = { files: await Promise.all(specs.map(async function(f){
           return { name: f.name, content: await f.text() };
@@ -5429,9 +5435,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         var r = await fetch(capiBase()+'/v1/import', {
           method:'POST', headers: Object.assign({'Content-Type':'application/json'}, authHdr()),
           body: JSON.stringify(payload) });
-        if (!r.ok){ out.textContent = bi('Ошибка импорта: ','Import failed: ') + r.status + ' ' + (await r.text()).slice(0,200); return; }
+        /* esc() is REQUIRED here and not decoration: the tail is a response BODY. bi() forces
+           innerHTML, and innerHTML over unescaped foreign text is how a message becomes markup. */
+        if (!r.ok){ out.innerHTML = bi('Ошибка импорта: ','Import failed: ') + esc(r.status + ' ' + (await r.text()).slice(0,200)); return; }
         renderImportReport(out, await r.json(), skipped);
-      } catch(e){ out.textContent = bi('Ошибка: ','Error: ') + e.message; }
+      } catch(e){ out.innerHTML = bi('Ошибка: ','Error: ') + esc(e.message); }
     });
     refresh();
   })();

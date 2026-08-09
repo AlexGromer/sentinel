@@ -349,6 +349,96 @@ try {
   await page.fill('#capi', `http://127.0.0.1:${PORT}`);
   await page.fill('#capitok', token);
 
+  // UI-BI-INTO-TEXTCONTENT. `bi()` RETURNS markup — `<span data-lang="ru">…</span><span
+  // data-lang="en">…</span>` — because the language toggle works by showing one span and hiding the
+  // other. Assigning it to `textContent`, to `title` or to `placeholder` therefore prints the tags
+  // AT THE READER.
+  //
+  // This is the class's THIRD appearance, and the first two were fixed one site at a time. Measured
+  // when the third was found by a screenshot: a grep found SEVEN live sites, not one — including the
+  // persistent rail, i.e. on every view of the product.
+  //
+  // ⚠ WHY THIS ASSERTS A SHAPE AND NOT A WORD. The Health view already had a DOM check for this very
+  // line; it asked whether «измерено»/«measured» was PRESENT, and it was — inside the literal markup.
+  // Containment cannot distinguish rendered text from printed tags. So the assertion is: no text a
+  // reader can see, and no tooltip, may LOOK like markup.
+  await check('no view prints markup at the reader instead of rendering it', async () => {
+    // ⚠ WAIT FOR THE STATE, and this is not ceremony. The first placement of this check was BEFORE
+    // the token is entered, so the rail's health label had not been rendered yet — and the check
+    // passed over an element that was not there. Measured: restoring the original defect left it
+    // green. A check that never reaches the state it is about does not distinguish anything.
+    //
+    // The wait is on the label being POPULATED, not on it reading correctly: with the defect present
+    // the words are there too — inside the literal markup — so this precondition cannot mask what the
+    // assertion below is for.
+    // The health poller hangs off the `change` event of the connection fields (vwProbeConn), so it
+    // starts when a person leaves the field — not when the value appears. Tab out, the way typing a
+    // token actually ends.
+    await page.locator('#capitok').press('Tab');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#rail-health .ctxt');
+      return el && /Здоров|Health/.test(el.textContent) && el.textContent.trim() !== 'LLM';
+    }, null, { timeout: 15000 });
+
+    let inspected = 0;
+    for (const v of VIEWS) {
+      await page.click(`.rail a[data-nav="${v}"]`);
+      await page.waitForTimeout(200);
+      const found = await page.evaluate(() => {
+        // ⚠ NOT "anything in angle brackets". The first draft of this check used that, and the Tools
+        // view went red over `agentctl import --from <dir>` and `--test <id>` — CLI metasyntax, which
+        // is the page working correctly. A detector that fires on legitimate content gets deleted,
+        // and then the real defect has nothing watching it.
+        //
+        // What leaked markup actually looks like, derived from what `bi()` emits rather than guessed:
+        // a CLOSING tag, or an opening tag carrying a QUOTED attribute. Metasyntax has neither —
+        // `<dir>` has no `/` and no `="…"`. `data-lang=` is named outright because it is this
+        // helper's signature and the cheapest possible positive.
+        const TAG = /<\/[a-z][\w-]*\s*>|<[a-z][\w-]*\s+[a-z-]+\s*=\s*"[^"]*"/i;
+        const bad = [];
+        let seen = 0;
+        const where = (el) => el.tagName.toLowerCase()
+          + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string'
+            ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '');
+        const visible = (el) => !!(el.offsetParent || getComputedStyle(el).position === 'fixed');
+        // Text a reader can see. <pre>/<code>/<textarea> are excluded on purpose: the hub SHOWS
+        // configuration and commands there, and a YAML block containing angle brackets is the
+        // product working, not a defect.
+        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let n = w.nextNode(); n; n = w.nextNode()) {
+          const el = n.parentElement;
+          if (!el || el.closest('script,style,template,textarea,pre,code')) continue;
+          if (!n.nodeValue.trim() || !visible(el)) continue;
+          seen++;
+          if (TAG.test(n.nodeValue) || n.nodeValue.includes('data-lang=')) {
+            bad.push({ kind: 'text', where: where(el), text: n.nodeValue.trim().slice(0, 140) });
+          }
+        }
+        // The other two destinations the same helper reaches, named in the hub's own comment beside
+        // `bi`: a tooltip and a placeholder render plain text and cannot carry spans either.
+        for (const attr of ['title', 'placeholder']) {
+          for (const el of document.querySelectorAll('[' + attr + ']')) {
+            const val = el.getAttribute(attr) || '';
+            if (!val.trim()) continue;
+            seen++;
+            if (TAG.test(val) || val.includes('data-lang=')) {
+              bad.push({ kind: attr, where: where(el), text: val.slice(0, 140) });
+            }
+          }
+        }
+        return { bad, seen };
+      });
+      inspected += found.seen;
+      ok(found.bad.length === 0, `view ${v} shows markup as text: `
+        + found.bad.map((b) => `${b.kind} in <${b.where}> = ${JSON.stringify(b.text)}`).join(' · '));
+    }
+    // A floor, for the reason every derived check here carries one: a walker that stops matching
+    // inspects nothing, and "no markup found" over an empty set is indistinguishable from a pass.
+    ok(inspected >= 200, `only ${inspected} text nodes and attributes inspected across ${VIEWS.length} `
+      + 'views — the walker is not reaching the rendered page, so this check would pass by looking at nothing');
+  });
+
+
   /* ------------------------------------------- ADR-066 tail: navigation that reaches a dead name */
   await check('a run in flight can be watched: the button CONNECTS and moves to the live view', async () => {
     // Watch only renders while a run's state is `running`, so this spawns its own instead of reusing
