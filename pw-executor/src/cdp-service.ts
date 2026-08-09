@@ -73,6 +73,12 @@ const FRAME_QUALITY = Number(process.env.CDP_LIVE_QUALITY ?? 55);
 const FRAME_MAX_W = Number(process.env.CDP_LIVE_MAX_WIDTH ?? 960);
 const FRAME_MAX_H = Number(process.env.CDP_LIVE_MAX_HEIGHT ?? 720);
 const FRAME_EVERY_NTH = Number(process.env.CDP_LIVE_EVERY_NTH ?? 2);
+/**
+ * How long a run's claim outlives its last sign of life. Longer than any run this product supports,
+ * because the cost of keeping one is a map entry, and the cost of dropping one early is answering
+ * "that run never started" about a run that plainly did.
+ */
+const CLAIM_TTL_MS = Number(process.env.CDP_LIVE_CLAIM_TTL_MS ?? 12 * 60 * 60 * 1000);
 
 /** Chrome opens the HTTP endpoint a moment after Playwright's own transport is up. */
 async function waitForCdp(port: number, timeoutMs = 60_000): Promise<void> {
@@ -111,16 +117,46 @@ function startForwarder(): Promise<net.Server> {
   });
 }
 
-/* --------------------------------------------------------------- screencast state (in memory) */
-let liveFrame: { data: Buffer; ts: number } | null = null;
-let liveSession: CDPSession | null = null;
-let livePage: Page | null = null;
-let liveLastAsk = 0;
+/* --------------------------------------------------------- screencast state (in memory) */
+/*
+ * LIVE-PER-RUN. This state used to be SIX module-level singletons — one frame, one session, one
+ * page, one idle clock for the whole process. That made the live view a fact about the SERVICE
+ * rather than about a run: with two runs in flight the picture showed whichever page was created
+ * last, and the hub said so in words because the topology could not say it in data.
+ *
+ * Now a session is keyed by the Chromium TARGET it watches, and a run declares which target is its
+ * own. The identifier is not invented here: `Target.getTargetInfo` returns the same id to every CDP
+ * client, including one that ADOPTED a page it did not create — measured directly, because the
+ * design turns on it. That is what makes this work in CDP-attach mode (ADR-037), where the executor
+ * owns nothing and could not label a page any other way.
+ */
+type LiveSession = {
+  cdp: CDPSession;
+  page: Page;
+  targetId: string;
+  frame: { data: Buffer; ts: number } | null;
+  /** Waiters woken by each new frame — this is what makes the MJPEG endpoint a stream, not a poll. */
+  waiters: Array<() => void>;
+  /** Acks that failed. Non-zero means the stream has stopped or is about to. */
+  ackErrors: number;
+  lastAsk: number;
+};
+
+/** targetId -> the screencast watching it. One per PAGE, so two viewers of two runs do not fight. */
+const sessions = new Map<string, LiveSession>();
+
+/**
+ * run_id -> targetId, as declared by the executor driving that run (POST /live/claim).
+ *
+ * Deliberately NOT derived from page order, URL or creation time. All three were available and all
+ * three are wrong the moment two runs overlap, which is exactly the case this exists for.
+ */
+const claims = new Map<string, { targetId: string; at: number }>();
+
+/** Cache: a page's target id never changes, and asking costs a CDP round trip. */
+const targetIds = new WeakMap<Page, string>();
+
 let liveIdleTimer: NodeJS.Timeout | null = null;
-/** Waiters woken by each new frame — this is what makes the MJPEG endpoint a stream, not a poll. */
-let liveWaiters: Array<() => void> = [];
-/** Acks that failed. Non-zero means the stream has stopped or is about to. */
-let liveAckErrors = 0;
 
 /**
  * A SECOND Playwright client, attached over CDP to the very Chromium this process launched.
@@ -141,44 +177,96 @@ async function observerBrowser(): Promise<Browser> {
   return observer;
 }
 
-/**
- * Find the page to watch.
- *
- * This function used to force a RECONNECT when the cached observer saw no page, on the theory that
- * `connectOverCDP` only ever adopts what exists at connect time. A mutation proved that reconnect
- * unkillable — the gate passed with it removed — so it was measured directly, and the theory was
- * wrong: an observer connected to an EMPTY browser does see a page another client creates a second
- * later. What actually caused "no page during a run" was a race in the reconnect path itself,
- * awaiting `close()` on the live handle while a concurrent request was still using it. Removing the
- * reconnect removes the race and the code that existed to work around it.
- *
- * Kept as a named function rather than inlined because the two callers must not drift: status and
- * the frame path have to be looking at the same page, or they answer about different things.
- */
-async function findPage(): Promise<Page | null> {
-  return currentPage(await observerBrowser());
+/** The target id of a page, as every CDP client sees it. Cached; null when the page is gone. */
+async function targetIdOf(page: Page): Promise<string | null> {
+  const known = targetIds.get(page);
+  if (known) return known;
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    const info = (await cdp.send('Target.getTargetInfo')) as { targetInfo?: { targetId?: string } };
+    await cdp.detach().catch(() => {});
+    const id = info?.targetInfo?.targetId ?? null;
+    if (id) targetIds.set(page, id);
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+function openPages(b: Browser): Page[] {
+  return b.contexts().flatMap((c) => c.pages()).filter((p) => !p.isClosed());
 }
 
 /**
- * The page to watch: the newest one across the adopted contexts. Resolved per start rather than
- * pinned for the service's lifetime — a second run gets a new page, and a live view frozen on the
- * previous run's page would be showing something true and irrelevant.
+ * The page to watch when NO run was named: the newest one across the adopted contexts.
+ *
+ * Kept, and kept UNSCOPED on purpose. An unnamed request is what `agentctl live frame` and every
+ * pre-existing caller send, and answering them with a refusal would break a working surface to
+ * enforce a rule they never agreed to. What changed is that the answer now SAYS it is unscoped
+ * (`scoped:false` in status), so "this is the newest page" is never mistaken for "this is your run".
  */
 function currentPage(b: Browser): Page | null {
-  const pages = b.contexts().flatMap((c) => c.pages()).filter((p) => !p.isClosed());
+  const pages = openPages(b);
   return pages.length ? pages[pages.length - 1] : null;
 }
 
-async function liveStart(): Promise<string | null> {
-  liveLastAsk = Date.now();
-  if (liveSession) return null;
-  const page = await findPage();
-  if (!page) return 'the browser has no page yet — start a run first';
+type Resolution = {
+  page: Page | null;
+  targetId: string | null;
+  scoped: boolean;
+  /** Why there is no page. A refusal that does not say which of the three cases it is, is a guess. */
+  why: string | null;
+};
+
+/**
+ * Which page a request is about.
+ *
+ * ⚠ A NAMED run that cannot be resolved is REFUSED, never silently answered with somebody else's
+ * picture. That is the decision this task exists for: showing the wrong run is worse than showing
+ * nothing, because nothing is visibly nothing and a wrong picture is indistinguishable from a right
+ * one. The three failures are told apart rather than collapsed — unclaimed, claimed-but-gone, and
+ * no-page-at-all lead a reader to three different places.
+ */
+async function resolve(runId: string): Promise<Resolution> {
+  const b = await observerBrowser();
+  if (!runId) {
+    const p = currentPage(b);
+    return { page: p, targetId: p ? await targetIdOf(p) : null, scoped: false,
+             why: p ? null : 'the browser has no page yet — start a run first' };
+  }
+  const claim = claims.get(runId);
+  if (!claim) {
+    return { page: null, targetId: null, scoped: true,
+             why: `run ${runId} has not claimed a page — either it has not started its browser yet, ` +
+                  'or this deployment runs the executor without a browser service to announce to' };
+  }
+  for (const p of openPages(b)) {
+    if ((await targetIdOf(p)) === claim.targetId) {
+      return { page: p, targetId: claim.targetId, scoped: true, why: null };
+    }
+  }
+  return { page: null, targetId: claim.targetId, scoped: true,
+           why: `run ${runId} claimed a page that is no longer open — the run has finished or its tab was closed` };
+}
+
+async function liveStart(runId: string): Promise<{ session: LiveSession | null; why: string | null; scoped: boolean }> {
+  const r = await resolve(runId);
+  if (!r.page || !r.targetId) return { session: null, why: r.why, scoped: r.scoped };
+
+  const existing = sessions.get(r.targetId);
+  if (existing) {
+    existing.lastAsk = Date.now();
+    return { session: existing, why: null, scoped: r.scoped };
+  }
+
+  const page = r.page;
+  const targetId = r.targetId;
   const cdp = await page.context().newCDPSession(page);
+  const sess: LiveSession = { cdp, page, targetId, frame: null, waiters: [], ackErrors: 0, lastAsk: Date.now() };
   cdp.on('Page.screencastFrame', async (f: { data: string; sessionId: number }) => {
-    liveFrame = { data: Buffer.from(f.data, 'base64'), ts: Date.now() };
-    const woken = liveWaiters;
-    liveWaiters = [];
+    sess.frame = { data: Buffer.from(f.data, 'base64'), ts: Date.now() };
+    const woken = sess.waiters;
+    sess.waiters = [];
     for (const w of woken) w();
     // The ack is what keeps frames coming: without it Chromium sends exactly one and stops. The
     // comment here used to say exactly that and then swallow the failure anyway, which left the
@@ -188,16 +276,15 @@ async function liveStart(): Promise<string | null> {
     try {
       await cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId });
     } catch (e) {
-      liveAckErrors += 1;
-      if (liveAckErrors === 1) log('screencast ack failed — frames will stop:', (e as Error).message);
+      sess.ackErrors += 1;
+      if (sess.ackErrors === 1) log('screencast ack failed — frames will stop:', (e as Error).message);
     }
   });
   await cdp.send('Page.startScreencast', {
     format: 'jpeg', quality: FRAME_QUALITY,
     maxWidth: FRAME_MAX_W, maxHeight: FRAME_MAX_H, everyNthFrame: FRAME_EVERY_NTH,
   });
-  liveSession = cdp;
-  livePage = page;
+  sessions.set(targetId, sess);
 
   // SEED THE FIRST FRAME EXPLICITLY, and note WHICH PART of this does the work.
   //
@@ -216,37 +303,76 @@ async function liveStart(): Promise<string | null> {
   // rather than left as an unexplained blank.
   try {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: FRAME_QUALITY });
-    if (shot && typeof shot.data === 'string' && !liveFrame) {
-      liveFrame = { data: Buffer.from(shot.data, 'base64'), ts: Date.now() };
+    if (shot && typeof shot.data === 'string' && !sess.frame) {
+      sess.frame = { data: Buffer.from(shot.data, 'base64'), ts: Date.now() };
     }
   } catch (e) {
     log('could not seed the first frame:', (e as Error).message);
   }
 
-  log(`screencast started on ${page.url().slice(0, 80)}`);
-  return null;
+  log(`screencast started on ${page.url().slice(0, 80)} (target ${targetId.slice(0, 8)})`);
+  return { session: sess, why: null, scoped: r.scoped };
 }
 
-async function liveStop(reason: string): Promise<void> {
-  if (!liveSession) return;
-  const s = liveSession;
-  liveSession = null; livePage = null; liveFrame = null; liveAckErrors = 0;
-  try { await s.send('Page.stopScreencast'); } catch { /* page gone */ }
-  try { await s.detach(); } catch { /* already detached */ }
-  log(`screencast stopped (${reason})`);
+async function liveStop(targetId: string, reason: string): Promise<void> {
+  const sess = sessions.get(targetId);
+  if (!sess) return;
+  sessions.delete(targetId);
+  try { await sess.cdp.send('Page.stopScreencast'); } catch { /* page gone */ }
+  try { await sess.cdp.detach(); } catch { /* already detached */ }
+  log(`screencast stopped on target ${targetId.slice(0, 8)} (${reason})`);
 }
 
 /** Serve the live view. Kept OFF the CDP relay port on purpose — that port speaks CDP and nothing else. */
 function startLiveServer(): Promise<http.Server> {
   liveIdleTimer = setInterval(() => {
-    if (liveSession && Date.now() - liveLastAsk > IDLE_STOP_MS) void liveStop('nobody watching');
-    // A run that finished takes its page with it; keeping a session on a closed page would go quiet
-    // without saying why.
-    if (liveSession && livePage && livePage.isClosed()) void liveStop('the page closed');
+    // Per SESSION now, not per process: one viewer leaving must not stop another viewer's stream,
+    // and one run's page closing must not take down the picture of a run still going.
+    for (const [targetId, sess] of sessions) {
+      if (Date.now() - sess.lastAsk > IDLE_STOP_MS) { void liveStop(targetId, 'nobody watching'); continue; }
+      // A run that finished takes its page with it; keeping a session on a closed page would go quiet
+      // without saying why.
+      if (sess.page.isClosed()) void liveStop(targetId, 'the page closed');
+    }
+    // A claim outlives the page it named — that is what makes "the run has finished" a different
+    // answer from "the run never started". Dropped only when it is older than any run could be.
+    for (const [runId, c] of claims) {
+      if (Date.now() - c.at > CLAIM_TTL_MS) claims.delete(runId);
+    }
   }, 2_000);
 
   const srv = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${LIVE_PORT}`);
+    // LIVE-PER-RUN. One place parses it, so status and the frame paths cannot end up answering about
+    // different runs — the same reason findPage was a named function rather than two inline lookups.
+    const runId = (url.searchParams.get('run_id') ?? '').trim();
+
+    // The executor announces which Chromium target its run is driving. POST, because it writes; and
+    // it is the ONLY writer on this surface, which is why the method is checked rather than assumed.
+    if (url.pathname === '/live/claim') {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'text/plain' });
+        return res.end('POST only');
+      }
+      let body = '';
+      for await (const chunk of req) {
+        body += chunk;
+        if (body.length > 4096) { res.writeHead(413); return res.end(); }
+      }
+      let claim: { run_id?: string; target_id?: string };
+      try { claim = JSON.parse(body || '{}'); } catch { claim = {}; }
+      const rid = (claim.run_id ?? '').trim();
+      const tid = (claim.target_id ?? '').trim();
+      if (!rid || !tid) {
+        res.writeHead(400, { 'content-type': 'text/plain' });
+        return res.end('run_id and target_id are both required');
+      }
+      claims.set(rid, { targetId: tid, at: Date.now() });
+      log(`run ${rid} claimed target ${tid.slice(0, 8)}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, claims: claims.size }));
+    }
+
     if (url.pathname === '/live/status') {
       // Connect the observer here too, so status answers about the BROWSER rather than about
       // whether anyone happened to ask for a frame first. A status that reports has_page:false
@@ -256,58 +382,82 @@ function startLiveServer(): Promise<http.Server> {
       // `catch {}` produced exactly the wrong answer it was placed next to a warning about: status
       // said has_page:false during a run in which the very next request returned a frame. "Could not
       // look" and "looked and found nothing" are different facts and must not share a field.
-      let p: Page | null = null;
+      let r: Resolution | null = null;
       let lookupError: string | null = null;
-      try { p = await findPage(); } catch (e) { lookupError = (e as Error).message; }
+      try { r = await resolve(runId); } catch (e) { lookupError = (e as Error).message; }
+      const sess = r && r.targetId ? sessions.get(r.targetId) ?? null : null;
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({
-        streaming: !!liveSession,
-        has_page: !!p,
-        url: p ? p.url() : null,
-        last_frame_ts: liveFrame ? liveFrame.ts : null,
-        ack_errors: liveAckErrors,
+        streaming: !!sess,
+        has_page: !!(r && r.page),
+        url: r && r.page ? r.page.url() : null,
+        last_frame_ts: sess && sess.frame ? sess.frame.ts : null,
+        ack_errors: sess ? sess.ackErrors : 0,
+        // LIVE-PER-RUN. `scoped:false` is the load-bearing field: it is how a caller learns the
+        // picture is "the newest page" rather than "your run". Without it an unnamed request and a
+        // resolved one are indistinguishable, which is the confusion this whole task removes.
+        run_id: runId || null,
+        scoped: r ? r.scoped : false,
+        reason: r ? r.why : null,
         error: lookupError,
       }));
     }
 
     if (url.pathname === '/live/frame.jpg') {
-      const why = await liveStart().catch((e) => (e as Error).message);
-      if (why) { res.writeHead(503, { 'content-type': 'text/plain' }); return res.end(why); }
+      const started = await liveStart(runId).catch((e) => ({ session: null, why: (e as Error).message, scoped: !!runId }));
+      if (!started.session) {
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        return res.end(started.why ?? 'no page');
+      }
+      const sess = started.session;
       // Wait briefly for the FIRST frame rather than answering 503 on a cold start: the screencast
       // was only just asked for, and "not ready" a millisecond after starting it is not information.
-      if (!liveFrame) await new Promise<void>((resolve) => {
+      if (!sess.frame) await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 3_000);
-        liveWaiters.push(() => { clearTimeout(t); resolve(); });
+        sess.waiters.push(() => { clearTimeout(t); resolve(); });
       });
-      if (!liveFrame) { res.writeHead(503, { 'content-type': 'text/plain' }); return res.end('no frame yet'); }
-      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
-      return res.end(liveFrame.data);
+      if (!sess.frame) { res.writeHead(503, { 'content-type': 'text/plain' }); return res.end('no frame yet'); }
+      res.writeHead(200, {
+        'content-type': 'image/jpeg', 'cache-control': 'no-store',
+        // The picture says WHOSE it is, in a header a proxy carries and a human can read. A JPEG
+        // cannot carry that in its body, and a caller that asked for a run deserves to be able to
+        // check it got that run rather than trust the routing.
+        'x-sentinel-run': runId || '',
+        'x-sentinel-scoped': String(started.scoped),
+      });
+      return res.end(sess.frame.data);
     }
 
     if (url.pathname === '/live/mjpeg') {
-      const why = await liveStart().catch((e) => (e as Error).message);
-      if (why) { res.writeHead(503, { 'content-type': 'text/plain' }); return res.end(why); }
+      const startedM = await liveStart(runId).catch((e) => ({ session: null, why: (e as Error).message, scoped: !!runId }));
+      if (!startedM.session) {
+        res.writeHead(503, { 'content-type': 'text/plain' });
+        return res.end(startedM.why ?? 'no page');
+      }
+      const msess = startedM.session;
       res.writeHead(200, {
         'content-type': 'multipart/x-mixed-replace; boundary=sentinelframe',
         'cache-control': 'no-store',
         connection: 'close',
+        'x-sentinel-run': runId || '',
+        'x-sentinel-scoped': String(startedM.scoped),
       });
       let open = true;
       req.on('close', () => { open = false; });
       let sent = -1;
       while (open) {
-        liveLastAsk = Date.now();
-        if (liveFrame && liveFrame.ts !== sent) {
-          sent = liveFrame.ts;
-          res.write(`--sentinelframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${liveFrame.data.length}\r\n\r\n`);
-          res.write(liveFrame.data);
+        msess.lastAsk = Date.now();
+        if (msess.frame && msess.frame.ts !== sent) {
+          sent = msess.frame.ts;
+          res.write(`--sentinelframe\r\nContent-Type: image/jpeg\r\nContent-Length: ${msess.frame.data.length}\r\n\r\n`);
+          res.write(msess.frame.data);
           res.write('\r\n');
         }
         // Woken BY a frame, with a ceiling so a stalled screencast cannot wedge the connection open
         // forever with nothing said.
         await new Promise<void>((resolve) => {
           const t = setTimeout(resolve, 2_000);
-          liveWaiters.push(() => { clearTimeout(t); resolve(); });
+          msess.waiters.push(() => { clearTimeout(t); resolve(); });
         });
       }
       return res.end();

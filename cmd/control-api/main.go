@@ -846,6 +846,10 @@ func (s *server) spawnRun(req runRequest) *run {
 	if s.store != nil && s.storeAddr != "" {
 		cmd.Env = append(cmd.Env, "STORE_ADDR="+s.storeAddr)
 	}
+	// LIVE-PER-RUN. THIS process names the run — the hub, the store and every route already use `id`.
+	// agentctl would otherwise mint a second, unrelated id for the same run, and the live view (which
+	// is asked about the id the hub knows) would never resolve a page. One run, one name.
+	cmd.Env = append(cmd.Env, "SENTINEL_RUN_ID="+id)
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
