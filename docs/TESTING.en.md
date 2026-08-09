@@ -29,8 +29,8 @@ every package prints `ok` or `--- PASS`; a non-zero exit code is a blocker.
 Run all offline tests with a single command:
 
 ```bash
-for t in m3 m4 m4b m5 b1 m7 m8 m9 m9_2 m9_2b r2_multiturn r3_takeover determinism record_bridge sanitize m13_chats m14_agui m14_replay_agui m_structured_out m11_4; do
-    .venv/bin/python tests/test_${t}_offline.py
+for f in tests/test_*_offline.py; do
+    .venv/bin/python "$f"
 done
 ```
 
@@ -49,10 +49,13 @@ Or individually — for fast isolation:
 .venv/bin/python tests/test_m9_2b_offline.py # two-phase goal/describe, reconcile, rich RunConfig
 ```
 
-The list above is a representative sample (one example per M-stage); the remaining modules
-in the loop (`r2_multiturn`, `r3_takeover`, `determinism`, `record_bridge`, `sanitize`, `m13_chats`,
-`m14_agui`, `m14_replay_agui`, `m_structured_out`, `m11_4`) run with the same pattern
-(`.venv/bin/python tests/test_<module>_offline.py`) — see the full list in the `for` loop above.
+The list above is a representative sample (one example per M-stage), not an exhaustive list.
+The full list of offline suites is not maintained by hand (principle 5, `docs/DEVELOPMENT.en.md`
+§0) — the `for` loop in §1.2 discovers them by glob `tests/test_*_offline.py` and runs them with
+the same pattern (`.venv/bin/python tests/test_<module>_offline.py`). The count is deliberately
+NOT written down here — it goes stale faster than it gets corrected; ask the tree instead with
+`ls tests/test_*_offline.py | wc -l`. CI requires at least 25 discovered (ADR-087,
+`.github/workflows/ci.yml`).
 
 Each file prints `PASS <test_name>` for every test and `ALL PASS (N)` at the end.
 A non-zero exit code or the string `FAIL` in stdout is a blocker.
@@ -427,8 +430,8 @@ docker compose run --rm \
 | Context | Minimum set of commands |
 |---|---|
 | Before any commit | `go vet ./...` + `cd pw-executor && npx tsc --noEmit` + `gitleaks detect` |
-| PR / feature branch | All offline tests (§1.1–1.5) |
-| Release candidate | Offline tests + live demo via docker compose + live run vs. staging (§3) |
+| PR / feature branch that adds a component or feature | Full offline suite (§1.1–1.2) + the DOM gates (setup-wizard, hub Logs-view, static-showcase) + `ui-smoke` screenshots + docker in EVERY delivery shape + a live run of the changed component + mutation testing — principle 7 (`docs/DEVELOPMENT.en.md` §0) requires this on EVERY such PR; the full binding checklist is [`docs/PR_ACCEPTANCE.en.md`](PR_ACCEPTANCE.en.md) |
+| Release candidate (tag) | Everything above, plus the release-artifact gates: `install-smoke` / `deb-smoke` / `install-ps1-smoke` / `airgap` (`.github/workflows/ci.yml`, `release.yml`) |
 | New LLM model | `test_b1_offline.py` + smoke run of goal mode vs. `file://` (§3.2) |
 | pw-executor change | `npx tsc --noEmit` + `test_m9_offline.py` |
 | Healing change | `test_m3_offline.py` + `test_m8_offline.py` + live replay vs. site-v2 (§3.1) |

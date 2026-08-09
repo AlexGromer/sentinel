@@ -20,11 +20,11 @@ opening a PR.
 
 ```bash
 # Go
-go build ./... && go vet ./... && go test ./internal/store/
+go test ./...
 # Python (offline suites — no network, no browser)
-for t in m3 m4 m4b m5 b1 m7 m8; do .venv/bin/python tests/test_${t}_offline.py; done
+for f in tests/test_*_offline.py; do .venv/bin/python "$f"; done
 # TypeScript
-cd pw-executor && npx tsc --noEmit
+cd pw-executor && npm test   # node:test; gates the compile too — this is what CI runs
 ```
 
 Full setup and per-component build live in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
@@ -47,8 +47,9 @@ feat(m9): add browser.fill/type tools to pw-executor (ADR-022)
 
 - Branch from `main`: `feat/m9-fill-type`, `fix/...`, `docs/...`.
 - Open a PR with the template; fill the checklist and link the issue.
-- A PR needs: green CI (build → replay matrix), the test gates above, and an updated contract/ADR/GAP
-  when behaviour or architecture changes.
+- A PR needs to satisfy the acceptance checklist in [`docs/PR_ACCEPTANCE.md`](docs/PR_ACCEPTANCE.md)
+  (CI-derived checks + the recorded manual checks), and an updated contract/ADR/GAP when behaviour
+  or architecture changes.
 - `main` is protected — merge via PR only.
 
 ## Issues
