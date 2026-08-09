@@ -766,6 +766,46 @@
       "reach": "capability"
     },
     {
+      "id": "live-per-run",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Живое видео прогона, привязанное к его id",
+      "title_en": "Live run video, scoped to its run id",
+      "how_ru": "GET /v1/live/status|frame.jpg|mjpeg и `agentctl live status|frame|stream` принимают --run-id/run_id: названный прогон получает СВОЮ страницу или отказ с причиной (не заявлял · заявлял, но она закрыта · страницы нет вовсе), а не чужую картинку. Без run_id запрос легален и отвечает про новейшую страницу, помечая себя `scoped:false` в JSON и заголовками X-Sentinel-Run/X-Sentinel-Scoped кадра (ADR-121).",
+      "how_en": "GET /v1/live/status|frame.jpg|mjpeg and `agentctl live status|frame|stream` take --run-id/run_id: a named run gets ITS OWN page or a reasoned refusal (unclaimed · claimed-but-gone · no page at all), never somebody else's picture. Without run_id the request stays legal and answers about the newest page, marking itself `scoped:false` in the JSON and via the frame's X-Sentinel-Run/X-Sentinel-Scoped headers (ADR-121).",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/live/status"
+        },
+        {
+          "kind": "http",
+          "ref": "GET /v1/live/frame.jpg"
+        },
+        {
+          "kind": "http",
+          "ref": "GET /v1/live/mjpeg"
+        },
+        {
+          "kind": "cli",
+          "ref": "live status"
+        },
+        {
+          "kind": "cli",
+          "ref": "live frame"
+        },
+        {
+          "kind": "cli",
+          "ref": "live stream"
+        },
+        {
+          "kind": "ui",
+          "ref": "live"
+        }
+      ],
+      "reach": "capability"
+    },
+    {
       "id": "ui-library",
       "group": "UI",
       "severity": "medium",

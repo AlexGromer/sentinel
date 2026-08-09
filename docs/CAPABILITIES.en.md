@@ -46,6 +46,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 |---|---|
 | **Attach to your own Chrome (CDP) ⭐** | PW_CDP_ENDPOINT=http://localhost:9222 — the tool drives YOUR already-open Chrome (ADR-037). |
 | **Take over a live run by hand ⭐** | GET /v1/stream (WS) — take over a running run, drive by hand, hand control back. |
+| **Live video scoped to a run** | GET /v1/live/status\|frame.jpg\|mjpeg?run_id=<id>, agentctl live status\|frame\|stream --run-id <id> — a named run gets its own page or a reasoned refusal, never somebody else's picture; without run_id — the previous behaviour, honestly marked scoped:false (ADR-121). |
 | **The brain as an MCP server ⭐** | RUN_MODE=mcp-server — run the brain as an MCP server (tools/list + sampling). |
 | **Log in once (login-as-test) ⭐** | STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef. |
 | **Multi-turn chat authoring** | RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation. |

@@ -3699,6 +3699,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      what is happening with the tool and the business plainly apart. Both are fed by the AG-UI events
      the hub already receives — this adds a second consumer, it does not add a second stream. */
   var lvMode = 'frame', lvRunId = '', lvLastFrame = '';
+  /* LIVE-PER-RUN (ADR-121). The live view names the run it is about. Without this the request
+     reached control-api unscoped and the browser service answered about the NEWEST page — with two
+     runs in flight that is somebody else's screen, and a wrong picture is indistinguishable from a
+     right one. Empty run id stays legal and answers unscoped, which the service says out loud. */
+  function lvQuery(){ return lvRunId ? ('?run_id=' + encodeURIComponent(lvRunId)) : ''; }
 
 
   /* ---- ADR-108d: artefacts, from the chat, on a canvas ---- */
@@ -3869,7 +3874,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     var st;
     try {
-      var rs = await fetch(capiBase()+'/v1/live/status', {headers: authHdr()});
+      var rs = await fetch(capiBase()+'/v1/live/status'+lvQuery(), {headers: authHdr()});
       st = await rs.json();
     } catch(e){
       box.innerHTML = '<p class="fail">'+bi('не удалось спросить состояние живого вида: ','could not ask for the live-view state: ')+esc(e.message)+'</p>';
@@ -3907,7 +3912,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var frames = 0, t0 = Date.now();
 
     try {
-      var r = await fetch(capiBase()+'/v1/live/mjpeg', {headers: authHdr(), signal: lvVideoAbort.signal});
+      var r = await fetch(capiBase()+'/v1/live/mjpeg'+lvQuery(), {headers: authHdr(), signal: lvVideoAbort.signal});
       if (!r.ok || !r.body) throw new Error('HTTP '+r.status);
       var reader = r.body.getReader();
       var buf = new Uint8Array(0);

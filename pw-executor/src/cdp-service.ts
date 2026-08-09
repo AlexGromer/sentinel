@@ -240,6 +240,15 @@ async function resolve(runId: string): Promise<Resolution> {
              why: `run ${runId} has not claimed a page — either it has not started its browser yet, ` +
                   'or this deployment runs the executor without a browser service to announce to' };
   }
+  // A page two runs share cannot be attributed to either. Saying so is the whole point: a picture
+  // that is true for one run and false for the other, with nothing on screen to tell which, is
+  // exactly what this task exists to stop.
+  const sharers = [...claims.entries()].filter(([, c]) => c.targetId === claim.targetId).map(([r]) => r);
+  if (sharers.length > 1) {
+    return { page: null, targetId: claim.targetId, scoped: true,
+             why: `run ${runId} shares one browser page with ${sharers.filter((r) => r !== runId).join(', ')} ` +
+                  '— in CDP-attach mode runs adopt the same tab, so this picture cannot be attributed to one of them' };
+  }
   for (const p of openPages(b)) {
     if ((await targetIdOf(p)) === claim.targetId) {
       return { page: p, targetId: claim.targetId, scoped: true, why: null };
@@ -367,10 +376,28 @@ function startLiveServer(): Promise<http.Server> {
         res.writeHead(400, { 'content-type': 'text/plain' });
         return res.end('run_id and target_id are both required');
       }
+      // ⚠ TWO RUNS CAN CLAIM ONE PAGE, and it is not a bug in the claim — it is the topology.
+      // MEASURED with two concurrent runs against one browser service: both announced target
+      // 84DC6185, because in CDP-attach mode the executor adopts `contexts()[0]` and then
+      // `pages()[0]` — the SECOND run drives the SAME TAB as the first. A label cannot separate what
+      // the browser did not separate.
+      //
+      // So the collision is DETECTED and SAID rather than papered over. Answering either run with
+      // that shared page would be the original defect wearing a run id: the picture would be true
+      // for one of them and a lie for the other, and nothing on screen would tell them apart.
+      // Whether a run should instead create its OWN page in the adopted context is a change to
+      // ADR-037's promise (reuse the user's session AND their open tab), so it is a decision to be
+      // taken deliberately — not one this endpoint makes by itself while nobody is looking.
+      const conflict = [...claims.entries()].find(([r, c]) => r !== rid && c.targetId === tid);
       claims.set(rid, { targetId: tid, at: Date.now() });
-      log(`run ${rid} claimed target ${tid.slice(0, 8)}`);
+      if (conflict) {
+        log(`run ${rid} claimed target ${tid.slice(0, 8)} — ALSO claimed by ${conflict[0]}; ` +
+            'the live view cannot attribute a page two runs share');
+      } else {
+        log(`run ${rid} claimed target ${tid.slice(0, 8)}`);
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, claims: claims.size }));
+      return res.end(JSON.stringify({ ok: true, claims: claims.size, shared_with: conflict ? conflict[0] : null }));
     }
 
     if (url.pathname === '/live/status') {
