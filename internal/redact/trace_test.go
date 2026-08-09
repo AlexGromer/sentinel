@@ -291,3 +291,82 @@ func TestRedactingTwiceChangesNothingMore(t *testing.T) {
 		t.Errorf("the second pass claims to have found more to redact: %+v", st)
 	}
 }
+
+// TestASecretHeaderIsBlankedByItsNameNotItsShape covers the leak measured on 2026-08-08.
+//
+// trace.network stores headers as `{"name":"X-Api-Key","value":"…"}`, so the header's name is a
+// VALUE, not a KEY — and the per-key rule that blanks `{"api_key":"…"}` structurally cannot see it.
+// What survived was only what `Line` recognises by its own shape, which is why `Authorization:
+// Bearer …` looked protected and hid the fact that nothing else was.
+//
+// Asserted as four SEPARATE cases rather than one table with a shared expectation, because the four
+// travel through different code: two through the new pair rule, one through reBearer inside Line,
+// one through the per-key rule. A single case passing tells you nothing about the other three.
+func TestASecretHeaderIsBlankedByItsNameNotItsShape(t *testing.T) {
+	// ⚠ THE CANARIES ARE DELIBERATELY UNCONVINCING, and that is not sloppiness.
+	//
+	// Two independent reasons, and both would be broken by "making them look real":
+	//
+	//  1. This test asserts that a value is blanked because its SIBLING `name` is credential-shaped —
+	//     not because the value itself looks like a credential. A canary that Line() would recognise
+	//     on its own (a Bearer token, a JWT) would make the test pass through the OLD path and prove
+	//     nothing about the new rule. `CANARY-not-a-real-credential-0001` is recognised by neither
+	//     reBearer nor reJWT nor scanNamedSecrets, so only the pair rule can blank it.
+	//  2. gitleaks scans this repository on every push as a HARD failure, and it is right to: a
+	//     realistic `sk-live-…` in a test file is indistinguishable from a leaked one to any scanner,
+	//     to any reviewer, and to anyone who greps history later. The first version of this test used
+	//     one and CI refused it (generic-api-key, trace_test.go:344). Allow-listing the file would
+	//     have traded a real guard for a green tick.
+	blanked := func(t *testing.T, line string) string {
+		t.Helper()
+		out, n := redactJSONText([]byte(line))
+		if n == 0 {
+			t.Fatalf("nothing was redacted in %s", line)
+		}
+		return string(out)
+	}
+
+	t.Run("an api-key header, which has no credential-shaped KEY anywhere", func(t *testing.T) {
+		got := blanked(t, `{"headers":[{"name":"X-Api-Key","value":"CANARY-not-a-real-credential-0001"}]}`)
+		if strings.Contains(got, "CANARY-not-a-real-credential-0001") {
+			t.Fatalf("the key survived into the archive: %s", got)
+		}
+	})
+
+	t.Run("a cookie header, whose value Line does not recognise either", func(t *testing.T) {
+		got := blanked(t, `{"headers":[{"name":"Cookie","value":"session=CANARY-not-a-real-session-0002"}]}`)
+		if strings.Contains(got, "abcdef123456") {
+			t.Fatalf("the session survived into the archive: %s", got)
+		}
+	})
+
+	t.Run("an authorization header still goes, as it always did", func(t *testing.T) {
+		got := blanked(t, `{"headers":[{"name":"Authorization","value":"Bearer sk-abc.def.ghi"}]}`)
+		if strings.Contains(got, "sk-abc.def.ghi") {
+			t.Fatalf("a bearer credential survived: %s", got)
+		}
+	})
+
+	t.Run("an ordinary header is left alone — a rule that blanks everything protects nothing", func(t *testing.T) {
+		out, _ := redactJSONText([]byte(`{"headers":[{"name":"Accept","value":"application/json"}]}`))
+		if !strings.Contains(string(out), "application/json") {
+			t.Fatalf("an innocent header was blanked, which would make the archive useless: %s", out)
+		}
+	})
+
+	t.Run("the member KEY rule still works — the pair rule must not have replaced it", func(t *testing.T) {
+		got := blanked(t, `{"api_key":"CANARY-not-a-real-credential-0001"}`)
+		if strings.Contains(got, "CANARY-not-a-real-credential-0001") {
+			t.Fatalf("the original per-key rule regressed: %s", got)
+		}
+	})
+
+	t.Run("a name member that is not a header keeps working normally", func(t *testing.T) {
+		// `{"name":"Accept"}` with no sibling `value` must not crash or invent a member, and a
+		// `name` that is credential-shaped with no `value` beside it has nothing to blank.
+		out, _ := redactJSONText([]byte(`{"name":"Cookie"}`))
+		if strings.Contains(string(out), Placeholder) {
+			t.Fatalf("a lone name member produced a redaction out of nothing: %s", out)
+		}
+	})
+}

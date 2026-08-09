@@ -441,6 +441,27 @@ func redactJSONText(line []byte) ([]byte, int) {
 	walk = func(v interface{}) interface{} {
 		switch t := v.(type) {
 		case map[string]interface{}:
+			// A NAME/VALUE PAIR IS ONE ASSERTION, and reading it as two was a measured leak.
+			//
+			// trace.network stores request and response headers as `{"name":"X-Api-Key","value":"…"}`
+			// — the header's name is the VALUE of a member called `name`, not a KEY. The per-key rule
+			// below therefore never sees a credential-shaped key here: it sees `name` and `value`,
+			// neither of which is one. What survived was only whatever `Line` recognises by its own
+			// shape, so `Authorization: Bearer …` was blanked (reBearer) while `X-Api-Key: sk-live-…`
+			// and `Cookie: session=…` went into the archive verbatim. Measured on all four shapes
+			// before this existed; the file's own header comment documents the pair layout, so the
+			// shape was known and simply not joined up.
+			//
+			// ⚠ The fix is HERE and not in the vocabulary. configguard.Secretish has three callers
+			// (this walk, redact.Value, scanNamedSecrets); widening it to catch header names would
+			// change what the run log and the service journal blank as well — a change of blast
+			// radius disguised as a bug fix.
+			if nm, ok := t["name"].(string); ok && configguard.Secretish(nm) {
+				if val, ok := t["value"].(string); ok && val != Placeholder {
+					t["value"] = Placeholder
+					n++
+				}
+			}
 			for k, sub := range t {
 				if s, isStr := sub.(string); isStr {
 					if configguard.Secretish(k) {
