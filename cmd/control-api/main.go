@@ -240,6 +240,11 @@ type server struct {
 	llmBaseURL string
 	httpClient *http.Client
 	ready      readyState
+
+	// QA-REPORT-SERVICE (ADR-119): the memo behind GET /metrics. Its own lock for the same reason
+	// `ready` has one — walking runs/ is disk work that grows with the number of runs, and a scraper
+	// polling it must never queue behind, or in front of, a run being created.
+	metrics metricsState
 }
 
 func newRunID() string {

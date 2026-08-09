@@ -38,7 +38,9 @@ go build -o bin/agentctl ./cmd/agentctl
 go build -o bin/store-gateway ./cmd/store-gateway     # M2b-1: gRPC persistence; agentctl auto-spawns it
 go build -o bin/control-api ./cmd/control-api         # M9.3: HTTP control-plane for the setup-WebUI/CI
 go build -o bin/orchestrator ./cmd/orchestrator       # M8: gRPC RunControl supervisor (budget/abort/takeover)
-go build -o bin/report-service ./cmd/report-service   # M8: HTTP report/metrics server (long-lived mode)
+# `bin/report-service` — removed 2026-08-09 (ADR-119): built and signed since M8 but never launched by
+# anything (absent from the Dockerfile, every compose file, install.sh). The aggregate /metrics scrape
+# now lives in control-api (cmd/control-api/metrics_agg.go); build it above with the rest.
 
 # Python — brain (LangGraph)
 cd brain && UV_PROJECT_ENVIRONMENT=../.venv uv sync --frozen && cd ..   # 13 locked deps from brain/uv.lock; UV_PROJECT_ENVIRONMENT puts the venv at repo-root ./.venv (where agentctl looks), like the Dockerfile's UV_PROJECT_ENVIRONMENT=/app/.venv

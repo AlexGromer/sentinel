@@ -144,9 +144,10 @@ server launch.
 `pw-executor` via `browser.traceStop(path=…)` (`:143`); `pw-executor` writes the file through Playwright
 (`pw-executor/src/server.ts:421-428`) and merely **echoes** the path back — it never originates it.
 The gRPC `RunEvent` carries no trace field, and no Go code writes `trace.zip` (only `sweepTraces` deletes
-old ones). `report-service` does not serve it — the service exposes exactly three routes: `/healthz`,
-`/report/`, and `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` is read directly
-from the run directory (or from the CI artifact).
+old ones). There is no separate HTTP service for traces anymore — `cmd/report-service` has been removed
+(ADR-119, 2026-08-09): it was built and signed but never launched by anything. `trace.zip` is read
+directly from the run directory (or from the CI artifact), or served through control-api's artifact
+whitelist — `GET /v1/runs/{id}/artifact?name=trace.zip` (token-gated, ADR-099).
 
 **Viewing:** `playwright show-trace trace.zip`
 
@@ -158,27 +159,69 @@ artifact.
 
 ## 5. Prometheus Metrics
 
-Exposed by `report-service` at `/metrics` — a concatenation of `<run_dir>/metrics.prom` across
-all runs (Prometheus text format, `_metrics()` in `brain/report.py:14-35`). No Grafana dashboard
-and no Alertmanager rules file ship in the repository.
+The aggregate scrape is served by **control-api** at the root `GET /metrics` (ADR-119,
+`cmd/control-api/metrics_agg.go`). Before 2026-08-09 the route belonged to `report-service` — a
+binary that was built and signed but launched by NOTHING: absent from the `Dockerfile`, every
+compose file, and `install.sh`. The route is `accessAuthed`: a regular token sees the aggregate over
+its OWN runs; the machine token and a deployment with no accounts (`owner == ""`) see every run. No
+Grafana dashboard and no Alertmanager rules file ship in the repository.
 
-| Metric | Labels | Description |
+**The aggregate and the per-run artifact are now DIFFERENT things.** `<run_dir>/metrics.prom`
+(`_metrics()` in `brain/report.py:14-35`) is unchanged: a plain node_exporter textfile with no label,
+no `# HELP`/`# TYPE`. A byte-for-byte concatenation of these files would have produced N duplicates of
+the same series (a broken scrape, not an aggregate), so the merge happens IN CONTROL-API on every
+`/metrics` request: each series gets a `run="<id>"` label, series are grouped by family, and each
+family gets exactly one `# HELP`/`# TYPE` header (the type is DERIVED from the name — a `_total`
+suffix means counter, everything else gauge). Fixing `brain/report.py` alone would not have been
+enough: this repository already has 192 run directories with no run label, and nobody is going to
+rewrite them.
+
+| Per-run metric | Labels | Description |
 |---|---|---|
-| `sentinel_run_steps` | — | Number of steps in the run |
-| `sentinel_run_exit_code` | — | Structured exit code of the run |
-| `sentinel_heal_total` | — | Count of healed steps |
-| `sentinel_heal_by_strategy_total` | `strategy` | Count of heals by strategy — `strategy` ∈ the `PRIORS` keys (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), or `unknown` (on a cache hit the cached locator's own strategy — a `PRIORS` key — is returned; the literal `cache` is never emitted as a label) |
-| `sentinel_regression_total` | `kind` | Count of regressions by kind — `kind` ∈ {`a11y`, `visual`} |
-| `sentinel_quarantined_total` | — | Number of currently quarantined steps |
-| `sentinel_failed_total` | — | Number of failed steps |
+| `sentinel_run_steps` | `run` | Number of steps in the run |
+| `sentinel_run_exit_code` | `run` | Structured exit code of the run |
+| `sentinel_heal_total` | `run` | Count of healed steps |
+| `sentinel_heal_by_strategy_total` | `run`, `strategy` | Count of heals by strategy — `strategy` ∈ the `PRIORS` keys (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), or `unknown` (on a cache hit the cached locator's own strategy — a `PRIORS` key — is returned; the literal `cache` is never emitted as a label) |
+| `sentinel_regression_total` | `run`, `kind` | Count of regressions by kind — `kind` ∈ {`a11y`, `visual`} |
+| `sentinel_quarantined_total` | `run` | Number of currently quarantined steps |
+| `sentinel_failed_total` | `run` | Number of failed steps |
 
-**Tokens and cost are not a Prometheus metric.** As of M15.1 they're computed by the control-API
+The response is capped at the **500 newest runs** (newest first), and what is dropped is STATED, not
+silent — three metrics about the aggregator itself:
+
+| Aggregator metric | Labels | Description |
+|---|---|---|
+| `sentinel_metrics_runs_included` | — | Run directories included in this response, after scoping to the caller |
+| `sentinel_metrics_runs_omitted` | `reason` ∈ {`cap`, `unreadable`, `too_large`, `conflict`} | Run directories the aggregator did not include, by reason |
+| `sentinel_metrics_lines_dropped` | — | Lines of a source `metrics.prom` that were not recognisable Prometheus textfile syntax |
+
+The walk of `runs/` is cached for 10 s with single-flight (one disk walk serves N concurrent callers);
+unreadable directories (this repository has some left root-owned by Docker) are skipped and counted
+under `runs_omitted{reason="unreadable"}` rather than failing the request with 5xx.
+
+**Tokens and cost are still not a Prometheus metric.** As of M15.1 they're computed by the control-API
 (`cmd/control-api/main.go:666-675`, priced by `costUSD` at `:561`) and written as points into the
 store-gateway `metrics` domain (SQLite, ADR-050/051) with `model` in `labels_json`; the UI
 renders them natively — not via `/metrics`.
 
-**Separate path (optional):** `push_metrics()` (`brain/report.py:70-85`) pushes 5 gauge values
-to a Prometheus Pushgateway per run — `sentinel_run_steps`, `sentinel_run_exit_code`,
+**The scrape requires a credential** — `/metrics` is `accessAuthed`, like every other control-api
+service route. A working `scrape_configs` fragment:
+
+```yaml
+scrape_configs:
+  - job_name: sentinel
+    metrics_path: /metrics
+    bearer_token_file: /etc/prometheus/secrets/sentinel-token
+    static_configs:
+      - targets: ["control-api:8090"]
+```
+
+The token is the same bearer used by the rest of control-API (`state/control-api.token` in a
+docker-compose deployment, or the machine token in a deployment with accounts); without it `/metrics`
+answers 401.
+
+**Separate path (optional, unchanged by this edit):** `push_metrics()` (`brain/report.py:70-85`)
+pushes 5 gauge values to a Prometheus Pushgateway per run — `sentinel_run_steps`, `sentinel_run_exit_code`,
 `sentinel_heal_total`, `sentinel_failed_total`, and `sentinel_regression_a11y_total` (note: this
 name differs from `sentinel_regression_total{kind="a11y"}` in the text-file path above — don't
 conflate the two).

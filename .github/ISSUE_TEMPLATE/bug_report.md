@@ -6,7 +6,7 @@ labels: bug
 ---
 
 **Component**
-<!-- brain / pw-executor / orchestrator / store-gateway / report-service / docs -->
+<!-- brain / pw-executor / control-api / orchestrator / store-gateway / docs -->
 
 **What happened**
 <!-- Observed behaviour. Include the structured exit code (0/1/2/3) if relevant. -->

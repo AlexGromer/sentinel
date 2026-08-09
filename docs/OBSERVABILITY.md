@@ -141,9 +141,10 @@ Brain поддерживает dict `token_usage` с ключом `model_id → 
 `pw-executor` в `browser.traceStop(path=…)` (`:143`); `pw-executor` записывает файл через Playwright
 (`pw-executor/src/server.ts:421-428`) и лишь **возвращает** путь обратно — он его не порождает.
 gRPC-`RunEvent` поля трейса не несёт, и никакой Go-код `trace.zip` не пишет (только `sweepTraces`
-удаляет старые). `report-service` его не раздаёт — сервис предоставляет ровно три маршрута: `/healthz`,
-`/report/` и `/metrics` (`cmd/report-service/main.go:5-7`); `trace.zip` читается напрямую из директории
-запуска (или из CI-артефакта).
+удаляет старые). Отдельного HTTP-сервиса для трейсов больше нет — `cmd/report-service` удалён (ADR-119,
+2026-08-09): он собирался и подписывался, но не запускался ничем. `trace.zip` читается напрямую из
+директории запуска (или из CI-артефакта), либо отдаётся через артефакт-вайтлист control-api —
+`GET /v1/runs/{id}/artifact?name=trace.zip` (token-gated, ADR-099).
 
 **Просмотр:** `playwright show-trace trace.zip`
 
@@ -155,27 +156,67 @@ Playwright (сеть, консоль, снимки DOM, скриншоты, вр
 
 ## 5. Метрики Prometheus
 
-Предоставляются `report-service` по адресу `/metrics` — конкатенация `<run_dir>/metrics.prom`
-по всем запускам (текстовый Prometheus-формат, `_metrics()` в `brain/report.py:14-35`). Дашборда
-Grafana и файла правил Alertmanager в репозитории нет.
+Агрегатный скрейп отдаёт **control-api** по корневому `GET /metrics` (ADR-119, `cmd/control-api/metrics_agg.go`).
+До 2026-08-09 маршрут числился за `report-service` — бинарём, который собирался и подписывался, но не
+запускался НИЧЕМ: отсутствовал в `Dockerfile`, во всех compose-файлах и в `install.sh`. Маршрут
+`accessAuthed`: обычный токен видит агрегат по СВОИМ прогонам; машинный токен и развёртывание без
+аккаунтов (`owner == ""`) — по всем. Дашборда Grafana и файла правил Alertmanager в репозитории нет.
 
-| Метрика | Метки | Описание |
+**Агрегат и per-run артефакт теперь РАЗЛИЧАЮТСЯ.** `<run_dir>/metrics.prom` (`_metrics()` в
+`brain/report.py:14-35`) остаётся, как и раньше, чистым node_exporter textfile — без метки, без
+`# HELP`/`# TYPE`. Побайтовая конкатенация этих файлов дала бы N дубликатов одной и той же серии
+(сломанный скрейп, а не агрегат), поэтому склейка происходит В CONTROL-API при каждом обращении к
+`/metrics`: каждая серия получает метку `run="<id>"`, серии группируются по семейству, и на каждое
+семейство печатается ровно один `# HELP`/`# TYPE` (тип ВЫВОДИТСЯ из имени — суффикс `_total` ⇒ counter,
+иначе gauge). Правка `brain/report.py` не помогла бы сама по себе: на этом репозитории уже 192 каталога
+прогонов без run-метки, и переписывать их некому.
+
+| Метрика прогона | Метки | Описание |
 |---|---|---|
-| `sentinel_run_steps` | — | Число шагов в запуске |
-| `sentinel_run_exit_code` | — | Структурированный exit-код запуска |
-| `sentinel_heal_total` | — | Количество исцелённых шагов |
-| `sentinel_heal_by_strategy_total` | `strategy` | Количество исцелений по стратегии — `strategy` ∈ ключам `PRIORS` (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), либо `unknown` (при cache-hit возвращается стратегия закешированного локатора — из `PRIORS`; литерал `cache` меткой не эмитится) |
-| `sentinel_regression_total` | `kind` | Количество регрессий по виду — `kind` ∈ {`a11y`, `visual`} |
-| `sentinel_quarantined_total` | — | Число шагов в карантине |
-| `sentinel_failed_total` | — | Число упавших шагов |
+| `sentinel_run_steps` | `run` | Число шагов в запуске |
+| `sentinel_run_exit_code` | `run` | Структурированный exit-код запуска |
+| `sentinel_heal_total` | `run` | Количество исцелённых шагов |
+| `sentinel_heal_by_strategy_total` | `run`, `strategy` | Количество исцелений по стратегии — `strategy` ∈ ключам `PRIORS` (`testid`, `role_name`, `label`, `text_role`, `css`, `xpath`, `visual`), либо `unknown` (при cache-hit возвращается стратегия закешированного локатора — из `PRIORS`; литерал `cache` меткой не эмитится) |
+| `sentinel_regression_total` | `run`, `kind` | Количество регрессий по виду — `kind` ∈ {`a11y`, `visual`} |
+| `sentinel_quarantined_total` | `run` | Число шагов в карантине |
+| `sentinel_failed_total` | `run` | Число упавших шагов |
 
-**Токены и стоимость не являются Prometheus-метрикой.** С M15.1 они считаются контрол-API
+Выдача ограничена **500 новейшими прогонами** (`newest first`), а отброшенное ЗАЯВЛЕНО, а не молчит —
+три метрики самого агрегатора:
+
+| Метрика агрегатора | Метки | Описание |
+|---|---|---|
+| `sentinel_metrics_runs_included` | — | Число прогонов, вошедших в этот ответ, после скоупинга по вызывающему |
+| `sentinel_metrics_runs_omitted` | `reason` ∈ {`cap`, `unreadable`, `too_large`, `conflict`} | Число отброшенных каталогов прогонов, по причине |
+| `sentinel_metrics_lines_dropped` | — | Строк исходного `metrics.prom`, не опознанных как Prometheus textfile-синтаксис |
+
+Обход `runs/` кэшируется на 10 с с single-flight (один диск-walk на N параллельных вызывающих);
+нечитаемые каталоги (в этом репозитории есть root-owned от докера) пропускаются и попадают в
+`runs_omitted{reason="unreadable"}`, а не роняют запрос 5xx.
+
+**Токены и стоимость по-прежнему не Prometheus-метрика.** С M15.1 они считаются контрол-API
 (`cmd/control-api/main.go:666-675`, цена — `costUSD` на `:561`) и пишутся как точки в
 `metrics`-домен store-gateway (SQLite, ADR-050/051) с `model` в `labels_json`; UI рендерит их
 нативно — не через `/metrics`.
 
-**Отдельный путь (опционально):** `push_metrics()` (`brain/report.py:70-85`) пушит 5
-gauge-значений в Prometheus Pushgateway на запуск — `sentinel_run_steps`, `sentinel_run_exit_code`,
+**Скрейп требует credential** — `/metrics` это `accessAuthed`, как и любой другой служебный маршрут
+control-api. Рабочий фрагмент `scrape_configs`:
+
+```yaml
+scrape_configs:
+  - job_name: sentinel
+    metrics_path: /metrics
+    bearer_token_file: /etc/prometheus/secrets/sentinel-token
+    static_configs:
+      - targets: ["control-api:8090"]
+```
+
+Токен — тот же bearer, что и у остального control-API (`state/control-api.token` в
+docker-compose-развёртывании, либо машинный токен в развёртывании с аккаунтами); без него `/metrics`
+отвечает 401.
+
+**Отдельный путь (опционально, не изменён этой правкой):** `push_metrics()` (`brain/report.py:70-85`)
+пушит 5 gauge-значений в Prometheus Pushgateway на запуск — `sentinel_run_steps`, `sentinel_run_exit_code`,
 `sentinel_heal_total`, `sentinel_failed_total` и `sentinel_regression_a11y_total` (имя отличается
 от `sentinel_regression_total{kind="a11y"}` в текстовом пути выше — не путать одно с другим).
 

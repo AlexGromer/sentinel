@@ -305,7 +305,7 @@ AGENT_CKPT_PATH=/tmp/agent-{run_id}-ckpt.db  # LangGraph checkpoint DB (separate
 ### Общий SQLite (home-lab сервис)
 
 Долгоживущий сервис на K3s использует единый общий SQLite (режим WAL) под эксклюзивным
-правом записи Go store-gateway. Параллельные чтения из `report-service` и `agentctl`
+правом записи Go store-gateway. Параллельные чтения из `control-api` и `agentctl`
 безопасны под WAL.
 
 ### Триггер миграции на Postgres

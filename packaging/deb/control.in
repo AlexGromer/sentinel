@@ -10,8 +10,8 @@ Description: Autonomous self-healing UI-testing agent — control-plane binaries
  found, freezes it as a replayable scenario, and heals locators that drifted.
  .
  This package ships the Go CONTROL PLANE only: agentctl (CLI), control-api
- (HTTP + browser UI), store-gateway (persistence), orchestrator and
- report-service. They are statically linked and need no further libraries.
+ (HTTP + browser UI), store-gateway (persistence) and orchestrator. They
+ are statically linked and need no further libraries.
  .
  IT DOES NOT SHIP A RUNNABLE TEST STACK. Driving a real browser run additionally
  requires, on this host: Python 3.11+ with uv (the planning/healing brain), Node

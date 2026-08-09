@@ -83,7 +83,7 @@ Long-term state is owned **exclusively** by the Go `store-gateway` component.
 - **Single writer:** all writes are serialised through the `PersistenceService`
   gRPC interface. No Python or TypeScript component ever opens a direct DB
   connection.
-- **Concurrent readers:** `report-service` and `agentctl` may read concurrently
+- **Concurrent readers:** `control-api` and `agentctl` may read concurrently
   under SQLite WAL mode without blocking the writer.
 - **Schema migrations (reality as of M13):** today — idempotent `CREATE TABLE
   IF NOT EXISTS` (+ one-off `ALTER`s) in `store-gateway` at startup, for the
@@ -251,7 +251,7 @@ in depth here.
   single-host runs.
 - **Single-writer model:** Go's exclusive write ownership via the `store-gateway`
   serialises all mutations. WAL mode allows unlimited concurrent readers
-  (`report-service`, `agentctl`) without writer blocking.
+  (`control-api`, `agentctl`) without writer blocking.
 - **Schema portability:** the schema is written to be Postgres-compatible. The
   migration when Postgres is introduced is a driver change in `store-gateway`
   — no schema rewrites.

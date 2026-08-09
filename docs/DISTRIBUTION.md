@@ -187,7 +187,9 @@ sudo chown -R "$(id -u):$(id -g)" ./runs ./state ./config
 
 ### Что поставляется
 
-Пять Go-бинарников (`agentctl`, `control-api`, `store-gateway`, `orchestrator`, `report-service`) для шести платформ:
+Четыре Go-бинарника (`agentctl`, `control-api`, `store-gateway`, `orchestrator`) для шести платформ
+(пятый, `report-service`, удалён 2026-08-09, ADR-119 — собирался и подписывался, но не запускался
+ничем; агрегатный `/metrics` теперь у control-api):
 
 | Платформа | GOOS | GOARCH |
 |---|---|---|
@@ -198,7 +200,7 @@ sudo chown -R "$(id -u):$(id -g)" ./runs ./state ./config
 | Windows x86-64 | windows | amd64 |
 | Windows ARM64 | windows | arm64 |
 
-Итого: 30 бинарников (6 платформ × 5 бинарников) + Docker-образ (multi-arch: linux/amd64 + linux/arm64).
+Итого: 24 бинарника (6 платформ × 4 бинарника) + Docker-образ (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 

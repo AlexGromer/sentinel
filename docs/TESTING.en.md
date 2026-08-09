@@ -21,7 +21,7 @@ go test ./...
 ```
 
 `go test ./...` — unit tests for ALL Go components (agentctl, control-api, orchestrator,
-report-service, store-gateway, internal/*). Expected result:
+store-gateway, internal/*; `report-service` was removed 2026-08-09, ADR-119). Expected result:
 every package prints `ok` or `--- PASS`; a non-zero exit code is a blocker.
 
 ### 1.2 Python: offline suite (full regression M3–M9)

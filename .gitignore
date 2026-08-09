@@ -287,7 +287,6 @@ bun.lockb
 /agentctl
 /control-api
 /orchestrator
-/report-service
 /store-gateway
 
 # Rust

@@ -961,6 +961,29 @@
         "cli": "same reason: it is not an action to invoke but a policy for a run about to start. `agentctl run` carries it as env, like every other run-shaping switch",
         "ui": "the run panel sets no env; a toggle here would be a fourth place a run's shape is decided. Recorded rather than built — see [UI-BACKEND-PRESETS] for the surface that would own it"
       }
+    },
+    {
+      "id": "metrics-scrape",
+      "group": "Observability",
+      "severity": "medium",
+      "title_ru": "Агрегатный Prometheus-скрейп по прогонам",
+      "title_en": "Aggregate Prometheus scrape across runs",
+      "how_ru": "GET /metrics — агрегат по прогонам вызывающего (машинный токен/развёртывание без аккаунтов видит все), метка run на каждой серии, # HELP/# TYPE по семейству, честные runs_included/runs_omitted; agentctl metrics — тот же скрейп из терминала (ADR-119, заменяет удалённый cmd/report-service).",
+      "how_en": "GET /metrics — an aggregate over the caller's own runs (the machine token / an accounts-less deployment sees every run), a run label on every series, # HELP/# TYPE per family, honest runs_included/runs_omitted; agentctl metrics is the same scrape from a terminal (ADR-119, replaces the removed cmd/report-service).",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /metrics"
+        },
+        {
+          "kind": "cli",
+          "ref": "metrics"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "ui": "the scrape target is Prometheus, not a person; the hub has no view that would render a raw Prometheus text exposition, and none is planned"
+      }
     }
   ]
 }

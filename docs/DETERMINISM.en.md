@@ -311,7 +311,7 @@ discarded after the job uploads its artifacts.
 ### Shared SQLite (home-lab service)
 
 The long-lived service on K3s uses a single shared SQLite (WAL mode) under the Go
-store-gateway's exclusive write ownership. Concurrent reads from `report-service`
+store-gateway's exclusive write ownership. Concurrent reads from `control-api`
 and `agentctl` are safe under WAL.
 
 ### Postgres Migration Trigger
