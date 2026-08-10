@@ -63,8 +63,6 @@ Every LLM call appends exactly one JSON line. The file is `fsync`-ed at run end 
 
 **Record schema:**
 
-| Field | Type | Description |
-|---|---|---|
 The real record (`tx_write`, `brain/graph.py:225-245` → `brain/__main__.py:113-115`) is exactly **7 fields**:
 
 | Field | Type | Description |
@@ -218,7 +216,10 @@ scrape_configs:
 
 The token is the same bearer used by the rest of control-API (`state/control-api.token` in a
 docker-compose deployment, or the machine token in a deployment with accounts); without it `/metrics`
-answers 401.
+answers **403**, not 401: the guard's refusal is always `403` (`denyCredential` in
+`cmd/control-api/access.go`). The only route that answers `401` is `POST /v1/login` on an invalid
+name/password pair (`cmd/control-api/session.go`). The route is declared `accessAuthed` with no
+`legacyOpen`, so a credential is required even in a deployment without accounts.
 
 **Separate path (optional, unchanged by this edit):** `push_metrics()` (`brain/report.py:70-85`)
 pushes 5 gauge values to a Prometheus Pushgateway per run — `sentinel_run_steps`, `sentinel_run_exit_code`,
