@@ -71,9 +71,15 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
             print(f"REVISION — {test_id} @ {rev['revision'][:12]} ({'new' if rev['new'] else 'unchanged'})")
         except Exception as e:  # versioning must never fail the authoring run
             log("test.revision_save_failed", test_id=test_id, error=e)
-    if is_describe:
-        with open(out / "reconcile-report.json", "w") as f:
-            json.dump({"target_url": target, "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
+    # PLAN-NOT-GROUNDED-SILENT. The perentry list of what did NOT bind is written in BOTH modes now.
+    # It used to be describe-only, and the consequence was measured on a real failing run: goal mode
+    # recorded the NUMBER 4 in scenario.json and threw the four refs away on the spot, so the one run
+    # that most needed explaining was the one that explained least. The serialiser already existed,
+    # the list was already collected (scenario.py), and the file was already in control-api's artifact
+    # whitelist — the only thing standing between a person and the evidence was this `if`.
+    with open(out / "reconcile-report.json", "w") as f:
+        json.dump({"target_url": target, "mode": ("describe" if is_describe else "goal"),
+                   "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
     log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
     # HEALTH-004: a goal run that grounded 3 of 10 exits 0, reports a counter, and is over. That is the
     # exact shape `degrades` exists for — green, and quietly worth less than it looks. Describe mode
@@ -83,8 +89,25 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
     if sc and unmatched:
         log("plan.partially_grounded", grounded=len(sc), unmatched=len(unmatched),
             total=len(sc) + len(unmatched))
+    elif unmatched:
+        # ⚠ TOTAL failure used to be logged LESS than partial failure. `plan.partially_grounded` is
+        # guarded by `sc and unmatched`, so a run that grounded NOTHING — the worst outcome this mode
+        # has — said nothing at all beyond a counter. Measured twice on a live model: `0 grounded,
+        # 4 unmatched`, exit 1, and the only line about it was the neutral `scenario_authored`.
+        #
+        # This is a different code, not a broader guard on the old one: partial grounding DEGRADES a
+        # result (the test checks less than asked), while zero grounding means there is no test at
+        # all. Collapsing them would let a reader take "some of it worked" from a run where none did.
+        # ⚠ Tolerant of BOTH shapes on purpose. scenario.py hands dicts {ref, reason}; older callers
+        # and fixtures hand bare strings. A DIAGNOSTIC that raises is worse than the silence it
+        # replaces — it would turn "the scenario did not ground" into a stack trace attributed to our
+        # own logging, in the run that already had the least to show for itself. Found by the full
+        # suite, not by this file's own gate: the neighbouring catalogue test passes strings.
+        log("plan.not_grounded", unmatched=len(unmatched),
+            refs=", ".join(str(u.get("ref", "?")) if isinstance(u, dict) else str(u)
+                           for u in unmatched[:5]))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
-          + (" + reconcile-report.json" if is_describe else ""))
+          " + reconcile-report.json")
     if is_describe and unmatched:
         return 1
     return 0 if sc else 1
