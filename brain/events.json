@@ -1978,6 +1978,18 @@
       "ru": "Сервисный журнал очищен через agentctl: удалено {removed}, оставлено {kept}, граница {cutoff}",
       "en": "Service journal purged by agentctl: {removed} record(s) removed, {kept} kept, cutoff {cutoff}",
       "emitter": "agentctl"
+    },
+    "plan.not_grounded": {
+      "lvl": "error",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Сценарий НЕ заземлён: ни один из {unmatched} шагов не привязался к элементу на странице ({refs})",
+      "en": "The scenario is NOT grounded: none of the {unmatched} steps bound to an element on the page ({refs})",
+      "modules": [
+        "__main__"
+      ],
+      "ru_verdict": "сценария нет: инструмент не смог связать ни одного шага с элементами приложения — это отказ АВТОРИНГА, а не находка в вашем приложении",
+      "en_verdict": "there is no scenario: the tool could bind none of the steps to elements of the application — this is an AUTHORING failure, not a finding about your application"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
