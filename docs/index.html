@@ -923,6 +923,18 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <label style="margin-top:.35rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
             <input id="b-healllm" type="checkbox" style="width:auto">heal_llm (<span data-lang="ru">LLM-перепривязка при починке</span><span data-lang="en">LLM re-grounding during heal</span>)
           </label>
+          <label style="margin-top:.5rem;display:block;color:var(--tx)">
+            <span data-lang="ru">Наблюдение</span><span data-lang="en">Observation</span>
+            <select id="b-observe" style="margin-top:.25rem">
+              <!-- LIVE-MATRIX (ADR-120). The first option is the DEPLOYMENT DEFAULT, and it says which
+                   one that is rather than leaving it blank: an invisible default makes "I did not
+                   choose" and "I chose exactly this" the same act, and then nobody can say what the
+                   run will produce. The options and their cost text come from GET /v1/config-schema —
+                   hard-coding them here would be a second copy of what the server already publishes. -->
+              <option value=""></option>
+            </select>
+          </label>
+          <div id="b-observe-cost" class="hint" style="margin-top:.25rem"></div>
           <div id="b-cifr-warn" class="warnbox" style="display:none;margin-top:.4rem"></div>
         </div>
         <div>
@@ -2898,9 +2910,49 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     storage_state: 'b-ss', storage_state_save: 'b-sss', login_plan: 'b-loginplan',
     pw_no_trace: 'b-pwnotrace',
     ci: 'b-ci', force_replay: 'b-forcereplay', aut_version: 'b-autversion', heal_llm: 'b-healllm',
+    observe: 'b-observe',
     conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key; typing one into a run form would let a person graft a run onto someone else’s conversation' }
   };
   window.cfgFieldIds = cfgFieldIds;   // named so the DOM gate can walk it (see setView on addressability)
+
+  /* LIVE-MATRIX (ADR-120). The observation selector is FILLED FROM THE SCHEMA, never hard-coded:
+     the server already publishes the set, the deployment default and the cost of each mode, and a
+     second copy in this page is a second thing to go stale.
+
+     Two things this deliberately does. It NAMES the inherited default in the empty option — a blank
+     "use the default" tells a person nothing about what they will get, and then "I did not choose"
+     and "I chose exactly this" become the same act. And it shows the COST of whatever is selected,
+     because a mode that only has a name leaves somebody choosing by vibe; `human` in particular has
+     to say that it changes timing, or it will be picked for a run that measures response times. */
+  function lvFillObserve(schema){
+    var sel = ge('b-observe'); if (!sel) return;
+    var f = ((schema||{}).fields||{}).observe; if (!f || !f.enum) return;
+    var def = f.default || '';
+    var en = document.body.classList.contains('lang-en');
+    sel.innerHTML = '';
+    var o0 = document.createElement('option');
+    o0.value = '';
+    o0.textContent = (en ? 'deployment default' : 'по умолчанию в развёртывании') + (def ? ' — ' + def : '');
+    sel.appendChild(o0);
+    (f.enum||[]).forEach(function(m){
+      var o = document.createElement('option');
+      o.value = m;
+      /* A mode the build cannot perform is LABELLED, not hidden: hiding it would make the product's
+         answer to "can I ask for this" depend on the build, with nothing saying so. Asking for it is
+         refused before the run starts, with the task that brings it named. */
+      var pending = (f.not_yet||[]).indexOf(m) >= 0;
+      o.textContent = m + (pending ? (en ? ' — not in this build' : ' — не в этой сборке') : '');
+      sel.appendChild(o);
+    });
+    function showCost(){
+      var box = ge('b-observe-cost'); if (!box) return;
+      var m = sel.value || def;
+      var c = ((f.cost||{})[m]||{});
+      box.innerHTML = c.ru || c.en ? bi(esc(c.ru||''), esc(c.en||'')) : '';
+    }
+    sel.addEventListener('change', showCost);
+    showCost();
+  }
 
   /* Builds the POST /v1/runs body by WALKING cfgFieldIds rather than restating the fields. */
   function bBody(){
@@ -5190,6 +5242,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var rs = await fetch(base + '/v1/config-schema');   // unauthenticated, like the wizard's
       if (!rs.ok) throw new Error('HTTP ' + rs.status);
       cfgSchema = await rs.json();
+      lvFillObserve(cfgSchema);   /* LIVE-MATRIX: the run form's modes come from the same schema */
     } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); return; }
     /* The saved document is token-gated, so with no token this request cannot succeed — and asking
        anyway would put a 403 in the console on every visit made before someone pastes a token, which

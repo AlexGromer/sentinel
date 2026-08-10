@@ -1990,6 +1990,26 @@
       ],
       "ru_verdict": "сценария нет: инструмент не смог связать ни одного шага с элементами приложения — это отказ АВТОРИНГА, а не находка в вашем приложении",
       "en_verdict": "there is no scenario: the tool could bind none of the steps to elements of the application — this is an AUTHORING failure, not a finding about your application"
+    },
+    "run.observation": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Наблюдение: режим {mode}, кадры {frames} — {why}{overridden}",
+      "en": "Observation: mode {mode}, frames {frames} — {why}{overridden}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.observe_refused": {
+      "lvl": "error",
+      "cat": "run",
+      "ru": "Режим наблюдения отклонён до старта: {reason}",
+      "en": "The observation mode was declined before the run started: {reason}",
+      "modules": [
+        "__main__"
+      ],
+      "ru_verdict": "прогон не запускался: запрошенный режим наблюдения противоречит тому, что делает прогон, и продукт отказался вместо того, чтобы молча дать другое",
+      "en_verdict": "the run never started: the requested observation mode contradicts what the run does, and the product declined rather than quietly doing something else"
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",

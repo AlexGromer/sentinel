@@ -1024,6 +1024,34 @@
       "missing": {
         "ui": "the scrape target is Prometheus, not a person; the hub has no view that would render a raw Prometheus text exposition, and none is planned"
       }
+    },
+    {
+      "id": "observe-mode",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Выбор режима наблюдения прогона",
+      "title_en": "Choosing a run's observation mode",
+      "how_ru": "GET /v1/config-schema публикует режимы (off/frames/stream/human/record), дефолт и цену каждого на русском и английском; POST /v1/runs принимает observe; agentctl run --observe <режим> — тот же выбор из терминала; форма прогона хаба заполняется из той же схемы и явно показывает унаследованный дефолт. human и record объявлены, но пока отклоняются с названной задачей (LIVE-HUMAN/LIVE-RECORD) — ADR-120.",
+      "how_en": "GET /v1/config-schema publishes the modes (off/frames/stream/human/record), the default, and each mode's cost in Russian and English; POST /v1/runs accepts observe; agentctl run --observe <mode> is the same choice from a terminal; the hub's run form is filled from the same schema and names the inherited default explicitly. human and record are declared but currently refused with the task named (LIVE-HUMAN/LIVE-RECORD) — ADR-120.",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/config-schema"
+        },
+        {
+          "kind": "http",
+          "ref": "POST /v1/runs"
+        },
+        {
+          "kind": "cli",
+          "ref": "run"
+        },
+        {
+          "kind": "ui",
+          "ref": "run"
+        }
+      ],
+      "reach": "capability"
     }
   ]
 }
