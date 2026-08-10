@@ -955,6 +955,37 @@ try {
     ok(await warn.isVisible(), 'a configured model with a heuristic planner must say the LLM is unused');
   });
 
+  // [OBSERVE-NOT-IN-RUNCONFIG]. The form offers "Наблюдение" and prints each mode's cost, and the
+  // exported run.yaml carried no trace of the choice — so "repeat this run in CI or from a terminal"
+  // repeated it with a DIFFERENT observation, silently. The auth guard `pw_no_trace` DID reach the
+  // same file, so the export was selective in a way nobody had written down.
+  //
+  // Asserted through the RENDERED page rather than by reading index.html for a string: the string
+  // form is a surrogate — it matches the comment explaining it, and a mutation walks straight
+  // through. Here the selector is really operated and the exported document is really read.
+  await check('the exported run.yaml carries the observation mode the form offers', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    const yaml = page.locator('#b-yaml');
+
+    // Nothing chosen: the key must be ABSENT, not empty. "I did not choose" and "I chose the
+    // default" are different facts, and an `observe: ''` would merge them.
+    await page.selectOption('#b-observe', '');
+    await page.waitForTimeout(250);
+    ok(!/^observe:/m.test(await yaml.innerText()),
+       'with no mode chosen the exported file must not carry an observe key at all');
+
+    await page.selectOption('#b-observe', 'off');
+    await page.waitForTimeout(250);
+    const doc = await yaml.innerText();
+    ok(/^observe:/m.test(doc), `the chosen mode did not reach the exported run.yaml:\n${doc}`);
+    // QUOTED on purpose: pyyaml implements YAML 1.1, where a bare `off` is the BOOLEAN false. The
+    // brain would then be handed "False" and refuse it as an unknown mode. Measured — the
+    // behavioural gate caught exactly this on its first run.
+    ok(/^observe:\s*['"]off['"]/m.test(doc),
+       `the mode must be quoted — bare off is a YAML 1.1 boolean:\n${doc}`);
+  });
+
   // M9-LIVE fix: /readyz has probed the LLM since ADR-062 and nothing showed it. The three states must
   // stay distinct — `skipped` (nothing configured, heuristic may be intended) vs `error` (configured and
   // unreachable, almost never intended) are different news, and one red dot for both rebuilds the

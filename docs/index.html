@@ -309,8 +309,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   <div class="hbar">
     <span class="brand">SENTI<b>NEL</b></span>
     <span class="tag">
-      <span data-lang="ru">Подбор модели · стоимость · время · VRAM — на одной странице, офлайн.</span>
-      <span data-lang="en">Model picker · cost · time · VRAM — one page, offline.</span>
+      <!-- Описывает ПРОДУКТ, а не одну его вкладку. Прежняя строка («Подбор модели · стоимость ·
+           время · VRAM — на одной странице») описывала калькуляторы, которые после ADR-066 стали
+           ОДНОЙ вкладкой «Инструменты» из десяти: первое, что читал человек, открывший пульт,
+           называло пульт неверно. Выводить подзаголовок неоткуда — он не проекция никакого
+           перечня, — поэтому защита от повторного дрейфа не в гейте, а в форме утверждения:
+           фраза о продукте целиком не перестаёт быть верной от добавления вью, а фраза об одной
+           вкладке перестаёт. -->
+      <span data-lang="ru">Автономный агент UI-тестирования: исследует приложение, замораживает воспроизводимый план, чинит локаторы при дрейфе DOM.</span>
+      <span data-lang="en">Autonomous UI-testing agent: explores your app, freezes a replayable plan, repairs locators on DOM drift.</span>
     </span>
     <span class="toggle" role="group" aria-label="Language / Язык">
       <button type="button" id="lang-ru" aria-pressed="true" onclick="setLang('ru')">RU</button>
@@ -1095,7 +1102,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <button type="button" class="btn" id="ch-rerun" data-needs-api disabled disabled title="replay">🔁 <span data-lang="ru">Перепрогон</span><span data-lang="en">Re-run</span></button>
         <button type="button" class="btn" id="ch-baseline" data-needs-api disabled disabled title="baseline update">📌 <span data-lang="ru">Эталон</span><span data-lang="en">Baseline</span></button>
         <button type="button" class="btn" id="ch-newconv" title="new conversation (reset multi-turn context)">🆕 <span data-lang="ru">Новый разговор</span><span data-lang="en">New conversation</span></button>
-        <span class="hint"><span data-lang="ru">сначала проверьте подключение (Settings → #7)</span><span data-lang="en">check the connection first (Settings → #7)</span></span>
+        <!-- ТРЕТЬЕ вхождение той же протухшей нумерации: #7/#8/#9 остались от одностраничной раскладки, снятой ADR-066. Два первых закрыты #230 по находке аудита, это нашёл кадр ui-smoke. -->
+        <span class="hint"><span data-lang="ru">сначала проверьте подключение — вид «Настройки»</span><span data-lang="en">check the connection first — the "Settings" view</span></span>
       </div>
       <div id="ch-chat" style="display:flex;flex-direction:column;gap:.5rem;margin-top:.8rem;min-height:1rem"></div>
         </div><!-- /chat3-left -->
@@ -1409,8 +1417,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 
   <footer>
     <p>Sentinel — Apache-2.0.
-      <span data-lang="ru">Все расчёты выполняются в браузере (офлайн на загрузке). Математика токенов/VRAM — из проверенных формул кода (LOCAL_MODELS §5/§6). Имена моделей, цены и пригодность, помеченные «verify», относятся к post-cutoff (январь 2026) — проверяйте перед боевым использованием.</span>
-      <span data-lang="en">All calculations run in your browser (offline on load). Token/VRAM math derives from verified code formulas (LOCAL_MODELS §5/§6). Model names, prices and fit marked “verify” are post-cutoff (Jan-2026) — verify before production use.</span>
+      <span data-lang="ru">Калькуляторы во вкладке «Инструменты» считают в браузере, офлайн: математика токенов и VRAM — из проверенных формул кода (LOCAL_MODELS §5/§6). Имена моделей, цены и пригодность, помеченные «verify», относятся к post-cutoff (январь 2026) — проверяйте перед боевым использованием.</span>
+      <span data-lang="en">The calculators in the "Tools" view compute in your browser, offline: the token and VRAM math derives from verified code formulas (LOCAL_MODELS §5/§6). Model names, prices and fit marked “verify” are post-cutoff (Jan-2026) — verify before production use.</span>
     </p>
   </footer>
 </main>
@@ -2336,6 +2344,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     lines.push('plan_budget: '+(bVal('b-planbud')||'50000'));
     lines.push('heal_budget: '+(bVal('b-healbud')||'20000'));
     lines.push('total_budget: '+(bVal('b-totbud')||'0'));
+    /* Наблюдение попадает в экспорт, потому что иначе «повтори этот прогон в CI или из терминала»
+       повторял его С ДРУГИМ наблюдением — молча. Пустое значение НЕ пишем: отсутствие ключа
+       означает «человек не выбирал», и брейн скажет, какой дефолт применил; ключ с пустым
+       значением сделал бы эти два случая одним. */
+    var obs=bVal('b-observe').trim();
+    if (obs) lines.push('observe: '+bq(obs));   /* КАВЫЧКИ обязательны: YAML 1.1 читает голое off как булево false */
     var ss=bVal('b-ss').trim(), sss=bVal('b-sss').trim(), lp=bVal('b-loginplan').trim(), pnt=ge('b-pwnotrace').checked;
     if (ss||sss||lp||pnt){
       lines.push('auth:');
@@ -3194,10 +3208,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     el.addEventListener('change', run); el.addEventListener('input', run);
   });
   ge('b-planner').addEventListener('input',function(){ ge('b-planner').dataset.touched='1'; });
-  ['b-goal','b-describe','b-target','b-planner','b-coverage','b-maxsteps','b-planbud',
-   'b-healbud','b-totbud','b-ss','b-sss','b-loginplan','b-baseurl','b-modelp','b-modelh',
-   'b-vision','b-pwnotrace'].forEach(function(id){
-    var el=ge(id); if (!el) return;
+  /* Перечень контролов ВЫВОДИТСЯ из самой формы, а не переписывается сюда (принцип 5).
+     Замерено 2026-08-10: рукописный список отстал на ДЕВЯТЬ контролов, и один из них —
+     «Наблюдение». Отказ шёл в невидимую сторону: селектор работал, цену режима печатал, а
+     экспортируемый run.yaml выбора не нёс, потому что перестройку никто не звал. Лишний
+     контрол в списке был бы заметен сразу (обработчик на несуществующем id), пропущенный —
+     нет, и это ровно та асимметрия, из-за которой перечни здесь выводятся.
+     `renderBuild` идемпотентна, поэтому подписать её на всё содержимое формы безопасно;
+     собственные обработчики отдельных полей (bSyncMode, bTargetGuard) остаются рядом. */
+  var bForm=ge('build');
+  (bForm ? bForm.querySelectorAll('input,select,textarea') : []).forEach(function(el){
     el.addEventListener('input',renderBuild);
     el.addEventListener('change',renderBuild);
   });

@@ -24,6 +24,7 @@ repo-root defaults to the directory two levels above this script
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,14 +55,17 @@ SINGLE_LANGUAGE: set[str] = {
     "testdata/fixtures/README.md",
 }
 
-# Directories to skip entirely during the walk. Includes gitignored runtime/scratch dirs
-# (state/, .claude/, runs/, .venv/, __pycache__) so the gate only sees source-tracked docs —
-# matching what CI checks out (a fresh tree has none of these).
-SKIP_DIRS: frozenset[str] = frozenset(
-    # "frontend" / "extension" are dev-only scaffolds (ADR-044 / M9.8) — single-language dev-tool READMEs,
-    # not part of the bilingual product docs (like node_modules).
-    {"node_modules", "dist", ".git", "bin", "state", ".claude", "runs", ".venv", "__pycache__", "memory", "frontend", "extension", ".next"}
-)
+# POLICY exclusions — directories whose docs are deliberately single-language. This list states a
+# decision and nothing else; it is NOT how junk is kept out of the walk (see _collect_md).
+#
+# "frontend" / "extension" are dev-only scaffolds (ADR-044 / M9.8) — single-language dev-tool
+# READMEs. "memory" is the assistant's own notes, not product documentation.
+POLICY_SKIP_DIRS: frozenset[str] = frozenset({"frontend", "extension", "memory"})
+
+# A floor on the number of tracked pairs found, for the same reason every derived check here carries
+# one: a traversal that stops finding anything passes perfectly over an empty set, and that is the
+# single failure mode deriving the list cannot catch by itself. Raise it only when it becomes wrong.
+MIN_PAIRS = 40
 
 
 # ---------------------------------------------------------------------------
@@ -81,22 +85,55 @@ def _count_headings(path: Path) -> int:
     return count
 
 
+def _tracked_md(root: Path) -> list[Path] | None:
+    """Every `.md` file git tracks under *root*, or None when git cannot answer.
+
+    The set of files to gate is DERIVED, not maintained. The previous version walked the tree and
+    pruned a hand-written set of directory NAMES, which fails in the direction nobody sees: a
+    scratch directory whose name is not on the list is walked, and the gate starts demanding an
+    English mirror of somebody else's package. Measured on 2026-08-10: 24 errors locally, ZERO of
+    them about a tracked file — the noise came from `.venv-review/` (a name one character off the
+    listed `.venv`) and `.pytest_cache/`. In CI the tree is fresh, so the step was green: the gate
+    lied exactly where a human reads it and was silent where it gates. `docs/DEVELOPMENT.md` §0
+    principle 5 records this same class from an earlier occurrence — the list was fixed then by
+    adding a name, and it broke again the same way.
+
+    git's index is the authority on what ships, which is precisely the question this gate asks.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "*.md"],
+            capture_output=True, check=True, timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [root / p.decode("utf-8") for p in out.split(b"\0") if p]
+
+
 def _collect_md(root: Path) -> tuple[set[Path], set[Path]]:
-    """Walk *root* and return (primary_md, en_md) path sets."""
+    """Return (primary_md, en_md) path sets over the files git tracks under *root*.
+
+    Falls back to a filesystem walk only when git cannot answer (a source tarball with no `.git`),
+    and says so, because a silent fallback would put the old failure mode back without a signal.
+    """
+    tracked = _tracked_md(root)
+    if tracked is None:
+        print("WARN  git is unavailable — falling back to a filesystem walk; untracked "
+              "directories may produce noise", file=sys.stderr)
+        tracked = [Path(dirpath) / f
+                   for dirpath, dirnames, filenames in os.walk(root)
+                   for f in filenames if f.endswith(".md")]
+
     primary: set[Path] = set()
     english: set[Path] = set()
-
-    for dirpath, dirnames, filenames in os.walk(root):
-        # Prune skip dirs in-place so os.walk does not descend into them.
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not fname.endswith(".md"):
-                continue
-            full = Path(dirpath) / fname
-            if fname.endswith(".en.md"):
-                english.add(full)
-            else:
-                primary.add(full)
+    for full in tracked:
+        rel = full.relative_to(root) if full.is_absolute() else full
+        if POLICY_SKIP_DIRS & set(rel.parts[:-1]):
+            continue
+        if full.name.endswith(".en.md"):
+            english.add(full)
+        else:
+            primary.add(full)
 
     return primary, english
 
@@ -175,6 +212,16 @@ def main(argv: list[str]) -> int:
             f"\nFAIL: {len(errors)} bilingual-parity error(s)."
             f"  pairs_ok={verified_pairs}  allowlisted={len(SINGLE_LANGUAGE)}"
             f"  warnings={len(warnings)}"
+        )
+        return 1
+
+    # The floor. Deriving the list from git removes the noise, but it cannot notice that it found
+    # NOTHING — `git ls-files` in a tree with no index, or a pathspec that stops matching, returns
+    # an empty set and every rule above passes vacuously over it.
+    if verified_pairs < MIN_PAIRS:
+        print(
+            f"\nFAIL: only {verified_pairs} bilingual pair(s) found, floor is {MIN_PAIRS}. "
+            f"The traversal stopped finding documents — that is a broken gate, not a clean tree."
         )
         return 1
 
