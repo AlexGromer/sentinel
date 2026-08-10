@@ -7,8 +7,16 @@ Please report security issues **privately**, not via public GitHub issues.
 - Use **GitHub Security Advisories** (repository → *Security* → *Report a vulnerability*), or
 - email the maintainer (see the repository owner's profile).
 
-Include: affected component (`brain` / `pw-executor` / `orchestrator` / `store-gateway` / `control-api`), version or
-commit SHA, reproduction steps, and impact. We aim to acknowledge within a few business days.
+Include: the affected component, a version or commit SHA, reproduction steps, and impact.
+Components include the `agentctl` CLI (it spawns everything else, inherits the host env and owns the
+destructive subcommands `purge-store` / `purge-service` / `sweep-downloaded`), `brain`,
+`pw-executor`, `orchestrator`, `store-gateway`, `control-api`, and the dev-only MV3 browser
+extension in `extension/` (dev-only means it ships in no image or package — it does **not** mean
+reports about it are out of scope). This list is illustrative, not exhaustive: the authority on
+which process owns what is [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — its §3 diagram plus the
+§4 boundary table, which covers the surfaces added after the diagram was drawn. If you are unsure
+which component owns the behaviour, just say what you observed and where. We aim to acknowledge
+within a few business days.
 
 ## Scope
 

@@ -112,8 +112,8 @@
 
 | Угроза | Граница | STRIDE | Вер / Влияние | Существующая мера | Остаточный риск | Owner / Milestone |
 |---|---|---|---|---|---|---|
-| **Утечка всех host secrets в дочерние процессы.** До M11.3 `agentctl::spawnBrain` вызывал `cmd.Env = append(os.Environ(), …)` без allowlist (историческая цитата; теперь на этом месте `filteredEnv()` — `cmd/agentctl/main.go`). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; остаток — динамические Vault/CSI | M11.3 ✅ |
-| **Plaintext secrets в Helm values → Kubernetes.** `cronjob.yaml:39–46` использует `value: {{ .Values.checkpointDsn }}` и `{{range .Values.extraEnv}} value: {{ $v }}` без `secretKeyRef`. CHECKPOINT_DSN и extraEnv хранятся как строки в `values-prod.yaml`, попадают в etcd в открытом виде и видны через `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 CLOSED (Helm-half)** | M11.3 ✅ |
+| **Утечка всех host secrets в дочерние процессы.** До M11.3 `agentctl::spawnBrain` вызывал `cmd.Env = append(os.Environ(), …)` без allowlist (историческая цитата; теперь на этом месте `filteredEnv()` — `cmd/agentctl/main.go`). Все переменные хоста (SSH-ключи, облачные credentials, не относящиеся к Sentinel токены) наследуются Python brain, Node.js pw-executor и их подпроцессами, а также могут попасть в stderr при ошибке. | host-env → brain subprocess | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 PARTIALLY OPEN** (Helm-половина закрыта); остаток — динамические Vault/CSI | M11.3 ✅ |
+| **Plaintext secrets в Helm values → Kubernetes.** `cronjob.yaml:39–46` использует `value: {{ .Values.checkpointDsn }}` и `{{range .Values.extraEnv}} value: {{ $v }}` без `secretKeyRef`. CHECKPOINT_DSN и extraEnv хранятся как строки в `values-prod.yaml`, попадают в etcd в открытом виде и видны через `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Вер: H / Влияние: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 PARTIALLY OPEN** (Helm-половина закрыта) | M11.3 ✅ |
 
 ### 4.2 Граница ❷ — agentctl → store-gateway (Unix gRPC socket)
 
@@ -262,12 +262,42 @@
 СТРУКТУРЕ хранения, а не по имени подсистемы. Правило «секретное — по ключу» и хранилище
 «пары {name,value}» несовместимы молча.
 
+### 4.16 Граница ⓰ — живой вид: кадры браузера, проксируемые под учётными данными (ADR-111)
+
+> Поверхность появилась с ADR-111 и в модели не была описана ни строкой. Браузер стал сервисом и
+> отдаёт СВОЙ screencast (`pw-executor/src/cdp-service.ts`), а control-API делает то, ради чего он
+> там стоит, — ставит перед ним учётные данные: `GET /v1/live/{status,frame.jpg,mjpeg}`,
+> `accessAuthed`. Поверхность существует только когда задан `CONTROL_API_CDP_LIVE`
+> (`cmd/control-api/live.go`, `liveBase()`); пустое значение — штатное одноконтейнерное
+> развёртывание, в котором живого вида нет вовсе.
+
+| Угроза (STRIDE) | Вектор | Текущая защита | Остаточный риск |
+|---|---|---|---|
+| **I** — картинка чужой работы | Кадр показывает то, что открыто в браузере, включая залогиненное тестируемое приложение | Маршрут И ЕСТЬ учётные данные (`accessAuthed`); `CONTROL_API_CDP_LIVE` пуст по умолчанию | `run_id` выбирает, ЧЬЮ страницу показать, но владельца прогона не проверяет никто: аутентифицированный запрос получает кадр любого названного прогона. Скоуп по владельцу здесь не обещан — картинка принадлежит браузерному СЕРВИСУ, общему по конструкции (причина записана рядом с маршрутами в `cmd/control-api/access.go`) |
+| **E** — обход единственного гейта | Живой порт браузерного сервиса собственных учётных данных НЕ имеет — ровно как его CDP-порт | Порт живёт во внутренней сети и на хост не публикуется (шапка `cmd/control-api/live.go`) | Публикация этого порта наружу снимает защиту ЦЕЛИКОМ: control-API — единственный гейт, и мимо него кадры отдаются кому угодно без проверки |
+
 ## 5. Сводная таблица GAP-трекинга
+
+> **Словарь колонки «Статус».** До 2026-08-10 его здесь не было вовсе — блок «Обозначения» в §4
+> определяет только оси вероятности и влияния, — и ярлык нечем было ни проверить, ни отличить один
+> от другого. Из-за этого `GAP-SEC-001` нёс `CLOSED`, а тело той же ячейки тут же его отзывало
+> («остаток … открыто»); при чтении по колонке — а это единственное назначение сводной таблицы —
+> P1/HIGH читался как закрытый. Допустимые значения:
+>
+> | Ярлык | Что означает |
+> |---|---|
+> | `MITIGATED` | Мера внедрена и работает; остатка, требующего работы, нет |
+> | `MITIGATED (<квалификатор>)` | Закрыт названный рубеж, первопричина лежит ЗА границей и остаётся |
+> | `PARTIALLY OPEN` | Часть объёма сделана, часть прямо заявлена невыполненной |
+> | `OPEN` | Не сделано |
+>
+> ⚠ `CLOSED` в этой колонке **не употребляется**: «закрыто с остатком» — противоречие, а не
+> квалификатор. Гэп, у которого остаток назван, — это `PARTIALLY OPEN`.
 
 | GAP ID | Статус | STRIDE | Severity | Краткое описание | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Утечка-в-трейс: трейсинг отключён (`PW_NO_TRACE`) на auth-прогонах; секреты по env-var NAME через secretRef; brain redacts logs; fail-closed при активном трейсинге; prod использует storageState. | — |
-| **GAP-SEC-001** | **CLOSED — Helm-половина + #25 (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **#25 CLOSED:** `NODE_`/`GIT_` больше не префиксы — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` exact-allowlisted (`TestFilteredEnvPrefixNarrowing`). **Остаток:** только динамические секреты Vault/CSI-driver. | done |
+| **GAP-SEC-001** | **PARTIALLY OPEN — Helm-половина и #25 закрыты (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **#25 CLOSED:** `NODE_`/`GIT_` больше не префиксы — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` exact-allowlisted (`TestFilteredEnvPrefixNarrowing`). **Остаток:** только динамические секреты Vault/CSI-driver. | done |
 | **#23 store-gateway authN** | **MITIGATED** | E | MEDIUM | per-run token authN в gRPC-metadata (`TokenAuthInterceptor`) + SO_PEERCRED + сокет 0600; unit-тест `TestTokenAuthInterceptor`. | done; #23 → 0xCoDSnet |
 | **#24 golden integrity** | **MITIGATED** | T | MEDIUM | HMAC `golden_snapshots` (ключ `state/golden.key`, вне БД); tamper → exit 3; тесты `TestGoldenIntegrityTamper` + `test_golden_mac_tamper_detected_exit3`. | done; #24 → 0xCoDSnet |
 | **#26 trace.zip PII** | **MITIGATED** | I | MEDIUM | `runs/` + `runs/<id>/` → `0700` (owner-only); retention `trace.zip` (`SENTINEL_TRACE_KEEP`=10 / `SENTINEL_TRACE_TTL_HOURS`); тесты `TestMkArtifactDirPerms`/`TestSweepTraces*`. Encryption/redaction — опц., не реализовано. | done; #26 → 0xCoDSnet |

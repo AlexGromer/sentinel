@@ -46,7 +46,7 @@ There are **three** files, not one, carrying two schemas.
 | File | Contents | Written by |
 |---|---|---|
 | `state/locators.db` | 4 heal/trust tables | `brain/` directly (`LocalStore`) or via the gateway |
-| `state/control-store.db` | the 7 M13 domains | the Go gateway only |
+| `state/control-store.db` | the whole M13 store schema: the M13 domains plus `users` (ADR-109, local accounts); the per-column list lives in `db-foreign-text.json` | the Go gateway only |
 | `runs/<id>/checkpoint.db` | the full `RunState` | deleted in `finally` (ADR-099) |
 
 ⚠ `brain/store.py::_SCHEMA` declares **only the four heal tables**. `scenarios`, `results`, `metrics`
@@ -54,12 +54,26 @@ and `config` exist solely in Go — looking for them on the Python path is waste
 
 ### What carries foreign text
 
-Inherent: `healed_locators.value` and `.page_path` · `healing_audit.original`, `.healed`, `.page_path` ·
-`golden_snapshots.page_key` · `runs.target` · `chats.last_goal`, `.last_target` · `scenarios.name`,
-`.target`, `.steps_json` · `results.steps_json`, `.regressions_json` · `metrics.labels_json`.
+The exhaustive classification lives in [`db-foreign-text.json`](db-foreign-text.json), and it lives
+there ONLY: a gate in each language (`internal/store/purge_inventory_test.go`,
+`tests/test_db_inventory_offline.py`) checks it against the schema a REAL store creates, so a column
+added without a classification fails the build. A second copy of the list beside it would have no
+gate — it would drift silently. Named here are only the entries that change a deployer's decision:
 
-Incidental: `scenarios.tags` · `tests.name` · `config.value_json` · inside JSON,
-`results.steps_json[].error` and `[].assert.actual`.
+- **`healed_locators.value`** — the live cache read by every run, and it never expires: it holds the
+  page's text longer than the healing history does.
+- **`chats.last_goal`** and **`chats.summary`** — the operator's phrasing, verbatim. `summary` is not
+  a model-written summary but the deterministic `_rolling_summary` string (`brain/graph.py`): the
+  turn count plus the first 80 characters of the opening turn. It was unreachable until 2026-07-28
+  (a chat run fell into the storeless branch); `runNeedsStore` (`cmd/agentctl/main.go`) now starts
+  the store for `--mode chat`, SEC-CHATS-WIRING-GAP is closed, and the column fills on the dominant
+  path — the hub spawns exactly `agentctl run --mode chat`. The source of truth is the checkpointer
+  (`conversations.db`); this is a browsable index over it, purgeable but never redactable.
+- **`metrics.labels_json`** — the target URL on EVERY metric point.
+- **`scenarios.steps_json[].value`/`.text`** — the one leak that is NOT inherent; it has its own
+  section below.
+
+The rest is in the json; read it there, not here.
 
 ### What was verified clean
 
@@ -68,14 +82,22 @@ This half matters just as much: a column wrongly declared clean **never enters a
 - `semantic_id` in both tables — `sha1(f"{path}|{role}|{name}")[:12]`, measured live as `07ece0d2c1a9`.
 - `step_failures` entirely — across 45 live rows: `step_key` is a hash, `last5` is `[1,1]`.
 - `golden_snapshots` apart from `page_key` — sha256 and an HMAC.
-- `runs.error` — only `os/exec` errors (`cmd/control-api/main.go:623,655`). ⚠ That cleanliness rests
-  on `lineWriter.Write` always returning `(len(p), nil)`, which is a property of the implementation
-  rather than a guarded invariant, and no test pins it — `[SEC-RUNS-ERROR-UNGUARDED]`.
+- `runs.error` — only `os/exec` errors: the two `rec.Error` assignment sites in
+  `cmd/control-api/main.go` are a failed `cmd.Start` and a non-`ExitError` from `cmd.Wait`. That
+  cleanliness rests on the invariant "`lineWriter.Write` always returns `(len(p), nil)`", and the
+  invariant is **pinned by a test** — `cmd/control-api/linewriter_contract_test.go`: `os/exec`
+  surfaces a writer error as `cmd.Wait()`'s error, which flows into `rec.Error` and then into the
+  column, so the day `Write` returns an error the inventory's "`runs.error` is clean" would quietly
+  become false. The test asserts the contract (no error on any input · no short write); both
+  mutations are caught. There is deliberately NO redactor on the path into `rec.Error`: `redact` is a
+  scanner for NAMED secrets and never sees arbitrary page text (ADR-081/098), so what protects here
+  is the contract, not the redactor.
 - `tests.schedule` — a cron expression; nothing in the codebase builds this value from page content.
-- `chats.summary` — **not** a model-written summary but a deterministic string bounded at 80
-  characters of the first turn (`brain/graph.py:213`), and today **unreachable**: `ChatProjector`
-  requires `STORE_ADDR`, which `agentctl` never sets for `--mode chat`. Fix that wiring and the column
-  immediately starts holding operator phrasing verbatim (`[SEC-CHATS-WIRING-GAP]`).
+- `users` entirely — carries no foreign text and is NOT subject to a purge: `user_id` is minted by
+  control-api, `name` is a login the person chose for themselves (not text off a page), and `pw_hash`
+  is an irreversible PBKDF2-HMAC-SHA256 (`internal/identity`), never a password. The distinction is
+  essential: sweeping `users` is not sanitisation, it is account deletion. That is why the table is
+  absent from `purgeable` (`internal/store/purge.go`) and `purge-store` refuses it by name.
 
 ### The one leak that is NOT inherent
 
@@ -86,11 +108,19 @@ The sharpest statement of the gap: `scripts/collect-live-run.sh:255` **already b
 when a scenario leaves in a support bundle. In SQLite it sits as written. One policy, two outcomes,
 because the policy lives in a bash script instead of on the write path.
 
-The root cause is not in the database: `_SCHEMA_STEPS` and `_SCHEMA_DRAFT`
-(`brain/planner.py:66-79`) have `value` and **no `secretRef`**, whereas the recorder path carries it
-through (`record_bridge.py:108`) and `pw-executor` resolves it from the environment
-(`server.ts:528-536`). The mechanism exists and works — it is simply unavailable on the dominant
-authoring path. Closing it is `[SEC-SCENARIO-SECRETREF]`.
+The root cause was not in the database, and it is closed (ADR-102): `_SCHEMA_STEPS` and
+`_SCHEMA_DRAFT` (`brain/planner.py`) gained `secretRef` — a secret is entered by NAMING an
+environment variable, never by its value; the prompts forbid inlining outright. The mechanism is end
+to end and **fill-only**, because that is the product's existing contract: the recorder routes it
+only in the fill branch (`brain/record_bridge.py::_attach_value`), `_verb_step` honours it only for
+fill (`brain/scenario.py`), and the executor resolves it only for `browser.fill`
+(`pw-executor/src/server.ts`, whose zod contract carries `secretRef` on exactly that verb). A
+`secretRef` on any other verb is REJECTED into `unmatched` (`ground_scenario`/`reconcile`) rather
+than silently dropped — a silent drop would read as "the secret is protected" while the field stayed
+empty. ⚠ **The remainder is honest, which is why the column stays in the inventory:** the schema
+offers a safe path but does not compel it — a goal whose own text spells out the password can still
+lead to a literal in `value`; and `scenarios.steps_json` rows written BEFORE ADR-102 sit as they are,
+cured by `agentctl purge-store`, not by redaction.
 
 ## The cleanup procedure
 

@@ -1,5 +1,7 @@
 # Контракт M-STRUCTURED-OUT — строгий structured-output LLM (`tool_use`/`json_schema`) + устойчивый JSON-fallback
 
+> 🌐 **Русский** (основная версия) · [English](M_STRUCTURED_OUT_CONTRACT.en.md)
+
 > Статус: **Accepted** (ADR-057). Мини-веха: одна волна поверх `main` (после PR #67). Реализует LLM-problem #2.
 
 ## 1. Зачем

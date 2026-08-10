@@ -19,17 +19,17 @@
 |---|---|
 | Фреймворк | LangGraph `StateGraph` (Python, пакет `langgraph`) |
 | Хранилище checkpoint | `langgraph.checkpoint.sqlite.SqliteSaver` |
-| Путь к БД checkpoint | `<artifact_dir>/checkpoint.db` — один файл SQLite на прогон (`brain/__main__.py:135`), никогда не файл `store-gateway` |
+| Путь к БД checkpoint | `<artifact_dir>/checkpoint.db` — один файл SQLite на прогон (собирается в `brain/__main__.py::_run_explore`), никогда не файл `store-gateway` |
 | Ключ идентификации потока | `thread_id = run_id` |
-| Продакшн-БД (`CHECKPOINT_DSN`) | Синхронный `PostgresSaver` (пакет `langgraph.checkpoint.postgres`) заменяет `SqliteSaver`, когда задана переменная окружения `CHECKPOINT_DSN` — тот же интерфейс, схема не меняется (`_checkpointer`, `brain/__main__.py:26-38`) |
+| Продакшн-БД (`CHECKPOINT_DSN`) | Синхронный `PostgresSaver` (пакет `langgraph.checkpoint.postgres`) заменяет `SqliteSaver`, когда задана переменная окружения `CHECKPOINT_DSN` — тот же интерфейс, схема не меняется (`brain/__main__.py::_checkpointer`) |
 | Уровень выполнения в браузере | **`pw-executor`** — наш собственный TypeScript-сервер, реализующий MCP/JSON-RPC 2.0 через stdio (создан самостоятельно, не куплен; заменяет любой готовый MCP-сервер браузера) |
 
 > **Два независимых пути выполнения.** Этот `StateGraph` управляет режимами `explore` и `chat`
 > (включая `goal`/`describe` через узел `scenario`, ADR-028/ADR-048) — внутри графа НЕТ ветвления
-> по `run_mode` (`graph.py:463-475`: рёбра безусловны либо ведут через 4 роутер-функции, ни одна
+> по `run_mode` (сборка графа в `brain/graph.py::build_graph`: рёбра безусловны либо ведут через 4 роутер-функции, ни одна
 > не читает `run_mode`). Режимы `replay` и `baseline` вообще не проходят через этот граф — они
 > выполняются отдельным циклом `run_replay()` (`brain/replay.py`), диспетчеризуемым из
-> `_run_replay()` (`brain/__main__.py:514`). Реальный движок восстановления локаторов
+> `_run_replay()` (`brain/__main__.py`). Реальный движок восстановления локаторов
 > (`HealingEngine.heal`, кеш + стратегии + LLM + визуальный режим) работает **только** в этом
 > цикле — см. §3.11.
 
@@ -37,8 +37,8 @@
 
 ## 2. Общий объект состояния — `RunState` (TypedDict)
 
-`RunState` — единственный общий объект, передаваемый через каждый узел (`brain/state.py:10-63`,
-`TypedDict total=False`, 33 поля). Все поля, кроме служебных `_`-каналов, сохраняются в
+`RunState` — единственный общий объект, передаваемый через каждый узел (`brain/state.py::RunState`,
+`TypedDict total=False`). Все поля, кроме служебных `_`-каналов, сохраняются в
 контрольную точку при каждом вызове узла `checkpoint`.
 
 > Ниже перечислены ТОЛЬКО поля, реально объявленные в `RunState`. Более ранняя версия этого
@@ -67,7 +67,9 @@
 | Поле | Описание |
 |---|---|
 | `messages` | Аккумулятор реплик разговора (`Annotated[list, add_messages]`) — LangGraph-редьюсер добавляет реплики между ходами. Пусто для одноразовых explore/goal/describe-прогонов |
+| `chat_intent` | **ADR-108a** — ЦЕЛЬ разговора, закреплённая на первом ходе и никогда не переписываемая: `{"kind": "goal"\|"describe", "text": str}`. Существует потому, что `goal` делал две работы сразу: control-api слал текст КАЖДОГО хода как goal, и «зачем этот разговор» и «что человек только что напечатал» были одним полем — различить уточнение от новой цели было нечем. Живёт в чекпойнтере (`thread_id=conversation_id`), а не в SQL-строке `chats`, чья колонка `last_goal` продолжает значить ровно то, что написано в её имени: последний ход |
 | `site_map` | Карта сайта `page_path -> [element]`, накапливается узлом `ground` за весь проход explore |
+| `perception` | **ADR-092/093/097** — `page_path -> {seen, total, ratio, unseen{…}, opaque{…}}`: сколько страницы восприятие ВИДИТ (в отличие от покрытия — сколько из увиденного отработано). Заполняется узлом `ground` (вызов `browser.perceptionAudit`) раз на страницу; узел `report` кладёт `perception.pages` и `worst_ratio` в `plan.json` РЯДОМ со `steps`, чтобы не сдвинуть `plan_hash`. Поля `completeness_ratio` в коде по-прежнему нет — это другой, действительно существующий замер под другим именем |
 | `phase` | `"explore"` \| `"scenario"` |
 | `scenario_steps` | Grounded-шаги, добавленные узлом `scenario` в `exploration_plan` |
 | `scenario_unmatched` | Черновые шаги/ссылки, которые не удалось привязать к реальному элементу |
@@ -77,7 +79,7 @@
 | Поле | Описание |
 |---|---|
 | `current_url` | URL, загруженный в браузере в текущий момент |
-| `page_model` | Словарь, собираемый `perceive`/`ground`: `{url, title, aria, nodeCount}` + `buttons` (добавляется в `ground`). **Не** содержит `a11y_tree`/`landmarks`/`forms`/`completeness_ratio` и хеши — этих подполей код не вычисляет (`graph.py:156-202`) |
+| `page_model` | Словарь, собираемый `perceive`/`ground`: `{url, title, aria, nodeCount}` + `buttons` (добавляется в `ground`). **Не** содержит `a11y_tree`/`landmarks`/`forms`/`completeness_ratio` и хеши — этих подполей код не вычисляет (`brain/graph.py::perceive` / `::ground`) |
 
 ### 2.4 Учёт исследования / сходимость
 
@@ -132,7 +134,7 @@
 
 ## 3. Узлы
 
-Граф содержит **10 именованных узлов** (`brain/graph.py:454-459`: `perceive`, `ground`, `plan`,
+Граф содержит **10 именованных узлов** (`brain/graph.py::build_graph`, цикл `b.add_node`: `perceive`, `ground`, `plan`,
 `act`, `verify`, `heal`, `checkpoint`, `takeover`, `scenario`, `report`) и два неявных встроенных
 узла LangGraph (`START`, `END`). Внутри графа НЕТ ветвления по `run_mode` — все рёбра либо
 безусловны, либо решаются одной из 4 роутер-функций (`route_entry`, `route_plan`, `route_verify`,
@@ -180,7 +182,7 @@
 
 **LLM: нет.**
 
-- Каталогизирует интерактивные элементы (`_elements_from_interactives`, `graph.py:54-102`): роль,
+- Каталогизирует интерактивные элементы (`brain/graph.py::_elements_from_interactives`): роль,
   имя, `testid`, primary-локатор + упорядоченный список `alternatives` (`testid`/`role_name`/
   `label`/`text_role`, приоры 0.95/0.90/0.88/0.80).
 - Покрытие считается только по кнопкам (`role == "button"`); ссылки идут в `nav_frontier`.
@@ -190,13 +192,13 @@
   `visited_paths`, `coverage_achieved = exercised / max(1, seen)`.
 - **Не сверяется** с golden-baseline (`a11y_hash`/`screenshot_hash`) — этой проверки в explore-графе
   нет; golden-diff реализован только в `run_replay()` (§3.11).
-- Безусловное ребро `ground → plan` (`graph.py:464`) — нет ветвления по `run_mode`.
+- Безусловное ребро `ground → plan` (`b.add_edge("ground", "plan")` в `brain/graph.py::build_graph`) — нет ветвления по `run_mode`.
 
 ### 3.3 `plan`
 
 **LLM: условно** — зависит от переданного `planner` (`HeuristicPlanner` детерминирован;
 LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фазы 1 выбираются в `_run_explore`,
-`brain/__main__.py:102-108`).
+`brain/__main__.py::_run_explore`).
 
 - Собирает кандидатов: непокрытые кнопки (`click`) + весь `nav_frontier` (`navigate`).
 - Завершает исследование (`exploration_complete=True`), когда `current_step >= max_steps`, либо
@@ -233,7 +235,7 @@ LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фаз
 - При `ok=True`: сбрасывает `consecutive_heal_failures=0` — единственная точка сброса счётчика
   авто-HITL (ADR-055).
 - При `ok=False`: увеличивает `failed_steps`.
-- Маршрут (`route_verify`, `graph.py:428-429`): `"checkpoint" if ok else "heal"` — ровно 2 исхода.
+- Маршрут (`brain/graph.py::route_verify`): `"checkpoint" if ok else "heal"` — ровно 2 исхода.
 
 ### 3.6 `heal`
 
@@ -264,7 +266,7 @@ LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фаз
 - Здесь **нет** записи в `store-gateway`, **нет** вызовов `PersistenceService`, **нет** сброса
   `heal_attempts`/`healing_context` (этих полей не существует) — саму LangGraph-контрольную точку
   сбрасывает фреймворк (компилированный граф с `checkpointer=saver`), а не код этого узла.
-- Маршрут (`route_checkpoint`, `graph.py:431-438`) — ровно 3 цели: `exploration_complete →
+- Маршрут (`brain/graph.py::route_checkpoint`) — ровно 3 цели: `exploration_complete →
   scenario`; иначе `_takeover_armed → takeover`; иначе `current_step >= max_steps → scenario`,
   else `→ perceive`.
 
@@ -277,7 +279,7 @@ LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фаз
   вход при resume безопасен и идемпотентен).
 - `app.invoke()` возвращает управление с `__interrupt__`; живой браузер передаётся оператору
   (CDP, M9-LIVE). Оркестратор шлёт `Command(resume=...)` на Return — цикл продолжается с того же
-  места (`_resume_through_takeovers`, `brain/__main__.py:61-85`).
+  места (`brain/__main__.py::_resume_through_takeovers`).
 - На resume: снимает `_takeover_armed`, добавляет payload возврата в `takeover_returns`.
 - Безусловное ребро `takeover → checkpoint` (повторный опрос перед продолжением — на случай, если
   Return ещё не долетел до оркестратора).
@@ -291,7 +293,7 @@ LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фаз
   явно покрытых кнопок — `goal`-режим строит `refs` и вызывает `ground_scenario`; `describe`-режим
   делает LLM-черновик и детерминированно сверяет его (`reconcile`) с реальной картой.
 - **M9.10 (ADR-048): также точка ВОЗОБНОВЛЕНИЯ тёплого multi-turn диалога.** `route_entry`
-  (`graph.py:440-445`) направляет `START` прямо сюда, минуя `perceive`, когда в состоянии уже есть
+  (`brain/graph.py::route_entry`) направляет `START` прямо сюда, минуя `perceive`, когда в состоянии уже есть
   и `site_map`, и `messages` (тёплый поток) — переавторизует поверх сохранённой карты с учётом
   предыдущих реплик как refine-контекста (`_capped_history`, ограничено
   `SENTINEL_REFINE_HISTORY_KEEP`, по умолчанию 6 ходов).
@@ -317,7 +319,7 @@ LLM-backed планировщик, `GoalPlanner`/`DescribePlanner` для фаз
 ### 3.11 `run_replay()` — отдельный цикл replay/baseline (в обход графа)
 
 `run_mode in {"replay", "baseline"}` НЕ проходит через `StateGraph` вообще: `_run_replay()`
-(`brain/__main__.py:514`) напрямую вызывает `run_replay()` (`brain/replay.py:101`) — обычный
+(`brain/__main__.py::_run_replay`) напрямую вызывает `run_replay()` (`brain/replay.py::run_replay`) — обычный
 Python-цикл по замороженным шагам `plan.json`, без LangGraph, без чекпойнтера, без узлов
 `perceive`/`ground`/`plan`.
 
@@ -325,10 +327,10 @@ Python-цикл по замороженным шагам `plan.json`, без Lan
   `FORCE_REPLAY=1`) — жёсткий abort, `exit_code=3`, ничего не выполняется.
 - **По каждому шагу:** `navigate`/`assert`/`press` выполняются напрямую; для `click`/`fill`/`type`/
   `select` сперва `browser.probe` на primary-локаторе — при `count==1` действие выполняется сразу,
-  иначе вызывается **реальный** `HealingEngine.heal(ctx)` (`brain/healing.py:56-112`):
+  иначе вызывается **реальный** `HealingEngine.heal(ctx)` (`brain/healing.py::HealingEngine.heal`):
   1. Кеш (`store.lookup`) по `(page_path, semantic_id, dom_hash)`; промах — `store.evict_stale`.
   2. Ротация стратегий по записанным `alternatives`: первый локатор, разрешающийся ровно в 1
-     элемент (`brain/healing.py:26-27`, `PRIORS`):
+     элемент (`brain/strategies.py::PRIORS`, ADR-083; в `healing.py` это лишь ре-экспорт):
 
      | Стратегия | Источник | Prior |
      |---|---|---|
@@ -336,32 +338,41 @@ Python-цикл по замороженным шагам `plan.json`, без Lan
      | `role_name` | генерируется `ground()` — ARIA role + accessible name | 0.90 |
      | `label` | генерируется `ground()` из `aria-label` (не для кнопок) | 0.88 |
      | `text_role` | генерируется `ground()` из видимого текста | 0.80 |
-     | `css` | ТОЛЬКО из LLM-переgrounding (шаг 3 ниже) | 0.65, далее ×0.90 скидка на самоуверенность |
+     | `css` | ТОЛЬКО из чужих планов — импорт (`brain/importer.py`) и рекордер (`brain/record_bridge.py`, стратегия выводится из ключа наблюдённого локатора). С ADR-082 LLM его больше НЕ авторит | 0.65 (ротация зовёт `prior_for` и скидки не применяет) |
      | `xpath` | объявлена в `PRIORS`; генерируется `record_bridge.py` (записанные extension-сценарии), не `ground()` | 0.45 |
      | `visual` | ТОЛЬКО из visual set-of-marks (шаг 4) | 0.80 (в FLAGGED-диапазоне по дизайну) |
+     | `llm_pick` | ЕДИНСТВЕННАЯ стратегия, которую сегодня производит LLM-тир (шаг 3 ниже, ADR-082) | prior ТИПА получившегося локатора × `PICK_DISCOUNT` 0.90 ⇒ 0.855 (`testid`) либо 0.81 (`role_name`) |
 
-  3. Если ротация не дала результата — LLM-переgrounding (`_llm_reground`, структурированный
-     JSON-ответ с CSS-селектором), только если задан LLM-backend (`use_llm=True`, обычно
-     `HEAL_LLM=1`) и бюджет `heal` не исчерпан (`budget.tracker().exceeded("heal")`).
+  3. Если ротация не дала результата — LLM-переgrounding (`_llm_reground`): с ADR-082 модель НЕ
+     авторит селектор, а выбирает ИНДЕКС в списке, который исполнитель уже сообщил
+     (`browser.interactives`); индекс вне диапазона отбрасывается, а из выбранного дескриптора
+     собирается `{testid}` либо `{role,name}`. Стратегия результата — `llm_pick`. Работает только
+     если задан LLM-backend (`use_llm=True`, обычно `HEAL_LLM=1`) и бюджет `heal` не исчерпан
+     (`budget.tracker().exceeded("heal")`).
   4. Если и это не дало результата — визуальный set-of-marks (`_visual_reground`), только если
-     `use_visual=True` **и** backend поддерживает vision. Нет проверки `completeness_ratio` —
-     такого поля нигде в коде нет.
+     LLM-backend вообще поднят (`use_llm=True`, `HEAL_LLM=1` — иначе `self._backend` пуст и тир не
+     вызывается), `use_visual=True` (`HEAL_VISUAL=1`) **и** backend поддерживает vision; бюджет
+     `heal` проверяется ещё раз уже внутри тира. Нет проверки `completeness_ratio` — такого поля
+     нигде в коде нет.
   5. Кандидат повторно пробируется живым DOM; если не разрешается ровно в 1 элемент — уверенность
      обнуляется.
-  6. Порог: `confidence >= 0.85` → `auto_healed` (локатор сохраняется как `active`);
-     `0.60–0.84` → `flagged` (применяется оптимистически, сохраняется с пометкой на ревью);
-     `< 0.60` → `needs_review`, локатор НЕ сохраняется, шаг падает.
+  6. Порог: `confidence >= AUTO` → `auto_healed` (локатор сохраняется как `active`);
+     `FLAG..AUTO` → `flagged` (применяется оптимистически и сообщается); `< FLAG` →
+     `needs_review`, локатор НЕ сохраняется, шаг падает. `AUTO`/`FLAG` — не константы: 0.85/0.60
+     это ДЕФОЛТЫ, переопределяемые `SENTINEL_HEAL_AUTO`/`SENTINEL_HEAL_FLAG` (ADR-080). Между
+     уверенностью и исходом стоят ещё два механизма: кэп `_cap` (ПЕРЕОСНОВА, дотянувшая до `AUTO`,
+     срезается до `(AUTO+FLAG)/2` и до AUTO дойти не может) и предикат тождества ADR-082.
   7. Каждая попытка пишет строку в SQLite-таблицу `healing_audit` (append-only,
-     `brain/store.py:145-152`) — никаких `UPDATE`/`DELETE`.
+     `brain/store.py::LocalStore.audit`) — никаких `UPDATE`/`DELETE`.
 - **Карантин нестабильных шагов:** `store.record_step(plan_id, step_key, passed, aut_version)`
   ведёт скользящее окно последних 5 исходов НА AUT SHA (сбрасывается при смене SHA); ≥3 провалов
   из 5 → карантин (`quarantined=True`, не считается в `exit 1`); 3 подряд успеха снимают карантин
-  (`brain/store.py:179-196`). Golden-diff регрессии (`exit 2`) карантин НЕ подавляет.
+  (`brain/store.py::LocalStore.record_step`; в Go — `internal/store/server.go::RecordStep`). Golden-diff регрессии (`exit 2`) карантин НЕ подавляет.
 - **Нет ретрай-цикла с лимитом попыток** на один шаг (никакого поля `heal_attempts`) — на каждый
   шаг ровно один вызов `heal.heal(ctx)`.
 - **AG-UI + авто-HITL (M14 tail 2, ADR-055):** эмитит `run.started`/`step.progress`/`heal`/
   `verdict`; считает `consecutive_heal_failures` (та же семантика и порог
-  `SENTINEL_AUTO_HITL_THRESHOLD`, что и в графе, `brain/replay.py:143-153`) и эмитит `hitl_needed`
+  `SENTINEL_AUTO_HITL_THRESHOLD`, что и в графе, `brain/replay.py::run_replay`) и эмитит `hitl_needed`
   при достижении порога — но реальной паузы (interrupt/resume) в replay-цикле нет: живой
   авто-takeover в середине replay — задача M9-LIVE.
 
@@ -371,7 +382,7 @@ Python-цикл по замороженным шагам `plan.json`, без Lan
 
 ### 4.1 Таблица рёбер
 
-Источник истины: `brain/graph.py:454-475` (`b.add_edge`/`b.add_conditional_edges`). Все рёбра ниже
+Источник истины: `brain/graph.py::build_graph` (`b.add_edge`/`b.add_conditional_edges`). Все рёбра ниже
 верны для ОДНОГО графа, используемого explore/chat/goal/describe — нет ветвления по `run_mode`.
 
 | От | До | Условие / Триггер |
@@ -395,7 +406,7 @@ Python-цикл по замороженным шагам `plan.json`, без Lan
 
 ### 4.2 Роутер-функции — дословно
 
-Ровно 4 функции генерируют условные рёбра; ни одна не читает `run_mode` (`graph.py:425-445`):
+Ровно 4 функции генерируют условные рёбра; ни одна не читает `run_mode` (`brain/graph.py::build_graph`: `route_plan`, `route_verify`, `route_checkpoint`, `route_entry`):
 
 ```python
 def route_plan(state):
@@ -474,7 +485,7 @@ def route_entry(state):
                                             perceive (нормальный цикл)
 ```
 
-> Упрощённая схема реальных рёбер `graph.py:454-475` (см. точную таблицу в §4.1). Нет узлов
+> Упрощённая схема реальных рёбер `brain/graph.py::build_graph` (см. точную таблицу в §4.1). Нет узлов
 > `LOCATOR_STALE`/`ELEMENT_GONE`/`TIMING`/`human gate` — этих веток в коде нет.
 > `checkpoint → perceive` — основное обратное ребро, управляющее циклом explore.
 

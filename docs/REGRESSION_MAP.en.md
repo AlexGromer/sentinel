@@ -11,7 +11,7 @@
 > a file path, normative references carry a date and a URL, and data about how interfaces break
 > carries a citation.
 >
-> **Revision date:** 2026-07-26 · **Code state:** ADR-070
+> **There is deliberately no aggregate "code state" stamp here — such a marker goes stale silently.** Each row is dated by its own ADR reference and file path; when a row is re-verified, the row is what gets edited, not the header. For when the map was last touched, ask `git log -1 -- docs/REGRESSION_MAP.en.md`.
 
 ---
 
@@ -96,9 +96,9 @@ code in CI are out of scope here — that is `docs/TESTING.md`.
 
 | what breaks | detected? | mechanism | exit | where reported | GAP |
 |---|---|---|---|---|---|
-| the brain did not start / crashed | **yes** | control-api records the abnormal exit (`cmd/control-api/main.go:478`) | `-1` | verdict + `logs/run.jsonl` | — |
-| the run was signal-killed or cancelled | **yes** | ADR-069: `state=canceled` is separated from `failed`, because a killed process exits with −1 indistinguishably from a crash (`main.go:506-512`) | `-1` | verdict (state beside the code) | — |
-| the LLM is unreachable → the planner silently falls back to heuristic | **partly** | 20 codes carry `degrades: true` in `brain/events.json`, each with a `{ru,en}_verdict` hint | unchanged | **logs only**; never reaches the verdict | `[PROD-VERDICT-APP]` (same mechanism) |
+| the brain did not start / crashed | **yes** | control-api records the abnormal exit (`cmd/control-api/main.go::spawnRun` — the failed-`cmd.Start` branch and the `default` arm of the `switch` after `cmd.Wait()`) | `-1` | verdict + `logs/run.jsonl` | — |
+| the run was signal-killed or cancelled | **yes** | ADR-069: `state=canceled` is separated from `failed`, because a killed process exits with −1 indistinguishably from a crash (`cmd/control-api/main.go::spawnRun`, `switch`: `rec.canceled` / `err == nil` / `*exec.ExitError`) | `-1` | verdict (state beside the code) | — |
+| the LLM is unreachable → the planner silently falls back to heuristic | **partly** | the codes carrying `degrades: true` in `brain/events.json` (no fewer than thirty today), each with a `{ru,en}_verdict` hint; ask the tree for the count: `python3 -c "import json;d=json.load(open('brain/events.json'));print(sum(1 for v in d['events'].values() if v.get('degrades')))"` | unchanged | **logs only**; never reaches the verdict | `[PROD-VERDICT-APP]` (same mechanism) |
 | pw-executor did not come up | **yes** | the `browser.launched` event is absent | `-1` | logs | — |
 | exploration loops on an element that will not act | **yes** (ADR-070) | a per-element retry budget in `brain/graph.py`; events `plan.element_blacklisted`, `plan.unactionable_elements` | unchanged | logs + the reason it stopped | — |
 | the token budget is exhausted | **yes** | `brain/runcontrol.py` → `plan.orchestrator_abort` | unchanged | logs + token metrics | — |
@@ -117,7 +117,7 @@ Degradations of the artefact Sentinel produced.
 | what breaks | detected? | mechanism | exit | where reported | GAP |
 |---|---|---|---|---|---|
 | the plan was tampered with or corrupted | **yes** | `plan_hash` — SHA-256 over every field of every step (`brain/state.py::canonical_plan_hash`); checked **before** execution | **3** | verdict; **nothing runs** | — |
-| a golden was forged | **yes** | HMAC-SHA256 over the golden's integrity-bearing fields (`brain/store.py:52`), byte-identical to the Go gateway | **3** | verdict | — |
+| a golden was forged | **yes** | HMAC-SHA256 over the golden's integrity-bearing fields (`brain/store.py::_golden_mac`), byte-identical to the Go gateway | **3** | verdict | — |
 | a locator stopped resolving | **yes** | `brain/healing.py`: cache keyed on the page hash → rotation of `alternatives[]` (testid 0.95 → role+name 0.90 → label 0.88 → text 0.80) → textual LLM re-ground → visual re-ground (set-of-marks) | unchanged | `heal-report.json`, the `healed` counter | — |
 | **healing bound to a different element** | **not verified, but VISIBLE (ADR-071)** | `_llm_reground`/`_visual_reground` still pick a new selector from the current page and there is still no "is this the same element" check — but that case is now classified as a **re-ground**, marked `degrades` and visible on the verdict instead of dissolved into the `healed` counter | unchanged | `heal.drift_reground` (warn) + `drift.elements[]` | remains: **no identity verification** |
 | **the flow changed, not the locator** | **no** | healing finds something "close enough" and passes | unchanged | — | `[PROD-HEAL-VERDICT]` |
@@ -136,13 +136,13 @@ The thing the product exists for.
 | what breaks | detected? | mechanism | exit | where reported | GAP |
 |---|---|---|---|---|---|
 | a step did not execute | **yes** | `brain/replay.py` | **1** | verdict + step breakdown | — |
-| the page's accessibility tree changed | **yes, authoritatively** | `_a11y_hash` (`brain/replay.py:41`) — a hash of the ARIA snapshot; compared on **first** landing on a page, symmetrically in `baseline` and `replay`, so a later click cannot shift the golden | **2** | verdict + `regressions[]` | — |
+| the page's accessibility tree changed | **yes, authoritatively** | `brain/replay.py::_a11y_hash` — a hash of the ARIA snapshot; compared on **first** landing on a page, symmetrically in `baseline` and `replay`, so a later click cannot shift the golden | **2** | verdict + `regressions[]` | — |
 | the page screenshot changed | **yes, advisory** | a screenshot hash; by default it does **not** affect the exit code — cross-process render instability would otherwise produce false failures | unchanged (default) | `regressions[]` | `RISK-009` |
-| the application threw a JS exception | **yes, and into the verdict (ADR-072)** | `app.js_error`, emitted by `pw-executor/src/server.ts:79`; the per-code tally comes from `browser.appFaults` and the brain files it under `app_faults` | `0` by default; `1` under `SENTINEL_FAIL_ON_APP_ERRORS=N` | the `pass_with_app_faults` verdict + `app_faults` in the report + `<system-err>` on the suite in `junit.xml` | — |
-| a console error/warning | same | `app.console_error` / `app.console_warn`, `server.ts:82-83` | same (⚠ warnings are NOT in `errors` — gating on them would make the feature unusable) | same | — |
-| an application request failed | same | `app.request_failed`, `server.ts:87` | same | same | — |
-| the application answered 4xx/5xx | same | `app.http_error`, `server.ts:93` | same | same | — |
-| the application opened a dialog | same | `app.dialog`, `server.ts:96` | same (not in `errors`) | same | — |
+| the application threw a JS exception | **yes, and into the verdict (ADR-072)** | `app.js_error`, emitted by `pw-executor/src/server.ts::attachAppCapture` → `p.on('pageerror')` (the human-readable text of a code lives in `server.ts::APP_MESSAGES`); the per-code tally comes from `browser.appFaults` and the brain files it under `app_faults` | `0` by default; `1` under `SENTINEL_FAIL_ON_APP_ERRORS=N` | the `pass_with_app_faults` verdict + `app_faults` in the report + `<system-err>` on the suite in `junit.xml` | — |
+| a console error/warning | same | `app.console_error` / `app.console_warn`, `server.ts::attachAppCapture` → `p.on('console')` | same (⚠ warnings are NOT in `errors` — gating on them would make the feature unusable) | same | — |
+| an application request failed | same | `app.request_failed`, `server.ts::attachAppCapture` → `p.on('requestfailed')` | same | same | — |
+| the application answered 4xx/5xx | same | `app.http_error`, `server.ts::attachAppCapture` → `p.on('response')` | same | same | — |
+| the application opened a dialog | same | `app.dialog`, `server.ts::attachAppCapture` → `p.on('dialog')` | same (not in `errors`) | same | — |
 | **the interface changed but the test healed** | **yes (ADR-071)** | the drift class is derived from whether the strategy is a member of the frozen `alternatives[]`: **re-bind** (same element by another key — repairing the test) versus **re-ground** (a new selector from the current page; nothing verifies element identity) — `brain/replay.py::_drift_entry` | `0` by default; `1` under `SENTINEL_FAIL_ON_HEAL=N` | the `pass_with_drift` verdict state + the AG-UI frame + `drift.elements[]` (before→after) + an "Interface drift" table in the HTML report | — |
 | **performance degraded** | **no** | only `duration_ms` for the whole run is measured | — | a metric | `[PROD-PERF]` |
 | **accessibility degraded** (52872 / WCAG 2.1 criteria) | **no** | the accessibility tree is used as a hash, not as a criterion: "changed" ≠ "became inaccessible" | — | — | `[PROD-A11Y]` |

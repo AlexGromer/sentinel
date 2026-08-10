@@ -63,16 +63,24 @@ done
 > **Предпосылки:** `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai`
 > (или `uv sync`, если `pyproject.toml` полный). Подробнее — `DEVELOPMENT.md §1–2`.
 
-### 1.3 TypeScript: проверка типов pw-executor
+### 1.3 TypeScript: сборка и модульные тесты pw-executor
 
 ```bash
 cd pw-executor
-npx tsc --noEmit
+npm ci             # на чистом клоне; иначе можно пропустить
+npm test           # tsc + node:test — ровно то, что гоняет CI
+npx tsc --noEmit   # только типы, быстрый проход без сборки
 cd ..
 ```
 
-Чистый выход (код 0, нет строк `error TS`) — обязателен перед коммитом, так как pw-executor
-не имеет отдельных unit-тестов: типы — его основной статический контракт.
+Полный гейт — `npm test` (`pw-executor/package.json`: `tsc && node --test dist/*.test.js`): один
+проход `tsc` компилирует пакет, затем `node --test` прогоняет собранные `dist/*.test.js`; хуки
+`postbuild`/`posttest` их удаляют, поэтому тестовый код не уезжает потребителям `pw-executor/dist`.
+Именно `npm test` запускает CI — шаг «Build + unit-test pw-executor» джобы `build`, который перед
+запуском проверяет пол на число найденных `src/*.test.ts` (`.github/workflows/ci.yml`,
+QA-PWEXEC-CI). Число сьютов здесь не записывается — оно снимается: `ls pw-executor/src/*.test.ts | wc -l`.
+`npx tsc --noEmit` — быстрая проверка типов, но НЕ полный гейт: он ничего не исполняет. Строка
+приёмки этого гейта — `docs/PR_ACCEPTANCE.md` §1.
 
 ### 1.4 Secrets scan (gitleaks)
 
@@ -429,11 +437,11 @@ docker compose run --rm \
 
 | Контекст | Минимальный набор команд |
 |---|---|
-| Перед любым коммитом | `go vet ./...` + `cd pw-executor && npx tsc --noEmit` + `gitleaks detect` |
+| Перед любым коммитом | `go vet ./...` + `go test ./...` + `cd pw-executor && npm test` + `gitleaks detect` |
 | PR / feature branch, добавляющий компонент или функциональность | Полный офлайн-сьют (§1.1–1.2) + DOM-гейты (setup-wizard, hub Logs-view, static-showcase) + `ui-smoke` скриншоты + докер во ВСЕХ видах поставки + живой прогон изменённого компонента + мутации — этого требует принцип 7 (`docs/DEVELOPMENT.md` §0) на КАЖДОМ таком PR; полный обязывающий перечень — [`docs/PR_ACCEPTANCE.md`](PR_ACCEPTANCE.md) |
 | Релизный кандидат (тег) | Всё из строки выше плюс гейты релизного артефакта: `install-smoke` / `deb-smoke` / `install-ps1-smoke` / `airgap` (`.github/workflows/ci.yml`, `release.yml`) |
 | Новая LLM-модель | `test_b1_offline.py` + smoke-прогон goal-режима vs. `file://` (§3.2) |
-| Изменение pw-executor | `npx tsc --noEmit` + `test_m9_offline.py` |
+| Изменение pw-executor | `cd pw-executor && npm ci && npm test` (компиляция + `src/*.test.ts`, как в CI) + `test_m9_offline.py` |
 | Изменение healing | `test_m3_offline.py` + `test_m8_offline.py` + live replay vs. site-v2 (§3.1) |
 | Изменение RunConfig | `test_m9_2_offline.py` + `test_m9_2b_offline.py` |
 

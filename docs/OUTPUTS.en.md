@@ -94,8 +94,12 @@ workflow: Sentinel generates the skeleton; engineers own and maintain it thereaf
 
 ### 4. Playwright Trace (`trace.zip`)
 
-A full browser execution trace per run: network activity, console output, DOM snapshots,
-screenshots, and the complete action timeline.
+A browser execution trace: network activity, console output, DOM snapshots, screenshots, and the
+complete action timeline. **It is NOT kept for every run** (ADR-084): a green run has nothing to
+dissect, and the file holds the tested application's live DOM and request bodies, so `trace.zip`
+survives only when `exit_code != 0` (`brain/__main__.py::_keep_trace`). Levers:
+`SENTINEL_TRACE_ALWAYS=1` restores the old behaviour, `PW_NO_TRACE=1` beats both — then no trace is
+recorded at all.
 
 Produced by `pw-executor` and written to the shared artifact directory; served through control-api's
 artifact whitelist (`GET /v1/runs/{id}/artifact?name=trace.zip`, ADR-099) or read directly from the
@@ -116,6 +120,36 @@ Retention: on every run `agentctl` keeps `trace.zip` only for the newest `SENTIN
 `trace.zip` on every run) and deletes any `trace.zip` older than
 `SENTINEL_TRACE_TTL_HOURS` (default `0` = TTL off). **Only** `trace.zip` is removed — `plan.json` and
 reports stay for the audit trail. Applied only to the default `runs/`, never a user `--artifact-dir`.
+
+**Contents (ADR-098).** A kept trace is a redacted trace, or there is no trace at all. The hook sits
+where the trace is KEPT (`_stop_trace`), not in report generation: the report is built later, and a
+replay started directly (`python -m brain`) never reaches it — a redaction that depends on how the
+run was launched is the worst property a protective mechanism can have. Redacted are the values of
+input verbs (unconditionally, whatever the field is called), driver narratives (by `callId`, never by
+text), `__playwright_value_` in DOM snapshots, and named secrets across every non-image entry.
+**Fail closed:** a trace that could not be redacted is DELETED — that is not a degraded artifact, it
+is a leak. The emergency `SENTINEL_TRACE_RAW=1` announces itself EVERY time. To redo it by hand on an
+archive already on disk: `agentctl redact-trace --trace <trace.zip>`. ⚠ The window between Playwright
+writing the archive and the redaction is stated, not closed: there is no hook between "the bytes hit
+the disk" and "we can read them", so the raw file lives for the length of one subprocess.
+
+**Pixels are never cleaned** — OCR plus masking is unreliable and expensive, and a redactor that
+half-works on screenshots is worse than one that says it does not try. The lever:
+`SENTINEL_TRACE_SCREENSHOTS=0` (`pw-executor/src/server.ts`, at `tracing.start`) — frames are not
+recorded at all.
+
+**The sweep does not stay silent.** Every retention deletion leaves a `trace-removed.json` in the
+swept run's own directory (with the reason — `count` or `ttl` — and the `keep`/`ttl_hours` in force);
+the file is served through the artifact whitelist, so the hub shows "a trace existed and is gone"
+instead of indistinguishable emptiness. If the deletion failed, the marker is NOT written: it must
+mean "the trace is gone", not "we tried".
+
+**Viewing is not downloading.** The hub reads artifacts on every run open, so "delete once served"
+would erase a run just for being looked at. The distinguishing primitive is `?download=1`, which the
+hub sets ONLY on a download-button click (the run's artifact panel and the ADR-108d artifact canvas)
+and never on a prefetch for rendering: a genuine download writes a `downloaded.json` marker and
+nothing else. Deleting the marked runs is a separate explicit command, `agentctl sweep-downloaded
+--yes` (ADR-103), never automatic; `--dry-run` shows without acting.
 
 ---
 
@@ -226,12 +260,20 @@ there is no separate coverage-map artifact.
 
 ### 10. SARIF Report — as-built: no `--sarif` flag in the code
 
-**As-built:** `cmd/agentctl/main.go` has no `--sarif` flag on any subcommand. The full list
-of `agentctl` subcommands is: `run`, `baseline`, `locators`, `export-spec`, `report`,
-`calibrate`, `version`; the full flag list for `run` does not include `--sarif` (grep
-across `cmd/agentctl/main.go` — zero matches). A SARIF export for GitHub Code Scanning is a
-proposed but unimplemented capability; today, `report.json` (§2) can serve as the source for
-an external conversion script if one is needed.
+**As-built:** `cmd/agentctl/main.go` has no `--sarif` flag on any subcommand — grep across `cmd/`
+and `brain/` returns zero matches, and the full flag list for `run` does not include it. A SARIF
+export for GitHub Code Scanning is a proposed but unimplemented capability; today `report.json` (§2)
+can serve as the source for an external conversion script if one is needed.
+
+⚠ The subcommand list is deliberately gone: a hand-kept list of names is itself a defect (principle
+5, `docs/DEVELOPMENT.md` §0) — what is surplus in it is visible, what is missing is not. The
+seven-name list that stood here was seven subcommands behind by August (the storage/leak arc and
+HEALTH), three of them destructive. The authoritative list is printed by the product: `agentctl` with
+no arguments calls `usage()` (`cmd/agentctl/main.go`), whose completeness rests on a gate rather than
+on care — `TestUsageListsEverySubcommand` (`cmd/agentctl/main_test.go`) reads the `case "…"` labels
+out of `switch os.Args[1]` and fails on any dispatched subcommand missing from usage(). Thin clients
+over control-api routes (ADR-107) are appended by `apiUsage` in the same function. The capability
+catalog with access paths is `docs/capabilities.json`.
 
 ---
 
@@ -259,8 +301,18 @@ rendered string. Collapsing repeats (`×N`) and nesting stack frames happen on t
   truncated capture cannot be mistaken for a complete one.
 - **`app.*` events never reach the verdict** — a run reports `exit 0` while the application throws
   exceptions (`GAP-PROD-001`, analysed in [`REGRESSION_MAP.en.md`](REGRESSION_MAP.en.md) §6).
-- **There is no write-side redaction** — foreign output is stored as received (`GAP-SEC-005`,
-  [`THREAT_MODEL.en.md`](THREAT_MODEL.en.md) §4.12). No TTL is defined for `logs/`, unlike `trace.zip`.
+- **Write-side redaction EXISTS** (`GAP-SEC-005` closed by ADR-081, see
+  [`THREAT_MODEL.en.md`](THREAT_MODEL.en.md) §4.12): `logSink.write` is the single choke point all
+  three files descend from, and it passes EVERY line through `redact.Line`
+  (`cmd/control-api/logsink.go`) — `Bearer` form, JWTs and named secrets via `configguard.Secretish`,
+  the vocabulary shared with the config guard. There is deliberately no entropy or "long hex/base64"
+  rule: it would eat `run_id`/`plan_hash`/`dom_hash`/goldens, the audit trail itself. An unnamed,
+  shapeless secret survives redaction — a stated ceiling, not an oversight.
+- **`logs/` retention exists but defaults to OFF** (`SENTINEL_LOG_KEEP`/`SENTINEL_LOG_TTL_HOURS`,
+  both `0` = off; `cmd/agentctl/main.go::sweepLogs`, exposed as `/v1/config` fields in the
+  `retention` group), unlike `trace.zip`, whose sweep runs on its own. The logs ARE the diagnosis,
+  and silently deleting someone's evidence is a worse failure than a pile of files; redaction removes
+  the credentials, retention is disk hygiene the operator opts into.
 
 ### 12. The store marker on list endpoints — ADR-069
 

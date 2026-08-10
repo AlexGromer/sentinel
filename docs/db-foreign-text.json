@@ -187,7 +187,7 @@
         },
         "error": {
           "foreign": "none",
-          "note": "VERIFIED CLEAN, and worth the words: only os/exec spawn errors reach it (cmd/control-api/main.go:623,655). Its cleanliness rests on lineWriter.Write always returning (len(p), nil), which is a property of the implementation rather than a guarded invariant — see SEC-RUNS-ERROR-UNGUARDED."
+          "note": "VERIFIED CLEAN, and worth the words: only os/exec spawn/wait errors reach it (two rec.Error sites in cmd/control-api/main.go). Its cleanliness rests on lineWriter.Write always returning (len(p), nil) — an invariant now PINNED by cmd/control-api/linewriter_contract_test.go (no error on any input, no short write; both mutations caught). SEC-RUNS-ERROR-UNGUARDED resolved 2026-07-28."
         },
         "started_at": {
           "foreign": "none",
@@ -306,8 +306,8 @@
           "note": "the operator's instruction, verbatim and untransformed"
         },
         "summary": {
-          "foreign": "none",
-          "note": "NOT an LLM summary — a deterministic f-string bounded at 80 chars of the first turn (brain/graph.py:213). Also UNREACHABLE today: ChatProjector needs STORE_ADDR, which agentctl never sets for --mode chat. Fix that wiring and this column immediately starts holding operator goals verbatim — see SEC-CHATS-WIRING-GAP."
+          "foreign": "inherent",
+          "note": "NOT an LLM summary — the deterministic _rolling_summary f-string (brain/graph.py): turn count plus the first 80 chars of the operator's opening turn, verbatim. Unreachable until 2026-07-28, when runNeedsStore (cmd/agentctl/main.go) started the store-gateway for --mode chat and closed SEC-CHATS-WIRING-GAP; the hub's chat path spawns exactly that. Source of truth is the checkpointer (conversations.db); this is a browsable index over it. Purgeable (agentctl purge-store --tables chats), never redactable."
         },
         "updated_at": {
           "foreign": "none",

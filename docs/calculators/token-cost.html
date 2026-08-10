@@ -22,7 +22,8 @@
 </head>
 <body>
 <h1>Token-cost per test phase</h1>
-<p class="sub">Sentinel · из проверенных по коду <code>max_tokens</code>/бюджетов. Авторитет: <a href="../LOCAL_MODELS.md">docs/LOCAL_MODELS.md §6</a>. Клиентский, offline.</p>
+<p class="sub">Sentinel · счёт идёт по потолкам вывода, записанным в <a href="../LOCAL_MODELS.md">docs/LOCAL_MODELS.md §6</a>. Клиентский, offline.<br>
+⚠ <b>Цифры ниже — НИЖНЯЯ оценка, а не «проверено по коду».</b> С M9-LIVE код считает не по ним: стартовые потолки вывода задают <code>_PICK_TOKENS</code> и <code>_SCENARIO_TOKENS</code> (<code>brain/planner.py</code>), и при усечении (<code>finish_reason=length</code>) потолок удваивается вплоть до <code>LLM_MAX_TOKENS_HARD</code> (<code>brain/llm.py</code>). Расхождение, его замеренная причина и то, что пересчёт §1/§6 — отдельная задача, записаны в <a href="../LOCAL_MODELS.md">§8 того же документа</a>.</p>
 
 <div class="grid">
   <fieldset><legend>Нагрузка</legend>
