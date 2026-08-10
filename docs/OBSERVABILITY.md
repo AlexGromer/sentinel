@@ -213,7 +213,10 @@ scrape_configs:
 
 Токен — тот же bearer, что и у остального control-API (`state/control-api.token` в
 docker-compose-развёртывании, либо машинный токен в развёртывании с аккаунтами); без него `/metrics`
-отвечает 401.
+отвечает **403**, а не 401: отказ гварда всегда `403` (`denyCredential` в
+`cmd/control-api/access.go`). Единственный маршрут, отвечающий `401`, — `POST /v1/login` при
+неверной паре имя/пароль (`cmd/control-api/session.go`). Маршрут объявлен `accessAuthed` без
+`legacyOpen`, поэтому credential нужен и в развёртывании без аккаунтов.
 
 **Отдельный путь (опционально, не изменён этой правкой):** `push_metrics()` (`brain/report.py:70-85`)
 пушит 5 gauge-значений в Prometheus Pushgateway на запуск — `sentinel_run_steps`, `sentinel_run_exit_code`,

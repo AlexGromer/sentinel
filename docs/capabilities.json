@@ -364,6 +364,26 @@
       "reach": "capability"
     },
     {
+      "id": "sweep-downloaded",
+      "group": "CLI",
+      "severity": "medium",
+      "title_ru": "Удаление прогонов, копию которых человек уже унёс",
+      "title_en": "Delete runs a human has already taken a copy of",
+      "how_ru": "agentctl sweep-downloaded [--dry-run] --yes — удаляет ВЕСЬ каталог прогона с маркером downloaded.json (ADR-103). Никогда не автоматически: маркер ставит только настоящее скачивание, просмотр — нет. --yes обязателен (необратимо), --dry-run показывает без действия, отчёт счётчиками без путей.",
+      "how_en": "agentctl sweep-downloaded [--dry-run] --yes — deletes the WHOLE run directory carrying a downloaded.json marker (ADR-103). Never automatic: only a real download writes the marker, a view never does. --yes is required (irreversible), --dry-run reports without acting, counts never paths.",
+      "access": [
+        {
+          "kind": "cli",
+          "ref": "sweep-downloaded"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "ui": "a button would make an irreversible deletion of run directories a click; ADR-103 wants the operator to decide it BY NAME in a terminal",
+        "http": "no route on purpose: a download must never be the thing that erases the evidence, so the marker's consumer is kept out of the service plane entirely"
+      }
+    },
+    {
       "id": "scenarios-library",
       "group": "HTTP",
       "severity": "medium",
