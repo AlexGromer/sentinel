@@ -1072,6 +1072,22 @@
         }
       ],
       "reach": "capability"
+    },
+    {
+      "id": "adapter-spi",
+      "group": "Integrations",
+      "severity": "medium",
+      "title_ru": "Подключение своего адаптера (модель · авторизация · развёртывание)",
+      "title_en": "Plugging in your own adapter (model · auth · deployment)",
+      "how_ru": "SENTINEL_ADAPTERS=<модуль>[,<модуль>] — импорт модуля И ЕСТЬ регистрация: он вызывает register(kind, adapter) из brain.adapters и становится доступен по имени. Три вида: model (свой SDK провайдера вместо OpenAI-совместимости), auth (свой механизм входа) и deploy (свои переменные развёртывания). Выбор адаптера пишется ключом adapter: в блоке auth:/deploy: файла RunConfig. ⚠ Из интерфейса и по HTTP выбор пока НЕ достижим — принцип 6 для него не закрыт (ADR-123, остаток записан в docs/M9.7_CONTRACT.md).",
+      "how_en": "SENTINEL_ADAPTERS=<module>[,<module>] — importing the module IS the registration: it calls register(kind, adapter) from brain.adapters and becomes available by name. Three kinds: model (your provider's own SDK instead of OpenAI compatibility), auth (your own login mechanism) and deploy (your own deployment variables). The choice is written as the adapter: key inside the auth:/deploy: block of a RunConfig file. ⚠ It is NOT yet reachable from the UI or over HTTP — principle 6 is not closed for it (ADR-123; the remainder is recorded in docs/M9.7_CONTRACT.md).",
+      "access": [
+        {
+          "kind": "env",
+          "ref": "SENTINEL_ADAPTERS"
+        }
+      ],
+      "reach": "capability"
     }
   ]
 }
