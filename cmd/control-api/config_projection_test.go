@@ -156,6 +156,7 @@ func TestAppendRunFlagsPassesEveryFlaggedField(t *testing.T) {
 		{"ci", func(r *runRequest) { r.CI = true }, []string{"--ci"}},
 		{"force_replay", func(r *runRequest) { r.ForceReplay = true }, []string{"--force-replay"}},
 		{"heal_llm", func(r *runRequest) { r.HealLLM = true }, []string{"--heal-llm"}},
+		{"observe", func(r *runRequest) { r.Observe = "off" }, []string{"--observe", "off"}},
 	}
 	for _, c := range cases {
 		var req runRequest

@@ -457,6 +457,44 @@ var FALLBACK_SCHEMA = {
       "group": "run",
       "type": "int"
     },
+    "observe": {
+      "cost": {
+        "frames": {
+          "en": "one frame per step, rendered by the hub; slows a run slightly",
+          "ru": "кадр на каждый шаг, их показывает хаб; замедляет прогон незначительно"
+        },
+        "human": {
+          "en": "cursor, slowdown, highlight. ⚠ CHANGES TIMING — not for response times, races or timeouts; does not mix with golden mode",
+          "ru": "курсор, замедление, подсветка. ⚠ МЕНЯЕТ ТАЙМИНГ — не для проверки откликов, гонок и таймаутов; с эталонным режимом не смешивается"
+        },
+        "off": {
+          "en": "nothing is captured — fastest; there will be nothing to look at",
+          "ru": "ничего не снимается — быстрее всего; смотреть будет не на что"
+        },
+        "record": {
+          "en": "a video file as an artifact after the run; does not affect the live view",
+          "ru": "видеофайл артефактом после прогона; на живой вид не влияет"
+        },
+        "stream": {
+          "en": "the live screen, undecorated — usable by a person and a machine",
+          "ru": "живой экран без украшений — годится и человеку, и машине"
+        }
+      },
+      "default": "frames",
+      "enum": [
+        "off",
+        "frames",
+        "stream",
+        "human",
+        "record"
+      ],
+      "group": "run",
+      "not_yet": [
+        "human",
+        "record"
+      ],
+      "type": "enum"
+    },
     "plan_budget": {
       "default": 50000,
       "group": "budgets",

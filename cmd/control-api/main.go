@@ -653,6 +653,16 @@ func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string 
 	if req.HealLLM {
 		args = append(args, "--heal-llm")
 	}
+	// LIVE-MATRIX (ADR-120). This rides argv, not environment, and that is not a style choice.
+	// agentctl builds the brain's run-vars unconditionally — `"SENTINEL_OBSERVE=" + *observe` is
+	// appended whether or not --observe was given — and those vars go AFTER the inherited env, where
+	// os/exec keeps the LAST value. An inherited SENTINEL_OBSERVE=off was therefore overwritten by the
+	// empty string, and the brain resolved its default while honestly reporting "nothing was asked
+	// for": the hub's choice vanished en route and the log said the person never made one. Empty stays
+	// empty here too — an absent flag and an explicit one must remain different facts.
+	if v := strings.TrimSpace(req.Observe); v != "" {
+		args = append(args, "--observe", v)
+	}
 	if runCfgPath != "" {
 		args = append(args, "--run-config", runCfgPath)
 	}
@@ -874,12 +884,9 @@ func (s *server) spawnRun(req runRequest) *run {
 	// agentctl would otherwise mint a second, unrelated id for the same run, and the live view (which
 	// is asked about the id the hub knows) would never resolve a page. One run, one name.
 	cmd.Env = append(cmd.Env, "SENTINEL_RUN_ID="+id)
-	// LIVE-MATRIX: the chosen mode reaches the brain as environment, like every other run knob. Empty
-	// stays empty on purpose — the brain resolves the default and SAYS which it used, so "nothing was
-	// asked for" and "frames was asked for" remain different facts in the log.
-	if v := strings.TrimSpace(req.Observe); v != "" {
-		cmd.Env = append(cmd.Env, "SENTINEL_OBSERVE="+v)
-	}
+	// LIVE-MATRIX: the chosen mode does NOT ride here. It is an argv flag like every other per-run knob
+	// (appendRunFlags), because agentctl's own run-vars overwrite an inherited SENTINEL_OBSERVE with the
+	// empty string. Read that comment before moving this back into the environment.
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.
