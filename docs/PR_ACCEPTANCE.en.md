@@ -36,6 +36,7 @@ manual half below reads as the **remainder** rather than as the whole list.
 | Check | Job | Step in `.github/workflows/ci.yml` |
 |---|---|---|
 | pw-executor: TypeScript build + unit tests (`npm test` gates the compile too) | `build` | `Build + unit-test pw-executor (TypeScript -> dist/server.js; node:test gates the compile)` |
+| MV3 extension: `tsc --noEmit` + unit tests under jsdom (floor on the `*.test.ts` file count) | `build` | `Build + unit-test the MV3 extension (tsc --noEmit; jsdom node:test — PERCEPT-RECORDER-SHADOW)` |
 | Go: `go vet ./...` + `go test ./...` across the whole tree | `build` | `Vet + unit test (Go)` |
 | Inline JS syntax of every `docs/` page (`node --check`, with a floor on the page count) | `build` | `SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)` |
 | Setup-wizard DOM gate, live headless Chromium (floor 15) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |

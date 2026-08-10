@@ -12,6 +12,33 @@
 import type { Locator, RecorderEvent, RecorderEventType, SelectorCandidate, Strategy } from '../shared/protocol.js';
 
 // ---------------------------------------------------------------------------------------------------
+// Shadow DOM. Open roots only — a CLOSED root is a stated boundary, not a debt (see recorder.ts
+// deepTarget): the browser refuses to expose its nodes to anybody, us included, so the best honest
+// answer for an element inside one is its host, which is what the caller already has.
+// ---------------------------------------------------------------------------------------------------
+
+/** The host of the open shadow root `el` lives in, or null when `el` is in the light DOM.
+ * `getRootNode()` answers the nearest root: a ShadowRoot (a DocumentFragment, nodeType 11, carrying
+ * `.host`) inside a component, the Document otherwise. */
+export function shadowHostOf(el: Element): Element | null {
+  const root = typeof el.getRootNode === 'function' ? el.getRootNode() : null;
+  if (root && root.nodeType === 11 && (root as ShadowRoot).host) return (root as ShadowRoot).host;
+  return null;
+}
+
+/** The tree `el` resolves ids in: its shadow root, or the document.
+ *
+ * `document.getElementById` / `document.querySelector` are the WRONG lookups inside a component: ids
+ * are scoped per shadow tree, so a `<label for=…>` living in the component is invisible from the
+ * document AND an unrelated light-DOM element with the same id answers instead — which would put a
+ * fabricated accessible name on the candidate. */
+function idScopeOf(el: Element): Document | ShadowRoot | null {
+  const root = typeof el.getRootNode === 'function' ? el.getRootNode() : null;
+  if (root && (root.nodeType === 9 || root.nodeType === 11)) return root as Document | ShadowRoot;
+  return el.ownerDocument;   // detached subtree: getRootNode answers an Element — fall back
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Redaction (mandatory — issue #44 acceptance: a password value never appears in the event)
 // ---------------------------------------------------------------------------------------------------
 
@@ -125,9 +152,10 @@ export function accessibleName(el: Element, allowText = true): string {
 
   const labelledby = el.getAttribute('aria-labelledby');
   if (labelledby) {
+    const scope = idScopeOf(el);
     const txt = labelledby
       .split(/\s+/)
-      .map((id) => el.ownerDocument?.getElementById(id)?.textContent?.trim() || '')
+      .map((id) => scope?.getElementById(id)?.textContent?.trim() || '')
       .filter(Boolean)
       .join(' ');
     if (txt) return txt;
@@ -149,11 +177,12 @@ export function accessibleName(el: Element, allowText = true): string {
   return '';
 }
 
-/** Text of a <label for=id> or a wrapping <label>, if any. */
+/** Text of a <label for=id> or a wrapping <label>, if any. Searched in the element's own tree
+ * (`idScopeOf`), because a component's `<label for>` lives inside its shadow root. */
 function associatedLabelText(el: Element): string {
-  const doc = el.ownerDocument;
-  if (el.id && doc) {
-    const forLabel = doc.querySelector(`label[for="${cssEscape(el.id)}"]`);
+  const scope = idScopeOf(el);
+  if (el.id && scope) {
+    const forLabel = scope.querySelector(`label[for="${cssEscape(el.id)}"]`);
     if (forLabel?.textContent) return forLabel.textContent.trim().replace(/\s+/g, ' ');
   }
   const wrapping = el.closest('label');
@@ -161,8 +190,10 @@ function associatedLabelText(el: Element): string {
   return '';
 }
 
-/** A short CSS path: #id when present; else a bounded tag:nth-of-type chain up to an id'd ancestor/body. */
-export function cssPath(el: Element): string {
+/** A short CSS path WITHIN one tree: #id when present; else a bounded tag:nth-of-type chain up to an
+ * id'd ancestor, `body`, or the root of the tree (a shadow root has no `body` and its top element has
+ * no `parentElement` — `cssPath` below rejoins the segments across the boundary). */
+function cssPathWithinTree(el: Element): string {
   if (el.id) return `#${cssEscape(el.id)}`;
   const parts: string[] = [];
   let node: Element | null = el;
@@ -191,8 +222,36 @@ export function cssPath(el: Element): string {
   return parts.join(' > ');
 }
 
-/** Absolute XPath (last-resort, always available). */
+/** A CSS path that PIERCES open shadow roots: the path inside the component, prefixed by the path to
+ * its host (and so on outwards, bounded).
+ *
+ * Measured in `pw-executor/node_modules/playwright-core` (selectorEvaluator): Playwright resolves both
+ * the child (`>`) and the descendant combinator through `parentElementOrShadowHostInContext`, i.e. a
+ * `>` legitimately crosses an open shadow boundary, and `:light` exists precisely to opt OUT of that
+ * piercing. So `#picker > #swatch` addresses the control inside `<x-color-picker>`.
+ *
+ * The host prefix is not decoration: ids are scoped PER TREE, so a bare `#swatch` may exist in the
+ * light DOM as well and the two are indistinguishable to a pierced query. */
+export function cssPath(el: Element): string {
+  const segments: string[] = [];
+  let node: Element | null = el;
+  for (let hop = 0; node && hop < 4; hop++) {
+    segments.unshift(cssPathWithinTree(node));
+    node = shadowHostOf(node);
+  }
+  return segments.filter(Boolean).join(' > ');
+}
+
+/** Absolute XPath, or '' for an element inside a shadow tree — where none exists.
+ *
+ * Measured in playwright-core (`XPathEngine.queryAll`): the xpath engine is a bare
+ * `document.evaluate(selector, root)` with NO shadow expansion, unlike the CSS and role engines. An
+ * absolute path built from a shadow-hosted element therefore resolves to nothing — or, worse, to a
+ * different light-DOM element that happens to sit at the same indices. Emitting one would be exactly
+ * the fabricated candidate this module promises never to produce, so we emit none and let the css
+ * candidate (which does pierce) carry the fallback. */
 export function xpathOf(el: Element): string {
+  if (shadowHostOf(el)) return '';
   const parts: string[] = [];
   let node: Element | null = el;
   while (node && node.nodeType === 1) {
@@ -217,7 +276,9 @@ function cssEscape(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
 }
 
-/** Ranked, de-duplicated selector candidates for an element. Always ≥1 (css + xpath fallbacks). */
+/** Ranked, de-duplicated selector candidates for an element. Always ≥1: the css fallback is always
+ * present (it pierces open shadow roots), the xpath fallback only where a document XPath can address
+ * the element at all — see `xpathOf`. */
 export function buildSelectorCandidates(el: Element): SelectorCandidate[] {
   const out: SelectorCandidate[] = [];
   const push = (strategy: Strategy, locator: Locator) => out.push({ strategy, locator });
@@ -250,7 +311,8 @@ export function buildSelectorCandidates(el: Element): SelectorCandidate[] {
   }
 
   push('css', { css: cssPath(el) });
-  push('xpath', { xpath: xpathOf(el) });
+  const xpath = xpathOf(el);
+  if (xpath) push('xpath', { xpath });
 
   // De-dupe by (strategy + serialized locator), preserving rank order.
   const seen = new Set<string>();
