@@ -121,11 +121,10 @@ node scripts/pages-static-check.mjs
 # UI smoke with screenshots — the exact recipe is in ci.yml, step "End-to-end UI smoke"
 #   ⚠ store-gateway on a SHORT socket path (a unix address is capped near 108 bytes),
 #     CONTROL_API_SERVE_UI=1 and CONTROL_API_UI_DIR=$PWD/docs — otherwise `/` answers 404
-#   ⚠ delete the DB WITH its sidecars: rm -f <db> <db>-shm <db>-wal. A fresh file next to a
-#     stale -shm gives `open db: disk I/O error (522)`, the gateway dies SILENTLY in the
-#     background, and the smoke reds out on two unrelated checks (502 /v1/config, 503
-#     /v1/users) — which reads as a defect in your change. CI's tree is fresh, so it never
-#     happens there; a second local run is exactly when it does
+#   ⚠ delete the DB WITH its sidecars: rm -f <db> <db>-shm <db>-wal. A fresh file next to a stale
+#     -shm gives `open db: disk I/O error (522)`, the gateway dies SILENTLY in the background, and
+#     the smoke reds out on two unrelated checks (502 /v1/config, 503 /v1/users) — which reads as a
+#     defect in your change. CI's tree is fresh; a second local run is exactly when this happens
 node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token <token> --out "$PWD/ui-smoke"
 
 # Docker, three delivery forms

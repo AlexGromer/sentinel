@@ -36,6 +36,13 @@ _KEY_ENV = {
     "plan_budget": "PLAN_TOKEN_LIMIT",
     "heal_budget": "HEAL_TOKEN_LIMIT",
     "total_budget": "TOTAL_TOKEN_LIMIT",
+    # LIVE-MATRIX (ADR-120). Without this key the export path lied by omission: the hub's run form
+    # offers "Наблюдение", prints each mode's cost, and then hands the person a `run.yaml` + a
+    # command that carry no trace of the choice — so "repeat this run in CI or from a terminal"
+    # repeated it with a DIFFERENT observation, silently. Measured on the rendered form: the auth
+    # guard `pw_no_trace` DOES reach the exported file, so the export was selective in a way nobody
+    # had written down.
+    "observe": "SENTINEL_OBSERVE",
 }
 # M9.2b (ADR-028): structured keys handled specially (not a single env var).
 # M9.7 (ADR-123): the declarative ADAPTER blocks (`auth:`, `deploy:`) are DERIVED from the SPI's
@@ -51,6 +58,11 @@ _AGENTCTL_DEFAULTS = {"PLANNER": "heuristic", "COVERAGE_TARGET": "0.85", "MAX_ST
 # brain env var -> the agentctl flag that sets it (for the explicit-flag-wins check).
 _EXPLICIT_FLAG = {"GOAL": "goal", "DESCRIBE": "describe", "PLANNER": "planner",
                   "COVERAGE_TARGET": "coverage-target", "MAX_STEPS": "max-steps"}
+# ⚠ `SENTINEL_OBSERVE` НЕТ в таблице выше НАМЕРЕННО, и это замер, а не забывчивость. Строка для него
+# была написана и УБРАНА, когда мутация её выживания ничего не покрасила: `agentctl` не выдаёт для
+# наблюдения ДЕФОЛТНОГО значения — только пустую строку либо то, что дал флаг, — поэтому явный выбор
+# уже защищён проверкой «текущее значение непусто и не равно дефолту» ниже. Запись в таблице была бы
+# недостижимым кодом, а недостижимый код читается как работающая защита.
 
 
 def load_run_config(path: str) -> dict:
@@ -70,7 +82,16 @@ def load_run_config(path: str) -> dict:
     for k, v in data.items():
         if k not in _ALLOWED or v is None:
             continue
-        if k in _NUMERIC:
+        if k == "observe":
+            # ⚠ YAML 1.1 — which pyyaml implements — reads a bare `off` as the BOOLEAN False (same
+            # for `on`/`yes`/`no`). `observe: off` is the single most likely thing a person writes,
+            # and without this it arrives as False, becomes the string "False" in the environment,
+            # and the resolver refuses it as an unknown mode. Found by the behavioural gate on the
+            # first run; a source-shaped assertion would have passed over it.
+            if isinstance(v, bool):
+                v = "off" if v is False else "on"
+            v = str(v)
+        elif k in _NUMERIC:
             try:
                 v = _NUMERIC[k](v)
             except (TypeError, ValueError):
