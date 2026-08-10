@@ -763,8 +763,19 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen
         # during explore) — NOT the true process exit code, which __main__.py computes after
         # app.invoke() returns (outside this graph); that final code is out of scope here.
-        _agui("verdict", state.get("run_id", ""), verdict=("failed" if state.get("errors") else "ok"),
-              exit_code=(1 if state.get("errors") else 0), healed=0,
+        # PLAN-NOT-GROUNDED-SILENT. This frame used to be computed from `errors` ALONE — that is,
+        # from what the EXPLORE phase saw. The scenario node writes no errors, so an authoring run
+        # that grounded nothing emitted `verdict: ok, exit_code: 0` while the process exited 1.
+        # Measured twice on a live model, and the two lines sat in the same log file.
+        #
+        # The frame still is not the process exit code (that is computed in __main__ after the graph
+        # returns) and does not pretend to be. What it must not do is contradict it: an authoring run
+        # whose only deliverable is a scenario, that produced no grounded step, has failed, and the
+        # UI's headline event is the last place that should be the one to disagree.
+        not_grounded = bool(state.get("scenario_unmatched")) and not state.get("scenario_steps")
+        failed_run = bool(state.get("errors")) or not_grounded
+        _agui("verdict", state.get("run_id", ""), verdict=("failed" if failed_run else "ok"),
+              exit_code=(1 if failed_run else 0), healed=0,
               failed=state.get("failed_steps", 0))
         return {"plan_hash": ph}
 
