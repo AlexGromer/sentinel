@@ -19,6 +19,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 | **Healing calibration** | agentctl calibrate — heal precision by strategy + identity verdicts. |
 | **Purge foreign text from the DB** | agentctl purge-store --tables <..> --yes — explicit cleanup of accumulated foreign text (ADR-100). |
 | **Redact a trace** | agentctl redact-trace --trace <trace.zip> — strip typed values and secrets from a trace (ADR-098). |
+| **Delete runs a human has already taken a copy of** | agentctl sweep-downloaded [--dry-run] --yes — deletes the whole run directory carrying a downloaded.json marker (ADR-103); irreversible, so it refuses without --yes, and --dry-run counts without touching anything. |
 
 ## HTTP API
 

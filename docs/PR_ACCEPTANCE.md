@@ -35,6 +35,7 @@
 | Проверка | Джоба | Шаг в `.github/workflows/ci.yml` |
 |---|---|---|
 | pw-executor: сборка TypeScript + модульные тесты (`npm test` заодно гейтит компиляцию) | `build` | `Build + unit-test pw-executor (TypeScript -> dist/server.js; node:test gates the compile)` |
+| Расширение MV3: `tsc --noEmit` + модульные тесты под jsdom (пол на число файлов `*.test.ts`) | `build` | `Build + unit-test the MV3 extension (tsc --noEmit; jsdom node:test — PERCEPT-RECORDER-SHADOW)` |
 | Go: `go vet ./...` + `go test ./...` по всему дереву | `build` | `Vet + unit test (Go)` |
 | Синтаксис встроенного JS каждой страницы `docs/` (`node --check`, с полом на число страниц) | `build` | `SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)` |
 | DOM-гейт мастера настройки, живой headless Chromium (пол 15) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |
@@ -120,6 +121,10 @@ node scripts/pages-static-check.mjs
 # Смоук интерфейса со скриншотами — точный рецепт в ci.yml, шаг «End-to-end UI smoke»
 #   ⚠ store-gateway на КОРОТКОМ пути сокета (адрес unix ограничен ~108 байтами),
 #     CONTROL_API_SERVE_UI=1 и CONTROL_API_UI_DIR=$PWD/docs — иначе `/` отдаёт 404
+#   ⚠ БД сноси ВМЕСТЕ с её спутниками: rm -f <db> <db>-shm <db>-wal. Свежий файл рядом со
+#     старым -shm даёт `open db: disk I/O error (522)`, шлюз умирает МОЛЧА в фоне, а смоук
+#     краснеет двумя чужими проверками (502 /v1/config, 503 /v1/users) — читается как дефект
+#     правки. В CI дерево свежее, поэтому там этого не бывает; на второй местный прогон — бывает
 node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token <token> --out "$PWD/ui-smoke"
 
 # Докер, три вида поставки

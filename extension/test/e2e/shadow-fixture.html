@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>Shadow fixture</h1>
+
+    <!-- PERCEPT-RECORDER-SHADOW fixture. login-fixture.html has no shadow root at all, so nothing
+         about shadow retargeting is provable over it. Every control below is driven by whatever
+         `data-record` says, so a driver DERIVES its action list from this markup instead of carrying
+         its own copy (docs/DEVELOPMENT.md §0, principle 5). Syntax: `verb[:argument]`, several
+         separated by `;`, executed in order.
+
+         Deliberately NO `type=""` submit buttons except inside #settings: a submit-control click sets
+         the recorder's 700 ms window in which a form submit is recorded as a plain submit instead of
+         an Enter press, and that window would make the press-Enter case below depend on wall-clock
+         timing rather than on behaviour. -->
+
+    <!-- LIGHT DOM — the control group. Nothing about it may change when shadow support lands:
+         host-prefixed css, a present xpath candidate, testid first. -->
+    <button id="plain" type="button" data-testid="plain-btn" data-record="click">Plain</button>
+
+    <!-- OPEN root: the control the user clicks lives INSIDE the component. e.target is the host. -->
+    <x-color-picker id="picker"></x-color-picker>
+
+    <!-- OPEN root whose internals are INERT: the host carries role+name, so the nearest interactive
+         ancestor is found only by climbing OUT of the shadow tree. -->
+    <x-icon-button id="iconbtn" role="button" tabindex="0" aria-label="Delete row"></x-icon-button>
+
+    <!-- OPEN root holding a whole form: `change` and `submit` are not composed, so a document-level
+         listener never sees them at all. The <label for> pairs live inside the root, where a
+         document-scoped lookup cannot find them either. -->
+    <x-settings id="settings"></x-settings>
+
+    <!-- OPEN root that RE-DISPATCHES a composed `change` from an inner node — the shape that reaches
+         both the root's listener and the document's, and would be recorded twice. -->
+    <x-toggle id="toggle"></x-toggle>
+
+    <!-- OPEN root touched ONLY by the keyboard: no click, no input ever happens inside it, so the
+         root can only be discovered from `focusin` (composed) — and without that discovery its
+         non-composed `change` is lost in silence. -->
+    <x-lang id="lang"></x-lang>
+
+    <!-- CLOSED root: a boundary, not a debt. host.shadowRoot is null for everybody. -->
+    <x-sealed id="sealed"></x-sealed>
+
+    <script>
+      function root(id, mode, html) {
+        var r = document.getElementById(id).attachShadow({ mode: mode });
+        r.innerHTML = html;
+        return r;
+      }
+
+      root('picker', 'open',
+        '<button id="swatch" type="button" data-testid="swatch-red" data-record="click">Red</button>');
+
+      root('iconbtn', 'open', '<span id="glyph" data-record="click">x</span>');
+
+      root('settings', 'open',
+        '<form id="sform">' +
+          '<label for="alias">Alias</label>' +
+          '<input id="alias" name="alias" type="text" data-record="fill:nightly;press-enter" />' +
+          '<label for="mode">Mode</label>' +
+          '<select id="mode" name="mode" data-record="select:admin">' +
+            '<option value="user">User</option><option value="admin">Admin</option>' +
+          '</select>' +
+          '<label for="token">Token</label>' +
+          '<input id="token" name="apiKey" type="password" data-record="fill:NEVER-RECORD-THIS-VALUE" />' +
+        '</form>');
+
+      var toggle = root('toggle', 'open',
+        '<input id="tgl" name="nickname" type="text" value="dup" data-record="click" />');
+      toggle.getElementById('tgl').addEventListener('click', function (e) {
+        // exactly what a web component does when it republishes an internal change to the outside
+        e.currentTarget.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      });
+
+      root('lang', 'open',
+        '<label for="lang-sel">Language</label>' +
+        '<select id="lang-sel" name="language" data-record="focus;select:ru">' +
+          '<option value="en">English</option><option value="ru">Russian</option>' +
+        '</select>');
+
+      var sealed = root('sealed', 'closed',
+        '<button id="sealed-btn" type="button" data-record="click">Sealed</button>');
+      // A driver walking the tree CANNOT reach a closed root — that is the whole point of one. The
+      // page publishes its own reference so the case can still be exercised; nothing outside the page
+      // could have obtained it.
+      window.__closedRoots = [sealed];
+    </script>
+  </body>
+</html>

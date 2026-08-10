@@ -36,6 +36,7 @@ manual half below reads as the **remainder** rather than as the whole list.
 | Check | Job | Step in `.github/workflows/ci.yml` |
 |---|---|---|
 | pw-executor: TypeScript build + unit tests (`npm test` gates the compile too) | `build` | `Build + unit-test pw-executor (TypeScript -> dist/server.js; node:test gates the compile)` |
+| MV3 extension: `tsc --noEmit` + unit tests under jsdom (floor on the `*.test.ts` file count) | `build` | `Build + unit-test the MV3 extension (tsc --noEmit; jsdom node:test — PERCEPT-RECORDER-SHADOW)` |
 | Go: `go vet ./...` + `go test ./...` across the whole tree | `build` | `Vet + unit test (Go)` |
 | Inline JS syntax of every `docs/` page (`node --check`, with a floor on the page count) | `build` | `SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)` |
 | Setup-wizard DOM gate, live headless Chromium (floor 15) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |
@@ -120,6 +121,11 @@ node scripts/pages-static-check.mjs
 # UI smoke with screenshots — the exact recipe is in ci.yml, step "End-to-end UI smoke"
 #   ⚠ store-gateway on a SHORT socket path (a unix address is capped near 108 bytes),
 #     CONTROL_API_SERVE_UI=1 and CONTROL_API_UI_DIR=$PWD/docs — otherwise `/` answers 404
+#   ⚠ delete the DB WITH its sidecars: rm -f <db> <db>-shm <db>-wal. A fresh file next to a
+#     stale -shm gives `open db: disk I/O error (522)`, the gateway dies SILENTLY in the
+#     background, and the smoke reds out on two unrelated checks (502 /v1/config, 503
+#     /v1/users) — which reads as a defect in your change. CI's tree is fresh, so it never
+#     happens there; a second local run is exactly when it does
 node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token <token> --out "$PWD/ui-smoke"
 
 # Docker, three delivery forms

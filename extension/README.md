@@ -4,8 +4,15 @@ Live action **recorder** + co-pilot **takeover/return** for Sentinel (milestone 
 click and type into a replayable scenario, and lets you hand control of a live session between the agent
 and yourself.
 
-Like `frontend/`, this is a **dev tool**: it needs `npm install`, it is **not air-gapped** and **not built
-in CI**. The vanilla `docs/*` UI stays the primary, offline interface.
+Like `frontend/`, this is a **dev tool**: it needs `npm install` and it is **not air-gapped**. The vanilla
+`docs/*` UI stays the primary, offline interface.
+
+It **is** gated in CI, since PERCEPT-RECORDER-SHADOW: the `build` job runs `npm test` here (`tsc --noEmit`
+plus the jsdom unit tests), and `tests/test_recorder_shadow_offline.py` loads the real content-script
+recorder into jsdom over `test/e2e/shadow-fixture.html` and grounds what it emits through the real
+`brain/record_bridge.py`. Before that the extension was named by no workflow at all, so a change to
+`src/content/recorder.ts` could not turn anything red — the only recorder check in CI replays a transcript
+frozen inside the test file and passes a fix and a regression identically.
 
 ## Build
 
@@ -39,6 +46,28 @@ Load `dist/` via `chrome://extensions` → Developer mode → **Load unpacked**.
 - **Recorder → scenario** — `brain/record_bridge.py` grounds the events through the same emitter the
   goal/describe heads use (M9.2b reuse) — real selectors only, never fabricated.
 
+## Shadow DOM
+
+A click inside a web component arrives at a document-level listener with `event.target` **retargeted to
+the host** (DOM §2.10), so a recorder that trusts `e.target` writes down `<x-color-picker>` where you
+pressed the button inside it — while the executor, whose CSS and role engines pierce open roots, could
+have driven that button perfectly well. Three consequences, all handled in `src/content/`:
+
+- **Targets come from `composedPath()`**, not `e.target`. The nearest-interactive climb crosses the
+  boundary only when the component's own tree offers nothing, so a component with inert internals and a
+  role on its host still records as its host.
+- **`change` and `submit` are not composed** — they never reach the document from inside a root at all.
+  The recorder also listens on the roots it learned about from the composed events it did see; the set is
+  derived, never a list.
+- **CSS candidates are host-prefixed** (`#picker > #swatch`; Playwright pierces both combinators), and
+  **no xpath candidate is emitted** for a shadow node — Playwright's xpath engine is a bare
+  `document.evaluate` with no shadow expansion, so such a locator could only resolve to nothing or to the
+  wrong element.
+
+**A closed root is a boundary, not a debt.** Its nodes are absent from `composedPath` and `host.shadowRoot`
+is `null` for everybody. The recorder records the host — the only honest answer — rather than pretending
+to have seen inside.
+
 ## Redaction (mandatory)
 
 Password (`type=password`, `autocomplete=current/new-password`), fields marked `data-sentinel-secret`, and
@@ -64,4 +93,7 @@ src/shared/protocol.ts   the contracts: event schema, WS handshake, messages, st
 src/background/          service worker: index.ts (router) · ws-client.ts (#43) · takeover.ts (#47)
 src/content/             recorder.ts (#44) · selectors.ts (candidates + redaction, unit-tested)
 src/devtools/            devtools.ts (registers panel) · panel.ts (#45 UI)
+test/e2e/                recorder.e2e.mjs (live Chromium, dev-only) · login-fixture.html
+                         shadow-fixture.html (open/closed roots; actions declared as data-record)
+test/record-in-jsdom.mjs offline driver: the real recorder in jsdom → RecorderEvents as JSON
 ```
