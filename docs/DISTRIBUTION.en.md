@@ -486,7 +486,9 @@ services:
 # Verify binary checksums
 sha256sum -c checksums.sha256
 
-# Verify image signature (Cosign offline via bundle)
+# Verify the bundle's ARCHIVE signatures (Cosign offline via bundle).
+# Not the image signature: `docker save`/`load` does not carry it (see above) — the image is verified
+# on the connected machine BEFORE the save, and the bundle's integrity rests on a signed `MANIFEST.sha256`.
 # ⚠ THE SIGNER IDENTITY IS PINNED. `--certificate-identity-regexp=".*"` accepts ANY identity: such
 # a command proves only that the blob was signed by somebody in Sigstore, and does NOT prove it was
 # signed by THIS repository's release workflow. The values match scripts/offline-verify.sh

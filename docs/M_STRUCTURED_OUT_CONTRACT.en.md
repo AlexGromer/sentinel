@@ -1,5 +1,7 @@
 # Contract M-STRUCTURED-OUT — strict LLM structured output (`tool_use`/`json_schema`) + robust JSON fallback
 
+> 🌐 [Русский](M_STRUCTURED_OUT_CONTRACT.md) (основная версия) · **English**
+
 > Status: **Accepted** (ADR-057). Mini-milestone: one wave on top of `main` (after PR #67). Implements LLM-problem #2.
 
 ## 1. Why

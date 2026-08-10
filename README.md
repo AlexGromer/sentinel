@@ -118,11 +118,15 @@ CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api
 | [GitHub Pages](https://alexgromer.github.io/sentinel/) | хаб документации + 3 калькулятора (VRAM · token-cost · model-selector) |
 
 ## Карта проекта
+Полный индекс файлов — [`FILEMAP.md`](FILEMAP.md); он ведётся вместе с кодом, и подробности берутся
+оттуда, а не отсюда. Ниже — только точки входа, чтобы понять, с чего начать; это не перечень
+каталогов репозитория.
+
 | Путь | Назначение |
 |------|------------|
 | `ARCHITECTURE.md`, `GAPS.md`, `BACKLOG.md`, `FILEMAP.md` | канонический дизайн, открытые вопросы, задачи, индекс файлов |
 | `docs/` | спецификации по областям + контракты milestone (`M*_CONTRACT.md`) + история дизайна |
-| `cmd/agentctl/` | Go CLI |
+| `cmd/` | Go control-plane: `agentctl` (CLI, точка входа прогона) и `control-api` (HTTP/WS, интерфейс, `/metrics`) — с них начинают; состав бинарей и их роли выводятся из строк сборки в [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) §2 и из [`FILEMAP.md`](FILEMAP.md), здесь не дублируются |
 | `brain/` | Python LangGraph brain |
 | `pw-executor/` | TypeScript Playwright server |
 | `testdata/` | тестовые фикстуры |

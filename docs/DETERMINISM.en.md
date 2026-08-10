@@ -248,9 +248,12 @@ Every run accepts an `--aut-version` flag (typically `$(git rev-parse HEAD)`).
 does not store an `aut_version` at all (see the schema above) — and there is no
 `--on-aut-mismatch=warn|heal|abort` policy or `PLAN_STALE` event in the code (grep across
 `brain/` and `cmd/` — zero matches). The only role of `--aut-version` is to be the
-quarantine key for flaky steps (`brain/store.py`, the `step_failures` table;
-`record_step()` is called from `brain/replay.py:232`): a step is quarantined once **≥ 3
-of the last 5 attempts** on that AUT SHA have failed (`brain/store.py:188`). Changing
+quarantine key for flaky steps (the `step_failures` table): a step is quarantined once **≥ 3
+of the last 5 attempts** on that AUT SHA have failed, and is cleared automatically by **3
+consecutive** passes at the end of the window. The rule is implemented twice and identically in both
+store backends: `brain/store.py::LocalStore.record_step` and the store-gateway's `RecordStep`
+(`internal/store/server.go`) — `GrpcStore.record_step` merely delegates. Called from
+`brain/replay.py::run_replay`. Changing
 `--aut-version` between runs resets the history (`last5`) and clears the quarantine,
 separating real regression from environmental flake.
 
@@ -298,15 +301,25 @@ Alertmanager integration: `heal_rate > 0.20/run` → `DOM_INSTABILITY`;
 
 ### Per-job SQLite (CI)
 
-Every CI job writes to an **isolated, per-run SQLite file**:
+Every CI job writes to two DIFFERENT databases, isolated by different mechanisms:
 
 ```
-AGENT_DB_PATH=/tmp/agent-{run_id}.db       # main store-gateway DB
-AGENT_CKPT_PATH=/tmp/agent-{run_id}-ckpt.db  # LangGraph checkpoint DB (separate)
+runs/<run_id>/checkpoint.db   # the LangGraph checkpoint (assembled in brain/__main__.py::_run_explore)
+state/locators.db             # the main store-gateway DB; its path is the `-db` flag (cmd/store-gateway)
 ```
 
-Concurrent CI jobs never contend on a shared writer. Files are ephemeral and
-discarded after the job uploads its artifacts.
+The checkpoint is per-run because the artifact directory is unique (`ARTIFACT_DIR=runs/<run_id>`),
+not because some variable is set. The main DB is isolated NOT by `run_id` but by the job's own
+working directory; its path is set with the gateway flag when needed — which is exactly what our own
+CI does (`store-gateway --db /tmp/ui-smoke-store.db`). The only writer of the main DB is the Go
+store-gateway, so concurrent jobs never contend on a shared writer. The checkpoint is ephemeral: the
+brain deletes it itself when the run ends (`_discard_checkpoint`, ADR-099), independently of artifact
+upload.
+
+⚠ The `AGENT_DB_PATH` / `AGENT_CKPT_PATH` variables do not exist in the code and never did
+(`git log -S` across `*.go`/`*.py`/`*.ts`/`*.yml` is empty) — setting them is pointless: the
+`filteredEnv()` environment allowlist (`cmd/agentctl/main.go`) would strip them on the way to the
+brain.
 
 ### Shared SQLite (home-lab service)
 
@@ -323,7 +336,8 @@ explicit triggers is hit:
 - Distributed workers spanning multiple hosts
 
 The schema is Postgres-compatible by design; the migration is a driver swap in
-`store-gateway` with no schema changes. This is deferred to M5 — not pre-built.
+`store-gateway` with no schema changes. This is **deferred to M13-service** (M11/ADR-053) — not
+pre-built.
 
 ---
 
@@ -341,12 +355,12 @@ agentctl run --explore --target https://app.local --aut-version $(git rev-parse 
 
 **Startup.** `agentctl` (Go) loads the YAML config and, at M2+, calls
 `orchestrator.StartRun` over gRPC. The orchestrator spawns the Python brain
-subprocess with environment variables: `RUN_ID`, `RUN_MODE=explore`,
-`ARTIFACT_DIR`, `AGENT_DB_PATH`.
+subprocess with environment variables: `RUN_ID`, `RUN_MODE=explore`, `TARGET_URL`,
+`ARTIFACT_DIR` (plus `PLANNER`, `PLAN_FILE`, `PW_EXECUTOR_CMD`, `ORCH_ADDR` and the token limits).
 
 **Brain initialisation.** The brain initialises a LangGraph `StateGraph` with a
 `SqliteSaver` checkpointer pointed at a **separate** checkpoint DB file
-(`{ARTIFACT_DIR}/ckpt.db`). It spawns the `pw-executor` TS MCP server (built by
+(`{ARTIFACT_DIR}/checkpoint.db`). It spawns the `pw-executor` TS MCP server (built by
 us) as a child process over stdio and binds its tools via the LangGraph MCP
 adapter.
 
@@ -411,7 +425,8 @@ agentctl run --replay --plan plan.json --target https://app.local --ci \
   --aut-version $(git rev-parse HEAD)
 ```
 
-with `AGENT_DB_PATH=/tmp/agent-{run_id}.db` (per-job isolation).
+per-job isolation comes from the job's own working directory (and from the gateway's `-db` flag when
+an explicit path is needed).
 
 **Hash integrity check.** The brain loads `plan.json` and **immediately**
 re-computes `plan_hash`. The hashes match — proceed.

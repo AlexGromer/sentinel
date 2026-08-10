@@ -10,7 +10,14 @@ The Go CONTROL PLANE, statically linked, in /usr/bin:
     control-api      HTTP control plane + the browser UI (ADR-064); also
                      serves GET /metrics, an aggregate Prometheus scrape
                      across deployment runs
-    store-gateway    persistence for runs/scenarios/tests/chats/results/config
+    store-gateway    persistence — one SQLite file under the service state
+                     directory (/var/lib/sentinel), holding what the deployment
+                     keeps, including token/cost metrics and, once local
+                     accounts exist (ADR-109), their password hashes. Back that
+                     directory up and you have backed up the deployment; treat
+                     it as a credential store. What it serves is declared in the
+                     source repository by proto/store.proto and
+                     proto/persistence.proto — the gateway registers both.
     orchestrator     run-control gRPC (pause/resume/takeover)
 
 What this package is NOT

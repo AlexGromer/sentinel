@@ -63,16 +63,24 @@ A non-zero exit code or the string `FAIL` in stdout is a blocker.
 > **Prerequisites:** `uv venv && uv pip install langgraph langgraph-checkpoint-sqlite anthropic openai`
 > (or `uv sync` if `pyproject.toml` is complete). See `DEVELOPMENT.md §1–2` for details.
 
-### 1.3 TypeScript: type-check pw-executor
+### 1.3 TypeScript: build + unit tests for pw-executor
 
 ```bash
 cd pw-executor
-npx tsc --noEmit
+npm ci             # on a fresh clone; otherwise skippable
+npm test           # tsc + node:test — exactly what CI runs
+npx tsc --noEmit   # types only, for a fast pass without a build
 cd ..
 ```
 
-A clean exit (code 0, no `error TS` lines) is required before committing, because pw-executor
-has no separate unit tests: types are its primary static contract.
+The full gate is `npm test` (`pw-executor/package.json`: `tsc && node --test dist/*.test.js`): one
+`tsc` pass compiles the package, then `node --test` runs the compiled `dist/*.test.js`; the
+`postbuild`/`posttest` hooks strip them again, so no consumer of `pw-executor/dist` ships test code.
+`npm test` is what CI runs — the "Build + unit-test pw-executor" step of the `build` job, which first
+checks a floor on the number of `src/*.test.ts` it finds (`.github/workflows/ci.yml`, QA-PWEXEC-CI).
+The suite count is not written here — ask the tree: `ls pw-executor/src/*.test.ts | wc -l`.
+`npx tsc --noEmit` is a fast type check, NOT the full gate: it executes nothing. The acceptance row
+for this gate lives in `docs/PR_ACCEPTANCE.en.md` §1.
 
 ### 1.4 Secrets scan (gitleaks)
 
@@ -429,11 +437,11 @@ docker compose run --rm \
 
 | Context | Minimum set of commands |
 |---|---|
-| Before any commit | `go vet ./...` + `cd pw-executor && npx tsc --noEmit` + `gitleaks detect` |
+| Before any commit | `go vet ./...` + `go test ./...` + `cd pw-executor && npm test` + `gitleaks detect` |
 | PR / feature branch that adds a component or feature | Full offline suite (§1.1–1.2) + the DOM gates (setup-wizard, hub Logs-view, static-showcase) + `ui-smoke` screenshots + docker in EVERY delivery shape + a live run of the changed component + mutation testing — principle 7 (`docs/DEVELOPMENT.en.md` §0) requires this on EVERY such PR; the full binding checklist is [`docs/PR_ACCEPTANCE.en.md`](PR_ACCEPTANCE.en.md) |
 | Release candidate (tag) | Everything above, plus the release-artifact gates: `install-smoke` / `deb-smoke` / `install-ps1-smoke` / `airgap` (`.github/workflows/ci.yml`, `release.yml`) |
 | New LLM model | `test_b1_offline.py` + smoke run of goal mode vs. `file://` (§3.2) |
-| pw-executor change | `npx tsc --noEmit` + `test_m9_offline.py` |
+| pw-executor change | `cd pw-executor && npm ci && npm test` (compiles + runs `src/*.test.ts`, as CI does) + `test_m9_offline.py` |
 | Healing change | `test_m3_offline.py` + `test_m8_offline.py` + live replay vs. site-v2 (§3.1) |
 | RunConfig change | `test_m9_2_offline.py` + `test_m9_2b_offline.py` |
 

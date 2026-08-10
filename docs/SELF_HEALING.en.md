@@ -7,7 +7,7 @@
 **Scope:** This document describes the complete self-healing pipeline (`HealingEngine.heal`,
 `brain/healing.py`). It runs **not** in the graph `heal` node (that is a stub in the explore graph)
 but in the standalone `run_replay()` loop (`brain/replay.py`), which calls `heal.heal(ctx)` on a live
-locator failure. The `ctx` input is a plain dict (`brain/replay.py:207-210`):
+locator failure. The `ctx` input is a plain dict (`brain/replay.py::run_replay`):
 `{step, semantic_id, page_path, intent, attempted_locator, alternatives, dom_hash, interactives}`.
 The pipeline is bounded, calibrated, and verify-before-trust.
 
@@ -22,7 +22,7 @@ is a bespoke implementation, not an off-the-shelf product.
 ## Step 1 — Heal Trigger
 
 There is **no** four-class failure classifier (`LOCATOR_STALE`/`ELEMENT_GONE`/`TIMING`/`UNEXPECTED_ERROR`)
-in the code. The real trigger is a single check in `run_replay()` (`brain/replay.py:194-198`): for a
+in the code. The real trigger is a single check in `run_replay()` (`brain/replay.py`): for a
 locator-bearing step, `browser.probe` is run on the frozen primary locator, and if it does **not**
 resolve to exactly 1 element (`count != 1`), `heal.heal(ctx)` is invoked. Non-locator steps
 (navigation, etc.) are not healing candidates.
@@ -38,7 +38,7 @@ Do not reuse the stale snapshot from the previous cycle.
 3. When needed, capture a screenshot via `pw-executor` → `screenshot()` for the gated visual attempt
    in Step 6.
 4. Recompute `dom_hash = _a11y_hash(ariaSnapshot)[:16]` — a hash of the **whole page** a11y snapshot
-   (`brain/replay.py:210`; the same value is the cache key `dom_subtree_hash`). There is no
+   (`brain/replay.py::run_replay`, the hash is computed by `_a11y_hash`; the same value is the cache key `dom_subtree_hash`). There is no
    `completeness_ratio` in the code.
 
 The fresh snapshot prevents healing against DOM state that may have already changed again between
@@ -77,8 +77,12 @@ element**.
 | L5 | Scoped CSS — semantic container + element type | `.form-login input[type=email]` | **0.65** |
 | L6 | XPath positional | `//table/tbody/tr[2]/td[1]` | **0.45** |
 
-A successful match at **L5 or L6** emits a `strategy_degradation` metric — a signal that the AUT
-has unstable DOM structure and warrants attention from the development team.
+⚠ The `strategy_degradation` metric does not exist and never did: `grep` across `*.py`/`*.go`/`*.ts`
+returns zero, and the `brain/events.json` catalog rejects any code not listed in it, so it cannot be
+emitted around the back either. The claim came from the original synthesis (`docs/DESIGN_RECORD.md`)
+and described something never built: the product emits no "the AUT has unstable DOM structure"
+signal. The nearest thing that exists is the `strategy` column of `healing_audit` and its breakdown
+via `agentctl calibrate`.
 
 If any level L1–L6 yields a unique match, the confidence value from the table above is carried
 forward to Step 7 (Verify-Before-Accept). No LLM tokens are consumed.
@@ -148,17 +152,32 @@ The discounted confidence is passed to Step 7.
 
 ## Step 6 — Visual Set-of-Marks (default heal vision model Sonnet 4.6) — GATED
 
-This step is only reached and only executed when **all three gates pass**:
+This step is only reached and only executed when **four gates pass, and all four sit on one line**
+in `brain/healing.py::HealingEngine.heal`
+(`if not chosen and self._backend and self.use_visual and self._backend.supports_vision`):
 
-1. `completeness_ratio < 0.30` (a11y tree is sparse — canvas, shadow DOM, custom components)
-2. Step 5 (LLM re-grounding) failed to produce a valid candidate
-3. The M5 PoC has been validated with **> 70% accuracy** on at least 20 real broken-selector
-   scenarios (gate is off by default until M5 delivers the measurement)
+1. Step 5 (the text tier) produced no valid candidate — literally `if not chosen`.
+2. An LLM backend is wired at all: `HEAL_LLM=1` / `agentctl run --heal-llm` →
+   `HealingEngine(use_llm=True)` → `self._backend` is not `None`. **`HEAL_VISUAL` alone is not
+   enough:** with no backend the tier is never called.
+3. The visual tier is switched on by the operator: `HEAL_VISUAL=1` → `use_visual=True` (the code
+   marks it "gated off by default"). This is the form the ADR-005/ADR-017 condition "do not enable
+   before the PoC" actually took: per `ARCHITECTURE.md` §6 (2026-06-24) the real Sonnet-vision PoC
+   stayed `gated/user-run` and was never recorded in the project, so the switch is off by default.
+4. The backend can do vision: `self._backend.supports_vision` (ADR-019, see `M6_CONTRACT.md`
+   §Vision-gating). A text-only provider (e.g. DeepSeek-V3) **skips Tier-7** and degrades to the
+   deterministic L1–L6 rotation.
 
-> **M6 vision-gating (ADR-019, see M6_CONTRACT.md §Vision-gating):** this step (Tier-7 set-of-marks)
-> additionally requires a **vision-capable backend** — the effective gate is `use_visual AND backend.supports_vision`.
-> A text-only provider (e.g. DeepSeek-V3) **skips Tier-7** and degrades to the deterministic
-> L1–L6 rotation.
+A fifth refusal applies inside the tier, shared with Step 5: with the `heal` budget exhausted
+(`budget.tracker().exceeded("heal")` at the top of `_visual_reground`) no visual attempt is made —
+same as when `browser.setOfMarks` returns nothing (`marks == []`).
+
+⚠ **The `completeness_ratio < 0.30` gate does not exist and never did.** It contradicted §Step 2
+item 4 of this same document; `grep -rni completeness_ratio` across `*.py`/`*.go`/`*.ts` returns zero
+(ADR-092 → ADR-093). The product's page-visibility measure has a different name —
+`browser.perceptionAudit`, `perception.worst_ratio` in `plan.json` — and it does not affect healing
+at all. Records of the past (ADR-005, ADR-017, `docs/DESIGN_RECORD.md`, the Change Log) stay as they
+are: they record the decision of that day, not the shape of today's code.
 
 **Mechanism:**
 - Numbered overlay marks are rendered on the screenshot captured in Step 2.
@@ -234,22 +253,30 @@ need.
 
 ## Step 8 — Confidence Gate (calibrated, not magic)
 
-The `final_confidence` computed in Step 7 is evaluated against three tiers. The thresholds are
-FIXED module constants (`AUTO, FLAG = 0.85, 0.60` in `brain/healing.py`), used directly in the
-gate (`conf >= AUTO`, `conf >= FLAG`); they are not recalibrated at runtime.
+The `final_confidence` computed in Step 7 is evaluated against three tiers. The thresholds are the
+module-level `AUTO`/`FLAG` (`brain/healing.py`), used directly in the gate (`conf >= AUTO`,
+`conf >= FLAG`). They are **not** FIXED constants: since ADR-080 both are read from the environment
+(`SENTINEL_HEAL_AUTO`, `SENTINEL_HEAL_FLAG`, defaults 0.85/0.60; garbage and values outside [0,1]
+fall back to the default), so an operator can change them — "not recalibrated at runtime" is true
+only in the narrow sense that there is no feedback loop from the audit to the threshold. Before the
+comparison, a RE-GROUND is capped by `brain/healing.py::_cap`: a confidence that reaches `AUTO` is
+cut to `(AUTO+FLAG)/2` (0.725 at the defaults); below `AUTO` the value is left alone. The rule is
+"a re-ground is never accepted silently" (ADR-080); a re-ground is defined by membership in the
+frozen `alternatives[]` (`is_reground`, ADR-071/082), not by a list of strategies.
 
 | Confidence band | Decision | Behaviour |
 |---|---|---|
 | **≥ 0.85** | **AUTO-HEAL** | Run one post-heal verification: re-execute the action with the healed locator. On success, persist `HealedLocator(status=active)` keyed to `(page_url, semantic_id, dom_subtree_hash)`, update `RunState` and the in-memory plan, continue. On post-heal failure the outcome is `needs_review`/`failed` (row below). |
-| **0.60 – 0.84** | **FLAGGED** | Apply optimistically; set `healing_flagged=true`; persist with `review_required=true`. Surfaces in the run report's healing-audit section. Does **not** block execution. |
+| **0.60 – 0.84** | **FLAGGED** | Apply optimistically (does **not** block execution — ADR-005/017) and **say so**: the `flagged` outcome travels in `heal-report.json` together with the confidence, lands in the "accepted as" column of the report's drift table, is marked on the JUnit case, and raises the `heal.applied_unverified` degradation onto the verdict (ADR-077/080). ⚠ Historical correction 2026-07-26: this cell used to say "persist with `review_required=true`" and "surfaces in the run report's healing-audit section" — **neither existed**: `review_required` never appeared in the repository once, and `flagged` was in neither `report.py`, nor `junit.py`, nor the UI. The heal applied and stayed silent. What is described above is what ADR-080 built. |
 | **< 0.60** | **`needs_review` / `failed`** | The locator is **not** persisted. The outcome `needs_review` (a candidate was found but below threshold) or `failed` (no candidate) is recorded in the `healing_audit` table and surfaced in the heal-report. There is **no** per-heal `agentctl gate` CLI (it does not exist in the code); live human takeover is the separate `takeover`-node mechanism (`interrupt`/`Command(resume)`, ADR-054), validated at M9-LIVE. |
 
 **Calibration reporting — `cold_start` (0.90 default):** `brain/calibrate.py::calibrate()` takes a
 `cold_start=0.90` parameter, but this value is **reporting-only**: it is written into
 `state/calibration.json` (the `RUN_MODE=calibrate` offline path, `_run_calibrate` in
 `brain/__main__.py`) as a reference figure alongside the `confidence` histogram. `healing.py`
-imports nothing from `calibrate.py`; the live gate always uses the FIXED 0.85/0.60 thresholds
-above — there is no "threshold lowers toward 0.85" feedback loop in the code.
+imports nothing from `calibrate.py`; the live gate uses `AUTO`/`FLAG` (0.85/0.60 by default,
+overridable from the environment — see above) — there is no "threshold lowers toward 0.85" feedback
+loop in the code.
 
 ---
 
@@ -263,23 +290,29 @@ forensic-grade record and the ground truth for calibration.
 
 | Column | Type | Description |
 |---|---|---|
-| `run_id` | uuid | The run that triggered this heal attempt |
+| `run_id` | str | The run that triggered this attempt (TEXT, not a UUID) |
 | `step` | int | Step index within the plan |
 | `semantic_id` | str | The element's semantic identifier |
-| `original_selector` | str | The selector that failed |
-| `strategy_used` | enum | `testid` \| `role_name` \| `label` \| `text_role` \| `css` \| `xpath` \| `visual` \| `none` (see `PRIORS`, `healing.py:26-27`; `none` on total failure at Steps 4–6) |
-| `healed_selector` | str | The candidate selector (may be `null` on total failure) |
-| `confidence` | float | Final confidence after discounts and live-probe |
-| `outcome` | enum | `cache_hit` \| `auto_healed` \| `flagged` \| `needs_review` \| `failed` |
-| `llm_tokens` | int | Tokens consumed by Steps 5–6 (0 for cache/L1–L6 paths) |
-| `duration_ms` | int | Wall-clock time for the full heal cycle |
-| `dom_hash_before` | str | Subtree hash at the time of failure |
-| `dom_hash_after` | str | Subtree hash after fresh perception (Step 2) |
-| `timestamp` | datetime | UTC timestamp of the attempt |
+| `page_path` | str | The page path — the second part of the heal cache key |
+| `strategy` | str | `testid` \| `role_name` \| `label` \| `text_role` \| `css` \| `xpath` \| `visual` \| `llm_pick` \| `none` (vocabulary and priors: `brain/strategies.py::PRIORS`, ADR-083; `llm_pick` — the text tier picking an INDEX in the live element list, ADR-082; `none` — total failure at Steps 4–6) |
+| `original` | str | The locator that failed, as JSON (`json.dumps(attempted_locator)`) |
+| `healed` | str | The candidate locator; on total failure the literal string `"null"` is written |
+| `confidence` | float | Final confidence after discounts, the ADR-080 cap (`_cap`) and the live probe |
+| `outcome` | str | `cache_hit` \| `auto_healed` \| `flagged` \| `needs_review` \| `failed` |
+| `dom_hash` | str | Hash of the page's a11y snapshot at heal time (the third part of the cache key; the cache column is named `dom_subtree_hash` but hashes no subtree — ADR-088) |
+| `ts` | float | Unix time of the attempt |
+| `identity` | str | The ADR-082 identity verdict for a re-ground: `verified` \| `contradicted` \| `unverifiable`. EMPTY for a re-bind (the frozen key is vouched for by the plan itself) and in every row written before ADR-082 — both cases mean the same thing: "no identity claim was made" |
 
-The `healing_audit` table is emitted as a `healing-audit.jsonl` CI artifact and as OpenTelemetry
-span attributes (`selector` and `confidence` fields only — **never** prompt content, to avoid
-leaking any AUT credentials that may appear in the a11y tree).
+The `healing_audit` table is read through the `AuditRows` RPC; its only consumer in the product is
+calibration (`brain/calibrate.py`, reachable as `agentctl calibrate` / `RUN_MODE=calibrate`), which
+is why purging `healing_audit` with `agentctl purge-store` blinds calibration — a price the tool
+states out loud (`internal/store/purge.go`, ADR-100). ⚠ The `llm_tokens`, `duration_ms`,
+`dom_hash_before`/`dom_hash_after` columns and the `healing-audit.jsonl` CI artifact **do not
+exist** — they come from the original design (`docs/DESIGN_RECORD.md`), which was not built in this
+part. Neither tokens nor attempt duration are persisted anywhere: their only trace is the OTel span
+attributes of the heal call (`brain/otel.py::set_llm_tokens`), where only `selector` and
+`confidence` go out and **never** prompt content, to avoid leaking any AUT credentials that may
+appear in the a11y tree. CI uploads `heal-report.json`, not a dump of this table.
 
 ---
 
@@ -313,8 +346,12 @@ This separates two distinct failure modes:
 - Quarantined steps still execute in every run.
 - They do **not** contribute to exit code 1 or 2.
 - They are visible in the run report under a dedicated quarantine section.
-- **Cleared by:** `agentctl locators clear-quarantine <step>` or 3 consecutive passes on the same
-  AUT SHA.
+- **Cleared by:** `agentctl locators clear-quarantine` — **it takes no argument**. The subcommand
+  inspects only `args[0]`, so a step name appended to it is not rejected but **silently ignored**:
+  the `ClearQuarantine(Empty)` RPC runs `DELETE FROM step_failures`, clearing quarantine for **every**
+  step at once and resetting the `last5` history of steps that were never quarantined. Per-step
+  clearing does not exist in the product. Quarantine also lifts automatically after **3 consecutive**
+  passes on the same AUT SHA; an AUT SHA change resets `last5` outright.
 
 This rule is sourced from P3 (TrustFirst) as the cleanest mechanism to separate genuine regression
 signal from environmental noise without suppressing real failures.

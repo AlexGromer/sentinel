@@ -1,5 +1,7 @@
 # Контракт M15 — metrics/results-in-UI (реализует ADR-051)
 
+> 🌐 **Русский** (основная версия) · [English](M15_CONTRACT.en.md)
+
 > Статус: **ADR-051 (Accepted-design) → реализация M15**. Одна ветка `feat/m15-metrics-ui` поверх main. Token-cost ($) → M15.1.
 
 ## 1. Зачем

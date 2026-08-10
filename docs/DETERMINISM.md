@@ -242,9 +242,12 @@ agentctl run --explore --target https://app.local --aut-version $(git rev-parse 
 **As-built:** этот SHA **не** сравнивается ни с каким значением в `plan.json` — `plan.json` вообще
 не хранит `aut_version` (см. схему выше) — и в коде нет ни политики `--on-aut-mismatch=warn|heal|abort`,
 ни события `PLAN_STALE` (грепом по `brain/` и `cmd/` — ноль совпадений). Единственная роль
-`--aut-version` — быть ключом карантина нестабильных шагов (`brain/store.py`, таблица
-`step_failures`, `record_step()` вызывается из `brain/replay.py:232`): шаг помещается в карантин,
-если среди последних 5 попыток на данном AUT SHA было **≥ 3 неудачи** (`brain/store.py:188`).
+`--aut-version` — быть ключом карантина нестабильных шагов (таблица `step_failures`): шаг
+помещается в карантин, если среди последних 5 попыток на данном AUT SHA было **≥ 3 неудачи**, и
+снимается автоматически при **3 подряд** прохождениях в конце окна. Правило реализовано дважды и
+одинаково в обоих бэкендах store: `brain/store.py::LocalStore.record_step` и `RecordStep`
+store-gateway (`internal/store/server.go`) — `GrpcStore.record_step` только делегирует. Вызывается
+из `brain/replay.py::run_replay`.
 Смена `--aut-version` между запусками сбрасывает историю (`last5`) и снимает карантин, разделяя
 реальную регрессию от нестабильности окружения.
 
@@ -292,15 +295,23 @@ explore-once выше). Проверяемый след даёт `llm-transcript
 
 ### SQLite на задание (CI)
 
-Каждое задание CI записывает в **изолированный SQLite-файл на запуск**:
+Каждое задание CI пишет в две РАЗНЫЕ базы, и изолируются они разными механизмами:
 
 ```
-AGENT_DB_PATH=/tmp/agent-{run_id}.db       # main store-gateway DB
-AGENT_CKPT_PATH=/tmp/agent-{run_id}-ckpt.db  # LangGraph checkpoint DB (separate)
+runs/<run_id>/checkpoint.db   # LangGraph-чекпойнт (собирается в brain/__main__.py::_run_explore)
+state/locators.db             # основная БД store-gateway; путь — флаг `-db` (cmd/store-gateway)
 ```
 
-Параллельные задания CI никогда не конкурируют за общий писатель. Файлы эфемерны
-и удаляются после загрузки артефактов заданием.
+Чекпойнт изолирован по прогону, потому что уникален каталог артефактов (`ARTIFACT_DIR=runs/<run_id>`),
+а не потому что задана какая-то переменная. Основная БД изолируется НЕ по `run_id`, а рабочим
+каталогом задания; путь при необходимости задаётся флагом гейтвея — так и делает наш собственный CI
+(`store-gateway --db /tmp/ui-smoke-store.db`). Единственный писатель основной БД — Go store-gateway,
+поэтому параллельные задания не конкурируют за общего писателя. Чекпойнт эфемерен: мозг удаляет его
+сам по завершении прогона (`_discard_checkpoint`, ADR-099), независимо от выгрузки артефактов.
+
+⚠ Переменных `AGENT_DB_PATH` / `AGENT_CKPT_PATH` в коде нет и никогда не было (`git log -S` по
+`*.go`/`*.py`/`*.ts`/`*.yml` пуст) — задавать их бессмысленно: аллоулист окружения `filteredEnv()`
+(`cmd/agentctl/main.go`) вырезал бы их по дороге к мозгу.
 
 ### Общий SQLite (home-lab сервис)
 
@@ -316,7 +327,7 @@ Postgres для checkpointer'а (синхронный `PostgresSaver` через
 - Распределённые воркеры, охватывающие несколько хостов
 
 Схема по своей конструкции совместима с Postgres; миграция — это замена драйвера в
-`store-gateway` без изменений схемы. Откладывается до M5 — не строится заранее.
+`store-gateway` без изменений схемы. **Отложено в M13-service** (M11/ADR-053) — не строится заранее.
 
 ---
 
@@ -334,10 +345,11 @@ agentctl run --explore --target https://app.local --aut-version $(git rev-parse 
 
 **Запуск.** `agentctl` (Go) загружает YAML-конфигурацию и, начиная с M2+, вызывает
 `orchestrator.StartRun` через gRPC. Оркестратор запускает подпроцесс Python-мозга
-с переменными окружения: `RUN_ID`, `RUN_MODE=explore`, `ARTIFACT_DIR`, `AGENT_DB_PATH`.
+с переменными окружения: `RUN_ID`, `RUN_MODE=explore`, `TARGET_URL`, `ARTIFACT_DIR` (плюс
+`PLANNER`, `PLAN_FILE`, `PW_EXECUTOR_CMD`, `ORCH_ADDR` и лимиты токенов).
 
 **Инициализация мозга.** Мозг инициализирует LangGraph `StateGraph` с `SqliteSaver`
-checkpointer, указывающим на **отдельный** файл БД checkpoint (`{ARTIFACT_DIR}/ckpt.db`).
+checkpointer, указывающим на **отдельный** файл БД checkpoint (`{ARTIFACT_DIR}/checkpoint.db`).
 Запускает MCP-сервер `pw-executor` TS (созданный нами) как дочерний процесс через stdio
 и привязывает его инструменты через LangGraph MCP-адаптер.
 
@@ -401,7 +413,8 @@ agentctl run --replay --plan plan.json --target https://app.local --ci \
   --aut-version $(git rev-parse HEAD)
 ```
 
-с `AGENT_DB_PATH=/tmp/agent-{run_id}.db` (изоляция на уровне задания).
+изоляция задания обеспечивается его собственным рабочим каталогом (при необходимости — флагом `-db`
+гейтвея).
 
 **Проверка целостности хеша.** Мозг загружает `plan.json` и **немедленно**
 пересчитывает `plan_hash`. Хеши совпадают — продолжить.

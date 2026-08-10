@@ -1,5 +1,7 @@
 # Contract M15 — metrics/results-in-UI (implements ADR-051)
 
+> 🌐 [Русский](M15_CONTRACT.md) (основная версия) · **English**
+
 > Status: **ADR-051 (Accepted-design) → M15 implementation**. One branch `feat/m15-metrics-ui` on top of main. Token-cost ($) → M15.1.
 
 ## 1. Why

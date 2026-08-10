@@ -1,5 +1,7 @@
 # M16 contract — "everything through the UI": three equal surfaces, and chat at the centre
 
+> 🌐 [Русский](M16_CONTRACT.md) (основная версия) · **English**
+
 Proposes **ADR-107…110**. All four are **Proposed**; they enter the `ARCHITECTURE.md §3` table on
 acceptance.
 
