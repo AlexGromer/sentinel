@@ -357,4 +357,91 @@ and the logs died with the container.
 
 ---
 
+## 9. The live view: about the RUN, not the service (LIVE-PER-RUN, ADR-121)
+
+Sections 1–8 did not distinguish two runs going at once in the same browser: `/live/status`,
+`/live/frame.jpg` and `/live/mjpeg` (ADR-111) answered about the **service** — whichever page happened
+to be open last. With two runs in flight at once, that meant the viewer of the first run saw the
+second. Showing another run's picture is worse than showing none — absence is visible, and a wrong
+picture is indistinguishable from a right one.
+
+**The routes accept `run_id`, and it is OPTIONAL.**
+
+| Route | CLI | Without `run_id` | With `run_id` |
+|---|---|---|---|
+| `GET /v1/live/status` | `agentctl live status [--run-id <id>]` | answers about the newest open page, `scoped:false` | answers about this run's own page, or names the refusal reason, `scoped:true` |
+| `GET /v1/live/frame.jpg` | `agentctl live frame [--run-id <id>]` | same, plus frame headers (below) | same |
+| `GET /v1/live/mjpeg` | `agentctl live stream [--run-id <id>]` | same | same |
+
+An unnamed request — what `agentctl live frame` with no flag sends, and every piece of code that
+predates ADR-121 — stays legal: it is not refused, it answers about the newest page, as before. What
+changed is that the answer now **says so explicitly** — the `scoped:false` field in the `/live/status`
+JSON, and `X-Sentinel-Run`/`X-Sentinel-Scoped` headers on the frame itself (a JPEG cannot say this in
+its body). Before ADR-121, "this is the newest page" and "this is your run" were indistinguishable in
+the response.
+
+**The claim (`POST /live/claim`).** As soon as the executor (`pw-executor/src/server.ts::claimLivePage`)
+has a page, it reads that page's Chromium `targetId` (`Target.getTargetInfo`) and announces it to the
+browser service: `{run_id, target_id}`. This works even when the executor does NOT own the page (CDP-
+attach mode, ADR-037): `targetId` is the one identifier CDP hands out identically to the owner and to a
+client that only adopted someone else's page — established by a direct measurement, not an assumption,
+before any code was written. The page is NOT labelled by arrival order, URL or creation time — all
+three break exactly when two runs overlap.
+
+The claim is **fail-open**: a failure (the service unreachable, `targetId` could not be read, a
+timeout) does not fail the run — observation must not be allowed to kill work. But it is not silent
+either: the reason is logged on the executor side (`log('live claim failed …')`).
+
+The claim address is **derived** from `PW_CDP_ENDPOINT`, already set for control-api in compose (the
+CDP-relay port is swapped for `CDP_LIVE_PORT`, the path for `/live/claim`; the derivation is announced
+in the log as `live claim endpoint derived from PW_CDP_ENDPOINT: …`), overridable via an explicit
+`PW_LIVE_CLAIM`. No second address was added to compose — that is a deliberate decision, not an
+oversight: `docker-compose.yml` did not need to change, and a second address would have been a second
+way to drift, exactly as already happened once with a YAML merge key that swallowed an entire
+`environment:` block.
+
+**Refusal instead of substitution.** A named run that cannot be resolved gets a `503` with a plain-text
+reason — three cases are distinguished, not collapsed into one generic "no picture":
+
+| Reason | When |
+|---|---|
+| "run \<id\> has not claimed a page — …" | the run has not claimed a page yet (its browser has not started, or this deployment has no browser service at all) |
+| "run \<id\> claimed a page that is no longer open — …" | a claim exists but the page is closed (the run finished) |
+| "the browser has no page yet — start a run first" | (unnamed request only) the browser has no page open at all |
+
+A claim outlives its page on the `CDP_LIVE_PORT` service for `CLAIM_TTL_MS` (12 hours by default) —
+that is what makes "the run finished, its page closed" distinguishable from "the run never claimed a
+page": the claim does not vanish the moment the page closes.
+
+**`/live/status` carries three new fields**, without renaming the old ones (`streaming`/`has_page`/
+`url`/`last_frame_ts`/`ack_errors`/`error` are unchanged):
+
+| field | meaning |
+|---|---|
+| `run_id` | echoes the requested `run_id`, or `null` |
+| `scoped` | `true` if the answer is about the CLAIMED page of exactly this run; `false` — about the newest page in general |
+| `reason` | the refusal reason (see table above), or `null` |
+
+**`SENTINEL_RUN_ID`.** Before ADR-121, `agentctl run` minted a fresh random `runID` with no link to the
+name control-api had already given the run's directory (`runs/control-<id>` at `spawnRun`) — the claim
+would have gone out under a DIFFERENT name, and the hub, which asks about control-api's `<id>`, would
+never have met it. `cmd/control-api/main.go::spawnRun` passes the child process `SENTINEL_RUN_ID=<id>`;
+`cmd/agentctl/main.go::cmdRun` uses it in place of a fresh `runID` when it is set. The variable name is
+deliberately NOT `RUN_ID` — a common shell variable whose accidental inheritance would give two
+unrelated runs the same claimed identity.
+
+**One URL builder in control-api.** `cmd/control-api/live.go::liveTargetURL` is the single function
+both proxying handlers (`handleLiveStatus`, `proxyLive`) go through. Before it, they built the browser-
+service URL independently, and that drifted unnoticed: `?run_id=` was appended to `proxyLive`'s
+request but dropped on the floor in `handleLiveStatus` — nothing failed, `/live/status` simply answered
+about a different page than `/live/frame.jpg` did. Only `run_id` is forwarded, never the whole query
+string, so this proxy cannot become a way to hand the browser service arbitrary parameters.
+
+**Frame headers.** `GET /v1/live/frame.jpg` and `GET /v1/live/mjpeg` carry `X-Sentinel-Run` (echoes the
+requested `run_id`, empty for an unnamed request) and `X-Sentinel-Scoped` (`"true"`/`"false"`) —
+control-api forwards them from the browser service's response (`proxyLive`). This is the only way to
+learn a frame's ownership WITHOUT reading JSON: the body is a plain JPEG or a multipart stream.
+
+---
+
 ---

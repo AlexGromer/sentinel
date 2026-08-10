@@ -559,7 +559,17 @@ func cmdRun(repo string, args []string) int {
 	if *replay {
 		runMode = "replay"
 	}
+	// LIVE-PER-RUN. The id a CALLER already knows wins over a fresh one. control-api names a run
+	// before agentctl exists (runs/control-<id>) and the hub asks the live view about THAT id; a
+	// second, unrelated id generated here would make the two never meet, and the live view would
+	// refuse every run in the deployment that has a browser service at all.
+	//
+	// A dedicated SENTINEL_-prefixed name rather than RUN_ID: RUN_ID is a common shell variable, and
+	// inheriting it by accident would make two unrelated runs claim one identity.
 	runID := newRunID()
+	if v := strings.TrimSpace(os.Getenv("SENTINEL_RUN_ID")); v != "" {
+		runID = v
+	}
 	dir := mkArtifactDir(repo, runID, *artifactDir)
 	fmt.Printf("[agentctl] run_id=%s mode=%s planner=%s target=%s\n", runID, runMode, *planner, *target)
 	fmt.Printf("[agentctl] artifacts=%s\n", dir)

@@ -127,11 +127,17 @@ class _Stack:
             time.sleep(0.3)
         return False
 
-    def run_explore(self, artifact_dir: str) -> subprocess.Popen:
+    def run_explore(self, artifact_dir: str, run_id: "str | None" = None) -> subprocess.Popen:
         env = {**os.environ,
                "PW_CDP_ENDPOINT": f"http://127.0.0.1:{self.cdp_port}",
                "PW_NO_TRACE": "1",
                "BRAIN_PYTHON": str(REPO / ".venv" / "bin" / "python")}
+        if run_id:
+            # LIVE-PER-RUN. In compose the executor DERIVES the claim endpoint from PW_CDP_ENDPOINT
+            # plus the default live port; here the ports are random, so the override exists and is
+            # exercised — a derivation nobody can override is a derivation nobody can test.
+            env["SENTINEL_RUN_ID"] = run_id
+            env["PW_LIVE_CLAIM"] = f"http://127.0.0.1:{self.live_port}/live/claim"
         return subprocess.Popen(
             [str(AGENTCTL), "run", "--target", f"file://{REPO}/testdata/site/index.html",
              "--planner", "heuristic", "--artifact-dir", artifact_dir],
@@ -393,6 +399,195 @@ def test_a_frame_and_a_stream_arrive_while_a_run_drives_the_browser():
                 pass
         st.close()
 
+
+# ---------------------------------------------------------------------- LIVE-PER-RUN (ADR-111 follow-on)
+#
+# The defect these four exist for: the live view was a fact about the SERVICE. With two runs in the
+# same browser it showed whichever page was created LAST, and the hub said so in prose because the
+# topology could not say it in data. A picture of the wrong run is worse than no picture — it is
+# indistinguishable from the right one.
+
+
+def test_a_named_run_gets_its_own_page_not_the_newest():
+    """THE defect, stated as a property: a second page must not steal the first run's picture."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st, proc = _Stack(), None
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        with tempfile.TemporaryDirectory() as d:
+            proc = st.run_explore(d, run_id="run-alpha")
+            # Wait for the claim to land — on STATE, never on a guessed sleep.
+            deadline = time.time() + 90
+            claimed = None
+            while time.time() < deadline:
+                code, body = _get(f"http://127.0.0.1:{st.live_port}/live/status?run_id=run-alpha", timeout=5)
+                if code == 200:
+                    j = json.loads(body)
+                    if j.get("has_page") and j.get("url"):
+                        claimed = j
+                        break
+                time.sleep(0.4)
+            assert claimed, "run-alpha never resolved to a page — the claim never reached the service"
+            assert claimed["scoped"] is True, f"a NAMED request answered unscoped: {claimed}"
+            assert claimed["run_id"] == "run-alpha"
+
+            # A second page in the same browser: this is what used to hijack the picture.
+            code, second = _get(f"http://127.0.0.1:{st.live_port}/live/status", timeout=5)
+            unscoped = json.loads(second)
+            assert unscoped["scoped"] is False, (
+                "an UNNAMED request claimed to be scoped — that field is how a caller learns the "
+                f"picture is 'the newest page' rather than 'your run': {unscoped}")
+
+            # And the frame path agrees with status about whose page it is.
+            code, _ = _get(f"http://127.0.0.1:{st.live_port}/live/frame.jpg?run_id=run-alpha", timeout=20)
+            assert code == 200, f"the claimed run could not be photographed: HTTP {code}"
+    finally:
+        if proc:
+            proc.kill()
+            try:
+                proc.wait(timeout=20)
+            except Exception:
+                pass
+        st.close()
+
+
+def test_an_unclaimed_run_is_refused_rather_than_answered_with_somebody_elses_page():
+    """The decision this task exists for: refuse, never substitute.
+
+    A run that named itself and cannot be resolved gets a 503 that SAYS which of the three cases it
+    is. Answering it with the newest page would be the original defect wearing a run_id."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st, proc = _Stack(), None
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        with tempfile.TemporaryDirectory() as d:
+            # A real page EXISTS — that is the point. The refusal must not be "no page anywhere".
+            proc = st.run_explore(d, run_id="run-present")
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                code, body = _get(f"http://127.0.0.1:{st.live_port}/live/status?run_id=run-present", timeout=5)
+                if code == 200 and json.loads(body).get("has_page"):
+                    break
+                time.sleep(0.4)
+
+            code, body = _get(f"http://127.0.0.1:{st.live_port}/live/status?run_id=run-ghost", timeout=5)
+            j = json.loads(body)
+            assert j["has_page"] is False, (
+                "a run that never claimed a page was answered with one — that is showing somebody "
+                f"else's picture under this run's name: {j}")
+            assert j["scoped"] is True and j["run_id"] == "run-ghost"
+            assert j["reason"] and "claim" in j["reason"], (
+                f"the refusal does not say WHY, so a reader cannot tell 'never started' from "
+                f"'already finished': {j}")
+
+            code, body = _get(f"http://127.0.0.1:{st.live_port}/live/frame.jpg?run_id=run-ghost", timeout=10)
+            assert code == 503, f"an unclaimed run got a picture: HTTP {code}"
+    finally:
+        if proc:
+            proc.kill()
+            try:
+                proc.wait(timeout=20)
+            except Exception:
+                pass
+        st.close()
+
+
+def test_the_claim_endpoint_refuses_half_a_claim():
+    """A claim missing either half is not a claim. Accepting one would map a run to nothing, and the
+    live view would then refuse that run forever with the wrong reason."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st = _Stack()
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        base = f"http://127.0.0.1:{st.live_port}/live/claim"
+        for body, label in (({"run_id": "r"}, "no target_id"),
+                            ({"target_id": "t"}, "no run_id"),
+                            ({}, "empty")):
+            req = urllib.request.Request(base, data=json.dumps(body).encode(),
+                                         headers={"content-type": "application/json"}, method="POST")
+            try:
+                urllib.request.urlopen(req, timeout=10)
+                raise AssertionError(f"a claim with {label} was accepted")
+            except urllib.error.HTTPError as e:
+                assert e.code == 400, f"a claim with {label} answered HTTP {e.code}, want 400"
+        # GET must not write: the only writer on this surface states its method rather than assuming.
+        code, _ = _get(base, timeout=10)
+        assert code == 405, f"GET /live/claim answered {code}, want 405"
+    finally:
+        st.close()
+
+
+def test_control_api_carries_run_id_through_to_the_browser_service():
+    """The proxy used to build its target from a LITERAL path, so `?run_id=` added by the hub or the
+    CLI reached it and was dropped on the floor. Nothing failed — the answer was simply about a
+    different page. Measured through the REAL control-api, because the defect lived in the proxy and
+    a test of the service alone would pass over it."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st, proc = _Stack(), None
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        if not st.start_api(f"http://127.0.0.1:{st.live_port}"):
+            return _skip("control-api did not come up")
+        with tempfile.TemporaryDirectory() as d:
+            proc = st.run_explore(d, run_id="run-through-proxy")
+            deadline = time.time() + 90
+            seen = None
+            while time.time() < deadline:
+                code, body = _get(
+                    f"http://127.0.0.1:{st.api_port}/v1/live/status?run_id=run-through-proxy",
+                    token=TOKEN, timeout=5)
+                if code == 200:
+                    # control-api wraps the service document so a caller never infers availability
+                    # from the shape of what came back.
+                    j = (json.loads(body) or {}).get("upstream") or {}
+                    if j.get("has_page"):
+                        seen = j
+                        break
+                time.sleep(0.4)
+            assert seen, "the run never resolved THROUGH control-api"
+            assert seen.get("run_id") == "run-through-proxy" and seen.get("scoped") is True, (
+                "control-api dropped run_id on the way to the browser service — the caller asked "
+                f"about a run and was answered about the newest page: {seen}")
+
+            # A ghost run must be refused THROUGH the proxy too, not just at the service.
+            code, body = _get(f"http://127.0.0.1:{st.api_port}/v1/live/status?run_id=run-ghost",
+                              token=TOKEN, timeout=5)
+            assert (json.loads(body).get("upstream") or {})["has_page"] is False
+
+            # The PICTURE says whose it is, and the proxy must carry that through. Found by mutation:
+            # emptying the header list in proxyLive left every assertion above green, because they all
+            # read the JSON document — a JPEG has nowhere to put a run id except a header, and a
+            # caller that cannot check the header has to trust the routing it just asked about.
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{st.api_port}/v1/live/frame.jpg?run_id=run-through-proxy",
+                headers={"Authorization": "Bearer " + TOKEN})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                assert resp.status == 200, f"the claimed run could not be photographed through the proxy: {resp.status}"
+                assert resp.headers.get("X-Sentinel-Run") == "run-through-proxy", (
+                    "the frame arrived without naming its run — the proxy ate the header, and the "
+                    f"caller cannot tell whose picture it got: {dict(resp.headers)}")
+                assert resp.headers.get("X-Sentinel-Scoped") == "true", (
+                    f"the frame does not say it was scoped: {dict(resp.headers)}")
+    finally:
+        if proc:
+            proc.kill()
+            try:
+                proc.wait(timeout=20)
+            except Exception:
+                pass
+        st.close()
 
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

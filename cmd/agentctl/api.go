@@ -59,9 +59,12 @@ var apiVerbs = []apiVerb{
 	// screenshot of what the browser is doing is exactly what a CI job or a remote operator wants
 	// without opening a browser to look at a browser.
 	//   agentctl live frame > shot.jpg
-	{Verb: "live status", Method: "GET", Path: "/v1/live/status", Help: "is a live view available, and is a page open"},
-	{Verb: "live frame", Method: "GET", Path: "/v1/live/frame.jpg", Stream: true, Help: "one JPEG of what the browser sees, to stdout"},
-	{Verb: "live stream", Method: "GET", Path: "/v1/live/mjpeg", Stream: true, Help: "the live screencast as multipart JPEG, to stdout (Ctrl-C to stop)"},
+	// LIVE-PER-RUN (ADR-121): --run-id names WHICH run's picture. Omitting it stays legal and answers
+	// about the newest page, which the service marks `scoped:false` — the terminal deserves the same
+	// distinction the hub has, or `agentctl live frame` during two runs is a coin toss.
+	{Verb: "live status", Method: "GET", Path: "/v1/live/status", Query: []string{"run_id"}, Help: "is a live view available, and is a page open (--run-id scopes it to one run)"},
+	{Verb: "live frame", Method: "GET", Path: "/v1/live/frame.jpg", Query: []string{"run_id"}, Stream: true, Help: "one JPEG of what the browser sees, to stdout (--run-id scopes it)"},
+	{Verb: "live stream", Method: "GET", Path: "/v1/live/mjpeg", Query: []string{"run_id"}, Stream: true, Help: "the live screencast as multipart JPEG, to stdout (--run-id scopes it; Ctrl-C to stop)"},
 
 	{Verb: "config schema", Method: "GET", Path: "/v1/config-schema", Help: "every knob the product has, with its env name and default"},
 	{Verb: "config get", Method: "GET", Path: "/v1/config", Help: "the persisted config document"},

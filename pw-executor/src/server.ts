@@ -510,6 +510,81 @@ async function ensureBrowser(): Promise<void> {
       log('new browser tab/page tracked: index', pages.length - 1);
     }
   });
+
+  // LIVE-PER-RUN: tell the browser service WHICH page is this run's, so the live view can be asked
+  // about a run instead of about the service. Deliberately after the page exists and deliberately
+  // fail-open — see claimLivePage.
+  void claimLivePage(page);
+}
+
+/**
+ * Announce this run's page to the browser service (ADR-110), so /live/* can be scoped to a run.
+ *
+ * WHY A TARGET ID AND NOT SOMETHING SIMPLER. Page order, URL and creation time were all available
+ * and all three are wrong the moment two runs overlap — which is the only case this exists for.
+ * `Target.getTargetInfo` returns an id that every CDP client sees identically, INCLUDING a client
+ * that adopted a page it did not create. That was measured before this was written, because the
+ * whole design turns on it: in CDP-attach mode (ADR-037) the executor owns nothing, so a label it
+ * could only write as an owner would leave exactly the deployment that has a browser service
+ * unscoped.
+ *
+ * ⚠ FAIL-OPEN, AND THAT IS A DECISION. This is an OBSERVATION concern: a run whose picture cannot
+ * be scoped is still a run that must complete. Making the announcement fatal would let a live-view
+ * detail kill work that has nothing to do with it. It is not silent either — every failure is
+ * logged with its reason, because "the live view shows the wrong run" with no explanation is the
+ * defect this task exists to remove.
+ *
+ * Unset endpoint = nothing to announce to: a standalone executor launches its own browser, and
+ * there is no service holding a live view. Correct by construction rather than by special case.
+ */
+async function claimLivePage(p: Page): Promise<void> {
+  const runId = (process.env.RUN_ID ?? '').trim();
+  if (!runId) return;
+  const claimUrl = liveClaimUrl();
+  if (!claimUrl) return;
+  try {
+    const cdp = await p.context().newCDPSession(p);
+    const info = (await cdp.send('Target.getTargetInfo')) as { targetInfo?: { targetId?: string } };
+    await cdp.detach().catch(() => {});
+    const targetId = info?.targetInfo?.targetId;
+    if (!targetId) { log('live claim skipped: Chromium reported no target id for this page'); return; }
+    const res = await fetch(claimUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, target_id: targetId }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) { log(`live claim refused by the browser service: HTTP ${res.status}`); return; }
+    log(`live claim sent: run ${runId} -> target ${targetId.slice(0, 8)}`);
+  } catch (e) {
+    log('live claim failed (the run continues; the live view stays unscoped):', (e as Error).message);
+  }
+}
+
+/**
+ * Where to announce. Explicit `PW_LIVE_CLAIM` wins; otherwise it is DERIVED from the CDP endpoint the
+ * executor was already given, because a second address in compose is a second thing to get wrong —
+ * and the measured way it goes wrong here is a YAML merge key REPLACING an `environment:` block
+ * rather than deepening it, which has already swallowed PW_CDP_ENDPOINT once.
+ *
+ * The derivation is ANNOUNCED, never inferred silently: an address reached other than the one
+ * configured must not be something an operator reconstructs from a failure later.
+ */
+function liveClaimUrl(): string | null {
+  const explicit = (process.env.PW_LIVE_CLAIM ?? '').trim();
+  if (explicit) return explicit;
+  const cdpEndpoint = (process.env.PW_CDP_ENDPOINT ?? '').trim();
+  if (!cdpEndpoint) return null;
+  try {
+    const u = new URL(cdpEndpoint);
+    u.port = (process.env.CDP_LIVE_PORT ?? '9224');
+    u.pathname = '/live/claim';
+    u.search = '';
+    log(`live claim endpoint derived from PW_CDP_ENDPOINT: ${u.toString()} (set PW_LIVE_CLAIM to override)`);
+    return u.toString();
+  } catch {
+    return null;
+  }
 }
 
 /** Transport-agnostic tool dispatch. `method` is the dotted name (e.g. "browser.navigate"). */

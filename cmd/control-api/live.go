@@ -30,6 +30,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -61,6 +62,23 @@ var liveClient = &http.Client{
 	},
 }
 
+// liveTargetURL builds the browser-service URL for one request, and is the ONLY place that does.
+//
+// LIVE-PER-RUN found out why that matters: the query string was added to proxyLive and NOT to
+// handleLiveStatus, because the two built their target independently. Nothing failed — status simply
+// went on answering about the newest page while the frame path answered about the run. Two places
+// deciding one thing is how they come to disagree, and the disagreement is invisible.
+//
+// Only run_id is forwarded, never the whole query: this proxy must not become a way to hand
+// arbitrary parameters to the browser service's surface.
+func liveTargetURL(base, path string, r *http.Request) string {
+	target := base + path
+	if runID := strings.TrimSpace(r.URL.Query().Get("run_id")); runID != "" {
+		target += "?run_id=" + url.QueryEscape(runID)
+	}
+	return target
+}
+
 func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 	base := liveBase()
 	if base == "" {
@@ -77,7 +95,7 @@ func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 	// config mistake would reach the operator as a stack trace instead of as the sentence below —
 	// and proxyLive two functions down already gets this right, which made it an inconsistency
 	// rather than a considered choice.
-	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodGet, base+liveStatusPath, nil)
+	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodGet, liveTargetURL(base, liveStatusPath, r), nil)
 	if rerr != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false,
@@ -127,7 +145,12 @@ func (s *server) proxyLive(w http.ResponseWriter, r *http.Request, path string, 
 		ctx, cancel = context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	// LIVE-PER-RUN. The QUERY STRING IS CARRIED, and it did not used to be: `path` was a literal here,
+	// so `?run_id=` added by the hub or the CLI reached this function and was dropped on the floor.
+	// Nothing failed — the browser service simply answered about the newest page, which is the exact
+	// shape of defect this task exists to remove: a request that looks answered and is about
+	// something else.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, liveTargetURL(base, path, r), nil)
 	if err != nil {
 		http.Error(w, "bad live endpoint: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -141,6 +164,13 @@ func (s *server) proxyLive(w http.ResponseWriter, r *http.Request, path string, 
 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
+	}
+	// The service says WHOSE picture this is; a proxy that ate those headers would leave the caller
+	// unable to check it got the run it asked for, which is the same silence in a different place.
+	for _, h := range []string{"X-Sentinel-Run", "X-Sentinel-Scoped"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
