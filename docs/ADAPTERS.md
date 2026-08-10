@@ -1,22 +1,58 @@
-# Sentinel — Подключаемые адаптеры (LiteLLM-роутер · MCP-Inspector)
+# Sentinel — Подключаемые адаптеры (SPI · LiteLLM-роутер · MCP-Inspector)
 
 > 🌐 **Русский** (основная версия) · [English](ADAPTERS.en.md)
 
-> **ADR-045** · **Дата**: 2026-06-28 · **Статус**: методика (опциональный tooling, без хард-зависимостей)
+> **ADR-045** (инструменты) · **ADR-123** (SPI) · **Дата**: 2026-06-28, дополнено 2026-08-10 ·
+> **Статус**: методика + реализованный SPI
 
-Зонтичный документ для **подключаемых адаптеров** Sentinel (тема M9.7 / GAP-M9-08): инструменты, которые
-встают на уже существующие швы движка **без изменения кода**. Покрывает два, выбранных в roadmap:
-**LiteLLM** (опциональный model-router) и **MCP-Inspector** (отладка M7-MCP-сервера).
+Зонтичный документ для **подключаемых адаптеров** Sentinel (тема M9.7 / GAP-M9-08). Две разные вещи под
+одной обложкой, и их полезно не путать:
 
-## 1. Швы для подключения
+- **§1 — SPI (ADR-123):** место, куда встаёт **ЧУЖОЙ КОД**. Реестр `brain/adapters.py`, три вида
+  (`model` · `auth` · `deploy`), обнаружение через `SENTINEL_ADAPTERS`. Полный контракт —
+  [`M9.7_CONTRACT.md`](M9.7_CONTRACT.md).
+- **§2–§3 — внешние инструменты (ADR-045):** **LiteLLM** (опциональный model-router) и
+  **MCP-Inspector** (отладка M7-сервера). Кода не требуют вовсе: садятся на существующие швы конфигом.
+
+## 1. SPI — швы, через которые расширяется сам продукт
+
+| Вид | Что подменяет | Точка входа продукта |
+|-----|---------------|----------------------|
+| **`model`** | провайдер модели (`ModelAdapter.make(spec) -> LLMBackend`) | `brain/llm.py::make_backend(role)` — `anthropic` и `openai` зарегистрированы тут же как обычные адаптеры |
+| **`auth`** | декларативный блок `auth:` → окружение (`EnvAdapter.env(spec)`) | `brain/runconfig.py::_apply_auth`; референс `storage_state` = M9.1 логин-как-тест (ADR-026) |
+| **`deploy`** | декларативный блок `deploy:` → окружение | `brain/runconfig.py::_apply_deploy`; референс `local` = `STORE_ADDR` · `OTEL_EXPORTER_OTLP_ENDPOINT` · `CHECKPOINT_DSN` |
+
+```bash
+SENTINEL_ADAPTERS=mycorp_sentinel.adapters LLM_BACKEND=bedrock ./bin/agentctl run --target …
+```
+
+```yaml
+# run.yaml — `adapter:` необязателен; без него берётся тот, что поставлялся
+auth:   {adapter: storage_state, storage_state: /run/state.json, pw_no_trace: true}
+deploy: {store_addr: gateway:50051, otel_endpoint: http://otel:4317}
+```
+
+**Правила, которые стоит знать до написания своего адаптера** (обоснование — в контракте):
+`EnvAdapter.env()` **чистая** и в окружение не пишет (предпочтение «явный флаг > файл» остаётся в
+`runconfig.py`, а не у адаптера) · `ModelAdapter` **не читает `LLM_*`** сам, всё разрешённое приходит
+в `ModelSpec` · неизвестное имя адаптера — **конфигурационная ошибка (exit 3)**, а не молчаливый
+откат · неимпортируемый модуль из `SENTINEL_ADAPTERS` **бросает** на пути RunConfig и **деградирует
+с объявлением** на пути модели.
+
+> 🔒 **Граница лицензии (ADR-056 §2 строка 42):** SPI и референсные адаптеры — открытый каркас
+> (Apache-2.0, необратимо). Корпоративная авторизация (Keycloak/OIDC/Vault/SSO/RBAC) цепляется к
+> этому SPI **снаружи** и в это дерево не коммитится — `[M-COMMERCIAL-auth]`. Правило **проверяется**
+> гейтом `tests/test_adapter_spi_offline.py`, а не только записано.
+
+### Швы, адаптерами НЕ являющиеся
 
 | Шов | Где | Как подключиться |
 |-----|-----|------------------|
-| **Модель / бэкенд** | `brain/llm.py` `OpenAICompatBackend` (ADR-019, M6) | env `LLM_BACKEND=openai` + `LLM_BASE_URL=<OpenAI-compat endpoint>` — любой OpenAI-совместимый провайдер/прокси |
-| **MCP-хост** | `brain/server.py` M7-сервер (ADR-020) | хост драйвит `explore`/`heal`/`replay`/`report` и поставляет модель через `sampling/createMessage` |
+| **OpenAI-совместимый endpoint** | `brain/llm.py` `OpenAICompatBackend` (ADR-019, M6) | env `LLM_BACKEND=openai` + `LLM_BASE_URL=<endpoint>` — конфигурация встроенного адаптера, кода не нужно (сюда садится LiteLLM, §2) |
+| **MCP-хост** | `brain/server.py` M7-сервер (ADR-020) | хост драйвит `explore`/`heal`/`replay`/`report` и поставляет модель через `sampling/createMessage`; `sampling` разрешается **до** реестра — это свойство запуска процесса, а не настроенный провайдер |
 
-Оба — **опциональны**: с пустым env Sentinel работает как раньше (Anthropic по умолчанию; без хоста —
-эвристика/L1–L6). Адаптеры ниже не меняют ядро — это config + внешние инструменты.
+Всё перечисленное **опционально**: с пустым env Sentinel работает как раньше (Anthropic по умолчанию;
+без хоста — эвристика/L1–L6).
 
 ## 2. LiteLLM — опциональный model-router
 
@@ -83,7 +119,7 @@ npx @modelcontextprotocol/inspector \
 - Вызвать `replay` (детерминированный, **без LLM**) на готовом `plan.json` — не требует sampling.
 - Вызвать `explore`/`heal` — они запрашивают модель у хоста через `sampling/createMessage`; **в UI-режиме
   Inspector предложит ответить на sampling-запрос** (вы выступаете моделью) → так проверяется
-  `SamplingBackend` (`brain/llm.py:203-229`). Нет sampling → backend недоступен → fallback на эвристику/L1–L6.
+  `SamplingBackend` (`brain/llm.py`, класс `SamplingBackend` — якорь по имени, не по номеру строки). Нет sampling → backend недоступен → fallback на эвристику/L1–L6.
 
 CLI-режим (`--cli`) удобен для скриптовой проверки tools/resources/prompts; **поддержку sampling сверяйте с
 версией Inspector** (sampling — интерактивный, обычно через UI). Offline-аналог этих проверок без живого
@@ -93,5 +129,8 @@ CLI-режим (`--cli`) удобен для скриптовой проверк
 > подтвердить перед боевым использованием), GAP-VERIFY-006.
 
 ## См. также
-[`LOCAL_MODELS.md`](LOCAL_MODELS.md) (каталог моделей/runtime + калькуляторы) · [`M6_CONTRACT.md`](M6_CONTRACT.md)
-(provider-agnostic brain) · [`M7_CONTRACT.md`](M7_CONTRACT.md) (MCP-exposure) · [`DEVELOPMENT.md`](DEVELOPMENT.md).
+[`M9.7_CONTRACT.md`](M9.7_CONTRACT.md) (**контракт SPI**: реестр, три вида, референсные адаптеры,
+граница лицензии, гейт) · [`LOCAL_MODELS.md`](LOCAL_MODELS.md) (каталог моделей/runtime + калькуляторы) ·
+[`M6_CONTRACT.md`](M6_CONTRACT.md) (provider-agnostic brain) · [`M7_CONTRACT.md`](M7_CONTRACT.md)
+(MCP-exposure) · [`M9.1_CONTRACT.md`](M9.1_CONTRACT.md) §4 (storageState-жизненный цикл) ·
+[`DEVELOPMENT.md`](DEVELOPMENT.md).

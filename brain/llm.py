@@ -15,6 +15,10 @@ package never breaks a run: the planner falls back to the heuristic, healing to 
 
 Env precedence (per call to `make_backend`): role-specific `LLM_<KEY>_<ROLE>` > global `LLM_<KEY>`.
 Roles: "planner", "heal". Keys: BACKEND, MODEL, BASE_URL, API_KEY, VISION.
+
+M9.7 (ADR-123): the provider slot is an SPI, not an if/elif. `anthropic` and `openai` are registered
+into `brain/adapters.py` as `ModelAdapter`s like any other, so a provider with a different SDK is a
+module named in `SENTINEL_ADAPTERS` rather than an edit to this file. See `docs/ADAPTERS.md` §1.
 With NO env set the behaviour is identical to before: Anthropic, Opus (planner) / Sonnet (heal),
 keyed off ANTHROPIC_API_KEY, falling back to heuristic / L1–L6 when the key is absent.
 """
@@ -28,6 +32,7 @@ import sys
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
+from . import adapters
 from .eventlog import log
 
 
@@ -274,11 +279,65 @@ def _env(role: str, key: str) -> Optional[str]:
     return os.environ.get(f"LLM_{key}_{role.upper()}") or os.environ.get(f"LLM_{key}")
 
 
+# --- M9.7 (ADR-123): the two shipped providers, expressed as SPI adapters -------------------------
+# They live here rather than in brain/adapters.py because they construct the classes above, and
+# adapters.py must stay free of any import from this module (make_backend imports IT). They are
+# registered rather than special-cased so that `make_backend` has exactly ONE provider path: a seam
+# that only third-party code travels is a seam nothing in CI ever exercises.
+
+class _AnthropicAdapter:
+    """Native Anthropic — the calibrated default (ADR-007/ADR-019)."""
+
+    name = "anthropic"
+
+    def make(self, spec: adapters.ModelSpec) -> Optional[LLMBackend]:
+        # The provider-specific key fallback stays with the provider: ModelSpec.api_key carries only
+        # the explicit LLM_API_KEY[_ROLE], because "which env var is the house key" is exactly the
+        # thing an adapter knows and the generic resolver does not.
+        key = spec.api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            log("llm.no_anthropic_key", role=spec.role)
+            return None
+        return AnthropicBackend(spec.model, api_key=key)
+
+
+class _OpenAICompatAdapter:
+    """Any OpenAI-compatible endpoint — ChatGPT, DeepSeek, Qwen, OpenRouter, Ollama, vLLM, LiteLLM
+    (ADR-045's router sits here, behind `base_url`, and needs no code of its own)."""
+
+    name = "openai"
+
+    def make(self, spec: adapters.ModelSpec) -> Optional[LLMBackend]:
+        if not spec.model:
+            log("llm.openai_model_missing", role=spec.role)
+            return None
+        key = spec.api_key or os.environ.get("OPENAI_API_KEY")
+        if not key and not spec.base_url:
+            log("llm.openai_endpoint_missing", role=spec.role)
+            return None
+        return OpenAICompatBackend(spec.model, base_url=spec.base_url, api_key=key,
+                                   supports_vision=spec.supports_vision,
+                                   supports_structured=spec.supports_structured)
+
+
+adapters.register(adapters.MODEL, _AnthropicAdapter())
+adapters.register(adapters.MODEL, _OpenAICompatAdapter())
+
+
 def make_backend(role: str) -> Optional[LLMBackend]:
-    """Build the backend for a role ("planner"|"heal") from env, or `None` to keep the offline
-    fallback (heuristic / L1–L6). Never raises: any import/config problem returns `None`."""
+    """Build the backend for a role ("planner"|"heal"|"chat") from env, or `None` to keep the offline
+    fallback (heuristic / L1–L6). Never raises: any import/config problem returns `None`.
+
+    M9.7/ADR-123: the provider is resolved through the adapter SPI, so `LLM_BACKEND` may name a
+    provider this repository has never heard of as long as `SENTINEL_ADAPTERS` points at the module
+    that registers it. Everything else — the role-then-global env precedence, the per-role default
+    model, the degrade-instead-of-crash contract — is unchanged and stays HERE, so no adapter has to
+    re-implement it (or drift from it).
+    """
     provider = (_env(role, "BACKEND") or "anthropic").lower()
     # MCP-server mode (M7): an active sampling session takes precedence — the host supplies the model.
+    # Resolved before the registry on purpose: this is not a configured provider but a property of how
+    # the process is running, and a plugin named "sampling" must not be able to displace it.
     sampling = _sampling_ctx.get()
     if sampling is not None or provider == "sampling":
         if sampling is None:
@@ -286,31 +345,21 @@ def make_backend(role: str) -> Optional[LLMBackend]:
             return None
         loop, session = sampling
         return SamplingBackend(loop, session)
-    model = _env(role, "MODEL") or _DEFAULT_MODEL.get(role)
-    base_url = _env(role, "BASE_URL")
     try:
-        if provider == "anthropic":
-            key = _env(role, "API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-            if not key:
-                log("llm.no_anthropic_key", role=role)
-                return None
-            return AnthropicBackend(model, api_key=key)
-        if provider == "openai":
-            if not model:
-                log("llm.openai_model_missing", role=role)
-                return None
-            key = _env(role, "API_KEY") or os.environ.get("OPENAI_API_KEY")
-            if not key and not base_url:
-                log("llm.openai_endpoint_missing", role=role)
-                return None
-            supports_vision = (_env(role, "VISION") or "") == "1"
-            supports_structured = (_env(role, "STRUCTURED") or "") == "1"
-            return OpenAICompatBackend(model, base_url=base_url, api_key=key,
-                                       supports_vision=supports_vision,
-                                       supports_structured=supports_structured)
-        log("llm.backend_unknown", provider=provider)
-        return None
-    except Exception as e:  # missing SDK / bad config -> fallback, never crash a run
+        adapters.load_from_env()                     # out-of-tree providers named by SENTINEL_ADAPTERS
+        adapter = adapters.get(adapters.MODEL, provider)
+        if adapter is None:
+            log("llm.backend_unknown", provider=provider)
+            return None
+        return adapter.make(adapters.ModelSpec(
+            role=role,
+            provider=provider,
+            model=_env(role, "MODEL") or _DEFAULT_MODEL.get(role),
+            base_url=_env(role, "BASE_URL"),
+            api_key=_env(role, "API_KEY"),
+            supports_vision=(_env(role, "VISION") or "") == "1",
+            supports_structured=(_env(role, "STRUCTURED") or "") == "1"))
+    except Exception as e:  # missing SDK / bad config / unimportable plugin -> fallback, never crash
         log("llm.provider_unavailable", provider=provider, error=e)
         return None
 
