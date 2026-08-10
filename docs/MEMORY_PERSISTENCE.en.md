@@ -6,7 +6,7 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 
 > **Type:** Explanation
 > **Audience:** backend engineers, operators, contributors
-> **Last updated:** 2026-07-12
+> **Last updated:** 2026-08-10
 > **Related:** [DETERMINISM.md](./DETERMINISM.md), [../ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ## Overview
@@ -69,10 +69,20 @@ If the Python brain crashes mid-run:
 1. The orchestrator detects gRPC stream termination (within the 5-second health
    ping interval).
 2. The run is marked `FAILED` and partial state is recorded via store-gateway.
-3. The LangGraph checkpoint DB remains intact on disk.
-4. `agentctl run --resume <run_id>` restarts the brain, which reloads
-   `RunState` from the checkpoint and continues from the last node boundary —
-   no work lost.
+3. The per-run checkpoint is NOT kept as a resume point: `_discard_checkpoint` deletes
+   `<artifact_dir>/checkpoint.db` together with its `-wal`/`-shm` pair in a `finally` around
+   the whole run (`brain/__main__.py`, ADR-099) — a crashed run is exactly when nobody goes
+   looking for the files, and exactly when they are largest. The file survives only a hard
+   kill (SIGKILL/OOM/power loss), where `finally` never runs.
+4. There is **no resume by `run_id`**: no `agentctl` subcommand has a `--resume` flag (the
+   `cmdRun` flag set), and none ever did. A crashed explore/replay run is re-played from
+   scratch. This is **by construction, not an open task**: the checkpointer thread is keyed
+   by a `run_id` unique to that run, so there is nothing to resume — which is precisely why
+   multi-turn chat keeps a SEPARATE shared store (`_conversations_store_path`, ADR-099). The
+   one thing that genuinely continues is **multi-turn chat**: `agentctl run --mode chat
+   --conversation-id <id>` picks the thread up by `conversation_id → thread_id` in the shared
+   `state/conversations.db` (ADR-048) — a different mechanism in a different mode, unrelated
+   to crash recovery.
 
 ---
 
@@ -136,7 +146,8 @@ widget cannot invalidate all cached locators.
 #### `golden_snapshots`
 
 The immutable regression baselines, keyed by page/step (`page_key`). Never auto-updated
-by a CI run. Real schema (`internal/store/server.go:37-39`):
+by a CI run. Real schema — the `golden_snapshots` table in the `schema` constant
+(`internal/store/server.go`):
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -162,7 +173,8 @@ than silently trusting a swapped-in row.
 #### `healing_audit`
 
 An append-only forensic ledger of every heal attempt (`INSERT` only, no `UPDATE`/`DELETE`
-is ever issued against this table). Real schema (`internal/store/server.go:33-36`) — no
+is ever issued against this table). Real schema — the `healing_audit` table in the `schema`
+constant (`internal/store/server.go`) — no
 `mac` column (unlike `golden_snapshots`, this table is not HMAC-protected):
 
 | Column | Type | Description |
@@ -178,6 +190,7 @@ is ever issued against this table). Real schema (`internal/store/server.go:33-36
 | `outcome` | TEXT | The attempt's outcome (the exact value set is defined by the brain's calling code, not the DB) |
 | `dom_hash` | TEXT | Subtree hash at the time of the heal attempt |
 | `ts` | REAL | Unix time (seconds, float) the row was appended |
+| `identity` | TEXT | The element's identity verdict on re-grounding (ADR-082); older DBs get it from an idempotent `ALTER` (`ensureColumn`). Column parity with `brain/store.py` is pinned by the gate `tests/test_heal_identity_store_offline.py` |
 
 This table is the data source for `agentctl calibrate` and a CI artifact that computes
 precision/recall of auto-healed locators over a rolling window.
@@ -186,8 +199,8 @@ precision/recall of auto-healed locators over a rolling window.
 
 #### `step_failures`
 
-Per-step failure tracking for the AUT-SHA-gated flake quarantine logic. Real schema
-(`internal/store/server.go:40-43`):
+Per-step failure tracking for the AUT-SHA-gated flake quarantine logic. Real schema — the
+`step_failures` table in the `schema` constant (`internal/store/server.go`):
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -210,9 +223,10 @@ clear-quarantine`.
 #### `runs`
 
 One row per run (M13, ADR-050) — survives a `control-api`/`agentctl` restart, unlike the
-prior in-memory run map. Real schema (`internal/store/server.go:48-51`); the RPC
-`RunRecord` (`proto/store.proto:15-28`) carries the same 11 columns plus a read-only
-`found` (not stored in the DB — a "no such run" signal on `GetRun`):
+prior in-memory run map. Real schema — the `runs` table in the `storeSchema` constant
+(`internal/store/server.go`); the RPC `RunRecord` (`proto/store.proto`) carries the same set
+of columns plus a read-only `found` (not stored in the DB — a "no such run" signal on
+`GetRun`):
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -227,6 +241,7 @@ prior in-memory run map. Real schema (`internal/store/server.go:48-51`); the RPC
 | `error` | TEXT | Error text if the run failed |
 | `started_at` | TEXT | Run start time (RFC3339) |
 | `finished_at` | TEXT | Run completion time (RFC3339; empty while running) |
+| `owner` | TEXT | **ADR-109:** the local account that owns this row. Empty = unowned: every row written before identity existed, and every row on a deployment with no accounts — identity is opt-in, so with no users nothing is scoped. Older DBs get the column from an idempotent `ALTER` (`ensureColumn`). Read scoping hangs off this field: `GET /v1/runs` (`listRuns`), the aggregate `/metrics` (`metrics_agg.go`) and `GET /v1/service-log` (`svcjournal_read.go`); the machine token sees everything |
 
 Detailed step/coverage results and token metrics live not in `runs` but in the
 neighbouring M13 domains `results` and `metrics` (`proto/store.proto`), not documented
@@ -285,8 +300,8 @@ There is **no** automatic checkpoint-DB cleanup in the store-gateway: the Go
 store-gateway (`internal/store/server.go`) never reads or deletes `checkpoint.db` or
 `state/conversations.db` — those files belong exclusively to the Python brain's
 checkpointer (LangGraph `SqliteSaver`/`PostgresSaver`), not to the store-gateway. The
-per-run `<artifact_dir>/checkpoint.db` is naturally bounded by the lifetime of the run's
-artifact directory; `state/conversations.db` is the shared, non-ephemeral DB (see above)
-and is not pruned automatically today. Managing its growth (archiving/rotating old
+per-run `<artifact_dir>/checkpoint.db` is deleted by the brain itself, in a `finally` at run
+end (ADR-099), rather than lasting as long as the artifact directory; `state/conversations.db`
+is the shared, non-ephemeral DB (see above) and is not pruned automatically today. Managing its growth (archiving/rotating old
 conversation threads) is an operational concern not implemented in the store-gateway's
 code.
