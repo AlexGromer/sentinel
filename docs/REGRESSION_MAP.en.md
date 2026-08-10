@@ -121,7 +121,7 @@ Degradations of the artefact Sentinel produced.
 | a locator stopped resolving | **yes** | `brain/healing.py`: cache keyed on the page hash → rotation of `alternatives[]` (testid 0.95 → role+name 0.90 → label 0.88 → text 0.80) → textual LLM re-ground → visual re-ground (set-of-marks) | unchanged | `heal-report.json`, the `healed` counter | — |
 | **healing bound to a different element** | **not verified, but VISIBLE (ADR-071)** | `_llm_reground`/`_visual_reground` still pick a new selector from the current page and there is still no "is this the same element" check — but that case is now classified as a **re-ground**, marked `degrades` and visible on the verdict instead of dissolved into the `healed` counter | unchanged | `heal.drift_reground` (warn) + `drift.elements[]` | remains: **no identity verification** |
 | **the flow changed, not the locator** | **no** | healing finds something "close enough" and passes | unchanged | — | `[PROD-HEAL-VERDICT]` |
-| **rollback to a previous test version** | **no** | `plan_hash` is an integrity fingerprint, not a version; `TestRecord` is a single row with no revisions; `baseline` overwrites goldens | — | — | `[PROD-VERSIONING]` |
+| **rollback to a previous test version** | **partly (ADR-106)** | `brain/revisions.py` — a file-backed append-only store: the revision body keyed by `plan_hash`, a JSONL history, a per-field step diff, rollback by RE-appending; freezing a scenario with `SENTINEL_TEST_ID` writes a revision (ad-hoc runs are not versioned) | — | `agentctl revisions list\|show\|diff\|rollback` | what remains: the promote path with a stable `scenario_id`, a golden history per revision, diff/rollback in the UI — `[PROD-VERSIONING]` |
 | a systematically failing step fails the whole run | **yes** | quarantine (`store.record_step`, ADR-013/M3) — suppresses the step's contribution to `exit 1` but **not** to `exit 2`: a real application change must not hide behind a flaky-locator quarantine | — | `heal-report.json` | — |
 | **flake rate** ("failed 1 in 10") | **no** | quarantine is a binary fact; there is no statistic over history | — | — | `[PROD-FLAKE-RATE]` |
 | **Async Wait as a class** (top-1 per FSE'14) | **partly** | Playwright's auto-waiting removes some of it; **nothing measures it** | — | — | `[PROD-FLAKE-RATE]` |
@@ -211,7 +211,7 @@ no reason. Firefox/WebKit need goldens **per engine**, not a flag (`GAP-OPS-001`
 | **usability** | **no** | not measured |
 | **security** | **out of core scope** | a separate module M10, commercial (ADR-056) |
 | **compatibility** | **partly** | one engine (ADR-036), no cross-browser |
-| **maintainability** (of the test, not the application) | **partly** | healing exists; versioning and rollback do not |
+| **maintainability** (of the test, not the application) | **partly** | healing exists; test revisions, diff and rollback exist (ADR-106) — the promote path with a stable `scenario_id` and the golden history per revision remain |
 | **portability** | **not applicable** | a property of the application; we do not assess it |
 
 Bottom line: of eight axes, **one and a half** are confidently covered. That is not a verdict — it is
@@ -229,7 +229,7 @@ Each leads to a `BACKLOG.md` item:
 - ~~`[PROD-HEAL-VERDICT]`~~ — **the brain half is closed (ADR-071)**. Substantively still open:
   **there is no identity verification for a re-ground** — drift is now visible, not verified.
 - `[PROD-CRAWL]` — measure exploration on a real 50+ page SPA, then redefine coverage.
-- `[PROD-VERSIONING]` — plan revisions, diff, rollback, golden history.
+- ~~`[PROD-VERSIONING]`~~ — **the core is closed (ADR-106)**: plan revisions, diff, rollback (`brain/revisions.py`, `agentctl revisions`). What remains: writing on the promote path with a stable `scenario_id`, a golden history per revision, diff/rollback in the UI/CLI.
 - `[PROD-FLAKE-RATE]` — flake rate from run history.
 - `[PROD-PERF]`, `[PROD-A11Y]` — new check axes (performance, accessibility as a 52872/WCAG
   criterion).

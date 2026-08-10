@@ -60,10 +60,16 @@ docker compose --profile ollama up -d ollama             # local model (OpenAI-c
 
 | Service | Profile | Purpose |
 |---|---|---|
-| `sentinel` | (always) | Main entry point — `agentctl` CLI. Prints `--help` by default. Mounts `./runs`, `./state`, `./config`. |
+| `control-api` | (always) | HTTP control-API, published to `127.0.0.1:8090` ONLY (M9.3, ADR-032). The three UI deployment modes and the token lifecycle are below (ADR-064). Starts after `store-gateway` and `browser` via `depends_on: service_healthy`. |
+| `store-gateway` | (always) | Store (SQLite) on the unix socket `state/store.sock`, DB `state/control-store.db` (ADR-062/063). control-api probes it ONCE at startup, so readiness is a precondition, not tidiness. |
+| `browser` | (always) | A Chromium that outlives a run, reachable over CDP at `http://browser:9223` (ADR-110). There is deliberately NO `ports:` key: CDP has no authentication. |
+| `webui` | (always) | Local air-gapped **hub, setup-WebUI and calculators** (bundled into the image under `/app/docs`); `python -m http.server` on :8088 → `/chat/`, `/setup/`, `/calculators/`. The profile was dropped in #190 (ADR-112) — it comes up with a plain `docker compose up`. ADR-031 phase-1. |
+| `sentinel` | `cli` | One-shot `agentctl`: `docker compose run --rm sentinel …` (`run` enables its target's own profile). NOT part of `docker compose up` — the container runs one command and exits. Mounts `./runs`, `./state`, `./config`. |
 | `demo` | `demo` | Zero-external-dependency explore against `testdata/site/index.html` (fixture file://); heuristic planner (no LLM, no API key). Output: `./runs/demo/plan.json`. |
-| `webui` | `webui` | Local air-gapped **setup-WebUI + calculators** (bundled into the image under `/app/docs`); `python -m http.server` on :8088. Open `http://localhost:8088/setup/`. ADR-031 phase-1. |
+| `litellm` | `litellm` | Model-router, OpenAI-compatible at `http://litellm:4000/v1` (ADR-045); routing and provider keys live in `deploy/litellm/config.yaml`. |
 | `ollama` | `ollama` | OpenAI-compatible endpoint `http://ollama:11434/v1`. Start with: `docker compose --profile ollama up -d ollama`, then `docker compose exec ollama ollama pull <model>`. |
+
+> The source of truth is the `services:` block of `docker-compose.yml`; this table is hand-kept (principle 5) and should be gated through the `_services()` parser in `tests/test_compose_parity_offline.py`. Check it live with `docker compose config --profiles` and `docker compose config --services`.
 
 ### UI deployment modes and the access token (ADR-064)
 
@@ -109,8 +115,8 @@ calling from a cross-origin page all return 403. If you miss the window: read th
 Reaching the port after startup does NOT get you a token by itself — that is deliberate and preserves the
 ADR-032 security invariant.
 
-Pages served: `/` (hub), `/setup/` (wizard), `/chat/` (chat console), `/calculators/*.html`, plus `prices.json`
-and `backend-presets.json`. Prose `.md` docs are not served (they are linked to GitHub). Modes 1 and 2 are
+Pages served: `/` (hub), `/setup/` (wizard), `/chat/` (chat console), `/calculators/*.html`, plus `prices.json`,
+`backend-presets.json` and `capabilities.json` (the machine-readable half of the capabilities registry — the hub's catalogue fetches it). The set is defined in code: `cmd/control-api/ui.go::uiPathAllowed` filters BOTH sources (embedded and `CONTROL_API_UI_DIR`), while the `//go:embed` list in `docs/embed.go` additionally bounds the embedded tree and is mirrored by that filter. This paragraph restates them, and the code wins on any disagreement. Prose `.md` docs are not served (they are linked to GitHub). Modes 1 and 2 are
 byte-for-byte unchanged when `CONTROL_API_SERVE_UI`/`CONTROL_API_UI_DIR` are unset.
 
 ### Environment variables
@@ -141,7 +147,7 @@ docker compose run --rm sentinel run \
     --planner heuristic
 ```
 
-Fixtures directory: `testdata/fixtures/l1..l5.html` — see `testdata/fixtures/README.md` for L1–L5 level descriptions.
+Fixtures directory: `testdata/fixtures/` — graded complexity levels; one level may span several files (multi-page flows, nested frames). The level list and its descriptions are deliberately not duplicated here (principle 5) — the single source is `testdata/fixtures/README.md`.
 
 ### Mounted volumes
 
@@ -184,7 +190,7 @@ journal; what is and is not in it is `docs/OBSERVABILITY.en.md` §8.
 
 ## §3 M11.1 — GitHub Releases: multi-OS/arch binaries + Docker + signatures
 
-**Status:** implemented — `.github/workflows/release.yml` landed (M11.1); the E2E signed release (publish/sign) happens on the first maintainer `v*` tag, `workflow_dispatch` is a build/SBOM dry-run. Prerequisites: Foundation CI gates (DONE).
+**Status:** implemented and run against a real release — `.github/workflows/release.yml` landed (M11.1); the E2E release (build, sign, publish) ran on `v0.1.0-rc1` and `v0.1.0` (2026-08-02, ADR-110); `workflow_dispatch` is a build/SBOM dry-run with no publish/sign. Prerequisites: Foundation CI gates (DONE).
 
 ### What is delivered
 
@@ -201,20 +207,21 @@ launched by anything; the aggregate `/metrics` now lives in control-api):
 | Windows x86-64 | windows | amd64 |
 | Windows ARM64 | windows | arm64 |
 
-Total: 24 binaries (6 platforms × 4 binaries) + Docker image (multi-arch: linux/amd64 + linux/arm64).
+Total: 24 binaries (6 platforms × 4 binaries) + a `.deb` for linux/amd64 and linux/arm64 (ADR-110) + Docker image (multi-arch: linux/amd64 + linux/arm64).
 
 ### CI workflow: `release.yml`
 
 Trigger: `push` to a `v*` tag (e.g., `v1.0.0`).
 
-Steps:
-1. `go build -ldflags "-X main.Version=$TAG"` for each platform (matrix).
-2. Generate `sentinel-$TAG-$OS-$ARCH.tar.gz` + `.sha256` per artifact.
-3. Single `checksums.sha256` (SHA-256 for all archives) — verified via `sha256sum -c checksums.sha256`.
-4. **Cosign keyless signing** (Sigstore OIDC): `cosign sign-blob --bundle=...` for each archive. Verification: `cosign verify-blob --bundle=... --certificate-identity-regexp=... artifact.tar.gz`.
-5. **Docker buildx + GHCR**: `docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/alexgromer/sentinel:$TAG .`
-6. **SBOM**: `syft ghcr.io/alexgromer/sentinel:$TAG -o cyclonedx-json > sbom.cdx.json`; attached to the Release as an asset.
-7. GitHub Release is created via `gh release create` with all artifacts attached.
+Steps (the normative source is `release.yml`; this is a restatement — publishing is gated on the EVENT: a tag `push` is the real run, `workflow_dispatch` stays a dry run even on a tag):
+1. `go build -trimpath -ldflags "-s -w -X main.version=$TAG"` for each platform (matrix), for four binaries.
+2. `sentinel-$TAG-$OS-$ARCH.tar.gz`; for linux, additionally a `.deb` per architecture (`scripts/build-deb.sh`) — it builds in the dry run too, and its absence from the assets fails the `release` job (`ls rel/*.deb || exit 1`).
+3. A single `checksums.sha256` over all `.tar.gz`, `.deb` and `sbom.cdx.json`.
+4. **Cosign keyless** `sign-blob --bundle` on every asset, including `checksums.sha256` itself, and `cosign sign` on the image digest. Verification: `cosign verify-blob --bundle=… --certificate-identity-regexp='…/release.yml@refs/tags/v.*' --certificate-oidc-issuer='https://token.actions.githubusercontent.com' artifact.tar.gz` — identity and issuer are PINNED; without them the check proves only that a signature exists, not who made it (see the offline-verification section).
+5. **buildx + GHCR**: on a tag — a multi-arch push (linux/amd64 + linux/arm64); in a dry run — a single linux/amd64 build with no push. The `:latest` tag is set ONLY for a dash-free tag, while a dashed tag (`v1.0.0-rc1`) marks the Release `--prerelease` — otherwise `/releases/latest` would serve the rehearsal, which is exactly what the documented `curl | sh` from §7 installs.
+6. **SBOM**: `syft scan <image>@<digest> -o cyclonedx-json=sbom.cdx.json` (in a dry run — `syft scan dir:.`).
+7. `gh release create` with all assets.
+8. The `homebrew` job: regenerates `Formula/sentinel.rb` (`scripts/gen-brew-formula.sh`) and opens a **PR** into `main`. It is merged by **squash**: the bot's commit is unsigned, and `main` requires verified signatures — a squash merge is authored and signed by GitHub (ADR-110).
 
 ### Remaining GAP-SEC-002 items closed by M11.1
 
@@ -226,25 +233,26 @@ Steps:
 
 ### Acceptance criteria M11.1
 
-- [ ] GitHub Release contains 30 binaries (6 platforms × 5 binaries) in `.tar.gz`
-- [ ] `checksums.sha256` is present and passes `sha256sum -c checksums.sha256`
-- [ ] Cosign bundle verifies: `cosign verify-blob --bundle=sentinel.bundle sentinel.tar.gz`
-- [ ] Docker image is available at `ghcr.io/alexgromer/sentinel:<tag>` for linux/amd64 + linux/arm64
-- [ ] SBOM (CycloneDX JSON) attached to Release
-- [ ] `uv.lock` committed; `pip-audit` passes in CI based on lockfile
-- [ ] CI workflow `release.yml` triggers on `v*` tag and passes without errors
+- [x] GitHub Release contains the correct number of binaries in `.tar.gz` — **verified at `v0.1.0` (2026-08-02)**: back then it was 30 (5 binaries × 6 platforms); `report-service` was removed (ADR-119), so `release.yml` now builds four (`agentctl`, `control-api`, `orchestrator`, `store-gateway`) → 24 (6 platforms × 4 binaries)
+- [x] A `.deb` is attached for each Linux architecture (amd64, arm64) — ADR-110; a missing one fails the `release` job itself (`.github/workflows/release.yml`, the `ls rel/*.deb` check) — **verified at `v0.1.0` (2026-08-02)**
+- [x] `checksums.sha256` is present and passes `sha256sum -c checksums.sha256` — **verified at `v0.1.0` (2026-08-02)**
+- [x] Cosign bundle verifies: `cosign verify-blob --bundle=sentinel.bundle sentinel.tar.gz` — **verified at `v0.1.0` (2026-08-02)**
+- [x] Docker image is available at `ghcr.io/alexgromer/sentinel:<tag>` for linux/amd64 + linux/arm64 — **verified at `v0.1.0` (2026-08-02)**
+- [x] SBOM (CycloneDX JSON) attached to Release — **verified at `v0.1.0` (2026-08-02)**
+- [x] `uv.lock` committed; `pip-audit` passes in CI based on lockfile — **verified at `v0.1.0` (2026-08-02)**
+- [x] CI workflow `release.yml` triggers on `v*` tag and passes without errors — **verified at `v0.1.0` (2026-08-02)**
 
 ---
 
 ## §4 M11.2 — setup-WebUI: static configuration generator (ADR-031)
 
-**Status:** not started. Depends on: M11.1 (to reference real releases). Prerequisites: GitHub Pages (DONE).
+**Status:** delivered in the Foundation cycle (commit `b2c082e`, 2026-06-27; audit-confirmed 2026-07-05, PR #74), then **rewritten** in M11.5 PR-4 (ADR-031→ADR-059→ADR-061). The page lives at `docs/setup/index.html`; the path `docs/setup.html` never existed. The sketch below is the original ADR-031 spec; the actual implementation is richer and supersedes it (as in §5) — the wizard's current specification is §7.
 
 ### Decision (ADR-031): static-now / control-API-later
 
 **Phase 1 (M11.2):** Static client-side HTML configuration generator. No backend. Air-gapped. The same approach as the three calculators (docs/calculators/*.html).
 
-**Phase 2 (after M9.3):** Live-WebUI, backed by the brain HTTP control-API (M9.3 — GAP-M9-03). Phase 2 is not implemented until the control-API exists — a live-WebUI without a backend would mean writing secrets to localStorage (unacceptable).
+**Phase 2:** delivered — the control-API arrived in M9.3, and the wizard carries a live driver (▶Run / 🔁Re-run / 📌baseline → `POST /v1/runs` → poll + a verdict from the exit code, ADR-047).
 
 ### What Phase-1 WebUI generates
 
@@ -297,12 +305,12 @@ The user fills in a form in the browser → WebUI generates:
 
 ### Acceptance criteria M11.2
 
-- [ ] Static page `docs/setup.html` available on GitHub Pages
-- [ ] Generates valid RunConfig YAML (passes `python -c "from brain.runconfig import load_run_config; ..."`)
-- [ ] Generates correct env block (all keys from ADR-019 env schema)
-- [ ] No external network calls (verified via DevTools → Network in offline mode)
-- [ ] Phase-2 features explicitly marked (unavailable without M9.3)
-- [ ] Links to `docs/LOCAL_MODELS.md` and `docs/TESTING.md` are present
+- [x] Static page `docs/setup/index.html` (NOT `docs/setup.html` — that path never existed) is published on GitHub Pages (`.github/workflows/pages.yml`, `source: ./docs`)
+- [x] Generates valid RunConfig YAML *(audited 2026-07-05, PR #74)*
+- [x] Generates a correct env block — names come from `brain/llm.py` `make_backend` (`LLM_MODEL_PLANNER/HEAL`·`LLM_BASE_URL`·`LLM_BACKEND`·`LLM_VISION`), i.e. broader than this §4's ADR-019 schema
+- [x] No external network calls: not a single `<script src=`/CDN; offline relies on embedded snapshots of the schema and presets (ADR-061)
+- [~] Criterion dropped: Phase 2 shipped (M9.3 control-API, ADR-047), so the "Requires M9.3 — not implemented" banner no longer exists in the wizard and should not
+- [ ] Links to `docs/LOCAL_MODELS.md` and `docs/TESTING.md`: **half done** — `LOCAL_MODELS.md` is linked (`docs/setup/index.html:366,371`), there is no link to `TESTING.md` in the file
 
 ---
 
@@ -428,7 +436,7 @@ ArgoCD Application (`deploy/argocd/sentinel-app.yaml`, exists from M5) — comme
 
 ## §6 M11.4 — Air-gapped bundle
 
-**Status:** implemented — offline compose + verify/bundle scripts + CI `airgap` job (the core is verified on every push/PR). The full bundle E2E (real GHCR image + model + signatures) is assembled by the maintainer on the first `v*` tag, same as M11.1. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
+**Status:** implemented — offline compose + verify/bundle scripts + CI `airgap` job (the core runs on every push/PR). The full bundle E2E (a real GHCR image + model + signatures) — the maintainer assembles it by hand via `scripts/build-airgap-bundle.sh` (described further below in this section) — it was not assembled for `v0.1.0` (2026-08-02), even though the tag has since been cut. Depends on: M11.1 (signed image), M11.2 (WebUI static assets).
 
 ### Goal
 
@@ -479,8 +487,15 @@ services:
 sha256sum -c checksums.sha256
 
 # Verify image signature (Cosign offline via bundle)
+# ⚠ THE SIGNER IDENTITY IS PINNED. `--certificate-identity-regexp=".*"` accepts ANY identity: such
+# a command proves only that the blob was signed by somebody in Sigstore, and does NOT prove it was
+# signed by THIS repository's release workflow. The values match scripts/offline-verify.sh
+# (COSIGN_RELEASE_ID_RE / COSIGN_ISSUER), where they have been pinned from the start — it was this
+# document that diverged from them.
 cosign verify-blob --bundle=sentinel.bundle \
-    --certificate-identity-regexp=".*" sentinel.tar.gz
+    --certificate-identity-regexp='https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+    --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+    sentinel.tar.gz
 
 # Run in an isolated network
 docker run --network none sentinel:local agentctl --help
@@ -495,10 +510,10 @@ docker compose -f docker-compose.offline.yml --profile demo up
 |---|---|---|
 | 2 | demo completes explore offline (heuristic, LLM-free) | ✅ **verified in CI** (`airgap` job) |
 | 6 | static docs copy is available offline | ✅ **verified in CI** (after the `.dockerignore` fix) |
-| 1 | `compose up` with no external DNS | ◐ **mechanism** — `internal:true` + a negative-DNS probe for sentinel/demo; the full stack — at the tag |
-| 5 | cosign bundle verifies without Rekor | ◐ **mechanism** — a live self-signed `--bundle` round-trip in CI; the real release identity — at the tag |
-| 3 | Ollama `/v1/models` responds offline | ☐ **open** — at the tag (requires a real model bundle) |
-| 4 | checksums verify offline (`sha256sum -c`) | ☐ **open** — the logic self-tests; real checksums — at the tag |
+| 1 | `compose up` with no external DNS | ◐ **mechanism** — `internal:true` + a negative-DNS probe; the full offline stack was not exercised at `v0.1.0` (the GHCR stack over the network was — an 8-step plan, ADR-110) |
+| 5 | cosign bundle verifies without Rekor | ◐ **mechanism** — a live self-signed `--bundle` round trip in CI; the real release identity was verified online by `install.sh` at `v0.1.0`; the offline path (inside a bundle, `--trusted-root`, no Rekor/TUF) has not been exercised — no bundle was ever assembled |
+| 3 | Ollama `/v1/models` responds offline | ☐ **open** — needs a real model bundle; not exercised at `v0.1.0` |
+| 4 | checksums verify offline (`sha256sum -c`) | ☐ **open** — the logic self-tests; the real `v0.1.0` checksums were verified by `install.sh` (`sha256sum -c`), but not a bundle's `MANIFEST.sha256` — no bundle was assembled |
 
 ---
 
@@ -748,10 +763,12 @@ Sentinel OTel span (explore/replay step)
 
 The only "seams" Sentinel exposes for integration with customer infrastructure:
 
-| Parameter | Env variable | Purpose |
+| Parameter | Env variable / endpoint | Purpose |
 |---|---|---|
 | OTLP endpoint | `OTEL_EXPORTER_OTLP_ENDPOINT` | Where Sentinel sends its spans (customer's Tempo/Jaeger) |
-| Prometheus | `PROMETHEUS_PUSHGATEWAY_URL` / textfile | Sentinel metrics (latency, heal-rate, token cost) |
+| Prometheus (push, batch) | `PROM_PUSHGATEWAY` | Pushes 5 gauges per run (`brain/report.py::push_metrics`, called from `report` mode — `brain/__main__.py`) — the ephemeral-CronJob model |
+| Prometheus (textfile, per-run) | `<run_dir>/metrics.prom` | A plain node_exporter textfile, unlabelled and without `# HELP`/`# TYPE` (`brain/report.py::_metrics`); picked up by a collector from the runs volume |
+| Prometheus (scrape, aggregate) | `GET /metrics` on control-api (`accessAuthed`, the same bearer) | Aggregate across the deployment's runs, `run`-labelled, owner-scoped in the handler (ADR-119); see `docs/OBSERVABILITY.en.md` §5 |
 | W3C traceparent injection | M9.5 (GAP-M9-06) | Injecting span context into browser requests |
 
 ### M9.5 scope reaffirmation

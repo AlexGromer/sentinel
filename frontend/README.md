@@ -1,13 +1,13 @@
 # Sentinel Co-pilot (AG-UI / CopilotKit front) — `frontend/`
 
 > 🧊 **FROZEN — non-maintained reference (ADR-055, M14).** The sovereign single UI is now the in-house
-> **vanilla AG-UI co-pilot** in `docs/index.html` (Settings | Tests, live AG-UI timeline, `hitl_needed`
+> **vanilla AG-UI co-pilot** in `docs/index.html` (live AG-UI timeline, `hitl_needed`
 > takeover/return, scenario/test library, conversation management — all air-gapped, zero-dep, `file://`-safe).
 > ADR-055 dropped CopilotKit from the delivery path: an npm/React + Node-runtime build-toolchain is
 > structurally incompatible with the "download a release → run offline" sovereignty bar (ADR-049/053), and
 > maintaining parity across two UIs is pure tax. This scaffold is kept as a **non-maintained reference** (not
 > deleted, not updated) — it also removes GAP-SEC-002 (the npm supply-chain surface) from the delivery path.
-> If you need the current co-pilot: open `docs/index.html` → **Tests** tab.
+> If you need the current co-pilot: open `docs/index.html` and pick a view from the rail on the left. The `Settings | Tests` tab pair described above was replaced by the rail in **ADR-066**; views are addressable by hash — `#v=chat` to author a run, `#v=live` for the live AG-UI timeline and `hitl_needed` takeover/return, `#v=library` for the scenario/test library and conversations. The rail is the list; this line names examples, not all of it.
 
 A **rich co-pilot** front for Sentinel, built on **CopilotKit** + the **AG-UI** protocol, driving Sentinel through the OpenAI-compat shim (`POST /v1/chat/completions`, ADR-041). This is the "rich front on top" deferred from M12 (ADR-041) and scoped here as **ADR-044** — a runnable **skeleton**, not a finished product.
 

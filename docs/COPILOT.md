@@ -30,7 +30,7 @@
 **§F — режимы драйва браузера** (`M9_CONTRACT.md §F`):
 F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_HEADLESS=0`) → F3 **CDP-attach** к Chrome
 пользователя (`PW_CDP_ENDPOINT`) → F4 **co-pilot takeover/return**.
-**Статус:** F1 ✅ · **F2 ✅ / F3 ✅** (M9.6/ADR-036/037, offline; live-verify pending) · **F4 = design-only** (M9.8).
+**Статус:** F1 ✅ · **F2 ✅ / F3 ✅** (M9.6/ADR-036/037, offline; live-verify pending) · **F4 ✅** (M9.8) — brain interrupt/resume + RunControl `takeover`/`return` + WS-форвард (R3, **ADR-054**) и extension-side `chrome.debugger` (#47); живой e2e на настоящей сессии = M9-LIVE.
 
 **Эволюция авторинга:** one-shot (одна NL-строка → один прогон → `scenario.json`) → **multi-turn** (диалог
 с контекстом + коррекция). **Статус: multi-turn ✅ DONE** (M9.10, ADR-048) — **R2a backend** (checkpointer-resume `conversation_id`→`thread_id` + `messages` add_messages-канал + chat-mode conditional-entry refine) + **R2b UI** (vanilla `docs/chat`+`docs/index#chat`: mint `conversation_id`/разговор, кумулятивный тред, 🆕 «Новый разговор»); offline-verified, live=M9-LIVE. (`explore` остаётся one-shot.)
@@ -50,7 +50,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | **Multi-turn чат / контекст / коррекция по ходу** | «brain-extension» → **R2/M9.10** | ✅ DONE — R2a backend + R2b UI (ADR-048, offline; GAP-M9-17 closed) |
 | Headed / видимый браузер (F2) | M9.6/ADR-037 | ✅ DONE offline (live pending) |
 | CDP-attach к Chrome пользователя (F3) | M9.6/ADR-036/037 | ✅ DONE offline (live pending) |
-| **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ⚙️ extension-side ✅ (`extension/`, #47: `chrome.debugger` attach/return, баннер); brain interrupt/resume = R3 |
+| **Co-pilot takeover/return (F4)** | M9.8/ADR-039 | ✅ DONE — extension-side (`extension/`, #47: `chrome.debugger` attach/return, баннер) + brain-side interrupt/resume (R3, ADR-054); живой e2e = M9-LIVE |
 | WS-транспорт client→server (`/v1/stream`) | M9.8-prep/ADR-043 | ✅ DONE |
 | SSE server→client + artifact-fetch | M9.3-tail/ADR-040 | ✅ DONE |
 | Rich AG-UI co-pilot (vanilla) | **M14/ADR-055** | ✅ in-house в `docs/index.html` (Settings\|Tests · library/promote · live AG-UI-timeline · auto-HITL-баннер); CopilotKit `frontend/` заморожен (reference) |
@@ -78,7 +78,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 |---|------|-----------|-----------|
 | **R1** | **M9.9 In-tool run-console** | control-API `mode=replay\|baseline` + `from_run:<run_id>` (whitelist+traversal-guard; `--replay --plan`/`baseline`) + `config-schema.modes`; ▶/🔁/📌 + вердикт в vanilla-UI (`#build`/`#chat`/`chat/`/`setup/`); httptest — **✅ DONE (R1a backend + R1b UI)** | GAP-M9-16 |
 | **R2** | **M9.10 Multi-turn авторинг** ✅ | brain `chat` `RUN_MODE` checkpointer-resume `conversation_id`→`thread_id` + `messages`-канал + conditional-entry refine + agentctl/control-API `conversation_id` (**R2a**) · vanilla-UI `conversation_id`/кумулятивный тред/🆕 новый-разговор (**R2b**) — **✅ DONE (ADR-048)** | GAP-M9-17 ✓ |
-| **R3** | **M9.8 F4 takeover (brain-side)** | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS-сигналы `takeover/return/state-sync` поверх `/v1/stream` | GAP-M9-18 (+½ GAP-M9-15) |
+| **R3** | **M9.8 F4 takeover (brain-side)** ✅ | brain interrupt-on-takeover / resume-on-return (LangGraph interrupt+checkpoint); WS-сигналы `takeover/return/state-sync` поверх `/v1/stream` — **✅ DONE (ADR-054)**; живой e2e = M9-LIVE | GAP-M9-18 ✓ (+½ GAP-M9-15) |
 
 ### Эпик: Rich-UI + Persistence + Metrics (M13–M15, ADR-049..053) — после R3
 **Two-tier:** профили = **ТОПОЛОГИЯ, не фичи** — оба несут весь функционал (chat/copilot/UI/replay/library/metrics) и оба **air-gapped**-устанавливаемые. **Control-plane** (always-on: control-API+store-gateway+БД) **vs run-unit** (ephemeral: brain+pw-executor, спавн на 1 прогон → exit). CronJob (ADR-017) = триггер планового run-unit, **не** деплой сервиса. Профили: **standalone** (1 хост/compose/SQLite) · **service** (K8s/Postgres/HA) — оба air-gapped (ADR-053).
@@ -112,7 +112,7 @@ M9.7-remainder (auth/deploy adapters) · M10 security-модуль · M11.1 rele
 ## 6. Как закрываются desync-точки
 - «Запуск/перепрогон внутри инструмента» → **R1** ✅ DONE (GAP-M9-16).
 - «Контекст, не one-shot, коррекция по ходу» → **✅ DONE** — R2a backend + R2b UI (ADR-048, GAP-M9-17 closed; live=M9-LIVE).
-- «Перехват/co-pilot/партнёрство» → **R3** (brain) + #47 (extension) = F4 (GAP-M9-15/18).
+- «Перехват/co-pilot/партнёрство» → **✅ DONE** — R3 brain (ADR-054) + #47 extension = F4 (GAP-M9-15/18 закрыты); живой e2e = M9-LIVE.
 - «Показывал в браузере, что делает» → **уже есть** (F2 headed / F3 CDP-attach, M9.6); live-verify = M9-LIVE.
 
 ## См. также
