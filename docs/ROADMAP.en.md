@@ -12,7 +12,7 @@ Derived from the design synthesis 2026-06-23; canonical summary in ../ARCHITECTU
 > **M15.1** token-cost · **M-STRUCTURED-OUT** strict json_schema (ADR-057) · **M11.1/11.3/11.4/11.5/11.6/6b/M11-DIST**
 > release-pipeline+air-gap+installer+wizard+config-domain (ADR-030/035/059..062) · **M9-LIVE-prep** (executable live plan +
 > redacting collector) — all ✅. **Next:** M9-LIVE [local LLM] → M9.7 (auth/deploy adapters) → M10 (security) →
-> Langfuse/DSPy + Pages-final. M11.1/11.4 tails (a real signed release/bundle) are maintainer-gated on the first `v*` tag.
+> Langfuse/DSPy + Pages-final. The `v0.1.0` release shipped on 2026-08-02 (M11.1 closed); the M11.4 tail — the full air-gapped bundle (GHCR image + model + signatures) — is still assembled by the maintainer by hand.
 > The detailed M0–M7 sections below are a historical record of the plan; the authoritative current status is
 > `../ARCHITECTURE.md` §6 + `../BACKLOG.md`.
 

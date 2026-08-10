@@ -2,7 +2,7 @@
 
 > 🌐 [Русский](CAPABILITIES.md) (primary) · **English**
 
-A catalogue of features that work but are hard to reach because nothing named them (the LiteLLM class: code present, cannot be found). The source of truth is [`capabilities.json`](capabilities.json); the gate `tests/test_capabilities_offline.py` verifies that every access path below actually resolves in the code, so this page cannot promise a feature the product does not have.
+A catalogue of features that work but are hard to reach because nothing named them (the LiteLLM class: code present, cannot be found). The source of truth is [`capabilities.json`](capabilities.json); the gate `tests/test_capabilities_offline.py` verifies that every access path of every CATALOGUE ENTRY actually resolves in the code (the subcommand exists in `agentctl`'s dispatcher, the route is registered in control-api, the view is accepted by the hub's router), so the catalogue cannot promise a feature the product does not have. The tables below are a human-readable projection of that same catalogue and are not exhaustive; the complete, always-current list is rendered by the "Tools" view in the app itself and by [`capabilities.json`](capabilities.json).
 
 ## Integrations
 

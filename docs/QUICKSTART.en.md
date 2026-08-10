@@ -67,7 +67,7 @@ Details: `docs/DISTRIBUTION.md` §6.
 
 - The full testing guide and run model: `docs/TESTING.md`.
 - The local-model and runtime catalog: `docs/LOCAL_MODELS.md`.
-- The co-pilot UI (a vertical rail: chat · run · live · library · results · logs · settings — ADR-066): `docs/index.html` — the fastest way to bring it up (ADR-064,
+- The co-pilot UI — a vertical rail that follows the session (ADR-066). The view list is deliberately not duplicated here: the hub itself (`docs/index.html`) defines it and `scripts/hub-views.mjs` derives it. The fastest way to bring it up (ADR-064,
   single-service, no CORS wiring): `CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api`,
   then open the one-time link `http://127.0.0.1:8090/?bootstrap=<nonce>` printed in the startup log (valid for 5
   minutes, fills in the address and token itself). The three UI deployment modes and the access token — `docs/DISTRIBUTION.md` §2.

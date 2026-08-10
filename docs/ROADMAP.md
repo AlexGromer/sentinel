@@ -12,7 +12,7 @@
 > **M15.1** token-cost · **M-STRUCTURED-OUT** strict json_schema (ADR-057) · **M11.1/11.3/11.4/11.5/11.6/6b/M11-DIST**
 > release-pipeline+air-gap+installer+wizard+config-домен (ADR-030/035/059..062) · **M9-LIVE-prep** (исполнимый live-план +
 > редактирующий коллектор) — всё ✅. **Далее:** M9-LIVE [локальная LLM] → M9.7 (auth/deploy-адаптеры) → M10 (security) →
-> Langfuse/DSPy + Pages-final. Хвосты M11.1/11.4 (реальный подписанный релиз/bundle) — maintainer-gated на первом `v*`-теге.
+> Langfuse/DSPy + Pages-final. Релиз `v0.1.0` выпущен 2026-08-02 (M11.1 закрыт); хвост M11.4 — полный air-gapped bundle (GHCR-образ + модель + подписи) — по-прежнему собирается мейнтейнером вручную.
 > Детальные секции M0–M7 ниже — историческая запись плана; авторитетный текущий статус — `../ARCHITECTURE.md` §6 +
 > `../BACKLOG.md`.
 
