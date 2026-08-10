@@ -3,8 +3,14 @@
 // click / input / change / submit ONLY while recording, builds a RecorderEvent (real selector candidates,
 // mandatory secret redaction — see selectors.ts), and forwards it to the service worker, which streams it
 // over the WebSocket to /v1/stream.
+//
+// Shadow DOM (PERCEPT-RECORDER-SHADOW): every target here goes through `deepTarget`, because the DOM
+// retargets `e.target` to the shadow HOST on the way out of an open root — a document-level listener
+// is told `<x-color-picker>` where the user clicked the button inside it. Closed roots are a stated
+// boundary, and the non-composed events (change/submit) need a listener on the root itself; both are
+// spelled out at their implementations below.
 import type { ContentMessage, RecorderEvent, RecordControl } from '../shared/protocol.js';
-import { buildRecorderEvent, buildSelectorCandidates, controlKind } from './selectors.js';
+import { buildRecorderEvent, buildSelectorCandidates, controlKind, shadowHostOf } from './selectors.js';
 
 // When a click lands on an inner node (e.g. <button><svg>…), climb to the nearest interactive ancestor so
 // the candidates bind to the real control (role_name) instead of an svg-path css/xpath.
@@ -14,6 +20,54 @@ function isSubmitControl(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
   const type = (el.getAttribute('type') || '').toLowerCase();
   return (tag === 'button' && (type === 'submit' || type === '')) || (tag === 'input' && type === 'submit');
+}
+
+/** The element the user actually touched.
+ *
+ * `e.target` is RETARGETED to the shadow HOST the moment an event crosses an open shadow boundary
+ * (DOM §2.10 "retargeting"), so a document-level listener is told `<x-color-picker>` where the user
+ * clicked a button inside it. The recorded plan then names a component instead of a control — while
+ * the executor, whose CSS and role engines pierce open roots, sees and can drive the control perfectly
+ * well. `composedPath()[0]` is the un-retargeted deepest target and closes that gap.
+ *
+ * A CLOSED root is a BOUNDARY, not a debt: the browser deliberately keeps its nodes out of the composed
+ * path (and `host.shadowRoot` is null for everybody), so `path[0]` is legitimately the host. We then
+ * record the host — the same answer as before, and the only honest one available — rather than pretend
+ * to have seen inside. */
+function deepTarget(e: Event): Element | null {
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+  for (const node of path) {
+    if (node && (node as Node).nodeType === 1) return node as Element;
+  }
+  const target = e.target as Element | null;
+  return target && target.nodeType === 1 ? target : null;
+}
+
+/** Nearest interactive ancestor, crossing open shadow boundaries only when the element's own tree
+ * offers nothing. `closest()` stops at the root of the tree by design, so a component whose internals
+ * are inert (<span>/<svg>) and whose HOST carries role/tabindex would otherwise bind to the inert
+ * span. Climbing only after the inner tree comes up empty keeps the real control when there IS one. */
+function closestInteractive(el: Element): Element {
+  let node: Element | null = el;
+  for (let hop = 0; node && hop < 4; hop++) {
+    const hit = node.closest(INTERACTIVE) as Element | null;
+    if (hit) return hit;
+    node = shadowHostOf(node);
+  }
+  return el;
+}
+
+/** The focused element, following focus INTO open shadow roots. `document.activeElement` is the host
+ * for anything focused inside a component — same retargeting, and here it would attribute an
+ * Enter-driven submit to the whole component instead of the field the user typed in. */
+function deepActiveElement(): Element | null {
+  let node: Element | null = document.activeElement;
+  for (let hop = 0; node && node.shadowRoot && hop < 4; hop++) {
+    const inner = node.shadowRoot.activeElement;
+    if (!inner) break;
+    node = inner;
+  }
+  return node;
 }
 
 declare global {
@@ -58,80 +112,104 @@ function installRecorder(): void {
     return typeof v === 'string' ? v : undefined;
   }
 
-  // Capture phase so we see the event before the page can stopPropagation it.
-  document.addEventListener(
-    'click',
-    (e) => {
-      let el = e.target as Element | null;
-      if (!el || el.nodeType !== 1) return;
-      el = (el.closest(INTERACTIVE) as Element | null) ?? el;
-      if (isSubmitControl(el)) lastSubmitClickAt = Date.now();
-      send('click', el);
-    },
-    true,
-  );
+  // `change` and `submit` are NOT composed (they carry composed:false), so unlike click/input they do
+  // not cross a shadow boundary at all: a document-level listener never sees a <select> committed
+  // inside a component. That action is not mis-recorded — it is MISSING, silently. So we also listen
+  // on the shadow roots themselves, and the set of roots is DERIVED from the composed events we do
+  // see (click/input arrive from inside the component), never maintained as a list.
+  const hookedRoots = new WeakSet<Node>();
+  function hookShadowRootOf(el: Element): void {
+    if (!shadowHostOf(el)) return;                     // light DOM (or a closed root: nothing to hook)
+    const root = el.getRootNode();
+    if (hookedRoots.has(root)) return;
+    hookedRoots.add(root);
+    root.addEventListener('change', onChange, true);
+    root.addEventListener('submit', onSubmit, true);
+  }
+
+  // One Event object can reach us twice — a component that re-dispatches a COMPOSED `change` from an
+  // inner node is seen by both its shadow root's listener and the document's. Recording it twice would
+  // double every such action, and the bridge's fill-collapsing would hide the duplicate for fills
+  // while leaving it for everything else.
+  const seen = new WeakSet<Event>();
+  function first(e: Event): boolean {
+    if (seen.has(e)) return false;
+    seen.add(e);
+    return true;
+  }
+
+  function onClick(e: Event): void {
+    const target = deepTarget(e);
+    if (!target || !first(e)) return;
+    hookShadowRootOf(target);
+    const el = closestInteractive(target);
+    if (isSubmitControl(el)) lastSubmitClickAt = Date.now();
+    send('click', el);
+  }
 
   // Per-keystroke input is debounced (trailing) — the bridge collapses consecutive same-element fills,
   // but debouncing keeps us well under the server's per-session event cap during live typing.
-  document.addEventListener(
-    'input',
-    (e) => {
-      const el = e.target as Element | null;
-      if (!el || el.nodeType !== 1 || controlKind(el) === 'toggle') return;
-      const prev = inputTimers.get(el);
-      if (prev) clearTimeout(prev);
-      inputTimers.set(
-        el,
-        setTimeout(() => {
-          inputTimers.delete(el);
-          send('input', el, valueOf(el));
-        }, 300),
-      );
-    },
-    true,
-  );
+  function onInput(e: Event): void {
+    const el = deepTarget(e);
+    if (!el || !first(e) || controlKind(el) === 'toggle') return;
+    hookShadowRootOf(el);
+    const prev = inputTimers.get(el);
+    if (prev) clearTimeout(prev);
+    inputTimers.set(
+      el,
+      setTimeout(() => {
+        inputTimers.delete(el);
+        send('input', el, valueOf(el));
+      }, 300),
+    );
+  }
 
   // change fires on commit/blur — emit the final value immediately (flush any pending input timer first).
   // Skip checkbox/radio: their toggle is already captured by the click; a fill('on') would fail on replay.
-  document.addEventListener(
-    'change',
-    (e) => {
-      const el = e.target as Element | null;
-      if (!el || el.nodeType !== 1 || controlKind(el) === 'toggle') return;
-      const prev = inputTimers.get(el);
-      if (prev) {
-        clearTimeout(prev);
-        inputTimers.delete(el);
-      }
-      send('change', el, valueOf(el));
-    },
-    true,
-  );
+  function onChange(e: Event): void {
+    const el = deepTarget(e);
+    if (!el || !first(e) || controlKind(el) === 'toggle') return;
+    const prev = inputTimers.get(el);
+    if (prev) {
+      clearTimeout(prev);
+      inputTimers.delete(el);
+    }
+    send('change', el, valueOf(el));
+  }
 
-  document.addEventListener(
-    'submit',
-    (e) => {
-      const form = e.target as Element | null;
-      if (!form || form.nodeType !== 1 || !recording) return;
-      if (Date.now() - lastSubmitClickAt < 700) {
-        // A submit-control click was just recorded; the bridge drops the submit (the click is the action).
-        send('submit', form);
-        return;
-      }
-      // Enter-driven submit (no button click) — emit a press Enter on the focused field so it survives
-      // grounding (the bridge drops a bare submit, which would otherwise lose the form submission).
-      const active = (document.activeElement && document.activeElement !== document.body
-        ? document.activeElement
-        : form) as Element;
-      try {
-        emit({ type: 'submit', url: location.href, selectorCandidates: buildSelectorCandidates(active),
-          verb: 'press', key: 'Enter' });
-      } catch {
-        /* skip on a detached/odd target */
-      }
-    },
-    true,
-  );
+  function onSubmit(e: Event): void {
+    const form = deepTarget(e);
+    if (!form || !recording || !first(e)) return;
+    if (Date.now() - lastSubmitClickAt < 700) {
+      // A submit-control click was just recorded; the bridge drops the submit (the click is the action).
+      send('submit', form);
+      return;
+    }
+    // Enter-driven submit (no button click) — emit a press Enter on the focused field so it survives
+    // grounding (the bridge drops a bare submit, which would otherwise lose the form submission).
+    const focused = deepActiveElement();
+    const active = (focused && focused !== document.body ? focused : form) as Element;
+    try {
+      emit({ type: 'submit', url: location.href, selectorCandidates: buildSelectorCandidates(active),
+        verb: 'press', key: 'Enter' });
+    } catch {
+      /* skip on a detached/odd target */
+    }
+  }
+
+  // Capture phase so we see the event before the page can stopPropagation it.
+  document.addEventListener('click', onClick, true);
+  document.addEventListener('input', onInput, true);
+  document.addEventListener('change', onChange, true);
+  document.addEventListener('submit', onSubmit, true);
+  // `focusin` (composed, unlike `focus`) is how a KEYBOARD user first touches a control. Without it a
+  // component entered by Tab and committed with the keyboard — a <select> changed with the arrow keys,
+  // say — would produce no click and no input, so its root would never be learned and its
+  // non-composed `change` would be lost in silence. Nothing is RECORDED here: this only discovers roots.
+  document.addEventListener('focusin', (e) => {
+    const target = deepTarget(e);
+    if (target) hookShadowRootOf(target);
+  }, true);
 
   void chrome.runtime.sendMessage({ kind: 'recorder-ready' } satisfies ContentMessage);
 }

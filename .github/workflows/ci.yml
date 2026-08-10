@@ -87,6 +87,33 @@ jobs:
           npm ci
           npm test
 
+      # PERCEPT-RECORDER-SHADOW / M9.8: until this step, the MV3 extension was named by NO workflow.
+      # It was not compiled, not tested, and `scripts/check_bilingual.py` excludes the directory
+      # outright — so a change to the content-script recorder could not turn anything red. The one
+      # CI-visible recorder check (tests/test_record_bridge_recorder_e2e.py) replays a transcript
+      # frozen inside the test file: a fix and a regression pass it identically.
+      #
+      # `npm test` is `tsc --noEmit && node --import tsx --test src/**/*.test.ts` — one pass both
+      # type-checks the extension and runs its jsdom unit tests. This step must stay AHEAD of the
+      # Python offline suite: tests/test_recorder_shadow_offline.py loads the real recorder through
+      # tsx and FAILS (never skips) when extension/node_modules is absent.
+      #
+      # Floor on the SOURCE test-file count, same shape and same reason as the pw-executor step
+      # above: below it, the glob also fails to expand and `node --test` errors on the literal.
+      - name: Build + unit-test the MV3 extension (tsc --noEmit; jsdom node:test — PERCEPT-RECORDER-SHADOW)
+        run: |
+          cd extension
+          shopt -s nullglob globstar
+          files=(src/**/*.test.ts)
+          n=${#files[@]}
+          if [ "$n" -lt 1 ]; then
+            echo "::error::extension: no src/**/*.test.ts found — npm test would pass over nothing"
+            exit 1
+          fi
+          echo "extension: $n *.test.ts found (${files[*]})"
+          npm ci
+          npm test
+
       # Browsers land in the machine-global Playwright cache (~/.cache/ms-playwright),
       # so the server resolves them at runtime regardless of cwd.
       - name: Install Playwright browser (chromium-headless-shell)

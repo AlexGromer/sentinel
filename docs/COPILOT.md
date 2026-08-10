@@ -54,7 +54,7 @@ F1 **own-headless** (с M0, всегда) → F2 **headed/видимый** (`PW_
 | WS-транспорт client→server (`/v1/stream`) | M9.8-prep/ADR-043 | ✅ DONE |
 | SSE server→client + artifact-fetch | M9.3-tail/ADR-040 | ✅ DONE |
 | Rich AG-UI co-pilot (vanilla) | **M14/ADR-055** | ✅ in-house в `docs/index.html` (Settings\|Tests · library/promote · live AG-UI-timeline · auto-HITL-баннер); CopilotKit `frontend/` заморожен (reference) |
-| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ✅ DONE (`extension/`, #42-47: рекордер+redaction, SW-WS, DevTools-панель, record→scenario, takeover/return CDP; dev-only, не в CI). Live record→replay = M9-LIVE |
+| **MV3-рекордер-расширение** | M9.8/ADR-038 (GAP-M9-13) | ✅ DONE (`extension/`, #42-47: рекордер+redaction, SW-WS, DevTools-панель, record→scenario, takeover/return CDP; dev-only, **в CI с 2026-08-10**: `npm test` в джобе `build` + `tests/test_recorder_shadow_offline.py`). Live record→replay = M9-LIVE |
 | LiteLLM opt-router · MCP-Inspector | ADR-045 | ✅ DONE (config/docs) |
 | In-app tabs + multi-tab (M9.4) · traceparent (M9.5) | ADR | ✅ DONE offline (live pending) |
 | Pluggable adapters (auth/deploy/model/backend) | M9.7/ADR-025 | ⚙️ model/backend ✅ (ADR-045); **auth** частично ✅ (storageState/login-as-test, M9.1/ADR-026); OIDC/Keycloak + **deploy-адаптер not-built** |
