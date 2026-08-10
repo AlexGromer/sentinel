@@ -525,6 +525,10 @@ func cmdRun(repo string, args []string) int {
 	replay := fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
 	planFile := fs.String("plan", "", "path to plan.json (required with --replay)")
 	healLLM := fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
+	// LIVE-MATRIX (ADR-120): the same choice the hub offers, under the same name. A capability the UI
+	// has and the terminal does not is the gap ADR-107 exists to close; an EMPTY value is left empty
+	// so the brain can tell "nothing was asked for" from "frames was asked for" and say which it used.
+	observe := fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
 	autVersion := fs.String("aut-version", "", "app-under-test version/sha (flake quarantine)")
 	ci := fs.Bool("ci", false, "CI mode (forbids --force-replay)")
 	force := fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
@@ -589,6 +593,7 @@ func cmdRun(repo string, args []string) int {
 		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,
 		"HEAL_LLM=" + boolEnv(*healLLM),
+		"SENTINEL_OBSERVE=" + *observe,
 		"AUT_VERSION=" + *autVersion,
 		"CI=" + boolEnv(*ci),
 		"FORCE_REPLAY=" + boolEnv(*force),

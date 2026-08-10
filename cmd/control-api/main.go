@@ -388,6 +388,26 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			"force_replay": map[string]any{"type": "bool", "default": false, "group": "gates"},
 			"aut_version":  map[string]any{"type": "string", "group": "gates"},
 			"heal_llm":     map[string]any{"type": "bool", "default": false, "group": "healing"},
+			// LIVE-MATRIX (ADR-120). The observation mode is the PERSON's choice, not something the tool
+			// derives: a deployment default lives in settings, a run overrides it here, and the CLI takes
+			// the same name. `cost` rides along because a mode that only has a NAME leaves somebody
+			// choosing by vibe — ADR-120 requires the applicability and the price to be on screen, and a
+			// hub that had to hard-code those strings would be a second place for them to drift.
+			//
+			// ⚠ `pw_no_trace` is deliberately NOT part of this enum, though it also silences a capture.
+			// It is a fail-closed secret guard with two enforcement points; putting it in the same list
+			// would hand somebody a switch that removes a protection under the label "turn video off".
+			"observe": map[string]any{"type": "enum", "group": "run", "default": "frames",
+				"enum": []string{"off", "frames", "stream", "human", "record"},
+				"cost": map[string]any{
+					"off":    map[string]any{"ru": "ничего не снимается — быстрее всего; смотреть будет не на что", "en": "nothing is captured — fastest; there will be nothing to look at"},
+					"frames": map[string]any{"ru": "кадр на каждый шаг, их показывает хаб; замедляет прогон незначительно", "en": "one frame per step, rendered by the hub; slows a run slightly"},
+					"stream": map[string]any{"ru": "живой экран без украшений — годится и человеку, и машине", "en": "the live screen, undecorated — usable by a person and a machine"},
+					"human":  map[string]any{"ru": "курсор, замедление, подсветка. ⚠ МЕНЯЕТ ТАЙМИНГ — не для проверки откликов, гонок и таймаутов; с эталонным режимом не смешивается", "en": "cursor, slowdown, highlight. ⚠ CHANGES TIMING — not for response times, races or timeouts; does not mix with golden mode"},
+					"record": map[string]any{"ru": "видеофайл артефактом после прогона; на живой вид не влияет", "en": "a video file as an artifact after the run; does not affect the live view"},
+				},
+				"not_yet": []string{"human", "record"}, // declared, refused with the task named until LIVE-HUMAN / LIVE-RECORD land
+			},
 		},
 		// M11.5 PR-3 (ADR-060): LLM-backend descriptors from brain/llm.py make_backend. Descriptors ONLY —
 		// api_key is flagged secret and NEVER valued here. role_split: field also honours LLM_<KEY>_PLANNER/_HEAL.
@@ -579,6 +599,10 @@ type runRequest struct {
 	CI               bool   `json:"ci"`            // --ci: forbids --force-replay
 	ForceReplay      bool   `json:"force_replay"`  // --force-replay: bypass the plan_hash hard-abort
 	HealLLM          bool   `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
+	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the deployment default, which the form
+	// SHOWS rather than implies — an invisible default makes "I did not choose" and "I chose exactly
+	// this" the same act, and then nobody can say what the run will produce.
+	Observe string `json:"observe"`
 	PlanBudget       string `json:"plan_budget"`   // RunConfig only — no flag exists
 	HealBudget       string `json:"heal_budget"`   // RunConfig only
 	TotalBudget      string `json:"total_budget"`  // RunConfig only
@@ -850,6 +874,12 @@ func (s *server) spawnRun(req runRequest) *run {
 	// agentctl would otherwise mint a second, unrelated id for the same run, and the live view (which
 	// is asked about the id the hub knows) would never resolve a page. One run, one name.
 	cmd.Env = append(cmd.Env, "SENTINEL_RUN_ID="+id)
+	// LIVE-MATRIX: the chosen mode reaches the brain as environment, like every other run knob. Empty
+	// stays empty on purpose — the brain resolves the default and SAYS which it used, so "nothing was
+	// asked for" and "frames was asked for" remain different facts in the log.
+	if v := strings.TrimSpace(req.Observe); v != "" {
+		cmd.Env = append(cmd.Env, "SENTINEL_OBSERVE="+v)
+	}
 	// Capture combined stdout+stderr into the run's stream (ring buffer + SSE fan-out). Setting
 	// cmd.Stdout == cmd.Stderr makes os/exec merge them into ONE pipe with a single copy goroutine,
 	// so lineWriter is intentionally not thread-safe — do NOT split Stdout/Stderr without a mutex.

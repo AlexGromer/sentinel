@@ -47,6 +47,7 @@
 | **Подключение к вашему Chrome (CDP) ⭐** | PW_CDP_ENDPOINT=http://localhost:9222 — инструмент водит ВАШ уже открытый Chrome (ADR-037). |
 | **Перехват живого прогона руками ⭐** | GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление. |
 | **Живое видео, привязанное к прогону** | GET /v1/live/status\|frame.jpg\|mjpeg?run_id=<id>, agentctl live status\|frame\|stream --run-id <id> — названный прогон получает свою страницу или отказ с причиной, не чужую картинку; без run_id — прежний режим, честно помеченный scoped:false (ADR-121). |
+| **Выбор режима наблюдения прогона** | GET /v1/config-schema (режимы off/frames/stream/human/record, дефолт и цена каждого) + POST /v1/runs (observe) + agentctl run --observe <режим> + та же форма прогона в хабе. human/record объявлены, но пока отклоняются с названной задачей (LIVE-HUMAN/LIVE-RECORD) — ADR-120. |
 | **Мозг как MCP-сервер ⭐** | RUN_MODE=mcp-server — поднять мозг как MCP-сервер (tools/list + sampling). |
 | **Вход один раз (login-as-test) ⭐** | STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef. |
 | **Многоходовой чат-авторинг** | RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом. |

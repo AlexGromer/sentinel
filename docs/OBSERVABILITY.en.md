@@ -444,4 +444,96 @@ learn a frame's ownership WITHOUT reading JSON: the body is a plain JPEG or a mu
 
 ---
 
+## 10. Choosing an observation mode (LIVE-MATRIX, ADR-120)
+
+Sections 1–9 described infrastructural observability and one service's live view. This section is
+about HOW MUCH a run shows and to whom, and that is a USER choice, not derived state.
+
+Before ADR-120, observation was governed by four unrelated switches, read in four places across
+three processes and two languages — `PW_HEADED`/`PW_HEADLESS` (`pw-executor/src/launch.ts:26`),
+`SENTINEL_TRACE_SCREENSHOTS` (`pw-executor/src/server.ts:489`), `SENTINEL_LIVE_FRAMES`
+(`brain/graph.py:45`), `PW_NO_TRACE` (not a mode — see below) — and no single place knew all four.
+Worse: ONE picture — the per-step frame — was gated by TWO variables in TWO languages, so switching
+one off produced a half-observed run that said nothing about the missing half. The resolver
+`brain/observe.py` (`resolve()`/`apply()`) collapses the choice into one place and writes both
+variables TOGETHER — it is the only writer (a gate walks all of `brain/` to hold that).
+
+### Five modes and their cost
+
+| Mode | What is captured | Cost |
+|---|---|---|
+| `off` | nothing | fastest; there will be nothing to look at |
+| `frames` (default) | one frame per step, rendered by the hub | slows a run slightly |
+| `stream` | `frames` + the live screencast, undecorated | usable by a person as-is, and by a machine |
+| `human` ⚠ currently refused | `stream` + synthetic cursor + `slowMo` + highlight | **CHANGES TIMING** — not for response times, races, timeouts; does not mix with golden mode |
+| `record` ⚠ currently refused | a video file as an artifact after the run | does not affect the live view |
+
+The cost text lives in ONE place — `brain/observe.py::COST` (ru+en per mode) — and flows from there
+into the control-api schema (`cost` on the `observe` field), which the hub form reads. Hard-coding
+it a second time would mean a second copy destined to drift from the first.
+
+### Where it is chosen — three surfaces, one name
+
+1. **Deployment settings** — the default (`frames`), declared in the schema
+   (`cmd/control-api/main.go`, field `observe.default`), never implied silently.
+2. **The hub's run form** (`docs/index.html`, the `b-observe` selector) — filled from
+   `GET /v1/config-schema` (`lvFillObserve`); the first list item NAMES the inherited default rather
+   than leaving the field blank with no explanation; selecting a mode shows its cost (the
+   `b-observe-cost` box).
+3. **`agentctl run --observe off|frames|stream|human|record`** — the same name, the same set of
+   values, from a terminal.
+
+An empty value is NOT `off` — it is "no choice was made", and the resolver
+(`brain/observe.py::resolve()`) expands it into `DEFAULT`, naming that in the log
+(`run.observation`, whose `why` reads "by default, nothing was asked for"). That keeps "I did not
+choose" and "I chose exactly `frames`" different facts rather than the same act.
+
+### `human` and `record`: declared, not shipped
+
+The mode set is the product's answer to "what can I even ask for", and it already carries five
+names. But `human` (a synthetic cursor, `slowMo`, highlight — Playwright draws no cursor and does
+not slow down clicks, so this has to be built) and `record` (`recordVideo`, a `newContext` option,
+while the CDP-attach path adopts a context it does not own) need machinery this build does not have
+yet. Asking for either is a **refusal before the run starts** (`exit 3`, `fatal.observe_refused`),
+with the task that will bring it NAMED (`[LIVE-HUMAN]`, `[LIVE-RECORD]`). Measured live: on such a
+refusal the browser never launches at all (0 launches) — the refusal costs nothing and cannot
+"half-happen". Accepting a mode and quietly doing something else is deliberately forbidden: a person
+who asked for a cursor would get plain frames and never learn they got something other than what
+they asked for.
+
+`human` is also refused for a golden run (`baseline=True`), even once the machinery exists:
+slowdown and the overlay do not degrade the reference, they make it WRONG, and that only surfaces
+later, on somebody else's replay.
+
+### `PW_NO_TRACE` is not a mode
+
+`PW_NO_TRACE` is not in the enum and is never written by the observation resolver. It is a
+fail-closed SECRET guard with two independent enforcement points: `pw-executor/src/server.ts:610`
+throws when a secret is entered while tracing is active, and `brain/__main__.py` exits 3 if a
+secret would reach the trace (`fatal.secret_would_leak_to_trace`). An `off` that cleared it would
+silently remove that guard; a mode that set it would break every login-as-test run. Both directions
+are wrong, so `PW_NO_TRACE` stays out of the observation choice and is not shown beside it in the
+interface.
+
+### The VLM layer: a consequence, not a mode
+
+A model able to read frames (vision-heal) does not decide whether frames are captured — that is the
+person's call. But when `heal_llm` and vision are configured (`LLM_VISION`/`LLM_VISION_HEAL`) while
+capture is off (`observe=off`), the resolver appends a line to `why`: "vision heal is configured but
+observe=off, so it will receive no frame and cannot look at anything". Without that line, a heal
+with nothing to look at is indistinguishable from a heal that silently never ran — exactly the class
+of silence LIVE-MATRIX exists to remove.
+
+### Verified
+
+The gate `tests/test_observation_modes_offline.py` (10 checks, 12 mutations, 12 killed) holds: both
+frame gates are written TOGETHER and only by the resolver; `PW_NO_TRACE` is never written by this
+file, and the guard is alive on both sides; the control-api schema, the CLI flag, and the resolver's
+own set agree on one enumeration; a refusal resolves BEFORE the executor is spawned. Measured live
+in this session: `--observe off` → 0 frames in the run's artifacts; no explicit choice → 7 frames,
+and the log names them the default; `--observe human` and an unknown mode → `exit 3`, 0 browser
+launches.
+
+---
+
 ---

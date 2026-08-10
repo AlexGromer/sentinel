@@ -1120,6 +1120,21 @@ def main() -> int:
         log("fatal.target_unset")
         return 2
 
+    # LIVE-MATRIX (ADR-120): what this run OBSERVES is resolved HERE, once, from the mode the PERSON
+    # chose — and expanded into the switches the other language reads. Before the executor is spawned,
+    # because the child inherits this environment and that is how the decision crosses the process
+    # boundary. A refusal costs nothing and cannot half-happen: it is taken at the door.
+    from .observe import Refusal as _ObsRefusal, apply as _obs_apply, from_env as _obs_from_env, overrides as _obs_over
+    try:
+        _obs = _obs_from_env(run_mode=run_mode)
+    except _ObsRefusal as e:
+        log("fatal.observe_refused", reason=str(e))
+        return 3
+    _obs_manual = _obs_over(os.environ)
+    os.environ.update(_obs_apply(_obs, dict(os.environ)))
+    log("run.observation", mode=_obs.mode, frames=_obs.frames, why=_obs.why,
+        overridden=(",".join(_obs_manual) if _obs_manual else ""))
+
     log("run.config", run_id=run_id, mode=run_mode)
     ex = make_executor(pw_cmd)
     rc = 1
