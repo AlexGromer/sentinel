@@ -1,22 +1,58 @@
-# Sentinel — Pluggable adapters (LiteLLM router · MCP-Inspector)
+# Sentinel — Pluggable adapters (SPI · LiteLLM router · MCP-Inspector)
 
 > 🌐 [Русский](ADAPTERS.md) (authoritative) · **English**
 
-> **ADR-045** · **Date**: 2026-06-28 · **Status**: methodology (optional tooling, no hard dependency)
+> **ADR-045** (tooling) · **ADR-123** (SPI) · **Date**: 2026-06-28, extended 2026-08-10 ·
+> **Status**: methodology + an implemented SPI
 
-The umbrella doc for Sentinel's **pluggable adapters** (the M9.7 / GAP-M9-08 theme): tools that sit on the
-engine's existing seams **without changing code**. It covers the two picked from the roadmap: **LiteLLM**
-(optional model-router) and **MCP-Inspector** (debugging the M7 MCP server).
+The umbrella doc for Sentinel's **pluggable adapters** (the M9.7 / GAP-M9-08 theme). Two different things
+under one cover, and it helps not to conflate them:
 
-## 1. Pluggable seams
+- **§1 — the SPI (ADR-123):** the place where **THIRD-PARTY CODE** stands. The `brain/adapters.py`
+  registry, three kinds (`model` · `auth` · `deploy`), discovery through `SENTINEL_ADAPTERS`. The full
+  contract is [`M9.7_CONTRACT.en.md`](M9.7_CONTRACT.en.md).
+- **§2–§3 — external tools (ADR-045):** **LiteLLM** (optional model-router) and **MCP-Inspector**
+  (debugging the M7 server). They need no code at all: they sit on existing seams by configuration.
+
+## 1. The SPI — the seams the product itself is extended through
+
+| Kind | What it replaces | Product entry point |
+|------|------------------|---------------------|
+| **`model`** | the model provider (`ModelAdapter.make(spec) -> LLMBackend`) | `brain/llm.py::make_backend(role)` — `anthropic` and `openai` are registered right there as ordinary adapters |
+| **`auth`** | the declarative `auth:` block → environment (`EnvAdapter.env(spec)`) | `brain/runconfig.py::_apply_auth`; reference `storage_state` = the M9.1 login-as-test flow (ADR-026) |
+| **`deploy`** | the declarative `deploy:` block → environment | `brain/runconfig.py::_apply_deploy`; reference `local` = `STORE_ADDR` · `OTEL_EXPORTER_OTLP_ENDPOINT` · `CHECKPOINT_DSN` |
+
+```bash
+SENTINEL_ADAPTERS=mycorp_sentinel.adapters LLM_BACKEND=bedrock ./bin/agentctl run --target …
+```
+
+```yaml
+# run.yaml — `adapter:` is optional; without it the one that shipped is used
+auth:   {adapter: storage_state, storage_state: /run/state.json, pw_no_trace: true}
+deploy: {store_addr: gateway:50051, otel_endpoint: http://otel:4317}
+```
+
+**Rules worth knowing before writing your own adapter** (the reasoning is in the contract):
+`EnvAdapter.env()` is **pure** and does not write to the environment (the "explicit flag > file"
+precedence stays in `runconfig.py`, not in the adapter) · a `ModelAdapter` **does not read `LLM_*`**
+itself, everything resolved arrives in `ModelSpec` · an unknown adapter name is a **config error
+(exit 3)**, not a silent fallback · an unimportable `SENTINEL_ADAPTERS` module **raises** on the
+RunConfig path and **degrades with an announcement** on the model path.
+
+> 🔒 **Licence boundary (ADR-056 §2 row 42):** the SPI and its reference adapters are the open-core
+> framework (Apache-2.0, irreversibly). Enterprise auth (Keycloak/OIDC/Vault/SSO/RBAC) attaches to this
+> SPI **from outside** and is never committed to this tree — `[M-COMMERCIAL-auth]`. The rule is
+> **checked** by `tests/test_adapter_spi_offline.py`, not merely written down.
+
+### Seams that are NOT adapters
 
 | Seam | Where | How to plug in |
 |------|-------|----------------|
-| **Model / backend** | `brain/llm.py` `OpenAICompatBackend` (ADR-019, M6) | env `LLM_BACKEND=openai` + `LLM_BASE_URL=<OpenAI-compat endpoint>` — any OpenAI-compatible provider/proxy |
-| **MCP host** | `brain/server.py` M7 server (ADR-020) | a host drives `explore`/`heal`/`replay`/`report` and supplies the model via `sampling/createMessage` |
+| **OpenAI-compatible endpoint** | `brain/llm.py` `OpenAICompatBackend` (ADR-019, M6) | env `LLM_BACKEND=openai` + `LLM_BASE_URL=<endpoint>` — configuration of a built-in adapter, no code needed (this is where LiteLLM sits, §2) |
+| **MCP host** | `brain/server.py` M7 server (ADR-020) | a host drives `explore`/`heal`/`replay`/`report` and supplies the model via `sampling/createMessage`; `sampling` resolves **before** the registry — it is a property of how the process runs, not a configured provider |
 
-Both are **optional**: with empty env Sentinel behaves as before (Anthropic by default; no host → heuristic/L1–L6).
-The adapters below don't touch the core — they are config + external tools.
+All of the above is **optional**: with empty env Sentinel behaves as before (Anthropic by default; no
+host → heuristic/L1–L6).
 
 ## 2. LiteLLM — optional model-router
 
@@ -82,7 +118,7 @@ What to check:
 - Call `replay` (deterministic, **no LLM**) on an existing `plan.json` — needs no sampling.
 - Call `explore`/`heal` — they request the model from the host via `sampling/createMessage`; **in UI mode the
   Inspector prompts you to answer the sampling request** (you act as the model) → this exercises `SamplingBackend`
-  (`brain/llm.py:203-229`). No sampling → the backend is unavailable → fallback to heuristic/L1–L6.
+  (`brain/llm.py`, class `SamplingBackend` — anchored by name, not by line number). No sampling → the backend is unavailable → fallback to heuristic/L1–L6.
 
 CLI mode (`--cli`) is handy for scripted checks of tools/resources/prompts; **verify sampling support against your
 Inspector version** (sampling is interactive, usually via the UI). The offline analogue without a live host is
@@ -92,5 +128,8 @@ Inspector version** (sampling is interactive, usually via the UI). The offline a
 > before production use), GAP-VERIFY-006.
 
 ## See also
-[`LOCAL_MODELS.md`](LOCAL_MODELS.md) (model/runtime catalog + calculators) · [`M6_CONTRACT.md`](M6_CONTRACT.md)
-(provider-agnostic brain) · [`M7_CONTRACT.md`](M7_CONTRACT.md) (MCP exposure) · [`DEVELOPMENT.md`](DEVELOPMENT.md).
+[`M9.7_CONTRACT.en.md`](M9.7_CONTRACT.en.md) (**the SPI contract**: registry, three kinds, reference
+adapters, licence boundary, gate) · [`LOCAL_MODELS.en.md`](LOCAL_MODELS.en.md) (model/runtime catalog +
+calculators) · [`M6_CONTRACT.en.md`](M6_CONTRACT.en.md) (provider-agnostic brain) ·
+[`M7_CONTRACT.en.md`](M7_CONTRACT.en.md) (MCP exposure) · [`M9.1_CONTRACT.en.md`](M9.1_CONTRACT.en.md) §4
+(storageState lifecycle) · [`DEVELOPMENT.en.md`](DEVELOPMENT.en.md).

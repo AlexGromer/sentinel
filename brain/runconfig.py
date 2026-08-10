@@ -12,10 +12,19 @@ value that is still blank or at the known agentctl default. Unknown keys are IGN
 for the M9.2b auth/scenarios surface). Numeric keys are validated at load (a bad scalar is a config
 error -> exit 3, not a silent run failure). `mode`/`planner` are aliases for PLANNER and resolve
 deterministically (conflict raises). Pure: `load` reads a file -> dict; `apply` merges into an env map.
+
+M9.7 (ADR-123): `auth:` and `deploy:` are ADAPTER blocks resolved through `brain/adapters.py`. Each
+may carry `adapter: <name>`; omitting it selects the adapter that shipped, so every RunConfig written
+before this means exactly what it meant before. What changed is which sub-keys survive the loader:
+they are now the CHOSEN adapter's `keys`, not a literal dict in this file — an out-of-tree auth or
+deploy mechanism used to have its configuration deleted here before it could be asked about it. An
+unknown `adapter:` name is a config error (exit 3), never a silent fallback to no auth.
 """
 import os
 
 import yaml
+
+from . import adapters
 
 # RunConfig key -> the brain env var the rest of the code already reads.
 _KEY_ENV = {
@@ -29,10 +38,11 @@ _KEY_ENV = {
     "total_budget": "TOTAL_TOKEN_LIMIT",
 }
 # M9.2b (ADR-028): structured keys handled specially (not a single env var).
-_ALLOWED = set(_KEY_ENV) | {"mode", "auth", "scenarios"}
-# RunConfig `auth:` sub-key -> the M9.1 env var it drives (declarative; NO new runtime).
-_AUTH_ENV = {"storage_state": "STORAGE_STATE", "storage_state_save": "STORAGE_STATE_SAVE",
-             "login_plan": "PLAN_FILE", "pw_no_trace": "PW_NO_TRACE"}
+# M9.7 (ADR-123): the declarative ADAPTER blocks (`auth:`, `deploy:`) are DERIVED from the SPI's
+# kinds rather than spelled again here. Before this, `auth` was a literal in this set and its
+# sub-keys were a literal dict below it — which is precisely why an out-of-tree auth mechanism could
+# not be configured: the loader deleted its keys before any adapter could see them.
+_ALLOWED = set(_KEY_ENV) | {"mode", "scenarios"} | set(adapters.DEFAULTS)
 # Numeric keys are validated/coerced at load so a bad scalar fails as a config error (exit 3).
 _NUMERIC = {"coverage_target": float, "max_steps": int,
             "plan_budget": int, "heal_budget": int, "total_budget": int}
@@ -51,6 +61,7 @@ def load_run_config(path: str) -> dict:
     """
     if not path or not os.path.exists(path):
         return {}
+    adapters.load_from_env()                           # M9.7: `adapter:` may name an out-of-tree module
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -64,10 +75,8 @@ def load_run_config(path: str) -> dict:
                 v = _NUMERIC[k](v)
             except (TypeError, ValueError):
                 raise ValueError(f"RunConfig {path!r}: key {k!r} must be {_NUMERIC[k].__name__}, got {v!r}")
-        elif k == "auth":                              # M9.2b: declarative auth -> M9.1 env (validated)
-            if not isinstance(v, dict):
-                raise ValueError(f"RunConfig {path!r}: 'auth' must be a mapping")
-            v = {sk: sv for sk, sv in v.items() if sk in _AUTH_ENV and sv is not None}
+        elif k in adapters.DEFAULTS:                   # M9.2b auth: / M9.7 deploy: -> an SPI adapter
+            v = _validate_block(k, v, path)
         elif k == "scenarios":                         # M9.2b: a list of {name, goal XOR describe}
             if not isinstance(v, list) or not all(
                     isinstance(e, dict) and e.get("name")
@@ -76,6 +85,32 @@ def load_run_config(path: str) -> dict:
                                  f"{{name, goal|describe}} (exactly one of goal/describe per entry)")
         cfg[k] = v
     return cfg
+
+
+def _validate_block(kind: str, block, path: str) -> dict:
+    """Validate a declarative adapter block (`auth:` / `deploy:`) and normalize it (M9.7, ADR-123).
+
+    `adapter:` names the adapter; omitting it means the one that shipped (`adapters.DEFAULTS`), so a
+    RunConfig written before this SPI existed means exactly what it always meant. Sub-keys are kept
+    or dropped according to the CHOSEN adapter's own `keys` — that is the whole change: the previous
+    filter was a fixed four-entry dict, so a third-party adapter's configuration was deleted here
+    before the adapter could ever be asked about it.
+
+    An unknown adapter NAME raises: the caller maps a config error to exit 3. Falling back to the
+    default would be worse than useless — a typo in `adapter:` would silently run with no auth at
+    all, which looks exactly like a run that worked.
+    """
+    if not isinstance(block, dict):
+        raise ValueError(f"RunConfig {path!r}: {kind!r} must be a mapping")
+    requested = block.get("adapter")
+    requested = str(requested).strip() if requested is not None else adapters.DEFAULTS[kind]
+    try:
+        adapter = adapters.require(kind, requested)
+    except ValueError as e:
+        raise ValueError(f"RunConfig {path!r}: {e}") from e
+    out = {sk: sv for sk, sv in block.items() if sk in adapter.keys and sv is not None}
+    out["adapter"] = adapter.name                      # normalized, so apply need not resolve twice
+    return out
 
 
 def _explicit_set(env) -> set:
@@ -105,16 +140,33 @@ def _resolve_planner(cfg: dict):
     return planner if planner is not None else mode_planner
 
 
+def _apply_block(kind: str, block: dict, env) -> None:
+    """Run a declarative adapter block through its adapter and merge the result into `env`.
+
+    Precedence stays HERE, not in the adapter: `EnvAdapter.env()` is a pure block->mapping function
+    and `_overridable` decides what actually lands, so an explicit flag beats the file no matter who
+    wrote the adapter. An adapter able to write env directly would be an adapter able to outrank the
+    operator's own flag without saying so.
+    """
+    if not block:
+        return
+    adapter = adapters.require(kind, str(block.get("adapter") or adapters.DEFAULTS[kind]))
+    spec = {k: v for k, v in block.items() if k != "adapter"}
+    for env_key, value in adapter.env(spec).items():
+        if _overridable(env, env_key):
+            env[env_key] = value
+
+
 def _apply_auth(auth: dict, env) -> None:
-    """M9.2b: declarative auth -> M9.1 env (STORAGE_STATE*/PLAN_FILE/PW_NO_TRACE); a pre-set env wins."""
-    for sk, sv in auth.items():
-        env_key = _AUTH_ENV.get(sk)
-        if not env_key or not _overridable(env, env_key):
-            continue
-        if sk == "pw_no_trace":                        # normalize common truthy forms -> "1"/"0"
-            env[env_key] = "1" if str(sv).strip().lower() in ("1", "true", "yes", "on") else "0"
-        else:
-            env[env_key] = str(sv)
+    """M9.2b: declarative auth -> env; M9.7: through the AUTH adapter the block names (default
+    `storage_state` = the M9.1 STORAGE_STATE*/PLAN_FILE/PW_NO_TRACE workflow). A pre-set env wins."""
+    _apply_block(adapters.AUTH, auth, env)
+
+
+def _apply_deploy(deploy: dict, env) -> None:
+    """M9.7: declarative deploy -> env through the DEPLOY adapter (default `local`: STORE_ADDR /
+    OTEL_EXPORTER_OTLP_ENDPOINT / CHECKPOINT_DSN). A pre-set env wins."""
+    _apply_block(adapters.DEPLOY, deploy, env)
 
 
 def _apply_scenarios(scenarios: list, env) -> None:
@@ -143,15 +195,17 @@ def apply_run_config(cfg: dict, env=None) -> dict:
     it is os.environ). Raises ValueError on a mode/planner conflict (caller maps it to exit 3).
     """
     env = os.environ if env is None else env
+    adapters.load_from_env(env)                     # M9.7: `adapter:` may name an out-of-tree module
     planner = _resolve_planner(cfg)                 # raises on mode/planner conflict
     if planner and _overridable(env, "PLANNER"):
         env["PLANNER"] = planner
     for key, value in cfg.items():
-        if key in ("mode", "planner", "auth", "scenarios"):
-            continue                                # handled by _resolve_planner / _apply_auth / _apply_scenarios
+        if key in ("mode", "planner", "scenarios") or key in adapters.DEFAULTS:
+            continue                                # handled by _resolve_planner / _apply_block / _apply_scenarios
         env_key = _KEY_ENV[key]
         if _overridable(env, env_key):
             env[env_key] = str(value)
-    _apply_auth(cfg.get("auth") or {}, env)         # M9.2b declarative auth + scenario selector
+    _apply_auth(cfg.get("auth") or {}, env)         # M9.2b declarative auth
+    _apply_deploy(cfg.get("deploy") or {}, env)     # M9.7 declarative deploy wiring
     _apply_scenarios(cfg.get("scenarios") or [], env)
     return env
