@@ -210,7 +210,7 @@ sudo chown -R "$(id -u):$(id -g)" ./runs ./state ./config
 1. `go build -ldflags "-X main.Version=$TAG"` для каждой платформы (matrix).
 2. Генерация `sentinel-$TAG-$OS-$ARCH.tar.gz` + `.sha256` per-artifact.
 3. Единый `checksums.sha256` (SHA-256 для всех архивов) — верифицируется через `sha256sum -c checksums.sha256`.
-4. **Cosign keyless signing** (Sigstore OIDC): `cosign sign-blob --bundle=...` для каждого архива. Верификация: `cosign verify-blob --bundle=... --certificate-identity-regexp=... artifact.tar.gz`.
+4. **Cosign keyless signing** (Sigstore OIDC): `cosign sign-blob --bundle=...` для каждого архива. Верификация: `cosign verify-blob --bundle=… --certificate-identity-regexp='…/release.yml@refs/tags/v.*' --certificate-oidc-issuer='https://token.actions.githubusercontent.com' artifact.tar.gz` — identity и issuer ЗАКРЕПЛЕНЫ, иначе проверка доказывает только факт подписи, а не подписанта (см. §«Верификация offline»).
 5. **Docker buildx + GHCR**: `docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/alexgromer/sentinel:$TAG .`
 6. **SBOM**: `syft ghcr.io/alexgromer/sentinel:$TAG -o cyclonedx-json > sbom.cdx.json`; аттачится к Release как asset.
 7. GitHub Release создаётся через `gh release create` с аттачами всех артефактов.
@@ -478,8 +478,15 @@ services:
 sha256sum -c checksums.sha256
 
 # Верифицировать подпись образа (Cosign offline через bundle)
+# ⚠ Личность подписанта ЗАКРЕПЛЕНА. `--certificate-identity-regexp=".*"` принимает ЛЮБУЮ
+# identity: такая команда доказывает лишь, что блоб кем-то подписан в Sigstore, и НЕ доказывает,
+# что подписал релизный workflow ЭТОГО репозитория. Значения совпадают с scripts/offline-verify.sh
+# (COSIGN_RELEASE_ID_RE / COSIGN_ISSUER) — там они закреплены с самого начала, и расходился с ними
+# именно этот документ.
 cosign verify-blob --bundle=sentinel.bundle \
-    --certificate-identity-regexp=".*" sentinel.tar.gz
+    --certificate-identity-regexp='https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+    --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+    sentinel.tar.gz
 
 # Запустить в изолированной сети
 docker run --network none sentinel:local agentctl --help

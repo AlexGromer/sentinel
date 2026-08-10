@@ -211,7 +211,7 @@ Steps:
 1. `go build -ldflags "-X main.Version=$TAG"` for each platform (matrix).
 2. Generate `sentinel-$TAG-$OS-$ARCH.tar.gz` + `.sha256` per artifact.
 3. Single `checksums.sha256` (SHA-256 for all archives) — verified via `sha256sum -c checksums.sha256`.
-4. **Cosign keyless signing** (Sigstore OIDC): `cosign sign-blob --bundle=...` for each archive. Verification: `cosign verify-blob --bundle=... --certificate-identity-regexp=... artifact.tar.gz`.
+4. **Cosign keyless signing** (Sigstore OIDC): `cosign sign-blob --bundle=...` for each archive. Verification: `cosign verify-blob --bundle=… --certificate-identity-regexp='…/release.yml@refs/tags/v.*' --certificate-oidc-issuer='https://token.actions.githubusercontent.com' artifact.tar.gz` — identity and issuer are PINNED; without them the check proves only that a signature exists, not who made it (see the offline-verification section).
 5. **Docker buildx + GHCR**: `docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/alexgromer/sentinel:$TAG .`
 6. **SBOM**: `syft ghcr.io/alexgromer/sentinel:$TAG -o cyclonedx-json > sbom.cdx.json`; attached to the Release as an asset.
 7. GitHub Release is created via `gh release create` with all artifacts attached.
@@ -479,8 +479,15 @@ services:
 sha256sum -c checksums.sha256
 
 # Verify image signature (Cosign offline via bundle)
+# ⚠ THE SIGNER IDENTITY IS PINNED. `--certificate-identity-regexp=".*"` accepts ANY identity: such
+# a command proves only that the blob was signed by somebody in Sigstore, and does NOT prove it was
+# signed by THIS repository's release workflow. The values match scripts/offline-verify.sh
+# (COSIGN_RELEASE_ID_RE / COSIGN_ISSUER), where they have been pinned from the start — it was this
+# document that diverged from them.
 cosign verify-blob --bundle=sentinel.bundle \
-    --certificate-identity-regexp=".*" sentinel.tar.gz
+    --certificate-identity-regexp='https://github.com/AlexGromer/sentinel/.github/workflows/release.yml@refs/tags/v.*' \
+    --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+    sentinel.tar.gz
 
 # Run in an isolated network
 docker run --network none sentinel:local agentctl --help

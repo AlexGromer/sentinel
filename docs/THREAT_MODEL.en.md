@@ -34,6 +34,8 @@
 | **Run artifacts** (`trace.zip`, `heal-report.json`, `transcript`, `scenario.json`) | `runs/<id>/` on FS / PVC | Medium (UI screenshots, DOM data) | Medium | Low |
 | **SQLite locator DB** (`state/locators.db`) | FS / PVC | Low | Medium (affects heal quality) | Medium |
 | **LLM endpoint trust** (Anthropic cloud / OpenAI-compat / Ollama/vLLM) | External network / localhost | Medium (AUT page content in prompts) | Medium | Medium |
+| **Local accounts** (ADR-109): name, password hash, live sessions | `state/` via store-gateway; sessions in control-api memory | **Critical** (a compromise grants access to every row that owner has) | High | Medium |
+| **Aggregate run metrics** (ADR-119, `GET /metrics`) | `runs/<id>/metrics.prom`, merged in control-api | Medium (other people's numbers: how many runs, what failed) | Low | Low |
 
 ---
 
@@ -227,6 +229,39 @@ Boundary points ❶–❼ correspond to rows in the table below.
 | **Foreign services are not in the journal at all.** `ollama`, `litellm`, `webui` write their own formats to the docker journal. | foreign images → docker | **—** | — | They get docker's rotation (`logging:` with `max-size`/`max-file`, PR-C) and `docker compose logs`. | **A deliberate refusal, not an omission:** parsing someone else's output into a structure it does not have is inventing data. Anyone investigating an incident involving these services must know to look in two places. | declared boundary, not a GAP |
 
 ---
+
+### 4.14 Boundary ⓮ — the control-API identity plane (ADR-109)
+
+It appeared after §4.11 was written, and until this audit no line described it: the model spoke of
+control-API as a service with ONE machine token, while the service had acquired accounts, sessions
+and row ownership.
+
+| Threat (STRIDE) | Vector | Current defence | Residual risk |
+|---|---|---|---|
+| **S** — password guessing | `POST /v1/login` is declared `accessOpen`, so guessing needs no token | The answer is identical for a wrong name and a wrong password (accounts cannot be enumerated); the hash is not fast | ⚠ There is NO rate limit. An open route that accepts a password is exactly where one is guessed |
+| **E** — somebody else's rows | An account asks for a row another owner holds | `guard` resolves the owner from `{id}` BEFORE the handler (ADR-109 second half); lists and aggregates scope INSIDE the handler, because they have no `{id}` | A row with NO owner is visible to everyone — a deliberate rule for rows created before accounts existed |
+| **I** — leakage through an aggregate | `GET /metrics` sums the deployment's runs | `accessAuthed` plus an owner filter in the handler; the scoping fails CLOSED (an unreachable store means the run is unattributed, therefore not shown) | The machine token sees everything — that IS the operator's scrape, and it should be configured as one |
+| **R** — repudiation | Who created or deleted an account | The service journal (§4.13) records every call from ONE place | The journal is unsigned: see §4.13 |
+
+### 4.15 Boundary ⓯ — foreign text arriving OUTSIDE the event catalogue
+
+§4.12 declares "systematic collection of the tested application's output" a boundary and lists the
+`app.*` codes. Measurement showed that this describes **one** of two channels, and the second had
+already produced a leak.
+
+`trace.network` stores headers as **pairs** `{"name": …, "value": …}` — the header name is the VALUE
+of a member, not a key. A redaction rule written "by key" cannot see such a header at all:
+`X-Api-Key` and `Cookie` went into the artifact untouched. Worse, the failure was **invisible**:
+`Authorization: Bearer …` was cleaned by a different rule — one matching the value's SHAPE — which
+made the channel look closed.
+
+| Threat (STRIDE) | Vector | Current defence | Residual risk |
+|---|---|---|---|
+| **I** — a secret in an artifact | AUT request headers inside `trace.zip` | Fixed in the WALK rather than in the dictionary: the redactor traverses PAIRS and decides by the neighbouring name (#215). Verified against a real archive: 0 canaries | A secret in the application's OWN page source is a boundary, not debt: an entropy heuristic was rejected because `run_id`/`plan_hash` have the same shape |
+
+**The lesson this boundary records, not just the incident:** a channel of foreign text must be
+described by the STRUCTURE it is stored in, not by the name of the subsystem. "Secret things are
+keys" and "storage of {name,value} pairs" are silently incompatible.
 
 ## 5. GAP Tracking Summary Table
 
