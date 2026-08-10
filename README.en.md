@@ -118,11 +118,15 @@ start an endpoint — `docker compose --profile ollama up -d ollama` (or the mul
 | [GitHub Pages](https://alexgromer.github.io/sentinel/) | docs hub + 3 calculators (VRAM · token-cost · model-selector) |
 
 ## Project map
+The full file index is [`FILEMAP.md`](FILEMAP.md) — it is kept with the code, so details belong
+there, not here. Below are entry points only, to show where to start; this is not a listing of the
+repository's directories.
+
 | Path | What |
 |------|------|
 | `ARCHITECTURE.md`, `GAPS.md`, `BACKLOG.md`, `FILEMAP.md` | canonical design, open questions, tasks, file index |
 | `docs/` | per-area specs + milestone contracts (`M*_CONTRACT.md`) + design record |
-| `cmd/agentctl/` | Go CLI |
+| `cmd/` | Go control-plane: `agentctl` (CLI, the run entry point) and `control-api` (HTTP/WS, the UI, `/metrics`) — start here; which binaries exist and what they do follows from the build lines in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) §2 and from [`FILEMAP.md`](FILEMAP.md), and is not duplicated here |
 | `brain/` | Python LangGraph brain |
 | `pw-executor/` | TypeScript Playwright server |
 | `testdata/` | test fixtures |

@@ -27,23 +27,23 @@ All files work as `file://` targets. No CDN or external network requests.
 
 ## File List
 
+Not written here. The Level Map above already names every fixture, and a second hand-kept copy shows
+only what is superfluous — never what is missing, because an absent row has nothing to look at
+(`docs/DEVELOPMENT.md` §0, principle 5). Ask the tree instead:
+
+```bash
+ls testdata/fixtures/*.html
 ```
-testdata/fixtures/
-  l1.html               L1 trivial affordances
-  l2.html               L2 login form (client-side auth)
-  l3.html               L3 multi-field validation form
-  l4.html               L4 step 1 — login
-  l4-dashboard.html     L4 step 2 — dashboard
-  l4-billing.html       L4 step 3 — billing + upgrade modal
-  l5.html               L5 ARIA tabs + dynamic injection + shadow DOM
-  l6-newtab.html        L6 new browser tab (target=_blank / window.open) + in-app tabs
-  l7-appfaults.html     L7 an application that misbehaves (ADR-067)
-  l8-blindspots.html    L8 what perception cannot reach (ADR-093)
-  l9-roles.html         L9 one control per ARIA role (ADR-094)
-  l10-frames.html       L10 controls behind an iframe boundary (ADR-095)
-  l10-inner.html        L10 helper — the outer frame of the nested pair
-  README.md             this file
-```
+
+The invariant: every file that command prints must be **named in a Level Map row** — not necessarily
+a row of its own, since `l4.html` / `l4-dashboard.html` / `l4-billing.html` share one row and
+`l10-frames.html` / `l10-inner.html` share another. A fixture the command prints and the Level Map
+never names is the defect this section used to hide. Nothing here is counted on purpose: a written
+count goes stale faster than it gets corrected.
+
+One fact the Level Map does not carry, kept from the list this section replaced: `l10-inner.html` is
+the OUTER frame of the nested pair — `l10-frames.html` loads it with `<iframe id="outer">`, and the
+nesting the fixture is about lives inside it.
 
 ## Notes for Scenario Authors
 

@@ -6,7 +6,9 @@ labels: bug
 ---
 
 **Component**
-<!-- brain / pw-executor / control-api / orchestrator / store-gateway / docs -->
+<!-- agentctl (CLI) / brain / pw-executor / control-api / orchestrator / store-gateway / docs
+     The set follows from the directories under cmd/ plus brain/ and pw-executor/ — check there
+     rather than trusting this line, and say what you observed if none of them fits. -->
 
 **What happened**
 <!-- Observed behaviour. Include the structured exit code (0/1/2/3) if relevant. -->
@@ -20,7 +22,7 @@ labels: bug
 
 **Environment**
 - commit SHA:
-- run mode: explore / replay / mcp-server
+- run mode: explore / goal / describe / replay / baseline / chat / mcp-server
 - transport: jsonrpc / mcp · store: local / grpc
 - OS / Go / Python / Node versions:
 

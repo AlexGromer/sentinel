@@ -112,8 +112,8 @@ Boundary points ❶–❼ correspond to rows in the table below.
 
 | Threat | Boundary | STRIDE | Prob / Impact | Existing control | Residual risk | Owner / Milestone |
 |---|---|---|---|---|---|---|
-| **Leakage of all host secrets to child processes.** Before M11.3, `agentctl::spawnBrain` called `cmd.Env = append(os.Environ(), …)` without an allowlist (historical citation; that spot now holds `filteredEnv()` — `cmd/agentctl/main.go`). All host variables (SSH keys, cloud credentials, tokens unrelated to Sentinel) are inherited by the Python brain, Node.js pw-executor, and their subprocesses, and may also surface in stderr on error. | host-env → brain subprocess | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 CLOSED (Helm-half)**; residual — dynamic Vault/CSI | M11.3 ✅ |
-| **Plaintext secrets in Helm values → Kubernetes.** `cronjob.yaml:39–46` uses `value: {{ .Values.checkpointDsn }}` and `{{range .Values.extraEnv}} value: {{ $v }}` without `secretKeyRef`. `CHECKPOINT_DSN` and `extraEnv` are stored as plain strings in `values-prod.yaml`, land in etcd in plaintext, and are visible via `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 CLOSED (Helm-half)** | M11.3 ✅ |
+| **Leakage of all host secrets to child processes.** Before M11.3, `agentctl::spawnBrain` called `cmd.Env = append(os.Environ(), …)` without an allowlist (historical citation; that spot now holds `filteredEnv()` — `cmd/agentctl/main.go`). All host variables (SSH keys, cloud credentials, tokens unrelated to Sentinel) are inherited by the Python brain, Node.js pw-executor, and their subprocesses, and may also surface in stderr on error. | host-env → brain subprocess | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** env-allowlist default-on (`filteredEnv`; opt-out `SENTINEL_ENV_ALLOWLIST=0`) | **GAP-SEC-001 PARTIALLY OPEN** (the Helm half is closed); residual — dynamic Vault/CSI | M11.3 ✅ |
+| **Plaintext secrets in Helm values → Kubernetes.** `cronjob.yaml:39–46` uses `value: {{ .Values.checkpointDsn }}` and `{{range .Values.extraEnv}} value: {{ $v }}` without `secretKeyRef`. `CHECKPOINT_DSN` and `extraEnv` are stored as plain strings in `values-prod.yaml`, land in etcd in plaintext, and are visible via `kubectl describe pod`. | Helm chart → K8s etcd | **I** (Information Disclosure) | Prob: H / Impact: H | **MITIGATED (M11.3/ADR-035):** `secretKeyRef` plumbing (chart `secrets.*`) | **GAP-SEC-001 PARTIALLY OPEN** (the Helm half is closed) | M11.3 ✅ |
 
 ### 4.2 Boundary ❷ — agentctl → store-gateway (Unix gRPC socket)
 
@@ -263,12 +263,42 @@ made the channel look closed.
 described by the STRUCTURE it is stored in, not by the name of the subsystem. "Secret things are
 keys" and "storage of {name,value} pairs" are silently incompatible.
 
+### 4.16 Boundary ⓰ — the live view: browser frames proxied behind a credential (ADR-111)
+
+> This surface arrived with ADR-111 and the model never described it. The browser became a service
+> and serves its OWN screencast (`pw-executor/src/cdp-service.ts`), while control-API does the one
+> thing it is placed to do — put a credential in front of it: `GET /v1/live/{status,frame.jpg,mjpeg}`,
+> `accessAuthed`. The surface exists only when `CONTROL_API_CDP_LIVE` is set
+> (`cmd/control-api/live.go`, `liveBase()`); empty is the normal single-container deployment, which
+> has no live view at all.
+
+| Threat (STRIDE) | Vector | Current defence | Residual risk |
+|---|---|---|---|
+| **I** — a picture of somebody else's work | A frame shows whatever the browser has open, including a logged-in application under test | The route IS the credential (`accessAuthed`); `CONTROL_API_CDP_LIVE` is empty by default | `run_id` selects WHOSE page is shown, but nothing checks who owns that run: an authenticated request gets the frame of any run it names. Per-owner scoping is not promised here — the picture belongs to the browser SERVICE, which is shared by construction (the reason is written beside the routes in `cmd/control-api/access.go`) |
+| **E** — bypassing the only gate | The browser service's live port has NO credential of its own — exactly like its CDP port | The port lives on the internal network and is never published to the host (`cmd/control-api/live.go` module header) | Publishing that port removes the protection ENTIRELY: control-API is the only gate, and past it the frames are served to anyone with no check at all |
+
 ## 5. GAP Tracking Summary Table
+
+> **Vocabulary for the Status column.** Until 2026-08-10 there was none — the "Legend" block in §4
+> defines only the likelihood and impact axes — so a label could be neither validated nor told apart
+> from its neighbour. That is how `GAP-SEC-001` came to carry `CLOSED` while the body of the same
+> cell immediately withdrew it ("residual … open"); read down the column — the summary table's only
+> purpose — a P1/HIGH gap read as done. Permitted values:
+>
+> | Label | What it means |
+> |---|---|
+> | `MITIGATED` | The control is in place and works; nothing is left that needs work |
+> | `MITIGATED (<qualifier>)` | The named boundary is closed; the root cause lies BEYOND it and remains |
+> | `PARTIALLY OPEN` | Part of the scope is done, part is explicitly stated as not done |
+> | `OPEN` | Not done |
+>
+> ⚠ `CLOSED` is **not used** in this column: "closed with a residual" is a contradiction, not a
+> qualifier. A gap whose residual is named is `PARTIALLY OPEN`.
 
 | GAP ID | Status | STRIDE | Severity | Short description | Owner / Milestone |
 |---|---|---|---|---|---|
 | **GAP-RISK-010** | **MITIGATED** | I | — | Leak-in-trace: tracing disabled (`PW_NO_TRACE`) on auth runs; secrets referenced by env-var NAME via secretRef; brain redacts logs; fail-closed on active tracing; prod uses storageState. | — |
-| **GAP-SEC-001** | **CLOSED — Helm half + #25 (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **#25 CLOSED:** `NODE_`/`GIT_` are no longer prefixes — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` are exact-allowlisted (`TestFilteredEnvPrefixNarrowing`). **Remainder:** only dynamic Vault/CSI-driver secrets. | done |
+| **GAP-SEC-001** | **PARTIALLY OPEN — the Helm half and #25 are closed (M11.3/ADR-035)** | I | HIGH | env-allowlist **default-on** (opt-out `SENTINEL_ENV_ALLOWLIST=0`) + Helm `secretKeyRef` + `sentinel.envAllow`. **#25 CLOSED:** `NODE_`/`GIT_` are no longer prefixes — `NODE_OPTIONS`/`NODE_EXTRA_CA_CERTS`/`GIT_SSL_CAINFO`/`GIT_SSL_CAPATH` are exact-allowlisted (`TestFilteredEnvPrefixNarrowing`). **Remainder:** only dynamic Vault/CSI-driver secrets. | done |
 | **#23 store-gateway authN** | **MITIGATED** | E | MEDIUM | per-run token authN in gRPC metadata (`TokenAuthInterceptor`) + SO_PEERCRED + 0600 socket; unit test `TestTokenAuthInterceptor`. | done; #23 → 0xCoDSnet |
 | **#24 golden integrity** | **MITIGATED** | T | MEDIUM | HMAC on `golden_snapshots` (key `state/golden.key`, outside the DB); tamper → exit 3; tests `TestGoldenIntegrityTamper` + `test_golden_mac_tamper_detected_exit3`. | done; #24 → 0xCoDSnet |
 | **#26 trace.zip PII** | **MITIGATED** | I | MEDIUM | `runs/` + `runs/<id>/` → `0700` (owner-only); `trace.zip` retention (`SENTINEL_TRACE_KEEP`=10 / `SENTINEL_TRACE_TTL_HOURS`); tests `TestMkArtifactDirPerms`/`TestSweepTraces*`. Encryption/redaction optional, not implemented. | done; #26 → 0xCoDSnet |

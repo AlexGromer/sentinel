@@ -1,5 +1,15 @@
 # CLI↔UI matrix — measuring the gap, 2026-07-29
 
+> 🌐 [Русский](M16_MATRIX.md) (основная версия) · **English**
+
+> **This is a 2026-07-29 snapshot, not a state: read the CLI column with that date.** The line ranges
+> named below have since drifted — they no longer hold what was inventoried there. The CLI half was
+> closed by ADR-107: the projection of routes onto verbs lives in `cmd/agentctl/api.go` (`apiVerbs`;
+> routes with no verb sit in `apiRoutesWithoutCLI`, each with a recorded reason), and its completeness
+> is guarded by `cmd/agentctl/api_projection_test.go`. The current answer to "is this in the CLI"
+> comes from that table and from `agentctl` with no arguments, not from this map; the verb list is
+> deliberately NOT duplicated here — a hand-copied one would drift silently, exactly as the rows below did.
+
 Source for `docs/M16_CONTRACT.en.md`. Each row is a **user capability**, phrased as a person's goal
 rather than an implementation detail. Inventoried from the dispatcher at `cmd/agentctl/main.go:905-933`
 (plus invoking the binary), the routes at `cmd/control-api/main.go:1855-1903`, the markup and handlers
