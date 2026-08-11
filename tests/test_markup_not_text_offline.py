@@ -125,6 +125,17 @@ def main():
                     % (rel, line_of(src, m.start()), foreign.group(0),
                        stmt.strip().splitlines()[0][:100]))
 
+        # ТРЕТИЙ случай того же класса, найденный КАДРОМ, а не этим гейтом: `esc(bi(...))`.
+        # Экранирование съедает СВОЮ разметку и печатает читателю теги — визуально это тот же отказ,
+        # что и `textContent = bi(...)`, но по коду он выглядел безопасным, потому что `esc()` здесь
+        # обычно и есть правильное действие. Замер: кнопка отчёта в панели артефактов печатала
+        # `<span data-lang="ru">Отчёт (report.html)</span>…` буквально, а гейт был зелёным.
+        for m in re.finditer(r"\besc\(\s*(?:[A-Za-z0-9_.]+\s*(?:===?|!==?)[^?]*\?\s*)?bi\(", src):
+            errors.append(
+                "%s:%d wraps bi(...) in esc() — esc() escapes OUR OWN markup and prints the tags at "
+                "the reader. Escape only the dynamic part, never the bi() label: %s"
+                % (rel, line_of(src, m.start()), src[m.start():m.start() + 100].splitlines()[0]))
+
     if total_bi < MIN_BI_CALLS:
         errors.append("only %d bi() calls found across %d file(s) (floor %d) — the scan is not "
                       "reading the hub, so every check above passed over nothing"
