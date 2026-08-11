@@ -2801,20 +2801,88 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       +(unm!=null?' · unmatched '+(unm>0?'<span style="color:var(--warn)">'+esc(unm)+'</span>':'0'):'')+'</div>'
       +'<ol style="list-style:none;margin:0;padding:0;font-size:.9rem">'+rows+'</ol></div>';
   }
+  /* PROD-REPORT-UI. Числа отчёта показываем ИЗ `report.json`, а не из `report.html`: html — артефакт,
+     на разметку которого влиял агент, и рисовать его в origin страницы нельзя (потому сервер и отдаёт
+     его вложением). JSON — это ДАННЫЕ, и каждое поле уезжает в DOM через `textContent`, а не в
+     разметку: гейт `tests/test_markup_not_text_offline.py` (#218) держит именно эту границу.
+     Поля берутся те же, что печатает сам отчёт (`brain/report.py`): `verdict`, `steps`, `healed`,
+     `failed`, `exit_code`, `regressions` — чтобы панель и файл не начали расходиться в числах. */
+  function bRenderReport(box, raw){
+    var rep; try { rep=JSON.parse(raw); } catch(e){ return; }
+    var steps=(rep.steps||[]).length,
+        quar=(rep.steps||[]).filter(function(s){ return s && s.quarantined; }).length,
+        regs=(rep.regressions||[]).length;
+    var card=document.createElement('div');
+    card.style.cssText='margin:.4rem 0;padding:.5rem .6rem;border:1px solid var(--line,#333);border-radius:.4rem;flex-basis:100%';
+    /* Ярлыки — СТАТИЧЕСКИЕ и двуязычные, поэтому идут разметкой (`bi()` возвращает `<span
+       data-lang>`); значения приходят ИЗ ОТЧЁТА, то есть это чужой текст, и он идёт только через
+       `textContent`. Гейт #218 держит ровно эту границу — и поймал первую версию этой функции,
+       где ярлык клали в `textContent` и читателю напечатались бы теги. */
+    var head=document.createElement('b'); head.style.fontSize='.9rem';
+    head.innerHTML=bi('Отчёт прогона','Run report'); card.appendChild(head);
+    var rows=[[bi('вердикт','verdict'), rep.verdict==null?'—':String(rep.verdict)],
+              [bi('код выхода','exit code'), rep.exit_code==null?'—':String(rep.exit_code)],
+              [bi('шагов','steps'), String(steps)],
+              [bi('починено','healed'), String(rep.healed==null?0:rep.healed)],
+              [bi('провалено','failed'), String(rep.failed==null?0:rep.failed)],
+              [bi('в карантине','quarantined'), String(quar)],
+              [bi('расхождений','regressions'), String(regs)]];
+    var dl=document.createElement('div'); dl.className='hint'; dl.style.marginTop='.3rem';
+    rows.forEach(function(r){
+      var line=document.createElement('div');
+      var k=document.createElement('span'); k.innerHTML=r[0]+': ';
+      var v=document.createElement('span'); v.className='mono'; v.textContent=r[1];
+      line.appendChild(k); line.appendChild(v); dl.appendChild(line);
+    });
+    card.appendChild(dl); box.appendChild(card);
+  }
+
+  /* PROD-REPORT-UI. Список имён здесь был СВОЙ, из четырёх записей, и в нём не было `report.html` —
+     поэтому отчёт, который серверная половина исправно писала с ADR-089, до человека не доходил:
+     кнопки на него просто не существовало. Второй такой список (`ART_NAMES`) жил в этом же файле и
+     был длиннее. Теперь список ОДИН, и гейт `tests/test_report_ui_offline.py` сверяет его с
+     `artifactWhitelist` control-API — имя, которого сервер не отдаёт, стало бы мёртвой кнопкой, а
+     имя, которое он отдаёт и которого нет здесь, — невидимым артефактом. Оба случая красные. */
   async function bShowArtifacts(base, id){
     var box=ge('b-arts'); box.innerHTML='';
-    var names=['scenario.json','report.json','heal-report.json','baseline-report.json'];
+    var names=ART_NAMES, sawReport=false;
+    /* Запрашиваем ПАРАЛЛЕЛЬНО. Перечень вырос с четырёх имён до всего реестра сервера, и
+       последовательные round-trip'ы задержали панель настолько, что DOM-гейт увидел контролы всё ещё
+       заблокированными и покраснел — то есть цена последовательности была ЗАМЕРЕНА, а не
+       предположена. Порядок кнопок остаётся порядком перечня: ответы раскладываются по индексу. */
+    var fetched=await Promise.all(names.map(function(n){ return fetchArtifact(base,id,n); }));
     for (var i=0;i<names.length;i++){
-      var content=await fetchArtifact(base,id,names[i]);
+      var content=fetched[i];
       if (!content) continue;
+      if (names[i]==='report.json'){ bRenderReport(box, content); sawReport=true; }
       (function(n,c){
-        var btn=document.createElement('button'); btn.className='btn'; btn.innerHTML='⬇ '+esc(n);
+        var btn=document.createElement('button'); btn.className='btn';
+        /* ⚠ Отчёт СКАЧИВАЕТСЯ, а не открывается, и это не недоделка: control-API отдаёт `.html`
+           всегда как `Content-Disposition: attachment`, чтобы браузер не рендерил разметку, на
+           которую влиял агент. blob-URL наследует origin страницы, поэтому «открыть в новой
+           вкладке» вернуло бы ровно ту опасность. Кнопка говорит об этом словом «скачать». */
+        /* ⚠ `esc()` вокруг `bi()` — ошибка: `bi()` ВОЗВРАЩАЕТ разметку `<span data-lang>`, и
+           экранирование печатает читателю теги. Первая версия этой строки делала именно так, и
+           поймал её КАДР, а не гейт: #218 следит за разметкой в текстовых приёмниках и за чужим
+           текстом в innerHTML, но «экранированная своя разметка» — третий случай, которого в нём не
+           было (теперь есть). Экранируется только имя артефакта, ярлык — нет. */
+        btn.innerHTML='⬇ '+(n==='report.html'?bi('Отчёт (report.html)','Report (report.html)'):esc(n));
         // The pre-fetch above was a VIEW (built the button); the CLICK is the genuine download, so it
         // re-fetches with download=1 to mark the run "taken by a human" (SEC-RETENTION-DOWNLOAD).
         // Falls back to the already-fetched content if the re-fetch fails, so a download never breaks.
         btn.addEventListener('click',async function(){ var f=await fetchArtifact(base,id,n,true); dlBlob(n, f!=null?f:c); });
         box.appendChild(btn);
       })(names[i],content);
+    }
+    /* Отсутствие отчёта ОБЪЯСНЯЕТСЯ, а не молчит. `report.*` строятся из `heal-report.json`
+       (brain/report.py::generate), которого у explore/goal-прогона нет по построению — значит пустое
+       место здесь означает «этот вид прогона отчёта не делает», а не «отчёт потерялся». Пустая и
+       молчащая панель — ровно то, что запрещает смоук интерфейса. */
+    if (!sawReport){
+      var no=document.createElement('div'); no.className='hint';
+      no.innerHTML='<span data-lang="ru">Отчёта у этого прогона нет: он строится из <span class="mono">heal-report.json</span>, который пишет только <b>replay</b>. У исследования и прогона по цели его не бывает.</span>'
+                  +'<span data-lang="en">This run has no report: it is built from <span class="mono">heal-report.json</span>, which only a <b>replay</b> writes. An explore or a goal run never has one.</span>';
+      box.appendChild(no);
     }
     // SEC-TRACE-SWEPT-SILENTLY: a run whose trace was deleted by retention gets a trace-removed.json
     // marker (agentctl sweepTraces). Surface it, so a swept trace reads as "removed on purpose, and
@@ -3779,9 +3847,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
 
   /* ---- ADR-108d: artefacts, from the chat, on a canvas ---- */
+  /* Единственный перечень артефактов страницы. Гейт `tests/test_report_ui_offline.py` сверяет его с
+     `artifactWhitelist` control-API В ОБЕ СТОРОНЫ: имя, которого сервер не отдаёт, — мёртвая кнопка;
+     имя, которое он отдаёт и которого здесь нет, — невидимый артефакт. Второй случай и был дефектом:
+     так пропал `report.html`, а следом нашлась `reconcile-report.json` — улика заземления, ради
+     которой #223 и заводился (перечень несвязанных `ref` пишется теперь в ОБОИХ режимах, и без неё
+     провалившийся по заземлению прогон не мог объяснить, ЧТО не совпало). */
   var ART_NAMES = ['scenario.json','plan.json','report.json','report.html','heal-report.json',
-                   'baseline-report.json','junit.xml','executed-plan.json','metrics.prom',
-                   'site-map.json','run.yaml','trace.zip','reply.json'];
+                   'baseline-report.json','reconcile-report.json','junit.xml','executed-plan.json',
+                   'metrics.prom','site-map.json','run.yaml','trace.zip','reply.json'];
 
   async function artList(runId){
     var box = ge('art-list'); if (!box) return;
