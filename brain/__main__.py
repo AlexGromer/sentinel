@@ -1132,8 +1132,18 @@ def main() -> int:
         return 3
     _obs_manual = _obs_over(os.environ)
     os.environ.update(_obs_apply(_obs, dict(os.environ)))
-    log("run.observation", mode=_obs.mode, frames=_obs.frames, why=_obs.why,
-        overridden=(",".join(_obs_manual) if _obs_manual else ""))
+    # LIVE-HUMAN: `decorations` rides the SAME event as the mode, deliberately. It is the fact that
+    # makes a finished run's timings unusable (cursor + slowMo), and the surfaces that mark such a run
+    # read it from here — one event, one source. A second field, artifact or flag saying the same thing
+    # is how two answers to one question start disagreeing about the same run.
+    #
+    # The override text carries its own separator because the catalogue template puts `{overridden}`
+    # flush against `{why}` — that is what lets an un-overridden run print nothing extra, but it also
+    # meant the two ran together into one unreadable word ("…chosenSENTINEL_LIVE_FRAMES") on exactly
+    # the runs where the line matters most: the ones where a hand-set switch outranks the plan.
+    log("run.observation", mode=_obs.mode, frames=_obs.frames, decorations=_obs.decorations,
+        why=_obs.why, overridden=(f"; set by hand, overriding the plan: {','.join(_obs_manual)}"
+                                  if _obs_manual else ""))
 
     log("run.config", run_id=run_id, mode=run_mode)
     ex = make_executor(pw_cmd)

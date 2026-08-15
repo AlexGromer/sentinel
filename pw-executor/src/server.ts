@@ -23,6 +23,10 @@ import {
   DETERMINISM_DEVICE_SCALE_FACTOR,
   SCREENSHOT_DETERMINISM_OPTS,
 } from './determinism.js';
+import {
+  installDecorations, announce, echo, withCleanFrame, restoreCursor, sleep,
+  DECOR_TYPE_DELAY_MS, type Point,
+} from './decorate.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -378,6 +382,17 @@ let tracingStopped = false;
 // M9.6/ADR-037: true when we attached to the user's browser over CDP — teardown must NOT close it.
 let attachedOverCDP = false;
 
+// LIVE-HUMAN (ADR-120): does this run draw for a person? Decided ONCE, by the launch plan, which is
+// the only reader of SENTINEL_DECORATE (see launch.ts) — a second reader here would be a second
+// author of the same mode, and two authors of one decision is what ADR-120 consolidated away.
+let decorate = false;
+// The pacing our own side owes. Zero in a plain run; larger under CDP-attach, where `slowMo` cannot
+// be set on a browser we did not launch and this pause is the entire slowdown.
+let decorPauseMs = 0;
+// Where the drawn cursor is standing. Kept HERE because the page loses it on every navigation: the
+// init script re-runs and re-creates the API, but nothing knows where the pointer had got to.
+let decorAt: Point | null = null;
+
 /**
  * ADR-110: turn a configured CDP endpoint into one Chrome will actually answer.
  *
@@ -416,7 +431,11 @@ async function resolveCdpEndpoint(endpoint: string): Promise<string> {
 async function ensureBrowser(): Promise<void> {
   if (browser) return;
   // M9.6/ADR-037: resolve launch mode (headless default / headed / CDP-attach) from env (pure, tested).
+  // ADR-120 folded the decoration pacing into the same plan, because `slowMo` is a launch option and
+  // has to be decided before the browser exists.
   const plan = resolveLaunchPlan(process.env);
+  decorate = plan.decorate;
+  decorPauseMs = plan.stepPauseMs;
   // M9.1/ADR-026: pre-authenticated context from a saved storageState (produced by login-as-test).
   // Parse the file HERE so a missing OR corrupt/empty state.json both fall back to a no-state context
   // (don't crash the run) — passing a string path would make newContext throw on bad JSON, killing the
@@ -454,7 +473,13 @@ async function ensureBrowser(): Promise<void> {
   } else {
     // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
     // The anchors live in determinism.ts (single source of truth, asserted by determinism.test.ts).
-    browser = await chromium.launch({ headless: plan.headless });
+    // ADR-120: `slowMo` holds back EVERY Playwright operation, which is what makes a decorated run
+    // followable by an eye. It is passed only when it is non-zero so an ordinary run's launch
+    // arguments are byte-for-byte what they were.
+    browser = await chromium.launch({
+      headless: plan.headless,
+      ...(plan.slowMo > 0 ? { slowMo: plan.slowMo } : {}),
+    });
     context = await browser.newContext({
       viewport: DETERMINISM_VIEWPORT,
       deviceScaleFactor: DETERMINISM_DEVICE_SCALE_FACTOR,
@@ -466,6 +491,38 @@ async function ensureBrowser(): Promise<void> {
     });
     log(plan.headless ? 'browser launched (headless)' : 'browser launched (headed)');
     if (storageState) log('storageState loaded from', statePath);
+  }
+
+  // LIVE-HUMAN (ADR-120): the page-side half of the decoration layer, registered on the CONTEXT.
+  //
+  // ⚠ `addInitScript`, NOT a one-shot `evaluate`, and that is the difference between a mode that
+  // works and one that works until the run navigates. It also covers popups and new tabs for free,
+  // which a per-page injection would have to remember to repeat on `context.on('page')`.
+  if (decorate) {
+    try {
+      await installDecorations(context);
+      if (plan.slowMoUnavailable) {
+        // Said out loud rather than fudged: this browser was launched by somebody else, so `slowMo`
+        // is not ours to set. The pacing is carried entirely by our per-step pause, and a person who
+        // is told that can judge the run's timings; one who is not will read the difference as the
+        // mode having half-failed.
+        log(`decorations ON — slowMo cannot be applied to a browser we attached to over CDP; ` +
+            `pacing with a ${plan.stepPauseMs}ms pause before each action instead`);
+      } else {
+        log(`decorations ON — cursor, highlight and per-character entry; slowMo ${plan.slowMo}ms, ` +
+            `pause ${plan.stepPauseMs}ms per action. ⚠ this run's timings are not comparable to an ` +
+            `undecorated one`);
+      }
+    } catch (e) {
+      // Fail-OPEN, and loudly. Decoration is an observation concern: a run that cannot be drawn on
+      // is still a run that must complete, and refusing to start would let a cosmetic layer kill
+      // work that has nothing to do with it. `decorate` is cleared rather than left true so the
+      // failure is reported ONCE here instead of once per verb for the rest of the run — and so the
+      // capture verbs go back to being byte-for-byte what they are in an undecorated run.
+      decorate = false;
+      log('decorations were requested but could not be installed — this run continues UNDECORATED:',
+          (e as Error).message);
+    }
   }
 
   // M9.5 / §I: inject the active span's W3C traceparent into EVERY browser request so each UI action
@@ -643,6 +700,16 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         // says nothing about speed rather than guessing.
         timing = null;
       }
+      // ADR-120: the new document re-ran the init script, so the API is back — but the DOM it drew
+      // into is gone. Put the cursor back where it was standing, instantly (no travel: it did not
+      // move, the page did), or the person watches it vanish for as long as the next step takes to
+      // begin and reads that as the mode having stopped.
+      //
+      // ⚠ Only once there IS a cursor. Before the first aimed action there is nothing to restore,
+      // and materialising the overlay anyway would add an element to a page nobody has touched yet —
+      // a change to the application under test bought with no picture, since the arrow would be
+      // parked off-screen.
+      if (decorate && decorAt) await restoreCursor(page!, decorAt, log);
       return { url: page!.url(), title: await page!.title(), status: resp?.status() ?? null, timing };
     }
     case 'browser.snapshot': {
@@ -667,7 +734,12 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.click': {
       await ensureBrowser();
       const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      // ADR-120: aim, ring, act, echo. `aim` is null when decoration is off OR when the target has
+      // no box to aim at — either way the click below is the one that always ran.
+      const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+      if (aim) decorAt = aim;
       await loc.click({ timeout: 5000 });
+      if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       return { clicked: true, url: page!.url() };
     }
     // --- M9.1 (ADR-026): form/login interaction verbs + assert + auth-state ------
@@ -683,6 +755,13 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         // never even loaded. No-op in login-as-test (PW_NO_TRACE=1) and prod (storageState, no secret step).
         if (tracingStarted)
           throw new Error('browser.fill: refusing to enter a secret while tracing is active (set PW_NO_TRACE=1)');
+        // Decoration for a secret field is the CURSOR AND THE RING ONLY — both are computed from the
+        // element's box and know nothing about its contents. The per-character entry below is
+        // deliberately NOT applied here: it would turn one value into N keystroke events, and every
+        // one of them is something a page listener, a screencast frame or a future trace could pick
+        // up. A person still sees which field is being filled, which is all the mode promises.
+        const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+        if (aim) decorAt = aim;
         const v = process.env[secretRef];
         if (v === undefined) throw new Error(`secret '${secretRef}' not set`);
         log('fill', params?.locator, '= <redacted>');
@@ -691,8 +770,22 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         } catch {
           throw new Error('browser.fill failed (secret redacted)');
         }
+        if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       } else {
-        await loc.fill((params?.value as string) ?? '', { timeout: 5000 });
+        const value = (params?.value as string) ?? '';
+        const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+        if (aim) decorAt = aim;
+        if (decorate) {
+          // ADR-120: a value that appears all at once shows nothing about what was entered where.
+          // `fill('')` first because `fill` REPLACES and `pressSequentially` APPENDS — dropping the
+          // clear would quietly change the verb's meaning under decoration, which is exactly the
+          // kind of mode-dependent behaviour that makes a decorated run untrustworthy.
+          await loc.fill('', { timeout: 5000 });
+          await loc.pressSequentially(value, { delay: DECOR_TYPE_DELAY_MS, timeout: 5000 });
+        } else {
+          await loc.fill(value, { timeout: 5000 });
+        }
+        if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       }
       return { filled: true };
     }
@@ -701,8 +794,13 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       // Does NOT clear by default (append); pass clear:true to fill('') first.
       await ensureBrowser();
       const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+      if (aim) decorAt = aim;
       if (params?.clear) await loc.fill('', { timeout: 5000 });
-      await loc.pressSequentially((params?.text as string) ?? '', { timeout: 5000 });
+      // Already keystroke-by-keystroke; decoration only gives the keystrokes a pace a person can read.
+      await loc.pressSequentially((params?.text as string) ?? '',
+        { timeout: 5000, ...(decorate ? { delay: DECOR_TYPE_DELAY_MS } : {}) });
+      if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       return { typed: true };
     }
     case 'browser.press': {
@@ -710,8 +808,15 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const key = params?.key as string | undefined;
       if (!key) throw new Error('press: missing params.key');
       if (params?.locator) {
-        await buildLocator(page!, params.locator as LocatorSpec).first().press(key, { timeout: 5000 });
+        const loc = buildLocator(page!, params.locator as LocatorSpec).first();
+        const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+        if (aim) decorAt = aim;
+        await loc.press(key, { timeout: 5000 });
+        if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       } else {
+        // A page-level key has no target to aim at, so there is nothing to ring — the pause alone
+        // keeps it from happening in the same instant as the step before it.
+        if (decorate && decorPauseMs > 0) await sleep(decorPauseMs);
         await page!.keyboard.press(key); // page-level key needs prior focus
       }
       return { pressed: key };
@@ -719,8 +824,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     case 'browser.select': {
       await ensureBrowser();
       const loc = buildLocator(page!, (params?.locator ?? {}) as LocatorSpec).first();
+      const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
+      if (aim) decorAt = aim;
       const selected = await loc.selectOption(
         params?.value as Parameters<Locator['selectOption']>[0], { timeout: 5000 });
+      if (aim) await echo(page!, aim.x, aim.y, undefined, log);
       return { selected };
     }
     case 'browser.expect': {
@@ -1036,7 +1144,14 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       await ensureBrowser();
       // GAP-RISK-009: disable animations + hide the caret + CSS-scale so the hash is byte-stable
       // (anchors in determinism.ts, asserted by determinism.test.ts).
-      const buf = await page!.screenshot(SCREENSHOT_DETERMINISM_OPTS);
+      //
+      // ADR-120: and the overlay comes OFF for the duration. This is a GOLDEN — a reference other
+      // runs are compared against — so a cursor drawn into it does not degrade the reference, it
+      // makes it wrong, and wrong in the way that surfaces on somebody else's replay as a hash
+      // mismatch with nothing on screen to explain it. The mode is not cancelled; this one capture
+      // is taken with the overlay down and it goes straight back up.
+      const buf = await withCleanFrame(page!, decorate,
+        () => page!.screenshot(SCREENSHOT_DETERMINISM_OPTS), log);
       return { hash: crypto.createHash('sha256').update(buf).digest('hex') };
     }
     case 'browser.setOfMarks': {
@@ -1090,22 +1205,28 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
         { roleSrc: ARIA_ROLE_FN, nameSrc: ACCESSIBLE_NAME_FN, inputRole: INPUT_ROLE },
       );
       if (outPath) {
-        await page!.evaluate((ms) => {
-          const o = document.createElement('div');
-          o.id = '__som__';
-          for (const m of ms) {
-            const box = document.createElement('div');
-            box.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${m.bbox.y}px;width:${m.bbox.w}px;height:${m.bbox.h}px;border:2px solid red;z-index:2147483647;pointer-events:none`;
-            const lbl = document.createElement('div');
-            lbl.textContent = String(m.mark);
-            lbl.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${Math.max(0, m.bbox.y - 14)}px;background:red;color:#fff;font:10px monospace;z-index:2147483647;padding:0 2px`;
-            o.appendChild(box);
-            o.appendChild(lbl);
-          }
-          document.body.appendChild(o);
-        }, marks);
-        await page!.screenshot({ path: outPath, ...SCREENSHOT_DETERMINISM_OPTS });
-        await page!.evaluate(() => document.getElementById('__som__')?.remove());
+        // ADR-120: this picture is for the VISION MODEL, and it is asked to name one of OUR numbered
+        // marks. A second, unexplained pointer drawn over the page is one more thing in the frame
+        // that looks deliberate and is not — it can only cost us a wrong mark. So the whole overlay
+        // comes down around the capture, and the person's cursor returns immediately after.
+        await withCleanFrame(page!, decorate, async () => {
+          await page!.evaluate((ms) => {
+            const o = document.createElement('div');
+            o.id = '__som__';
+            for (const m of ms) {
+              const box = document.createElement('div');
+              box.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${m.bbox.y}px;width:${m.bbox.w}px;height:${m.bbox.h}px;border:2px solid red;z-index:2147483647;pointer-events:none`;
+              const lbl = document.createElement('div');
+              lbl.textContent = String(m.mark);
+              lbl.style.cssText = `position:fixed;left:${m.bbox.x}px;top:${Math.max(0, m.bbox.y - 14)}px;background:red;color:#fff;font:10px monospace;z-index:2147483647;padding:0 2px`;
+              o.appendChild(box);
+              o.appendChild(lbl);
+            }
+            document.body.appendChild(o);
+          }, marks);
+          await page!.screenshot({ path: outPath, ...SCREENSHOT_DETERMINISM_OPTS });
+          await page!.evaluate(() => document.getElementById('__som__')?.remove());
+        }, log);
       }
       return { marks, path: outPath ?? null };
     }
@@ -1162,6 +1283,11 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const path = params?.path as string;
       if (!path) throw new Error('browser.frame needs a path');
       await ensureBrowser();
+      // ⚠ NOT wrapped in withCleanFrame, and that is the decision rather than an oversight (ADR-120):
+      // this frame is what the hub shows a PERSON. Stripping the cursor out of it would remove the
+      // only evidence of who is acting — which is the entire reason the decorated mode exists. The
+      // clean frame is owed to the vision model and to the golden, both of which are captured by
+      // other verbs; a human frame is owed the opposite.
       await page!.screenshot({ path, fullPage: !!params?.fullPage });
       return { path };
     }

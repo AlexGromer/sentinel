@@ -1279,6 +1279,11 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         </div>
       </div>
       <div id="lg-degr" style="display:none"></div>
+      <!-- LIVE-HUMAN (ADR-120): закреплённая пометка «этот прогон снят для человека». Стоит РЯДОМ с
+           потерей качества и выше фильтров — фильтр прячет строки, а факт о прогоне прятаться не
+           должен. Наполняется из тех же записей, что и список (lgRender), одним источником — событием
+           run.observation. -->
+      <div id="lg-obs" style="display:none"></div>
       <div class="lgbar">
         <span class="lglabel"><span data-lang="ru">Уровни</span><span data-lang="en">Levels</span></span>
         <label class="lgchk"><input type="checkbox" id="lg-error" checked> <span class="lvl lvl-error">ERROR</span></label>
@@ -2477,6 +2482,65 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       return Array.isArray(j.degradations) ? j.degradations : [];
     } catch(e){ return []; }
   }
+  /* ── LIVE-HUMAN (ADR-120): прогон, ВЫПОЛНЕННЫЙ с украшениями, говорит об этом там, где смотрят его
+     результат ──────────────────────────────────────────────────────────────────────────────────────
+     ЧТО ЗАМЕРЕНО. Цена режима печаталась РЯДОМ С ВЫБОРОМ — и на этом всё. Сам прогон, уже выполненный
+     с курсором и замедлением, о своём наблюдении не говорил нигде: ни вердикт, ни отчёт, ни вид
+     «Логи» не отличали его от обычного. Через неделю по результату нельзя было узнать, что тайминги
+     этого прогона сдвинуты — а значит, нельзя было понять, каким его утверждениям верить.
+
+     ИСТОЧНИК ОДИН — событие `run.observation`, которое брейн печатает ДО старта. Живьём оно приезжает
+     строкой лога, после — лежит в `runs/control-<id>/logs/run.jsonl` и отдаётся
+     `GET /v1/runs/{id}/logs?code=run.observation`, то есть переживает и вкладку, и перезапуск
+     control-API. Ни второго поля, ни второго артефакта, ни отдельного флага: две записи об одном
+     факте расходятся, и тогда ни одной верить нельзя.
+
+     ЗНАЧЕНИЯ ДОСТАЮТСЯ ШАБЛОНОМ КАТАЛОГА (`lgFields`) — тем же механизмом, которым вид «Логи»
+     показывает русский текст с настоящими значениями. Своя регулярка была бы вторым знанием о форме
+     строки и разошлась бы с каталогом при первой же правке текста события; шаблон не расходится по
+     построению. Нет каталога или текст не лёг на шаблон — пометки нет: молчать честнее, чем гадать. */
+  var OBS_CODE = 'run.observation';
+  function obsOf(records, cat){
+    var e = cat && cat.events && cat.events[OBS_CODE];
+    if (!e || !e.en || !records) return null;
+    /* Последняя запись, а не первая: прогон печатает наблюдение один раз, но если когда-нибудь
+       напечатает дважды, верна ПОСЛЕДНЯЯ — та, под которой прогон и шёл. */
+    for (var i = records.length - 1; i >= 0; i--){
+      var r = records[i];
+      if (!r || r.code !== OBS_CODE) continue;
+      var f = lgFields(e.en, r.msg || '');
+      if (!f) return null;
+      return { mode: f.mode || '', decorated: String(f.decorations) === 'True' };
+    }
+    return null;
+  }
+  /* Разметка пометки или '' — пусто и для прогона без украшений, и когда сказать нечего.
+     Открыт как window.obsMarkHTML: DOM-гейт обязан гонять ОТГРУЖЕННЫЙ читатель, а не свою копию
+     (тот же приём, что window.lvOnEvent и window.lgCompile). */
+  function obsMarkHTML(records, cat){
+    var o = obsOf(records, cat);
+    if (!o || !o.decorated) return '';
+    var m = '<span class="mono">'+esc(o.mode)+'</span>';   /* значение из лога — только через esc() */
+    return '<div class="lgverdict" id="obs-decorated" style="margin-top:.5rem"><b>⚠ '
+      + bi('Прогон снят для ЧЕЛОВЕКА, режим наблюдения '+m,
+           'This run was drawn for a PERSON, observation mode '+m)
+      + '</b><br>'
+      + bi('Курсор, замедление и подсветка МЕНЯЮТ ТАЙМИНГ: откликам, гонкам и таймаутам этого прогона верить нельзя, и эталоном он быть не может.',
+           'The cursor, the slowdown and the highlight CHANGE TIMING: this run says nothing trustworthy about response times, races or timeouts, and it cannot serve as a golden.')
+      + '</div>';
+  }
+  window.obsMarkHTML = obsMarkHTML;
+  /* Записи о наблюдении этого прогона — с сервера, по коду события. `limit` мал: запись одна, а
+     фильтрация по коду делается СЕРВЕРОМ, чтобы вкладка не тянула весь лог ради одной строки. */
+  async function bFetchObsRecords(base, id){
+    try {
+      var r=await fetch(base+'/v1/runs/'+encodeURIComponent(id)+'/logs?code='+encodeURIComponent(OBS_CODE)+'&limit=5',
+                        {headers:authHdr()});
+      if (!r.ok) return [];
+      var j=await r.json();
+      return Array.isArray(j.records) ? j.records : [];
+    } catch(e){ return []; }
+  }
   /* Fails CLOSED: if the question cannot be answered, the buttons stay off. Guessing "yes" would hand
      the operator back the 400 this exists to prevent, and 🔁 on nothing is not a loss worth risking. */
   async function bFetchHasPlan(base, id){
@@ -2534,7 +2598,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var t = lgCatalog && lgCatalog.faults;
     return (name && t && t[name]) || null;
   }
-  function renderBuildVerdict(st, cause, report, degradations){
+  function renderBuildVerdict(st, cause, report, degradations, obsHTML){
     var code=st.exit_code, state=st.state, icon, col, head, sub;
     /* A spawn failure leaves exit_code at its zero value in the run record, and asking the table what
        exit 0 means would render a run that never started as PASSED. -1 is what the run.finished frame
@@ -2584,6 +2648,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     // "Completed" means the run reached an ending of its own — not that the ending was green. A refused
     // start (state failed, or a fault we own before anything executed) is the case the headline lied about.
     html+=bDegradedHtml(degradations, state!=='failed' && st.fault_domain!=='tool' && st.fault_domain!=='config');
+    /* LIVE-HUMAN: рядом с вердиктом, а не под ним где-нибудь. Это не деградация (прогон ничего не
+       потерял — его именно так и просили снять), поэтому отдельный блок, но в том же поле зрения:
+       вердикт и «чему в нём верить» читают одним взглядом. Пусто для обычного прогона. */
+    html+=(obsHTML||'');
     html+=bVerdictDetail(report);
     ge('b-verdict').innerHTML=html;
   }
@@ -2934,7 +3002,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       await loadEventCatalog();  // ADR-077: the verdict resolves degradation codes to sentences
       renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null),
                          await bFetchReport(base, id),        // ADR-076: the run's own verdict + counts
-                         await bFetchDegradations(base, id)); // ADR-077: what the run lost
+                         await bFetchDegradations(base, id),  // ADR-077: what the run lost
+                         // LIVE-HUMAN: чем этот прогон СНЯТ — из его собственного run.observation
+                         obsMarkHTML(await bFetchObsRecords(base, id), lgCatalog));
       await renderRunPhases(base,id);  // pipeline strip: explore (map) -> LLM authoring
       await renderRunSteps(base,id);   // human-readable step breakdown from scenario.json / plan.json
       await bShowArtifacts(base,id);
@@ -3035,6 +3105,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     sel.addEventListener('change', showCost);
     showCost();
   }
+  /* Открыт как seam по той же причине, что window.lvOnEvent: проверять цену режима надо на
+     ОТГРУЖЕННОМ заполнителе формы, с настоящей схемой на входе, а не на его копии в тесте. */
+  window.lvFillObserve = lvFillObserve;
 
   /* Builds the POST /v1/runs body by WALKING cfgFieldIds rather than restating the fields. */
   function bBody(){
@@ -4981,6 +5054,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
           return esc((e && e[l+'_verdict']) || code);
         }).join('<br>');
     } else { degr.style.display='none'; }
+
+    /* LIVE-HUMAN: пометка о наблюдении не зависит от фильтров — она про ПРОГОН, а не про строки.
+       Читается из тех же записей: `run.observation` лежит в run.jsonl, поэтому вид «Логи» отвечает на
+       «чем это снято» и через неделю, а не только пока открыта вкладка запуска. */
+    var obsBox = ge('lg-obs');
+    if (obsBox){
+      var obsHTML = obsMarkHTML(lgRecords, lgCatalog);
+      obsBox.innerHTML = obsHTML;
+      obsBox.style.display = obsHTML ? '' : 'none';
+    }
 
     ge('lg-count').textContent = shown.length + ' / ' + parents.length;
     if (!shown.length){

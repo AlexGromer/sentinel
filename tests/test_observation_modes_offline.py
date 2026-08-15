@@ -26,7 +26,14 @@ WHAT THIS FILE PINS, each against a way the design could quietly rot back:
  5. An unknown mode is refused, not silently replaced by the default.
  6. Every mode states its COST in both languages, in the schema the hub renders from — a mode that
     only has a name leaves a person choosing by vibe.
- 7. The three surfaces agree: the schema enum, the CLI flag and the resolver's own set.
+ 7. The three surfaces agree: the schema enum, the schema's "not in this build" list, the CLI flag and
+    the resolver's own set. A mode the resolver performs while the hub labels it unavailable is the
+    same lie as the reverse, told to the person about to choose it.
+ 8. LIVE-HUMAN: `human` is the ONE mode that decorates, decoration crosses the process boundary as
+    `SENTINEL_DECORATE`, and that variable is reported by `overrides()` like the other two — a switch
+    written but not reported is set by hand while the log keeps describing a plan that no longer holds.
+    The mode left `NOT_YET` in the same change as the machinery, so this file asserts the acceptance
+    and the switch TOGETHER: either alone is the half-built state the refusal existed to prevent.
 
 Offline, stdlib only.
 """
@@ -76,14 +83,74 @@ def test_the_chosen_mode_decides_and_says_why():
 
 
 def test_a_mode_this_build_cannot_perform_is_refused_with_the_task_named():
-    for mode in (observe.HUMAN, observe.RECORD):
+    """Walks NOT_YET rather than naming modes: the set SHRINKS as the machinery lands (human left it
+    with LIVE-HUMAN), and a hand-kept list here would have to be edited in the same breath — which is
+    how a list stops being a check and becomes a copy. The floor keeps the walk from passing over
+    nothing once it is empty: an empty NOT_YET is a real state, but it must be REACHED deliberately."""
+    check("there is still a declared-but-unbuilt mode to refuse (floor: this walk checks something)",
+          len(observe.NOT_YET) >= 1, observe.NOT_YET)
+    for mode in observe.NOT_YET:
         try:
             observe.resolve(mode)
             check(f"{mode} is refused rather than silently downgraded", False, "no Refusal raised")
         except observe.Refusal as e:
             check(f"{mode} is refused rather than silently downgraded", True)
             check(f"...and the refusal names the task that will bring it ({mode})",
-                  ("LIVE-HUMAN" in str(e)) or ("LIVE-RECORD" in str(e)), str(e))
+                  re.search(r"LIVE-[A-Z]+", str(e)) is not None, str(e))
+
+
+def test_human_is_performed_now_rather_than_promised():
+    """LIVE-HUMAN. The mode was DECLARED for months and refused with the task named; the half that was
+    missing is this one — the resolver accepting it and the switch that performs it. Asserted through
+    the resolver, not by reading NOT_YET: a mode is implemented when asking for it produces a plan."""
+    try:
+        p = observe.resolve(observe.HUMAN)
+        check("human is no longer refused — asking for it produces a plan", p.mode == observe.HUMAN, p.as_dict())
+        check("...and it still captures frames, exactly like stream (the frame axis has no special "
+              "case for human — the decoration is the whole difference)", p.frames is True, p.as_dict())
+    except observe.Refusal as e:
+        check("human is no longer refused — asking for it produces a plan", False, str(e))
+
+
+def test_the_decoration_belongs_to_human_and_to_nothing_else():
+    """ADR-120: decoration is part of the PERSON's chosen mode, not a derived state. Walks the whole
+    set so a mode added later cannot quietly acquire a cursor — every mode that is not `human` must
+    answer False, and `off` is named separately because "observation off" turning drawing ON is the
+    one wrong answer that would be invisible in a headless CI run."""
+    for mode in observe.MODES:
+        if mode in observe.NOT_YET:
+            continue
+        p = observe.resolve(mode)
+        want = (mode == observe.HUMAN)
+        check(f"{mode}: decorations={want}", p.decorations is want, p.as_dict())
+        env = observe.apply(p, {})
+        check(f"{mode}: SENTINEL_DECORATE={'1' if want else '0'}",
+              env.get("SENTINEL_DECORATE") == ("1" if want else "0"),
+              f"SENTINEL_DECORATE={env.get('SENTINEL_DECORATE')!r} — the executor reads this and nothing "
+              "else; a mode that decorates without it decorates nowhere, and one that sets it without "
+              "asking draws a cursor into a picture a model or a golden will read")
+    off = observe.apply(observe.resolve("off"), {})
+    check("observe=off draws nothing (frames off AND decoration off — two different questions)",
+          off.get("SENTINEL_LIVE_FRAMES") == "0" and off.get("SENTINEL_DECORATE") == "0", off)
+
+
+def test_apply_writes_exactly_what_overrides_reports():
+    """DERIVED from behaviour on both sides, with a floor. `apply` writing a switch that `overrides`
+    does not know is the silent case: an operator sets it by hand, the resolver keeps its default out
+    of the way (setdefault), and the log goes on printing a plan that no longer describes the run."""
+    # Resolved with a mode that is not in question here: this check is about the SWITCH SET, and
+    # asking for `human` would turn a regression in the mode's availability into a crash in a test
+    # about something else — which reports the wrong failure to whoever reads the run.
+    written = set(observe.apply(observe.resolve("frames"), {}))
+    check("apply() writes at least the three switches this resolver owns (floor)", len(written) >= 3, written)
+    check("...and overrides() reports every one of them, and only them",
+          observe.overrides({k: "x" for k in written}) == sorted(written),
+          f"written={sorted(written)} reported={observe.overrides({k: 'x' for k in written})}")
+    kept = observe.apply(observe.resolve("frames"), {"SENTINEL_DECORATE": "1"})
+    check("a hand-set decoration switch survives, like the frame switches",
+          kept.get("SENTINEL_DECORATE") == "1", kept)
+    check("...and is named, so the log cannot claim an undecorated plan while the executor decorates",
+          observe.overrides({"SENTINEL_DECORATE": "1"}) == ["SENTINEL_DECORATE"])
 
 
 def test_an_unknown_mode_is_refused_not_quietly_replaced():
@@ -198,6 +265,17 @@ def test_the_three_surfaces_agree_on_the_set():
         schema_modes = tuple(x.strip().strip('"') for x in m.group(1).split(",") if x.strip())
         check("the schema enum equals the resolver's set", schema_modes == observe.MODES,
               f"schema={schema_modes} resolver={observe.MODES}")
+
+    # ...and the same for the "not in this build" list, which the hub renders as a LABEL on the option.
+    # Left stale after the machinery lands, it tells the person the build cannot do the thing it is
+    # about to do — the mirror image of the silence NOT_YET exists to prevent, and the one this arc
+    # actually walked into: `human` was implemented in the resolver while the schema still marked it.
+    ny = re.search(r'"not_yet":\s*\[\]string\{([^}]*)\}', go[go.index('"observe"'):go.index('"observe"') + 3000])
+    check("the schema declares which modes are not in this build", ny is not None)
+    if ny:
+        schema_not_yet = sorted(x.strip().strip('"') for x in ny.group(1).split(",") if x.strip())
+        check("the schema's not_yet equals the resolver's NOT_YET", schema_not_yet == sorted(observe.NOT_YET),
+              f"schema={schema_not_yet} resolver={sorted(observe.NOT_YET)}")
 
     cli = read(os.path.join("cmd", "agentctl", "main.go"))
     flag = re.search(r'fs\.String\("observe",\s*"",\s*"([^"]+)"', cli)

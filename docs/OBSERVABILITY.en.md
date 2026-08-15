@@ -456,8 +456,10 @@ three processes and two languages — `PW_HEADED`/`PW_HEADLESS` (`pw-executor/sr
 (`brain/graph.py:45`), `PW_NO_TRACE` (not a mode — see below) — and no single place knew all four.
 Worse: ONE picture — the per-step frame — was gated by TWO variables in TWO languages, so switching
 one off produced a half-observed run that said nothing about the missing half. The resolver
-`brain/observe.py` (`resolve()`/`apply()`) collapses the choice into one place and writes both
-variables TOGETHER — it is the only writer (a gate walks all of `brain/` to hold that).
+`brain/observe.py` (`resolve()`/`apply()`) collapses the choice into one place and writes both frame
+variables TOGETHER — it is the only writer (a gate walks all of `brain/` to hold that). A third rides
+the same expansion for the same reason — `SENTINEL_DECORATE` (LIVE-HUMAN): not because it is a third
+frame switch, but because one decision must not acquire a second author.
 
 ### Five modes and their cost
 
@@ -466,7 +468,7 @@ variables TOGETHER — it is the only writer (a gate walks all of `brain/` to ho
 | `off` | nothing | fastest; there will be nothing to look at |
 | `frames` (default) | one frame per step, rendered by the hub | slows a run slightly |
 | `stream` | `frames` + the live screencast, undecorated | usable by a person as-is, and by a machine |
-| `human` ⚠ currently refused | `stream` + synthetic cursor + `slowMo` + highlight | **CHANGES TIMING** — not for response times, races, timeouts; does not mix with golden mode |
+| `human` | `stream` + synthetic cursor + `slowMo` + highlight | **CHANGES TIMING** — not for response times, races, timeouts; does not mix with golden mode |
 | `record` ⚠ currently refused | a video file as an artifact after the run | does not affect the live view |
 
 The cost text lives in ONE place — `brain/observe.py::COST` (ru+en per mode) — and flows from there
@@ -489,22 +491,64 @@ An empty value is NOT `off` — it is "no choice was made", and the resolver
 (`run.observation`, whose `why` reads "by default, nothing was asked for"). That keeps "I did not
 choose" and "I chose exactly `frames`" different facts rather than the same act.
 
-### `human` and `record`: declared, not shipped
+### `human` — shipped (LIVE-HUMAN)
 
-The mode set is the product's answer to "what can I even ask for", and it already carries five
-names. But `human` (a synthetic cursor, `slowMo`, highlight — Playwright draws no cursor and does
-not slow down clicks, so this has to be built) and `record` (`recordVideo`, a `newContext` option,
-while the CDP-attach path adopts a context it does not own) need machinery this build does not have
-yet. Asking for either is a **refusal before the run starts** (`exit 3`, `fatal.observe_refused`),
-with the task that will bring it NAMED (`[LIVE-HUMAN]`, `[LIVE-RECORD]`). Measured live: on such a
-refusal the browser never launches at all (0 launches) — the refusal costs nothing and cannot
-"half-happen". Accepting a mode and quietly doing something else is deliberately forbidden: a person
-who asked for a cursor would get plain frames and never learn they got something other than what
-they asked for.
+The mode was DECLARED and refused with the task named; LIVE-HUMAN brought the machinery, and `human`
+left `NOT_YET` IN THE SAME CHANGE as the switch that performs it. Apart, those two halves are exactly
+the state the refusal existed to prevent: a resolver that decides, a variable nobody exports, and an
+executor reading something nobody sets.
 
-`human` is also refused for a golden run (`baseline=True`), even once the machinery exists:
-slowdown and the overlay do not degrade the reference, they make it WRONG, and that only surfaces
-later, on somebody else's replay.
+One switch, two ends, nothing else:
+
+* **`SENTINEL_DECORATE`** = `1`/`0`. It is written ONLY by `brain/observe.py::apply()` — out of
+  `plan.decorations`, by the same `setdefault` move as the two frame switches — and it is reported by
+  `overrides()`, so a switch set BY HAND survives the resolver and is NAMED in the same log line. It
+  is read ONLY by `pw-executor`.
+* Decoration is part of the USER's mode, not derived state: `decorations` is true for `human` and
+  false for everything else, and nothing inside a run may turn it on by itself.
+* On the frame axis `human` behaves exactly like `stream`: the live screencast is not gated by this
+  plan at all (the executor starts it), so "like stream" reduces here to "frames stay on", which
+  `mode != off` already yields. There is no special case for `human` on that axis — and there must
+  not be one until the screencast becomes a switch this resolver owns, at which point `stream` and
+  `human` acquire it TOGETHER, in one line.
+
+**A frame for a MODEL or for a GOLDEN must be CLEAN.** The overlay is lifted AROUND such a capture
+rather than cancelled for the run: a person always sees the cursor, while the picture a model reads
+or a baseline is compared against contains nothing we drew. Otherwise the decoration would enter the
+input a decision is made from — and "the UI changed" would become indistinguishable from "we drew a
+cursor on it".
+
+`human` is still refused for a golden run (`baseline=True`), and refused at the door: the slowdown
+and the overlay do not degrade the reference, they make it WRONG, and that only surfaces later, on
+somebody else's replay. Capture the baseline with `frames`; watch a later replay with `human`.
+
+### `record`: declared, not shipped
+
+The mode set is the product's answer to "what can I even ask for", and it carries five names.
+`record` (`recordVideo`, a `newContext` option, while the CDP-attach path adopts a context it does
+not own) needs machinery this build does not have yet. Asking for it is a **refusal before the run
+starts** (`exit 3`, `fatal.observe_refused`), with the task that will bring it NAMED
+(`[LIVE-RECORD]`). Measured live: on such a refusal the browser never launches at all (0 launches) —
+the refusal costs nothing and cannot "half-happen". Accepting a mode and quietly doing something else
+is deliberately forbidden: a person who asked for video would get plain frames and never learn they
+got something other than what they asked for.
+
+### A run performed FOR A PERSON is marked where its result is read
+
+A mode's price is printed beside the choice — but the choice is made once, and the result is read a
+week later. A run performed in `human` carries the mark where its outcome is read: on the verdict card
+right after the run, and as a pinned line in the Logs view — "⚠ This run was drawn for a PERSON,
+observation mode `human`; the cursor, the slowdown and the highlight CHANGE TIMING: it says nothing
+trustworthy about response times, races or timeouts, and it cannot serve as a golden".
+
+The mark has ONE source: the `run.observation` event the brain prints before the run starts, carrying
+both the mode and `decorations`. Live it arrives as a log line; afterwards it sits in
+`runs/control-<id>/logs/run.jsonl` and comes back from `GET /v1/runs/{id}/logs?code=run.observation`,
+so the answer to "what was this drawn with" outlives both the tab and a control-API restart. There is
+deliberately no second field, no second artifact and no separate flag: two records of one fact drift,
+and then neither can be trusted. The values are recovered from the line with the CATALOGUE's own
+template — the same mechanism that lets the Logs view show Russian with real values — rather than
+with a private regex that would drift from the catalogue the first time the event's text is edited.
 
 ### `PW_NO_TRACE` is not a mode
 
@@ -527,13 +571,28 @@ of silence LIVE-MATRIX exists to remove.
 
 ### Verified
 
-The gate `tests/test_observation_modes_offline.py` (10 checks, 12 mutations, 12 killed) holds: both
-frame gates are written TOGETHER and only by the resolver; `PW_NO_TRACE` is never written by this
-file, and the guard is alive on both sides; the control-api schema, the CLI flag, and the resolver's
-own set agree on one enumeration; a refusal resolves BEFORE the executor is spawned. Measured live
-in this session: `--observe off` → 0 frames in the run's artifacts; no explicit choice → 7 frames,
-and the log names them the default; `--observe human` and an unknown mode → `exit 3`, 0 browser
-launches.
+The gate `tests/test_observation_modes_offline.py` holds: both frame gates are written TOGETHER and
+only by the resolver; `PW_NO_TRACE` is never written by this file, and the guard is alive on both
+sides; the control-api schema, the CLI flag and the resolver's own set agree BOTH on the enumeration
+and on the "not in this build" list (otherwise the hub would promise the opposite of what a run does);
+a refusal resolves BEFORE the executor is spawned; decoration is true ONLY for `human`; and the switch
+list is DERIVED — what `apply()` writes is what `overrides()` reports, with a floor on the count.
+
+The gate `tests/test_live_human_mode_offline.py` (LIVE-HUMAN) checks what the resolver cannot say
+about itself: it runs the SHIPPED entry point `python -m brain` against a stub executor that writes
+its own environment to a file, then reads what the child RECEIVED. `observe=human` →
+`SENTINEL_DECORATE=1` in the child; any other mode → `0`; `human` + golden → `exit 3` with the stub
+never spawned AT ALL; and the mode and `decorations` are recovered from the `run.observation` line
+with the catalogue template. Mutations: `decorations` hard-wired to `False`, the switch removed from
+`SWITCHES`, `overrides()` hiding it, `human` returned to `NOT_YET`, the schema marking `human`
+unavailable again, and the event dropping `decorations` — all six COMPILED, and all six went red.
+
+The interface was verified live, in a headless Chromium against the shipped page: choosing `human`
+prints "⚠ CHANGES TIMING …" in the form (screenshot taken and looked at), the option is no longer
+labelled "not in this build", and the Logs view of a run with `decorations True` shows the pinned
+mark — and does not show it for an ordinary run. Both checks were added to the DOM gate
+`scripts/hub-dom-check.mjs`; two page mutations (the reader never sees decoration; the Logs view never
+fills the pinned slot) went red.
 
 ---
 

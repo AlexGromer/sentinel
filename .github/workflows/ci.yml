@@ -79,12 +79,21 @@ jobs:
           shopt -s nullglob
           files=(src/*.test.ts)
           n=${#files[@]}
-          if [ "$n" -lt 2 ]; then
-            echo "::error::pw-executor: only $n src/*.test.ts found — expected at least 2 (determinism, launch)"
+          if [ "$n" -lt 3 ]; then
+            echo "::error::pw-executor: only $n src/*.test.ts found — expected at least 3 (determinism, launch, decorate)"
             exit 1
           fi
           echo "pw-executor: $n *.test.ts found (${files[*]})"
           npm ci
+          # ⚠ THE BROWSER HAS TO BE HERE, BEFORE `npm test` (LIVE-HUMAN / ADR-120). This install used
+          # to be a step of its own, further down — which was fine while every node:test in the
+          # package was pure. `decorate.test.ts` is not: what it claims (a cursor is drawn into the
+          # page, and is absent from the frame a model or a golden reads) is a claim about pixels,
+          # and the only way to assert it that a mutation cannot walk through is to drive a real
+          # page. Left below, the suite would fail in CI on a missing executable while passing
+          # locally — the worst possible split. Browsers land in the machine-global cache
+          # (~/.cache/ms-playwright), so every later step and job resolves them regardless of cwd.
+          npx playwright install --with-deps chromium-headless-shell
           npm test
 
       # PERCEPT-RECORDER-SHADOW / M9.8: until this step, the MV3 extension was named by NO workflow.
@@ -114,10 +123,11 @@ jobs:
           npm ci
           npm test
 
-      # Browsers land in the machine-global Playwright cache (~/.cache/ms-playwright),
-      # so the server resolves them at runtime regardless of cwd.
-      - name: Install Playwright browser (chromium-headless-shell)
-        run: cd pw-executor && npx playwright install --with-deps chromium-headless-shell
+      # The Playwright browser install used to stand here. It moved UP into the pw-executor step
+      # (ADR-120): that step's own suite now drives a real page, so the browser is a precondition of
+      # `npm test` rather than of the steps after it. Not duplicated here — `--with-deps` runs apt on
+      # every invocation, and a second copy would only make the job slower while hiding which step
+      # actually needs it.
 
       - name: Build agentctl (Go)
         run: go build -o bin/agentctl ./cmd/agentctl

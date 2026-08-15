@@ -406,7 +406,11 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 					"human":  map[string]any{"ru": "курсор, замедление, подсветка. ⚠ МЕНЯЕТ ТАЙМИНГ — не для проверки откликов, гонок и таймаутов; с эталонным режимом не смешивается", "en": "cursor, slowdown, highlight. ⚠ CHANGES TIMING — not for response times, races or timeouts; does not mix with golden mode"},
 					"record": map[string]any{"ru": "видеофайл артефактом после прогона; на живой вид не влияет", "en": "a video file as an artifact after the run; does not affect the live view"},
 				},
-				"not_yet": []string{"human", "record"}, // declared, refused with the task named until LIVE-HUMAN / LIVE-RECORD land
+				// LIVE-HUMAN landed, so `human` came OUT of this list in the same change as the machinery
+				// (brain/observe.py: SENTINEL_DECORATE). Left in, the hub would label an implemented mode
+				// "not in this build" while runs in it succeed — the same lie as the reverse, and the
+				// resolver's NOT_YET is the authority: tests/test_observation_modes_offline.py compares them.
+				"not_yet": []string{"record"}, // declared, refused with the task named until LIVE-RECORD lands
 			},
 		},
 		// M11.5 PR-3 (ADR-060): LLM-backend descriptors from brain/llm.py make_backend. Descriptors ONLY —

@@ -1994,8 +1994,8 @@
     "run.observation": {
       "lvl": "info",
       "cat": "run",
-      "ru": "Наблюдение: режим {mode}, кадры {frames} — {why}{overridden}",
-      "en": "Observation: mode {mode}, frames {frames} — {why}{overridden}",
+      "ru": "Наблюдение: режим {mode}, кадры {frames}, украшения {decorations} — {why}{overridden}",
+      "en": "Observation: mode {mode}, frames {frames}, decorations {decorations} — {why}{overridden}",
       "modules": [
         "__main__"
       ]

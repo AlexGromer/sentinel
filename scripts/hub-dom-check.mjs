@@ -986,6 +986,81 @@ try {
        `the mode must be quoted — bare off is a YAML 1.1 boolean:\n${doc}`);
   });
 
+  // LIVE-HUMAN (ADR-120). Two halves of one claim, and each is invisible to the other side's gate.
+  //
+  // FIRST: the mode has to be OFFERED. `human` spent months declared-and-refused, and the schema's
+  // `not_yet` list is what puts "— не в этой сборке" on the option. Left stale after the machinery
+  // landed, the page would tell a person the build cannot do what it is about to do. Driven through
+  // the RENDERED select against the REAL schema the running server publishes, because the string form
+  // ("not_yet no longer lists human") is a surrogate a mutation walks through.
+  //
+  // SECOND: the price has to be VISIBLE AT THE MOMENT OF CHOICE. `human` changes timing, and a person
+  // choosing it for a response-time run must read that in the interface — not in documentation nobody
+  // opens.
+  await check('the run form offers human, prices it, and no longer calls it unbuildable', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    const label = await page.locator('#b-observe option[value="human"]').textContent();
+    ok(!/не в этой сборке|not in this build/.test(label),
+       `the schema still marks human unavailable while the resolver performs it: ${label}`);
+    await page.selectOption('#b-observe', 'human');
+    await page.waitForTimeout(200);
+    const cost = await page.locator('#b-observe-cost').innerHTML();
+    ok(/МЕНЯЕТ ТАЙМИНГ/.test(cost) && /CHANGES TIMING/.test(cost),
+       `choosing human said nothing about the timing it changes: ${cost}`);
+    await page.selectOption('#b-observe', '');
+  });
+
+  // THIRD, and the one a week later depends on: a run PERFORMED for a person says so where its result
+  // is read. The fact has ONE source — the run.observation event, which persists in run.jsonl and comes
+  // back from GET /v1/runs/{id}/logs — so the record here is RENDERED FROM THE CATALOGUE's own template
+  // rather than typed out: a hand-written sentence would keep matching after the event's text changed,
+  // which is precisely the drift the mark must not survive.
+  await check('a run performed for a person wears that where its logs are read', async () => {
+    const line = await page.evaluate(async (base) => {
+      const cat = await (await fetch(base + '/v1/events-catalog')).json();
+      const tpl = cat.events['run.observation'].en;
+      const fill = (f) => tpl.replace(/\{(\w+)\}/g, (whole, n) => (n in f ? String(f[n]) : whole));
+      return {
+        human: fill({ mode: 'human', frames: 'True', decorations: 'True', why: 'human: chosen', overridden: '' }),
+        plain: fill({ mode: 'frames', frames: 'True', decorations: 'False', why: 'frames: chosen', overridden: '' }),
+      };
+    }, `http://127.0.0.1:${PORT}`);
+
+    let msg = line.human;
+    await page.route('**/v1/runs/*/logs**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        run_id: 'gate', recorded: true, degradations: [], scanned: 1, matched: 1,
+        records: [{ seq: 1, lvl: 'info', cat: 'run', mod: '__main__', code: 'run.observation', msg }],
+      }) });
+    });
+    try {
+      await page.click('.rail a[data-nav="logs"]');
+      // ⚠ Клика по рельсу НЕДОСТАТОЧНО, и это замерено: вид логов мемоизирован (`lgLoaded`), поэтому
+      // повторный вход показывает записи, загруженные РАНЬШЕ, а установленный только что перехват
+      // не участвует. Первая версия этой проверки видела 39 настоящих записей вместо одной
+      // подставленной и краснела на продукте, который работает. Перезагрузку требуем явно — тем же
+      // способом, каким её уже требует отрицательная половина ниже.
+      await page.click('#lg-reload');
+      await page.waitForTimeout(900);
+      const mark = page.locator('#lg-obs');
+      ok(await mark.isVisible(), 'a decorated run showed nothing on the surface its result is read from');
+      const text = await mark.innerText();
+      ok(/ТАЙМИНГ|TIMING/.test(text), `the mark does not say the timings are unusable: ${text}`);
+      ok(/human/.test(text), `the mark does not name the mode the run was performed in: ${text}`);
+
+      // The negative through the SAME path: an ordinary run must wear nothing, or the mark means nothing.
+      msg = line.plain;
+      await page.click('#lg-reload');
+      await page.waitForTimeout(700);
+      ok(!(await mark.isVisible()), 'an undecorated run wore the decorated-run mark');
+    } finally {
+      await page.unroute('**/v1/runs/*/logs**');
+      await page.click('.rail a[data-nav="run"]');
+      await page.waitForTimeout(200);
+    }
+  });
+
   // M9-LIVE fix: /readyz has probed the LLM since ADR-062 and nothing showed it. The three states must
   // stay distinct — `skipped` (nothing configured, heuristic may be intended) vs `error` (configured and
   // unreachable, almost never intended) are different news, and one red dot for both rebuilds the
