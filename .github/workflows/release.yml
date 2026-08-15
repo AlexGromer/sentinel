@@ -1,6 +1,11 @@
 # Sentinel release pipeline (M11.1, ADR-030) — closes the GAP-SEC-002 signed-release tail.
 #
-# On a `v*` tag: build 5 Go binaries × 6 platforms (30) plus a .deb per Linux arch, a multi-arch Docker
+# ⚠ Числа ниже ВЫВЕДЕНЫ из самого файла 2026-08-15, а не переписаны: список бинарей — цикл
+# `for c in …` в шаге сборки, платформы — `matrix.include`. Шапка говорила «5 бинарей × 6 платформ
+# (30)» с тех пор, как ADR-119 удалил `report-service`: и сомножитель, и произведение были ложью, а
+# читал её тот, кто хотел понять, что вообще уезжает пользователю.
+#
+# On a `v*` tag: build 4 Go binaries × 6 platforms (24) plus a .deb per Linux arch, a multi-arch Docker
 # image (GHCR), a CycloneDX SBOM, Cosign KEYLESS signatures (Sigstore OIDC — no long-lived key/secret),
 # and a GitHub Release with every asset attached. `workflow_dispatch` runs a build/SBOM DRY-RUN (no push
 # / no sign / no release), so the pipeline can be smoke-tested without cutting a tag.

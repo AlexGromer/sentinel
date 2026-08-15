@@ -572,6 +572,25 @@ jobs:
       # hardcoded default, in the deployment we recommend over every other. Asserted on the built
       # image rather than by reading the Dockerfile: a source-shape check would agree with an
       # ldflags string that never reaches the linker.
+      - name: The image ships the browsers it declares, and no others (ADR-036/ADR-124)
+        # DIST-VARIANTS. The base used to be `mcr.microsoft.com/playwright`, which ships all three
+        # engines — 583 MB of firefox+webkit that ADR-036 says are never launched, plus their system
+        # deps. ADR-124 installs the engines BY NAME instead of inheriting somebody's set.
+        #
+        # The check is not a size threshold: a number would have to be maintained by hand and would
+        # drift the moment a browser revision grows. It DERIVES the actual contents of the browser
+        # directory and compares them with the declared set, so an engine that reappears — by a base
+        # swap, by `--with-deps` gaining a default, by anyone — is red, and a declared one that
+        # vanishes is red too.
+        run: |
+          set -euo pipefail
+          got="$(docker run --rm --entrypoint sh sentinel:local -c 'ls -1 /ms-playwright' | sed 's/-[0-9]*$//' | sort -u | tr '\n' ' ')"
+          want="chromium chromium_headless_shell ffmpeg "
+          echo "browsers in the image: $got"
+          [ "$got" = "$want" ] || {
+            echo "::error::image ships '$got', declared '$want' — ADR-036 is Chromium-only; add the engine to the declaration WITH a reason, or stop installing it"
+            exit 1; }
+
       - name: The image knows its own version
         run: |
           set -euo pipefail

@@ -51,6 +51,7 @@
 | SBOM CycloneDX из закреплённого лока | `security` | `SBOM (CycloneDX, from the frozen lock — #38)` |
 | Двуязычность: у каждого первичного `docs/*.md` есть пара `.en.md` | `bilingual` | `Check bilingual docs parity` |
 | Сборка образа `sentinel:local` | `airgap` | `Build sentinel:local (cached, amd64, loaded — not pushed)` |
+| Образ везёт только объявленные браузеры — состав каталога ВЫВОДИТСЯ и сверяется с объявлением (ADR-036/124) | `airgap` | `The image ships the browsers it declares, and no others (ADR-036/ADR-124)` |
 | Образ знает свою версию | `airgap` | `The image knows its own version` |
 | Офлайн-проверка рантайма: `save`/`load` → `--network none`, ни одного внешнего вызова | `airgap` | `Offline runtime verification (save/load -> --network none, no external calls)` |
 | Cosign: подпись и **офлайновая** обратная проверка `verify-blob` | `airgap` | `Cosign sign + OFFLINE verify-blob round-trip` |
@@ -121,6 +122,9 @@ node scripts/pages-static-check.mjs
 # Смоук интерфейса со скриншотами — точный рецепт в ci.yml, шаг «End-to-end UI smoke»
 #   ⚠ store-gateway на КОРОТКОМ пути сокета (адрес unix ограничен ~108 байтами),
 #     CONTROL_API_SERVE_UI=1 и CONTROL_API_UI_DIR=$PWD/docs — иначе `/` отдаёт 404
+#   ⚠ Место на диске под докером — первая гипотеза при странном отказе. Замерено: при полном /var
+#     сервис браузера падает `ENOSPC ... mkdtemp '/tmp/playwright-artifacts-…'`, то есть отказ
+#     выглядит как регресс запуска Chromium, а не как кончившийся диск. `docker builder prune`.
 #   ⚠ БД сноси ВМЕСТЕ с её спутниками: rm -f <db> <db>-shm <db>-wal. Свежий файл рядом со
 #     старым -shm даёт `open db: disk I/O error (522)`, шлюз умирает МОЛЧА в фоне, а смоук
 #     краснеет двумя чужими проверками (502 /v1/config, 503 /v1/users) — читается как дефект
