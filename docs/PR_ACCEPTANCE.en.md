@@ -52,6 +52,7 @@ manual half below reads as the **remainder** rather than as the whole list.
 | CycloneDX SBOM from the frozen lock | `security` | `SBOM (CycloneDX, from the frozen lock — #38)` |
 | Bilingual parity: every primary `docs/*.md` has its `.en.md` sibling | `bilingual` | `Check bilingual docs parity` |
 | Build the `sentinel:local` image | `airgap` | `Build sentinel:local (cached, amd64, loaded — not pushed)` |
+| The image ships only the browsers it declares — the directory contents are DERIVED and compared with the declaration (ADR-036/124) | `airgap` | `The image ships the browsers it declares, and no others (ADR-036/ADR-124)` |
 | The image knows its own version | `airgap` | `The image knows its own version` |
 | Offline runtime verification: `save`/`load` → `--network none`, no external calls | `airgap` | `Offline runtime verification (save/load -> --network none, no external calls)` |
 | Cosign: sign and **offline** `verify-blob` round-trip | `airgap` | `Cosign sign + OFFLINE verify-blob round-trip` |
@@ -121,6 +122,9 @@ node scripts/pages-static-check.mjs
 # UI smoke with screenshots — the exact recipe is in ci.yml, step "End-to-end UI smoke"
 #   ⚠ store-gateway on a SHORT socket path (a unix address is capped near 108 bytes),
 #     CONTROL_API_SERVE_UI=1 and CONTROL_API_UI_DIR=$PWD/docs — otherwise `/` answers 404
+#   ⚠ Disk space under docker is the first hypothesis for a strange failure. Measured: with /var
+#     full the browser service dies with `ENOSPC ... mkdtemp '/tmp/playwright-artifacts-…'`, so the
+#     failure reads as a Chromium launch regression, not as a full disk. `docker builder prune`.
 #   ⚠ delete the DB WITH its sidecars: rm -f <db> <db>-shm <db>-wal. A fresh file next to a stale
 #     -shm gives `open db: disk I/O error (522)`, the gateway dies SILENTLY in the background, and
 #     the smoke reds out on two unrelated checks (502 /v1/config, 503 /v1/users) — which reads as a

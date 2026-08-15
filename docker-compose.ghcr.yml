@@ -92,10 +92,14 @@ x-sentinel-ghcr: &sentinel-ghcr
   # yields 1000 for everyone. Named here because a knob that looks like it reads your uid and does
   # not is worse than no knob.
   #
-  # ⚠ Measured, so it is not set defensively: uid 1000 and 1001 both have passwd entries in the
-  # Playwright base image (`ubuntu`, `pwuser`) with writable homes; an unlisted uid gets HOME=/ which
-  # is NOT writable — and Chromium launches anyway, because it puts its user-data-dir under /tmp.
-  # So no HOME override is needed, and none is set.
+  # ⚠ Measured, so it is not set defensively — and RE-measured on 2026-08-14 when ADR-124 swapped the
+  # runtime base from the Playwright image to `node:24-bookworm-slim`. What changed: uid 1000 is now
+  # `node` (home /home/node, writable) and uid 1001 has NO passwd entry at all, where the old base
+  # listed both as `pwuser`-family. What did NOT change is the conclusion: a run under uid 1000
+  # succeeds with the same plan_hash as before, and an unlisted uid fails on the HOST ownership of
+  # ./runs — identically on both bases, verified side by side — not on HOME. Chromium launches
+  # regardless, because it puts its user-data-dir under /tmp. So no HOME override is needed, and none
+  # is set.
   user: "${UID:-1000}:${GID:-1000}"
   volumes:
     - ./runs:/app/runs       # plan.json / transcript / heal-report / scenario.json / trace.zip

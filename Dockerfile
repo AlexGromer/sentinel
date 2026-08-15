@@ -45,10 +45,26 @@ COPY pw-executor/tsconfig.json ./
 COPY pw-executor/src/ src/
 RUN npm run build
 
-# --- stage 3: runtime (Playwright browsers + Python brain) ------------------
-FROM mcr.microsoft.com/playwright:v1.61.1-noble AS runtime
+# --- stage 3: runtime (Chromium + Python brain) -----------------------------
+# ADR-124 (DIST-VARIANTS). Базой был `mcr.microsoft.com/playwright:v1.61.1-noble`, который везёт ВСЕ
+# ТРИ движка Playwright, при том что ADR-036 фиксирует Chromium-only. Замер образа перед правкой:
+#
+#   всего 2.79 GB, из них /ms-playwright = 1.2 GB
+#     chromium 379M · chromium_headless_shell 262M · ffmpeg 4.9M · firefox 293M · webkit 290M
+#   два слоя базы: 2.03 GB и 330 MB (установка всех движков и их системных зависимостей)
+#
+# 583 MB движков не использовались никогда, плюс их зависимости внутри слоёв базы. После правки —
+# 1.58 GB (−1.21 GB, −43%), браузеры 646 MB. Поведение проверено, а не предположено: прогон в новом
+# образе даёт ТОТ ЖЕ `plan_hash edc74498ac7c5db0`, что и в старом, и сервис браузера (`cdp-service`)
+# поднимается с `CDP_SERVICE_READY` и `/live/status` 200.
+#
+# ⚠ Полный `chromium` остаётся НАМЕРЕННО, хотя CI ставит только `chromium-headless-shell`: замерено
+# `chromium.executablePath()` = `/ms-playwright/chromium-1228/…`, то есть именно его берёт
+# `chromium.launch()` в `cdp-service`, и он же нужен headed-режиму (`PW_HEADED`) и дуге LIVE.
+# Выбросить его значило бы сломать живой вид ради 379 MB.
+FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv python3 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # Brain deps come from the committed lockfile (brain/uv.lock), installed FROZEN by uv (#38) — a
 # reproducible, pinned install instead of the old unpinned `pip install <names>`. uv is pinned by
@@ -62,6 +78,13 @@ RUN cd /app/brain && uv sync --frozen --no-dev
 COPY --from=go-build /out/agentctl /out/store-gateway /out/control-api /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
+# Браузеры ставятся ЯВНО и поимённо — это и есть исполнение ADR-036 (Chromium-only) в поставке, а не
+# наследование чужого набора. Путь совпадает с тем, что задавал прежний базовый образ, поэтому всё,
+# что на него ссылалось, продолжает работать. Гейт джобы `airgap` сверяет содержимое каталога с этим
+# объявлением: движок, появившийся здесь незаявленным, красный.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN cd /app/pw-executor && npx playwright install --with-deps chromium chromium-headless-shell \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
 COPY brain/ /app/brain/
 COPY testdata/ /app/testdata/
 # Static web assets (setup-WebUI + calculators) for the `webui` compose profile — air-gapped, served
