@@ -84,19 +84,35 @@ def test_the_chosen_mode_decides_and_says_why():
 
 def test_a_mode_this_build_cannot_perform_is_refused_with_the_task_named():
     """Walks NOT_YET rather than naming modes: the set SHRINKS as the machinery lands (human left it
-    with LIVE-HUMAN), and a hand-kept list here would have to be edited in the same breath — which is
-    how a list stops being a check and becomes a copy. The floor keeps the walk from passing over
-    nothing once it is empty: an empty NOT_YET is a real state, but it must be REACHED deliberately."""
-    check("there is still a declared-but-unbuilt mode to refuse (floor: this walk checks something)",
-          len(observe.NOT_YET) >= 1, observe.NOT_YET)
-    for mode in observe.NOT_YET:
+    with LIVE-HUMAN, record with ADR-125), and a hand-kept list here would have to be edited in the
+    same breath — which is how a list stops being a check and becomes a copy.
+
+    ⚠ NOT_YET IS NOW EMPTY, and the floor that used to stand here (`len(NOT_YET) >= 1`) was removed
+    DELIBERATELY, in the same change that emptied it — which is precisely what that floor was for. Its
+    job was never to insist an unbuilt mode exist forever; it was to stop the walk from passing
+    vacuously over an empty set that somebody had emptied by accident. So the floor is replaced, not
+    dropped: the assertion that carries the meaning now is that EVERY declared mode resolves, because
+    once nothing is refused, "the product performs everything it declares" is the property worth
+    holding. Re-introducing an unbuilt mode restores the walk below with no edit here."""
+    for mode in observe.MODES:
+        if mode in observe.NOT_YET:
+            try:
+                observe.resolve(mode)
+                check(f"{mode} is refused rather than silently downgraded", False, "no Refusal raised")
+            except observe.Refusal as e:
+                check(f"{mode} is refused rather than silently downgraded", True)
+                check(f"...and the refusal names the task that will bring it ({mode})",
+                      re.search(r"LIVE-[A-Z]+", str(e)) is not None, str(e))
+            continue
+        # The replacement floor: a mode outside NOT_YET must PERFORM, i.e. produce a plan. A build that
+        # declared a mode, left it out of NOT_YET and then refused it anyway would be the worst of the
+        # three states — neither honest about being unbuilt nor able to do the thing.
         try:
-            observe.resolve(mode)
-            check(f"{mode} is refused rather than silently downgraded", False, "no Refusal raised")
+            p = observe.resolve(mode)
+            check(f"{mode} is declared and PERFORMED — asking for it produces a plan",
+                  p.mode == mode, p.as_dict())
         except observe.Refusal as e:
-            check(f"{mode} is refused rather than silently downgraded", True)
-            check(f"...and the refusal names the task that will bring it ({mode})",
-                  re.search(r"LIVE-[A-Z]+", str(e)) is not None, str(e))
+            check(f"{mode} is declared and PERFORMED — asking for it produces a plan", False, str(e))
 
 
 def test_human_is_performed_now_rather_than_promised():
@@ -112,16 +128,24 @@ def test_human_is_performed_now_rather_than_promised():
         check("human is no longer refused — asking for it produces a plan", False, str(e))
 
 
-def test_the_decoration_belongs_to_human_and_to_nothing_else():
+def test_the_decoration_belongs_to_the_decorated_modes_and_to_nothing_else():
     """ADR-120: decoration is part of the PERSON's chosen mode, not a derived state. Walks the whole
-    set so a mode added later cannot quietly acquire a cursor — every mode that is not `human` must
+    set so a mode added later cannot quietly acquire a cursor — every mode outside `DECORATED` must
     answer False, and `off` is named separately because "observation off" turning drawing ON is the
-    one wrong answer that would be invisible in a headless CI run."""
+    one wrong answer that would be invisible in a headless CI run.
+
+    ⚠ This gate CAUGHT ADR-125 and that is worth recording: `record` acquiring a cursor is exactly the
+    event the walk was written to stop, so it went red, and the answer was NOT to special-case it here
+    but to make the resolver derive both this and the golden refusal from ONE tuple (`observe.DECORATED`).
+    The check now reads that tuple. A future mode still cannot decorate quietly — it can only do so by
+    being ADDED to the tuple, where the golden refusal picks it up in the same line, which is the whole
+    point: a mode that draws for a person cannot be trusted as a reference, and the two facts must not
+    be settable apart."""
     for mode in observe.MODES:
         if mode in observe.NOT_YET:
             continue
         p = observe.resolve(mode)
-        want = (mode == observe.HUMAN)
+        want = (mode in observe.DECORATED)
         check(f"{mode}: decorations={want}", p.decorations is want, p.as_dict())
         env = observe.apply(p, {})
         check(f"{mode}: SENTINEL_DECORATE={'1' if want else '0'}",

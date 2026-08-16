@@ -229,6 +229,42 @@
       }
     },
     {
+      "id": "run-video",
+      "group": "Runtime",
+      "severity": "medium",
+      "title_ru": "Видеозапись прогона",
+      "title_en": "A video recording of a run",
+      "how_ru": "observe=record пишет видео прогона (ADR-125): agentctl run --observe record из терминала, POST /v1/runs с observe в форме прогона хаба, и файл потом достаётся как обычный артефакт — GET /v1/runs/{id}/artifact?name=video.webm, agentctl runs artifact, либо панель артефактов в разделе «Чат», где он проигрывается прямо на странице. ⚠ Запись ведётся с курсором, поэтому МЕНЯЕТ ТАЙМИНГ и эталоном такой прогон быть не может; ⚠ невозможна при подключении к чужому браузеру по CDP и отклоняется до старта. По умолчанию файл сохраняется только при незелёном прогоне — SENTINEL_VIDEO_ALWAYS=1 оставляет его всегда.",
+      "how_en": "observe=record records a video of the run (ADR-125): agentctl run --observe record from a terminal, POST /v1/runs with observe from the hub's run form, and the file is then fetched like any artifact — GET /v1/runs/{id}/artifact?name=video.webm, agentctl runs artifact, or the artifact panel in the Chat view, which plays it in the page. ⚠ The recording carries the cursor, so it CHANGES TIMING and such a run cannot be a golden; ⚠ it is impossible when attached to a foreign browser over CDP and is refused before the run starts. By default the file is kept only when the run did not finish clean — SENTINEL_VIDEO_ALWAYS=1 keeps it always.",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "POST /v1/runs"
+        },
+        {
+          "kind": "http",
+          "ref": "GET /v1/runs/{id}/artifact"
+        },
+        {
+          "kind": "cli",
+          "ref": "runs artifact"
+        },
+        {
+          "kind": "ui",
+          "ref": "chat"
+        },
+        {
+          "kind": "env",
+          "ref": "SENTINEL_RECORD"
+        },
+        {
+          "kind": "env",
+          "ref": "SENTINEL_VIDEO_ALWAYS"
+        }
+      ],
+      "reach": "capability"
+    },
+    {
       "id": "trace-download",
       "group": "Runtime",
       "severity": "medium",
@@ -1051,8 +1087,8 @@
       "severity": "high",
       "title_ru": "Выбор режима наблюдения прогона",
       "title_en": "Choosing a run's observation mode",
-      "how_ru": "GET /v1/config-schema публикует режимы (off/frames/stream/human/record), дефолт и цену каждого на русском и английском; POST /v1/runs принимает observe; agentctl run --observe <режим> — тот же выбор из терминала; форма прогона хаба заполняется из той же схемы и явно показывает унаследованный дефолт. human и record объявлены, но пока отклоняются с названной задачей (LIVE-HUMAN/LIVE-RECORD) — ADR-120.",
-      "how_en": "GET /v1/config-schema publishes the modes (off/frames/stream/human/record), the default, and each mode's cost in Russian and English; POST /v1/runs accepts observe; agentctl run --observe <mode> is the same choice from a terminal; the hub's run form is filled from the same schema and names the inherited default explicitly. human and record are declared but currently refused with the task named (LIVE-HUMAN/LIVE-RECORD) — ADR-120.",
+      "how_ru": "GET /v1/config-schema публикует режимы (off/frames/stream/human/record), дефолт и цену каждого на русском и английском; POST /v1/runs принимает observe; agentctl run --observe <режим> — тот же выбор из терминала; форма прогона хаба заполняется из той же схемы и явно показывает унаследованный дефолт. Все пять режимов ИСПОЛНЯЮТСЯ: human пришёл с ADR-120, record с ADR-125, и список not_yet схемы теперь пуст. ⚠ Два отказа остались, и оба — про сочетание, а не про режим: украшенный режим (human, record) не смешивается со снятием эталона, а record невозможен при подключении к чужому браузеру по CDP.",
+      "how_en": "GET /v1/config-schema publishes the modes (off/frames/stream/human/record), the default, and each mode's cost in Russian and English; POST /v1/runs accepts observe; agentctl run --observe <mode> is the same choice from a terminal; the hub's run form is filled from the same schema and names the inherited default explicitly. All five modes are PERFORMED: human arrived with ADR-120, record with ADR-125, and the schema's not_yet list is now empty. ⚠ Two refusals remain and both are about a COMBINATION rather than a mode: a decorated mode (human, record) does not mix with a golden capture, and record is impossible when attached to a foreign browser over CDP.",
       "access": [
         {
           "kind": "http",

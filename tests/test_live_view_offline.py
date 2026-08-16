@@ -19,7 +19,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from brain.graph import capture_frame  # noqa: E402
+from brain.frames import capture_frame  # noqa: E402  (moved out of graph.py — PROD-FAIL-MEDIA A)
 
 
 class Ex:
@@ -38,7 +38,7 @@ class Ex:
 
 def test_frame_is_a_file_and_the_event_carries_its_name():
     art = tempfile.mkdtemp(); ex = Ex()
-    name = capture_frame(ex, {"artifact_dir": art}, 7)
+    name = capture_frame(ex, art, 7)
     assert name == "frame-0007.png", name
     assert os.path.exists(os.path.join(art, "frames", name)), "the frame was not written"
     # The bytes must NOT be what travels: the tool is asked for a PATH.
@@ -46,13 +46,13 @@ def test_frame_is_a_file_and_the_event_carries_its_name():
 
 def test_a_failed_frame_never_fails_the_run():
     art = tempfile.mkdtemp()
-    assert capture_frame(Ex(fail=True), {"artifact_dir": art}, 3) == "", "a failure must yield no name"
+    assert capture_frame(Ex(fail=True), art, 3) == "", "a failure must yield no name"
 
 def test_frames_can_be_switched_off():
     art = tempfile.mkdtemp(); ex = Ex()
     os.environ["SENTINEL_LIVE_FRAMES"] = "0"
     try:
-        assert capture_frame(ex, {"artifact_dir": art}, 1) == ""
+        assert capture_frame(ex, art, 1) == ""
         assert not ex.calls, "it asked for a frame that was switched off"
     finally:
         os.environ.pop("SENTINEL_LIVE_FRAMES", None)

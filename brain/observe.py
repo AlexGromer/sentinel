@@ -28,9 +28,17 @@ so it stays out of the set and out of the interface.
 product's answer to "what can I ask for", but a declaration is not machinery: until the machinery
 lands, asking for one is refused with the task named. Accepting a mode and quietly doing something
 else is the class of silence this whole arc exists to remove — a person who asked to watch would get
-frames and no reason. `record` is still in that state (LIVE-RECORD). `human` no longer is: LIVE-HUMAN
-built the decoration side, so the refusal came out of `NOT_YET` IN THE SAME CHANGE as the switch that
-performs it — a mode leaves the waiting room only together with the thing that does the work.
+frames and no reason. `NOT_YET` IS NOW EMPTY: `human` left it with LIVE-HUMAN and `record` with
+LIVE-RECORD (ADR-125), each together with the switch that performs it — a mode leaves the waiting
+room only alongside the thing that does the work. The mapping stays because the shape is the
+contract: the next declared-but-unbuilt mode belongs in it, not in an `if`.
+
+⚠ AN IMPOSSIBILITY IS NOT THE SAME AS AN UNBUILT MODE, and ADR-125 separates them. `record` is built,
+but a run that attached to somebody else's browser over CDP cannot carry it: `recordVideo` is a
+`newContext` option and that context was adopted, not created. Unlike `slowMo` — which the executor
+compensates for with its own pauses (see launch.ts) — video has NOTHING to pay with, so a `record`
+run over CDP would end having produced no video at all. That is refused at the door rather than
+degraded, because a run that did not do the one thing it was asked for is not a degraded run.
 
 ⚠ THE DECORATION SWITCH IS ONE HALF OF A PAIR. `SENTINEL_DECORATE` is written HERE and nowhere else,
 and read by pw-executor and nowhere else (LIVE-HUMAN). It is not a third frame switch: frames answer
@@ -51,16 +59,17 @@ DEFAULT = FRAMES
 
 #: Modes whose machinery is not in this build. Declared as a mapping rather than an `if` chain so the
 #: gate can walk it, and so adding the machinery is a deletion here rather than a search.
-NOT_YET = {
-    RECORD: "LIVE-RECORD brings the video artifact; recordVideo is a newContext option and the "
-            "CDP-attach path adopts a context it did not create, which is the part that needs deciding",
-}
+#:
+#: EMPTY as of ADR-125, and that is a state worth naming rather than a leftover: every mode this
+#: product declares, it now performs. The mapping is kept — deleting it would make the next
+#: declared-but-unbuilt mode arrive as an `if`, which is the shape this replaced.
+NOT_YET: dict = {}
 
 #: The environment switches this resolver OWNS: `apply` writes exactly these and `overrides` reports
 #: exactly these, both by walking this tuple. Two hand-kept lists is how the four switches drifted
 #: apart in the first place — a switch added to one and forgotten in the other would be set silently
 #: and then contradict the plan in the log without saying so.
-SWITCHES = ("SENTINEL_LIVE_FRAMES", "SENTINEL_TRACE_SCREENSHOTS", "SENTINEL_DECORATE")
+SWITCHES = ("SENTINEL_LIVE_FRAMES", "SENTINEL_TRACE_SCREENSHOTS", "SENTINEL_DECORATE", "SENTINEL_RECORD")
 
 #: What each mode COSTS, in the words the interface must show beside it. A mode that only has a name
 #: leaves a person choosing by vibe; ADR-120 requires the applicability and the price on screen.
@@ -75,8 +84,12 @@ COST = {
                   "откликов, гонок и таймаутов, и не смешивается с эталонным режимом",
             "en": "cursor, slowdown and highlight. ⚠ CHANGES TIMING: not usable for checking response times, "
                   "races or timeouts, and does not mix with golden mode"},
-    RECORD: {"ru": "видеофайл артефактом после прогона; на живой вид не влияет",
-             "en": "a video file as an artifact after the run; does not affect the live view"},
+    RECORD: {"ru": "видеофайл артефактом после прогона, С КУРСОРОМ — запись без него так же нечитаема, "
+                   "как голый скринкаст. ⚠ ЗНАЧИТ МЕНЯЕТ ТАЙМИНГ ровно как human, и эталоном такой "
+                   "прогон быть не может. ⚠ НЕВОЗМОЖЕН при подключении к чужому браузеру по CDP",
+             "en": "a video file as an artifact after the run, WITH THE CURSOR — a recording without one "
+                   "is as unreadable as a bare screencast. ⚠ SO IT CHANGES TIMING exactly as human does, "
+                   "and such a run cannot be a golden. ⚠ IMPOSSIBLE when attached to a foreign browser over CDP"},
 }
 
 
@@ -131,7 +144,18 @@ def normalise(raw):
     return v
 
 
-def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_configured=False):
+#: Modes that draw into the page for a PERSON, and therefore change what the run measures.
+#: `record` joined `human` here with ADR-125 and NOT as a convenience: Alex's requirement of
+#: 2026-08-02 is that the recording carries the cursor, because a video without one is as unreadable
+#: as the bare screencast the mode exists to improve on. Drawing means slowMo and an overlay, so every
+#: consequence `human` already carries — changed timing, unusable as a golden — is inherited by
+#: `record` in the same breath. Derived from ONE tuple so the two cannot drift into disagreeing about
+#: which run is safe to trust.
+DECORATED = (HUMAN, RECORD)
+
+
+def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_configured=False,
+            cdp_attached=False):
     """Turn the chosen mode into a plan, or refuse.
 
     The refusals are the point of doing this in one place: each one needs two facts that used to live
@@ -139,14 +163,33 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
     """
     mode = normalise(raw_mode)
 
-    # ⚠ `human` and a golden capture are a contradiction, not a preference. Slowing the run down and
-    # drawing into the page does not DEGRADE a reference — it makes it WRONG, and wrong in a way that
-    # only surfaces later, on somebody else's replay. Declined at the door.
-    if mode == HUMAN and baseline:
+    # ⚠ A decorated mode and a golden capture are a contradiction, not a preference. Slowing the run
+    # down and drawing into the page does not DEGRADE a reference — it makes it WRONG, and wrong in a
+    # way that only surfaces later, on somebody else's replay. Declined at the door.
+    #
+    # Walks DECORATED rather than naming `human`: when ADR-125 gave `record` a cursor it inherited
+    # this contradiction whole, and a refusal that had spelled out one mode would have let the other
+    # through — producing exactly the wrong-but-plausible baseline this guard was written to stop.
+    if mode in DECORATED and baseline:
         raise Refusal(
-            "observe=human cannot be combined with a golden capture: the cursor overlay and slowMo "
+            f"observe={mode} cannot be combined with a golden capture: the cursor overlay and slowMo "
             "change the very pixels and timings the baseline is being recorded to define. Capture the "
-            "baseline with observe=frames, and watch a later replay with observe=human")
+            f"baseline with observe=frames, and watch a later replay with observe={mode}")
+
+    # ⚠ ADR-125 — an impossibility, not an unbuilt mode, and the difference decides the treatment.
+    # `recordVideo` is a `newContext` option; over CDP we ADOPT a context somebody else created
+    # (pw-executor/src/server.ts), so there is no creation to attach it to. `slowMo` has the same
+    # shape of problem and is DEGRADED — the executor pays the pacing with its own per-step pause.
+    # Video has nothing to pay with: the run would simply end with no file. So it is refused here,
+    # before anything starts, and the executor carries a second, louder guard for the case where the
+    # environment reached it by another route. Neither end degrades quietly.
+    if mode == RECORD and cdp_attached:
+        raise Refusal(
+            "observe=record cannot be combined with CDP-attach (PW_CDP_ENDPOINT is set): a video is a "
+            "property of a context at the moment it is CREATED, and this run adopts a context created "
+            "by the browser you attached to. Nothing here can add the recording afterwards, and a run "
+            "that finished without the video you asked for is not a degraded run. Record against a "
+            "browser this run launches itself, or watch the live view with observe=stream")
 
     if mode in NOT_YET:
         raise Refusal(f"observe={mode} is not implemented in this build — {NOT_YET[mode]}")
@@ -163,8 +206,14 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
     # becomes a switch this resolver owns, `stream` and `human` acquire it TOGETHER — one line, not two.
     #
     # Decoration is a property of the PERSON's chosen mode, not a derived state (ADR-120): it is on for
-    # `human` and off for everything else, and nothing else in the run may turn it on.
-    decorations = mode == HUMAN
+    # the decorated modes and off for everything else, and nothing else in the run may turn it on.
+    decorations = mode in DECORATED
+
+    # ADR-125. The video is the WHOLE of what `record` adds — the frame axis and the live view are
+    # untouched by it, which is why `record` is not "stream plus a file". Kept as its own field rather
+    # than derived at the far end from `mode`, for the same reason `decorations` is: the executor must
+    # be told a decision, not left to re-make it from a string it would have to keep in sync.
+    video = mode == RECORD
 
     if mode == OFF:
         why = "off: nothing is captured, by request"
@@ -176,7 +225,7 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
     else:
         why = f"{mode}: chosen" + ("" if raw_mode else " by default (nothing was asked for)")
 
-    plan = ObservationPlan(mode=mode, frames=frames, decorations=decorations, video=False, why=why)
+    plan = ObservationPlan(mode=mode, frames=frames, decorations=decorations, video=video, why=why)
 
     # The VLM layer is not a mode: it is a consequence of having a model that can read our frames. It
     # cannot turn capture ON — the person decides that — but a heal that will never receive a frame
@@ -195,10 +244,11 @@ def apply(plan, env):
     picture in two languages; written apart, they produce a half-observed run that reports nothing
     about the half that is missing. Written here, they cannot be set apart.
 
-    `SENTINEL_DECORATE` (LIVE-HUMAN) rides the SAME expansion for the same reason, not because it is a
-    third frame switch: it carries `plan.decorations` — the person's `human` mode — across the process
-    boundary to the only reader, pw-executor. Expanding it anywhere else would put a second author on
-    one decision, which is exactly how the original four switches came apart.
+    `SENTINEL_DECORATE` (LIVE-HUMAN) and `SENTINEL_RECORD` (ADR-125) ride the SAME expansion for the
+    same reason, not because they are extra frame switches: they carry `plan.decorations` and
+    `plan.video` across the process boundary to their only reader, pw-executor. Expanding either
+    anywhere else would put a second author on one decision, which is exactly how the original four
+    switches came apart.
 
     ⚠ PW_NO_TRACE is not touched — see the module docstring.
 
@@ -210,7 +260,8 @@ def apply(plan, env):
     frames = "1" if plan.frames else "0"
     values = {"SENTINEL_LIVE_FRAMES": frames,
               "SENTINEL_TRACE_SCREENSHOTS": frames,
-              "SENTINEL_DECORATE": "1" if plan.decorations else "0"}
+              "SENTINEL_DECORATE": "1" if plan.decorations else "0",
+              "SENTINEL_RECORD": "1" if plan.video else "0"}
     for var in SWITCHES:
         out.setdefault(var, values[var])
     return out
@@ -234,4 +285,10 @@ def from_env(env=None, *, run_mode="explore"):
         ci=e.get("CI", "0") == "1",
         heal_llm=e.get("HEAL_LLM", "0") == "1",
         vision_configured=(e.get("LLM_VISION") == "1" or e.get("LLM_VISION_HEAL") == "1"),
+        # ADR-125. Read here rather than in `resolve` so the resolver stays a pure function of its
+        # arguments, exactly like `baseline` and `ci`. `PW_CDP_ENDPOINT` is the executor's variable and
+        # this file must never WRITE it — it is only asked whether the run is about to adopt somebody
+        # else's browser, because that is the fact that makes a video impossible rather than merely
+        # awkward. A blank value is not attachment: launch.ts trims it the same way before deciding.
+        cdp_attached=bool((e.get("PW_CDP_ENDPOINT") or "").strip()),
     )

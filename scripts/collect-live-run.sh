@@ -59,7 +59,16 @@ COLLECT=(plan.json scenario.json reconcile-report.json heal-report.json baseline
          # change that creates it, because the fail-safe would otherwise drop it without a word.
          executed-plan.json)
 # Recognised but deliberately not collected by default (so they do not show up as "unknown").
-KNOWN_SKIP=(trace.zip checkpoint.db)
+#
+# ADR-125 put video.webm here rather than in COLLECT, and it is the same call the trace already got:
+# PIXELS ARE NOT REDACTABLE. The redaction below is structural and textual — it can blank a `value`
+# in a step and mask a token in a log line, and it can do NOTHING about a recording that shows a
+# filled login form for as long as the form was on screen. There is no --with-video counterpart on
+# purpose: the trace flag exists because a trace is often the only way to diagnose a hard failure,
+# whereas a video is watched by the person who ran it, on the machine that ran it. Somebody who truly
+# needs to send one can copy it by hand, deliberately, which is the correct amount of friction for
+# shipping a film of somebody else's application off the box.
+KNOWN_SKIP=(trace.zip checkpoint.db video.webm)
 
 WITH_TRACE=""
 OUTDIR=""

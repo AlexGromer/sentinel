@@ -1180,6 +1180,11 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
                 <button type="button" class="btn" id="art-close" style="margin-left:auto">✕</button>
               </div>
               <canvas id="art-canvas" style="max-width:100%;display:none;border:1px solid var(--bd);border-radius:.3rem"></canvas>
+              <!-- ADR-125: the run's video. A THIRD viewer, not a variant of the two above — a canvas
+                   shows one frame and `<pre>` would print the container bytes as mojibake, which is
+                   how `report.html` used to arrive before #235. `controls` and no `autoplay`: a
+                   recording of somebody's application must start because a person asked it to. -->
+              <video id="art-video" controls playsinline preload="metadata" style="max-width:100%;display:none;border:1px solid var(--bd);border-radius:.3rem"></video>
               <pre id="art-text" style="display:none;max-height:40vh;overflow:auto;font-size:.78rem;white-space:pre-wrap"></pre>
             </div>
           </div>
@@ -3928,7 +3933,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      провалившийся по заземлению прогон не мог объяснить, ЧТО не совпало). */
   var ART_NAMES = ['scenario.json','plan.json','report.json','report.html','heal-report.json',
                    'baseline-report.json','reconcile-report.json','junit.xml','executed-plan.json',
-                   'metrics.prom','site-map.json','run.yaml','trace.zip','reply.json'];
+                   'metrics.prom','site-map.json','run.yaml','trace.zip','reply.json','video.webm'];
 
   async function artList(runId){
     var box = ge('art-list'); if (!box) return;
@@ -3964,11 +3969,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      scenario.json and a <pre> cannot show a frame, and the person opening an artefact should not have
      to know which kind it is before clicking. */
   async function artOpen(runId, name){
-    var view = ge('art-view'), cv = ge('art-canvas'), tx = ge('art-text');
+    var view = ge('art-view'), cv = ge('art-canvas'), tx = ge('art-text'), vd = ge('art-video');
     if (!view) return;
     view.hidden = false;
     ge('art-view-name').textContent = name;
     cv.style.display = 'none'; tx.style.display = 'none';
+    /* Released BEFORE the next artefact is drawn, not on close: `art-close` is one of three ways this
+       panel stops showing a video (opening another artefact and switching view are the others), so
+       tying the teardown to the button would leak the blob — and a leaked object URL keeps the whole
+       recording alive in the tab. */
+    if (vd){ vd.pause(); if (vd.src){ URL.revokeObjectURL(vd.src); vd.removeAttribute('src'); vd.load(); } vd.style.display = 'none'; }
     try {
       var r = await fetch(capiBase()+'/v1/runs/'+encodeURIComponent(runId)+'/artifact?name='+encodeURIComponent(name),
                           { headers: authHdr() });
@@ -3982,6 +3992,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
           URL.revokeObjectURL(url);
         };
         img.src = url;
+        return;
+      }
+      /* ADR-125. A blob, not a plain `src` on the route: the artefact route requires an Authorization
+         header, and `<video src=...>` cannot carry one — the same reason `lvShowFrame` fetches its
+         frame instead of pointing an `<img>` at the URL. */
+      if (/\.(webm|mp4)$/i.test(name)){
+        /* innerHTML, not textContent: bi() RETURNS `<span data-lang>` markup, and assigning it to
+           textContent prints the tags at the reader — the exact class the gate in
+           tests/test_markup_not_text_offline.py exists to catch, and it caught this line. Both halves
+           are literals, so there is nothing dynamic here to esc(). */
+        if (!vd){ tx.style.display='block'; tx.innerHTML = bi('этот хаб не умеет показывать видео','this hub cannot show video'); return; }
+        vd.src = URL.createObjectURL(await r.blob());
+        vd.style.display = 'block';
         return;
       }
       var text = await r.text();

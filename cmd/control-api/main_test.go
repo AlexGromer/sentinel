@@ -1120,3 +1120,79 @@ func TestConversationalTurnAnswersWithTheReply(t *testing.T) {
 		t.Fatalf("the reply was ignored in favour of the run log:\n%s", body)
 	}
 }
+
+// TestBinaryArtifactsAnnounceTheirRealType: ADR-125, and it is a REGRESSION gate rather than a new
+// claim — the defect it pins was found by watching the running product, not by reading the handler.
+//
+// The route sends `X-Content-Type-Options: nosniff` and then labelled everything that was not a .zip
+// or an .html `application/json`, video and screenshots included. Both still rendered, because
+// Chromium sniffs a blob's container for itself — which means the page worked by relying on exactly
+// the behaviour the header asks the browser NOT to perform. A stricter engine is entitled to refuse,
+// and the failure would read as a broken recording rather than as a wrong header.
+//
+// Derived from `artifactWhitelist` instead of naming files: a binary artifact added later is judged
+// by this rule automatically. A hand-kept list here would have to be edited in the same breath as the
+// whitelist, which is how a check stops checking and becomes a copy.
+func TestBinaryArtifactsAnnounceTheirRealType(t *testing.T) {
+	// Suffix -> the type the byte stream actually is. Names not covered here are structured text and
+	// keep application/json, which is what they are.
+	binary := map[string]string{".webm": "video/webm", ".zip": "application/zip", ".png": "image/png"}
+
+	s, repo := newRunServer(t)
+	id := createRunAndWait(t, s)
+	artDir := filepath.Join(repo, "runs", "control-"+id)
+	if err := os.MkdirAll(filepath.Join(artDir, "frames"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The walk: every whitelisted name whose suffix is binary, plus the frame pattern, which is not in
+	// the whitelist map at all (it has its own regexp) and would otherwise be missed by a walk of the
+	// map alone — the exact shape of gap this file has been bitten by before.
+	names := []string{"frames/frame-0001.png"}
+	for n := range artifactWhitelist {
+		for suf := range binary {
+			if strings.HasSuffix(n, suf) {
+				names = append(names, n)
+			}
+		}
+	}
+	if len(names) < 3 {
+		t.Fatalf("the walk found only %d binary artifact(s) (%v) — a floor, because a walk that "+
+			"stops finding things passes perfectly over nothing", len(names), names)
+	}
+
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(artDir, name), []byte("\x1a\x45\xdf\xa3binary"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+id+"/artifact?name="+url.QueryEscape(name), nil)
+		req.Header.Set("Authorization", "Bearer secret-tok")
+		s.mux().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d want 200", name, rec.Code)
+		}
+		var want string
+		for suf, ct := range binary {
+			if strings.HasSuffix(name, suf) {
+				want = ct
+			}
+		}
+		if got := rec.Header().Get("Content-Type"); got != want {
+			t.Fatalf("%s: Content-Type %q, want %q. The route also sends nosniff, so a wrong type here "+
+				"is not cosmetic: it asks the browser not to guess and then requires it to guess.", name, got, want)
+		}
+	}
+
+	// The negative half, or the assertion above is satisfied by labelling EVERYTHING video/webm.
+	if err := os.WriteFile(filepath.Join(artDir, "plan.json"), []byte(`{"steps":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+id+"/artifact?name=plan.json", nil)
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("plan.json: Content-Type %q, want application/json — structured text must stay text", got)
+	}
+}
