@@ -144,12 +144,20 @@
       "severity": "high",
       "title_ru": "Перехват живого прогона руками",
       "title_en": "Take over a live run by hand",
-      "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление.",
-      "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back.",
+      "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление. ⚠ Требует ЗАПУЩЕННОГО сервиса orchestrator и адреса CONTROL_API_ORCH_ADDR: перехват доезжает до прогона по каналу RunControl, и без него control-api честно отвечает «no orchestrator wired». До ADR-126 этот сервис не запускался ни одной формой поставки, то есть возможность была объявлена и мертва; теперь он есть в compose и в .deb (юнит ставится выключенным).",
+      "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back. ⚠ Requires the orchestrator service to be RUNNING and CONTROL_API_ORCH_ADDR to be set: the takeover reaches the run over the RunControl channel, and without it control-api answers \"no orchestrator wired\" rather than pretending. Before ADR-126 no delivery form launched that service at all, so this capability was declared and dead; it now ships in compose and in the .deb (the unit is installed disabled).",
       "access": [
         {
           "kind": "http",
           "ref": "GET /v1/stream"
+        },
+        {
+          "kind": "service",
+          "ref": "orchestrator"
+        },
+        {
+          "kind": "env",
+          "ref": "CONTROL_API_ORCH_ADDR"
         }
       ],
       "reach": "capability",
@@ -227,6 +235,34 @@
       "missing": {
         "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
       }
+    },
+    {
+      "id": "run-supervision",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Надзор за прогоном (RunControl)",
+      "title_en": "Run supervision (RunControl)",
+      "how_ru": "Сервис `orchestrator --serve` держит канал RunControl, по которому прогон получает три вещи, невозможные без него: жёсткий потолок бюджета (ADR-021), перехват и возврат управления (ADR-054) и ответ человека на гейт карты (ADR-108c). Поднимается сервисом compose (`orchestrator`) либо юнитом `.deb` `sentinel-orchestrator` (ставится ВЫКЛЮЧЕННЫМ); control-api находит его по `CONTROL_API_ORCH_ADDR`, а прогон — по `ORCH_ADDR`, который control-api передаёт сам. ⚠ Надзор — ДОПОЛНЕНИЕ к прогону, а не предусловие: без сервиса прогоны идут ровно как раньше, а каждая неудача дозвона говорится один раз, а не на каждый опрос.",
+      "how_en": "The `orchestrator --serve` service holds the RunControl channel that gives a run three things impossible without it: the hard budget ceiling (ADR-021), operator takeover and return (ADR-054), and a person's answer to the map gate (ADR-108c). Started as the compose service `orchestrator` or by the `.deb` unit `sentinel-orchestrator` (installed DISABLED); control-api finds it through `CONTROL_API_ORCH_ADDR`, and a run through `ORCH_ADDR`, which control-api passes down itself. ⚠ Supervision is an ADDITION to a run, never a precondition: without the service runs proceed exactly as before, and each dial failure is said once rather than per poll.",
+      "access": [
+        {
+          "kind": "service",
+          "ref": "orchestrator"
+        },
+        {
+          "kind": "env",
+          "ref": "CONTROL_API_ORCH_ADDR"
+        },
+        {
+          "kind": "env",
+          "ref": "ORCH_ADDR"
+        },
+        {
+          "kind": "file",
+          "ref": "packaging/deb/sentinel-orchestrator.service"
+        }
+      ],
+      "reach": "capability"
     },
     {
       "id": "run-video",
@@ -620,12 +656,16 @@
       "severity": "medium",
       "title_ru": "Токен-бюджеты",
       "title_en": "Token budgets",
-      "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат; исчерпание = мягкая деградация, не отказ (ADR-021).",
-      "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings; running out degrades gracefully, not fails (ADR-021).",
+      "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат. Мягкая половина (деградация до эвристики и L1–L6) работает В БРЕЙНЕ всегда и не требует ничего. ⚠ ЖЁСТКИЙ потолок — модельно-НЕЗАВИСИМАЯ остановка прогона (ADR-021) — требует запущенного orchestrator: он объявляет превышение, а останавливает control-api, потому что под compose у каждого сервиса свой PID-неймспейс и сигналить чужие процессы физически нельзя (ADR-126). Без сервиса остаётся только мягкая половина, и это состояние по умолчанию.",
+      "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings. The soft half (degrading to the heuristic planner and L1–L6 healing) lives IN THE BRAIN and needs nothing. ⚠ The HARD ceiling — the model-INDEPENDENT stop of ADR-021 — needs the orchestrator running: it declares the breach and control-api stops the run, because under compose each service has its own PID namespace and signalling another's processes is impossible (ADR-126). Without the service only the soft half remains, and that is the default state.",
       "access": [
         {
           "kind": "env",
           "ref": "PLAN_TOKEN_LIMIT"
+        },
+        {
+          "kind": "service",
+          "ref": "orchestrator"
         }
       ],
       "reach": "artifact",

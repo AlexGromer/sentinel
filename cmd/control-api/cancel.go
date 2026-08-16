@@ -72,40 +72,11 @@ func (s *server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := killProcTree(pid, false); err != nil {
+	forced, forceErr, err := s.stopRunTree(rec, pid)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "could not signal the run: " + err.Error()})
 		return
-	}
-
-	// Wait briefly for the graceful exit, then force it. Bounded so the request cannot hang.
-	forced := false
-	forceErr := ""
-	deadline := time.Now().Add(cancelGrace)
-	for time.Now().Before(deadline) {
-		s.mu.RLock()
-		done := rec.State != "running"
-		s.mu.RUnlock()
-		if done {
-			break
-		}
-		time.Sleep(cancelPoll)
-	}
-	s.mu.RLock()
-	stillRunning := rec.State == "running"
-	s.mu.RUnlock()
-	if stillRunning {
-		forced = true
-		// The SIGKILL result is checked, like the SIGTERM one four lines above. It was discarded,
-		// which meant the response said `"forced": true` whether or not the kill landed — telling a
-		// caller a run was force-stopped while it may still be running is the one answer worse than
-		// admitting the stop failed. Reported rather than returned as an error: the cancellation
-		// path has already done everything it can, and the caller needs the outcome, not a 500 that
-		// hides which half worked.
-		if err := killProcTree(pid, true); err != nil {
-			forceErr = err.Error()
-			fmt.Fprintf(os.Stderr, "[control-api] force-kill of run %s (pid %d) failed: %v\n", rec.ID, pid, err)
-		}
 	}
 
 	s.mu.RLock()
@@ -122,4 +93,44 @@ func (s *server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 		resp["force_error"] = forceErr
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// stopRunTree signals the run's process GROUP: graceful, then forced if the tree ignores it.
+//
+// Extracted from handleCancelRun by ADR-126, when the budget ceiling gained a second caller
+// (`superviseRun`). Not a tidy-up: two independent stop paths would have drifted, and the way they
+// drift is silent — one of them keeps the SIGTERM grace and the other does not, so a run cancelled by
+// a person leaves a usable trace while one stopped by the budget leaves a truncated file, and nothing
+// says why. One implementation, one behaviour, whichever reason stopped the run.
+//
+// Returns (forced, forceError, signalError). A failed SIGKILL is REPORTED rather than returned as the
+// error: by then everything that could be done has been, and the caller needs to know which half
+// worked — telling somebody a run was force-stopped while it may still be alive is the one answer
+// worse than admitting the stop failed.
+func (s *server) stopRunTree(rec *run, pid int) (bool, string, error) {
+	if err := killProcTree(pid, false); err != nil {
+		return false, "", err
+	}
+	// Wait briefly for the graceful exit, then force it. Bounded, so no caller can hang on this.
+	deadline := time.Now().Add(cancelGrace)
+	for time.Now().Before(deadline) {
+		s.mu.RLock()
+		done := rec.State != "running"
+		s.mu.RUnlock()
+		if done {
+			break
+		}
+		time.Sleep(cancelPoll)
+	}
+	s.mu.RLock()
+	stillRunning := rec.State == "running"
+	s.mu.RUnlock()
+	if !stillRunning {
+		return false, "", nil
+	}
+	if err := killProcTree(pid, true); err != nil {
+		fmt.Fprintf(os.Stderr, "[control-api] force-kill of run %s (pid %d) failed: %v\n", rec.ID, pid, err)
+		return true, err.Error(), nil
+	}
+	return true, "", nil
 }

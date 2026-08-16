@@ -1,28 +1,49 @@
-// Command orchestrator is the Sentinel run supervisor (M8, ADR-021): a long-lived gRPC RunControl
-// server that spawns the Python brain, reconciles its per-step token deltas against the run budget,
-// and enforces a model-INDEPENDENT hard ceiling — signalling abort via ReportEvent and, as a
-// backstop, SIGTERM-ing the brain subprocess if it does not converge within a grace period.
+// Command orchestrator is the Sentinel run supervisor (M8, ADR-021; wired by ADR-126): a long-lived
+// gRPC RunControl SERVICE that reconciles per-step token deltas against each run's budget, carries the
+// operator's takeover/return (ADR-054) and the map gate's answer (ADR-108c) to the brain, and declares
+// a budget breach so the process that owns the run can stop it.
 //
-// Usage: orchestrator --target <URL> [--planner llm|heuristic] [--mode explore|replay] [--plan <p>]
+// Usage: orchestrator --serve [--addr <unix socket>] [--plan-token-limit N] [--heal-token-limit N]
 //
-//	[--plan-token-limit N] [--heal-token-limit N] [--total-token-limit N] [--kill-grace 10s]
+//	[--total-token-limit N]
+//
+// WHY THIS IS A SERVICE AND NOT A PER-RUN COMMAND (ADR-126). It used to be the latter: `main` minted
+// its own run id, listened on `state/sentinel-orch-<id>.sock`, spawned the brain itself and exited
+// with it. Three things followed, and all three are why nothing ever wired it:
+//
+//  1. `CONTROL_API_ORCH_ADDR` is read ONCE at control-api startup, so a per-run socket path could
+//     never be addressed — two concurrent runs had no answer at all.
+//  2. The id in `Takeover(run_id)` comes from control-api; the id this process minted was a different
+//     string, so the call could not have found the run even if it had arrived.
+//  3. Spawning the brain made this a SECOND owner of the run lifecycle, next to `agentctl` — and it
+//     spawned `python -m brain` directly, bypassing agentctl's env allowlist and its store wiring.
+//
+// The proto has said "service" all along: `StartRun(run_id, limits)` is a registration call, which a
+// one-run process has no use for. So the one-run path is gone, `agentctl` is again the single owner of
+// the run, and `runs` — a map that was already keyed by run id — serves as many runs as ask.
+//
+// ⚠ THE HARD CEILING MOVED, IT DID NOT VANISH, and that is the one thing ADR-021 must not lose. The
+// old backstop was `cmd.Process.Signal(SIGTERM)`, available only because this process was the brain's
+// parent. A service cannot do that: under compose each service has its OWN PID namespace, so
+// signalling another container's processes is not merely discouraged, it is impossible. Enforcement
+// therefore belongs to control-api, which already owns a strictly better mechanism —
+// `cmd/control-api/cancel.go` signals the whole process GROUP (SIGTERM, then SIGKILL), reaching the
+// brain, the executor AND Chromium, where the old backstop reached a single process. This service
+// DECIDES; control-api ACTS.
 //
 // Uses only google.golang.org/grpc + the generated internal/orchestrator/pb stubs (no OTel dep).
 package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,14 +51,6 @@ import (
 
 	pb "github.com/AlexGromer/sentinel/internal/orchestrator/pb"
 )
-
-func newRunID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "local"
-	}
-	return hex.EncodeToString(b)
-}
 
 // runState tracks cumulative spend + limits for one run (0 limit = that gate is off).
 type runState struct {
@@ -170,135 +183,78 @@ func (o *orchestrator) DecideMap(_ context.Context, r *pb.MapDecisionRequest) (*
 	return &pb.MapDecisionReply{Ok: true}, nil
 }
 
-func (o *orchestrator) breachOf(runID string) (bool, string) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if rs := o.runs[runID]; rs != nil {
-		return rs.breached, rs.reason
-	}
-	return false, ""
-}
-
+// ⚠ `breachOf` USED TO LIVE HERE and was deleted by ADR-126, deliberately rather than left unused.
+// It served the watchdog that SIGTERM-ed the brain this process had spawned; with the spawn gone it
+// answered a question nobody asked. Keeping it would have been worse than removing it: a live-looking
+// method named after the hard ceiling is exactly what convinces the next reader that this service
+// still enforces one. It does not — it DECIDES, and control-api enforces (see the file docstring).
+// The breach reaches the outside the same way everything else does: on the next `ReportEvent` reply.
 func main() {
-	addr := flag.String("addr", "", "unix socket to listen on (default state/sentinel-orch-<id>.sock)")
-	target := flag.String("target", "", "target URL for the brain run")
-	planner := flag.String("planner", "llm", "planner: heuristic|llm")
-	mode := flag.String("mode", "explore", "brain RUN_MODE (explore|replay)")
-	planFile := flag.String("plan", "", "plan.json (replay)")
-	planLimit := flag.Int64("plan-token-limit", 50000, "plan token budget")
-	healLimit := flag.Int64("heal-token-limit", 20000, "heal token budget")
-	totalLimit := flag.Int64("total-token-limit", 0, "total token budget (0=off)")
-	grace := flag.Duration("kill-grace", 10*time.Second, "grace before SIGTERM after a budget breach")
+	serve := flag.Bool("serve", false, "run as a long-lived RunControl service (the only mode since ADR-126)")
+	addr := flag.String("addr", "", "unix socket to listen on (default <repo>/state/orch.sock)")
+	planLimit := flag.Int64("plan-token-limit", 50000, "default plan token budget for a run that sets none of its own")
+	healLimit := flag.Int64("heal-token-limit", 20000, "default heal token budget for a run that sets none of its own")
+	totalLimit := flag.Int64("total-token-limit", 0, "default total token budget (0=off)")
 	flag.Parse()
+
+	// ⚠ REQUIRED rather than defaulted, deliberately. Before ADR-126 this binary with no flags meant
+	// "supervise one run and exit"; anyone still holding an old invocation would otherwise now get a
+	// process that sits there serving nobody, which looks exactly like a working service. An explicit
+	// flag turns that silence into a message that names what changed and what to do instead.
+	if !*serve {
+		fmt.Fprintln(os.Stderr,
+			"orchestrator: --serve is required.\n\n"+
+				"This is a long-lived RunControl SERVICE (ADR-126). The per-run form it used to have —\n"+
+				"  orchestrator --target <URL> [--mode ...] [--plan ...]\n"+
+				"— is gone: it spawned the brain itself, which made it a second owner of the run beside\n"+
+				"agentctl, and its per-run socket could not be addressed by control-api's single\n"+
+				"CONTROL_API_ORCH_ADDR. Start runs with `agentctl run` (or through control-api), and run\n"+
+				"this alongside them:\n\n"+
+				"  orchestrator --serve --addr /app/state/orch.sock")
+		os.Exit(2)
+	}
 
 	repo, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "orchestrator: cwd: %v\n", err)
 		os.Exit(1)
 	}
-	runID := newRunID()
 	sock := *addr
 	if sock == "" {
 		_ = os.MkdirAll(filepath.Join(repo, "state"), 0o755)
-		sock = filepath.Join(repo, "state", "sentinel-orch-"+runID+".sock")
+		sock = filepath.Join(repo, "state", "orch.sock")
 	}
+	// A socket left by an unclean shutdown makes `listen` fail with "address already in use" over a
+	// path nothing is serving. Same problem, and the same one-line answer, as store-gateway's.
 	_ = os.Remove(sock)
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "orchestrator: listen %s: %v\n", sock, err)
 		os.Exit(1)
 	}
-	defer os.Remove(sock)
 
 	orch := newOrchestrator(*planLimit, *healLimit, *totalLimit)
 	g := grpc.NewServer()
 	pb.RegisterRunControlServer(g, orch)
-	// The serve error is REPORTED and it KILLS THE PROCESS, rather than being discarded into a
-	// goroutine nobody hears from.
-	//
-	// This is the whole control channel: budget reconciliation, the abort signal, operator
-	// takeover/return and the map-decision gate all arrive over it. With `_ = g.Serve(lis)`, a
-	// failure to serve left main() sailing on into StartRun and the watchdog loop with a brain
-	// pointed at a socket nothing was listening to — and every one of those features degrades to
-	// "continue" without a word. That is the same shape as the incident that made grpcaddr.py
-	// necessary: a channel that was dead in every deployment for months because both ends were
-	// built to never complain.
-	//
-	// GracefulStop makes a normal shutdown return nil from Serve, so the only path that reaches the
-	// exit below is a real failure. store-gateway's identical call has always been checked
-	// (cmd/store-gateway/main.go) — this was an inconsistency between two files, not a convention.
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- g.Serve(lis) }()
-	go func() {
-		if err := <-serveErr; err != nil {
-			fmt.Fprintf(os.Stderr, "orchestrator: serve %s: %v\n", sock, err)
-			os.Exit(1)
-		}
-	}()
-	defer g.GracefulStop()
-	orch.StartRun(context.Background(), &pb.StartRunRequest{
-		RunId: runID, PlanTokenLimit: *planLimit, HealTokenLimit: *healLimit, TotalTokenLimit: *totalLimit})
 
-	// spawn the brain pointed at this orchestrator
-	brainPython := filepath.Join(repo, ".venv", "bin", "python")
-	if _, statErr := os.Stat(brainPython); statErr != nil {
-		brainPython = "python3"
-	}
-	if v := os.Getenv("BRAIN_PYTHON"); v != "" {
-		brainPython = v
-	}
-	artifactDir := filepath.Join(repo, "runs", runID)
-	_ = os.MkdirAll(artifactDir, 0o755)
-	cmd := exec.Command(brainPython, "-m", "brain")
-	cmd.Dir = repo
-	cmd.Env = append(os.Environ(),
-		"RUN_ID="+runID, "RUN_MODE="+*mode, "TARGET_URL="+*target,
-		"PLANNER="+*planner, "PLAN_FILE="+*planFile,
-		"PW_EXECUTOR_CMD=node "+filepath.Join(repo, "pw-executor", "dist", "server.js"),
-		"PYTHONPATH="+repo, "ORCH_ADDR="+sock, "ARTIFACT_DIR="+artifactDir,
-		fmt.Sprintf("PLAN_TOKEN_LIMIT=%d", *planLimit),
-		fmt.Sprintf("HEAL_TOKEN_LIMIT=%d", *healLimit),
-		fmt.Sprintf("TOTAL_TOKEN_LIMIT=%d", *totalLimit),
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	fmt.Fprintf(os.Stderr, "[orchestrator] run_id=%s mode=%s target=%s orch=%s\n", runID, *mode, *target, sock)
-	if startErr := cmd.Start(); startErr != nil {
-		fmt.Fprintf(os.Stderr, "orchestrator: start brain: %v\n", startErr)
+	// The socket EXISTING is what control-api dials and what the compose healthcheck tests, so it must
+	// not outlive the process: a path that answers nothing is worse than a path that is absent, because
+	// only an actual call can tell the first from a healthy service.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-stop
+		fmt.Fprintln(os.Stderr, "[orchestrator] signal received - stopping")
+		g.GracefulStop()
+		_ = os.Remove(sock)
+	}()
+
+	fmt.Fprintf(os.Stderr, "[orchestrator] serving RunControl on %s (defaults plan=%d heal=%d total=%d)\n",
+		sock, *planLimit, *healLimit, *totalLimit)
+	if err := g.Serve(lis); err != nil {
+		fmt.Fprintf(os.Stderr, "orchestrator: serve: %v\n", err)
+		_ = os.Remove(sock)
 		os.Exit(1)
 	}
-
-	done := make(chan int, 1)
-	go func() {
-		werr := cmd.Wait()
-		code := 0
-		if ee, ok := werr.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		} else if werr != nil {
-			code = 1
-		}
-		done <- code
-	}()
-
-	// hard-ceiling watchdog: SIGTERM the brain if a breach persists past the grace period.
-	var breachAt time.Time
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case code := <-done:
-			fmt.Fprintf(os.Stderr, "[orchestrator] brain exited code=%d\n", code)
-			os.Exit(code)
-		case <-ticker.C:
-			if breached, reason := orch.breachOf(runID); breached {
-				if breachAt.IsZero() {
-					breachAt = time.Now()
-					fmt.Fprintf(os.Stderr, "[orchestrator] budget breach (%s) — grace %s before SIGTERM\n", reason, *grace)
-				} else if time.Since(breachAt) > *grace {
-					fmt.Fprintln(os.Stderr, "[orchestrator] grace elapsed -> SIGTERM brain (hard ceiling)")
-					_ = cmd.Process.Signal(syscall.SIGTERM)
-				}
-			}
-		}
-	}
+	_ = os.Remove(sock)
 }

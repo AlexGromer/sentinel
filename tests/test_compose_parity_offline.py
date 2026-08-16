@@ -38,7 +38,13 @@ BUILT = REPO / "docker-compose.yml"
 PULLED = REPO / "docker-compose.ghcr.yml"
 
 # The services `docker compose up` must start with no flags — the product, not a menu of parts.
-DEFAULT_STACK = {"control-api", "store-gateway", "browser", "webui"}
+DEFAULT_STACK = {"control-api", "store-gateway", "browser", "webui", "orchestrator"}
+# ⚠ `orchestrator` joined at ADR-126, and the gate made it a deliberate edit — which is what it is
+# for. It belongs in the DEFAULT set rather than behind a profile because it is not "heavier than
+# the product": it is the same image, one Go process and one unix socket, and without it three
+# things the product ADVERTISES are silently absent — the budget ceiling (ADR-021), operator
+# takeover (ADR-054) and the map gate (ADR-108c). A profile would have kept the honest default
+# smaller and the advertised product a fiction.
 
 
 def _services(path: pathlib.Path) -> "dict[str, set[str]]":
@@ -176,6 +182,9 @@ def test_the_default_stack_is_wired_to_itself():
         # The one that was missing from the built stack entirely, which is why runs started through
         # the API never attached to the browser service they were meant to share.
         "PW_CDP_ENDPOINT": "http://browser:9223",
+        # ADR-126. Absent from every compose file until then, which is the whole reason the budget
+        # ceiling, operator takeover and the map gate were dead in each shipped deployment.
+        "CONTROL_API_ORCH_ADDR": "unix:/app/state/orch.sock",
     }
     for path in (BUILT, PULLED):
         seg = _segments(path)["control-api"]
@@ -190,6 +199,52 @@ def test_the_default_stack_is_wired_to_itself():
                 f"{path.name}: control-api sets {var} to {value!r}, expected "
                 f"'${{{var}-{target}}}' — the sibling service as the default, in the single-dash "
                 f"form so an explicit empty value still opts out.")
+
+
+def test_the_orchestrator_listens_where_control_api_dials(path=None):
+    """One socket path, written in TWO places, with nothing joining them — until this.
+
+    ⚠ THIS TEST EXISTS BECAUSE A MUTATION SURVIVED. Dropping `--addr /app/state/orch.sock` from the
+    orchestrator's entrypoint broke nothing: every gate stayed green, `docker compose ps` reported the
+    service HEALTHY, and control-api silently never reached it. The healthcheck is the reason it looks
+    so convincing — it tests the path the ENTRYPOINT chose, so the two wrong halves agree with each
+    other and disagree only with the third.
+
+    That failure is the exact shape of the defect ADR-126 was written to remove: two ends naming a
+    thing in two files, each correct on its own. So the check is a COMPARISON of what is written,
+    never a repetition of the expected value — a hand-written path here would be a fourth place to
+    get wrong.
+    """
+    for p in (BUILT, PULLED):
+        seg = _segments(p)
+        assert "orchestrator" in seg, f"{p.name}: no orchestrator service to check"
+
+        m = re.search(r"(?m)^      CONTROL_API_ORCH_ADDR:\s*\$\{CONTROL_API_ORCH_ADDR-unix:(\S+?)\}\s*$",
+                      seg["control-api"])
+        assert m, f"{p.name}: control-api does not name CONTROL_API_ORCH_ADDR in its own environment block"
+        dialled = m.group(1)
+
+        e = re.search(r'(?m)^    entrypoint:\s*\[(.+)\]\s*$', seg["orchestrator"])
+        assert e, f"{p.name}: the orchestrator service has no entrypoint to read a socket path from"
+        argv = [a.strip().strip('"') for a in e.group(1).split(",")]
+        assert "--serve" in argv, (
+            f"{p.name}: the orchestrator entrypoint is {argv} — without --serve the binary refuses to "
+            f"start at all (ADR-126), so the service would restart-loop while looking configured")
+        assert "--addr" in argv, (
+            f"{p.name}: the orchestrator entrypoint names no --addr, so it listens on its built-in "
+            f"default while control-api dials {dialled!r}. The healthcheck would still pass — it "
+            f"tests the path the entrypoint chose — and the two would never meet")
+        listens = argv[argv.index("--addr") + 1]
+        assert listens == dialled, (
+            f"{p.name}: the orchestrator listens on {listens!r} and control-api dials {dialled!r}. "
+            f"The stack comes up healthy and the supervision is silently absent — no ceiling, no "
+            f"takeover, no map gate, and nothing in any log to say so")
+
+        # The healthcheck is the third writer of the same path, and the same trap: green over a
+        # socket nobody dials proves only that the service is talking to itself.
+        assert listens in seg["orchestrator"].split("healthcheck:", 1)[-1], (
+            f"{p.name}: the healthcheck does not test {listens!r} — the path the service actually "
+            f"listens on. A probe of some other path is a green tick with no subject")
 
 
 def test_control_api_waits_for_what_it_only_probes_once():
