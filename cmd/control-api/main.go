@@ -404,13 +404,20 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 					"frames": map[string]any{"ru": "кадр на каждый шаг, их показывает хаб; замедляет прогон незначительно", "en": "one frame per step, rendered by the hub; slows a run slightly"},
 					"stream": map[string]any{"ru": "живой экран без украшений — годится и человеку, и машине", "en": "the live screen, undecorated — usable by a person and a machine"},
 					"human":  map[string]any{"ru": "курсор, замедление, подсветка. ⚠ МЕНЯЕТ ТАЙМИНГ — не для проверки откликов, гонок и таймаутов; с эталонным режимом не смешивается", "en": "cursor, slowdown, highlight. ⚠ CHANGES TIMING — not for response times, races or timeouts; does not mix with golden mode"},
-					"record": map[string]any{"ru": "видеофайл артефактом после прогона; на живой вид не влияет", "en": "a video file as an artifact after the run; does not affect the live view"},
+					"record": map[string]any{"ru": "видеофайл артефактом после прогона, С КУРСОРОМ. ⚠ МЕНЯЕТ ТАЙМИНГ ровно как human, эталоном такой прогон быть не может. ⚠ НЕВОЗМОЖЕН при подключении к чужому браузеру по CDP", "en": "a video file as an artifact after the run, WITH THE CURSOR. ⚠ CHANGES TIMING exactly as human does, such a run cannot be a golden. ⚠ IMPOSSIBLE when attached to a foreign browser over CDP"},
 				},
 				// LIVE-HUMAN landed, so `human` came OUT of this list in the same change as the machinery
 				// (brain/observe.py: SENTINEL_DECORATE). Left in, the hub would label an implemented mode
 				// "not in this build" while runs in it succeed — the same lie as the reverse, and the
 				// resolver's NOT_YET is the authority: tests/test_observation_modes_offline.py compares them.
-				"not_yet": []string{"record"}, // declared, refused with the task named until LIVE-RECORD lands
+				//
+				// ADR-125 emptied it: `record` left with its machinery (SENTINEL_RECORD) exactly as `human`
+				// did. EMPTY IS A REAL STATE and it means every mode this build declares, it performs —
+				// it is not a list somebody forgot to fill. ⚠ `record` is still IMPOSSIBLE over CDP-attach,
+				// but that is a property of the RUN, not of the build, so it belongs in the refusal the
+				// resolver raises when it sees PW_CDP_ENDPOINT — not here, where it would tell every
+				// non-CDP user their build cannot do something it does.
+				"not_yet": []string{},
 			},
 		},
 		// M11.5 PR-3 (ADR-060): LLM-backend descriptors from brain/llm.py make_backend. Descriptors ONLY —
@@ -1548,6 +1555,13 @@ var artifactWhitelist = map[string]bool{
 	// text plan.json already holds, under the same retention. It carries no secret: credentials travel
 	// as secretRef, never as a value (ADR-098).
 	"run.yaml": true,
+	// ADR-125 (LIVE-RECORD): the video of a run. Present only when it was asked for with
+	// observe=record AND the run did not finish clean (or SENTINEL_VIDEO_ALWAYS=1) — so a 404 here is
+	// the ORDINARY answer, not a fault. Listed by exact name for the same reason as every line above:
+	// this route reads files a caller names, and a pattern would be a traversal wearing a convenience.
+	// The per-step frames keep their own pattern (`frameNamePattern`) because there are many of them
+	// and exactly one of these.
+	"video.webm": true,
 }
 
 // frameNamePattern bounds what a live-frame request may name (ADR-108d). Written as an anchored
@@ -1681,6 +1695,22 @@ func (s *server) handleRunArtifact(w http.ResponseWriter, r *http.Request) {
 		// agent-influenced HTML if someone navigates straight to this endpoint.
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	} else if strings.HasSuffix(name, ".webm") {
+		// ADR-125: the run's video, served INLINE — the hub plays it in the page, so an attachment
+		// disposition would turn "watch what happened" into "download and find a player".
+		//
+		// ⚠ AND THE TYPE IS NOT COSMETIC HERE, which is how this was found. Measured against the
+		// running product: the video reached the page and played — but only because Chromium sniffs a
+		// blob's container for itself. We send `X-Content-Type-Options: nosniff` two lines above, so
+		// relying on that is relying on a behaviour we have explicitly asked the browser not to
+		// perform; a stricter engine is entitled to refuse, and the failure would look like a broken
+		// recording rather than a wrong header.
+		w.Header().Set("Content-Type", "video/webm")
+	} else if isFrameName(name) {
+		// Same defect, found in the same measurement and fixed in the same breath rather than left
+		// beside its twin: a per-step PNG was going out as `application/json` too. It renders today
+		// for the same accidental reason, and is wrong for the same real one.
+		w.Header().Set("Content-Type", "image/png")
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 	}

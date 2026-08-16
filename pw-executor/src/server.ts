@@ -27,6 +27,7 @@ import {
   installDecorations, announce, echo, withCleanFrame, restoreCursor, sleep,
   DECOR_TYPE_DELAY_MS, type Point,
 } from './decorate.js';
+import { makeVideoDir, dropVideoDir } from './record.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -382,6 +383,15 @@ let tracingStopped = false;
 // M9.6/ADR-037: true when we attached to the user's browser over CDP — teardown must NOT close it.
 let attachedOverCDP = false;
 
+// LIVE-RECORD (ADR-125): the scratch directory Playwright drops raw videos into while the context
+// lives, or null when this run does not record. See record.ts for why it is not the artifact dir.
+let videoDir: string | null = null;
+// ⚠ Finishing a video REQUIRES closing the context — that is the only moment Playwright guarantees
+// the bytes are complete. So `browser.videoStop` is destructive in a way `browser.traceStop` is not,
+// and this flag is what keeps the shutdown path from closing an already-closed context and turning a
+// finished run into a crash in its last line.
+let contextClosed = false;
+
 // LIVE-HUMAN (ADR-120): does this run draw for a person? Decided ONCE, by the launch plan, which is
 // the only reader of SENTINEL_DECORATE (see launch.ts) — a second reader here would be a second
 // author of the same mode, and two authors of one decision is what ADR-120 consolidated away.
@@ -470,6 +480,16 @@ async function ensureBrowser(): Promise<void> {
     context = browser.contexts()[0] ?? (await browser.newContext());
     log('attached over CDP:', endpoint);
     if (storageState) log('STORAGE_STATE ignored in CDP-attach mode (reusing the user session)');
+    if (plan.videoUnavailable) {
+      // ADR-125, second guard. `brain/observe.py` refuses observe=record + PW_CDP_ENDPOINT before the
+      // run starts, so reaching this line means the switch arrived by some OTHER route — a hand-set
+      // SENTINEL_RECORD, or a caller that is not our brain. Unlike slowMo there is nothing to
+      // compensate with, so the only honest act left is to say it at the top of the log rather than
+      // let the run end and leave somebody looking for a file that was never going to exist.
+      log('⚠ SENTINEL_RECORD=1 but this run ATTACHED to an existing browser over CDP: `recordVideo` ' +
+          'is an option of a context we would have to CREATE, and this context was adopted. NO VIDEO ' +
+          'WILL BE PRODUCED by this run. Record against a browser the run launches itself.');
+    }
   } else {
     // M8/GAP-RISK-009: fixed viewport + DSR=1 so screenshot bytes are stable across browser processes.
     // The anchors live in determinism.ts (single source of truth, asserted by determinism.test.ts).
@@ -480,6 +500,12 @@ async function ensureBrowser(): Promise<void> {
       headless: plan.headless,
       ...(plan.slowMo > 0 ? { slowMo: plan.slowMo } : {}),
     });
+    // ADR-125: the recording is decided HERE and can be decided nowhere else — `recordVideo` is an
+    // option of the context at the moment of creation, and no later call can add one. The size is
+    // pinned to the determinism viewport rather than left to Playwright's default so the video frames
+    // what the run actually drove; a recording of a differently-sized window shows a layout the run
+    // never saw.
+    if (plan.video) videoDir = makeVideoDir();
     context = await browser.newContext({
       viewport: DETERMINISM_VIEWPORT,
       deviceScaleFactor: DETERMINISM_DEVICE_SCALE_FACTOR,
@@ -488,9 +514,17 @@ async function ensureBrowser(): Promise<void> {
       // re-throws cert failures as a classified, actionable diagnostic instead of an opaque error.
       ...(process.env.PW_IGNORE_HTTPS_ERRORS === '1' ? { ignoreHTTPSErrors: true } : {}),
       ...(storageState ? { storageState } : {}),
+      ...(videoDir ? { recordVideo: { dir: videoDir, size: DETERMINISM_VIEWPORT } } : {}),
     });
     log(plan.headless ? 'browser launched (headless)' : 'browser launched (headed)');
     if (storageState) log('storageState loaded from', statePath);
+    if (videoDir) {
+      // ⚠ The window this names is real and cannot be closed from here — see record.ts. Unlike the
+      // trace (ADR-084), which is buffered and discarded at the end without ever touching the disk,
+      // the video is written as it happens; keeping or dropping it is a decision taken afterwards.
+      log('recording video to a scratch dir; the file is written AS THE RUN GOES and kept or dropped ' +
+          'afterwards — unlike the trace, there is no way to un-write it');
+    }
   }
 
   // LIVE-HUMAN (ADR-120): the page-side half of the decoration layer, registered on the CONTEXT.
@@ -1304,6 +1338,46 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       }
       return { path: path ?? null }; // no-op when tracing was never started (PW_NO_TRACE=1 auth run)
     }
+    case 'browser.videoStop': {
+      // ADR-125. Deliberately shaped like `browser.traceStop` — optional `path`, omitting it drops
+      // the recording — so a caller learns one rule for both artifacts. The MECHANISM underneath is
+      // the opposite, and that difference is the whole reason this is a separate verb:
+      //
+      //   trace: buffered in memory, `tracing.stop()` with no path throws it away UNWRITTEN.
+      //   video: written to disk AS THE RUN GOES; the only choice left is to delete it afterwards.
+      //
+      // ⚠ AND IT MUST CLOSE THE CONTEXT. `video.saveAs()` waits for the page to close before the file
+      // is complete, so finishing the recording ends the browser session. That makes this verb
+      // TERMINAL in a way traceStop is not — every call site invokes it last, after traceStop, and
+      // `contextClosed` stops the shutdown path from closing it a second time.
+      const vpath = params?.path as string | undefined;
+      if (!videoDir || !context || contextClosed) return { path: null, kept: false };
+      // Captured BEFORE the close: `page.video()` on a closed page still resolves, but reading the
+      // list afterwards would race with Playwright tearing the pages down.
+      const videos = pages.map((p) => p.video()).filter((v): v is NonNullable<typeof v> => !!v);
+      const main = page?.video() ?? videos[0] ?? null;
+      await context.close();
+      contextClosed = true;
+      if (videos.length > 1) {
+        // Named rather than dropped in silence: a run with popups produced several recordings and
+        // only the main page's is the artifact. Somebody looking for what happened in a popup should
+        // learn from the log that it was recorded and discarded, not conclude it was never captured.
+        log(`video: ${videos.length} recordings existed (popups/new tabs); only the main page's is ` +
+            `kept as the artifact, the rest are dropped with the scratch dir`);
+      }
+      if (!vpath || !main) {
+        dropVideoDir(videoDir);
+        videoDir = null;
+        log('video discarded (run finished clean; set SENTINEL_VIDEO_ALWAYS=1 to keep it). ⚠ unlike ' +
+            'the trace, the bytes HAD been on disk for the duration of the run');
+        return { path: null, kept: false };
+      }
+      await main.saveAs(vpath);
+      dropVideoDir(videoDir);
+      videoDir = null;
+      log('video saved:', vpath);
+      return { path: vpath, kept: true };
+    }
     case 'browser.tabs': {
       // M9.4 (A6): list tracked browser tabs/pages (drop any that closed). Indices match switchTab.
       await ensureBrowser();
@@ -1388,10 +1462,24 @@ async function mainJsonRpc(): Promise<void> {
     if (req.method === 'shutdown') break;
   }
   try {
-    if (context && tracingStarted && !tracingStopped) await context.tracing.stop();
+    if (context && tracingStarted && !tracingStopped && !contextClosed) await context.tracing.stop();
     if (!attachedOverCDP) await browser?.close(); // M9.6: never close the user's CDP-attached browser
   } catch (e) {
     log('cleanup error', e);
+  }
+  // ADR-125: a run that ended without reaching `browser.videoStop` — crash, abort, budget kill — still
+  // has raw video in a scratch dir. Dropping it here is not tidiness: those frames are a recording of
+  // somebody's application, and leaving them in /tmp for the next process to find is a disclosure,
+  // not a leftover. Runs AFTER the browser close above, so the files Playwright is still finalising
+  // are complete before they are removed.
+  try {
+    if (videoDir) {
+      dropVideoDir(videoDir);
+      log('video scratch dir dropped on shutdown (the run never reached browser.videoStop)');
+      videoDir = null;
+    }
+  } catch (e) {
+    log('video cleanup error', e);
   }
   log('exit');
   process.exit(0);

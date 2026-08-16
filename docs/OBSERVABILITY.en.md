@@ -522,16 +522,52 @@ cursor on it".
 and the overlay do not degrade the reference, they make it WRONG, and that only surfaces later, on
 somebody else's replay. Capture the baseline with `frames`; watch a later replay with `human`.
 
-### `record`: declared, not shipped
+### `record` — shipped (LIVE-RECORD, ADR-125), and `NOT_YET` is now empty
 
-The mode set is the product's answer to "what can I even ask for", and it carries five names.
-`record` (`recordVideo`, a `newContext` option, while the CDP-attach path adopts a context it does
-not own) needs machinery this build does not have yet. Asking for it is a **refusal before the run
-starts** (`exit 3`, `fatal.observe_refused`), with the task that will bring it NAMED
-(`[LIVE-RECORD]`). Measured live: on such a refusal the browser never launches at all (0 launches) —
-the refusal costs nothing and cannot "half-happen". Accepting a mode and quietly doing something else
-is deliberately forbidden: a person who asked for video would get plain frames and never learn they
-got something other than what they asked for.
+`record` left `NOT_YET` in the same change as `SENTINEL_RECORD`, exactly as `human` did before it.
+**The refusal set is now empty: every mode the product declares, it performs.** An empty `NOT_YET` is
+a state rather than a list somebody forgot to fill, and the gate in
+`tests/test_observation_modes_offline.py` was rewritten FOR it deliberately: the floor "at least one
+unbuilt mode exists" was replaced by the assertion "every declared mode PRODUCES a plan".
+
+What the mode does:
+
+* **`SENTINEL_RECORD`** = `1`/`0`, the set's fourth switch. Written ONLY by
+  `brain/observe.py::apply()` from `plan.video`, read ONLY by `pw-executor` (`src/record.ts`).
+* `recordVideo` is set on OUR `newContext`, sized to the determinism viewport: a recording of a
+  differently sized window would show a layout the run never saw.
+* The artifact is `runs/<id>/video.webm`, fetched through the same route as everything else
+  (`GET /v1/runs/{id}/artifact?name=video.webm`) and played in the hub's artifact panel.
+
+**The recording carries the CURSOR** — Alex's requirement of 2026-08-02: without one it is as
+unreadable as a bare screencast. So `record` draws into the page, and drawing means `slowMo` and an
+overlay, i.e. ALL of `human`'s consequences: **timing is changed, and such a run cannot be a golden**.
+Both facts are derived from one tuple, `observe.DECORATED`, so they cannot be set apart; the golden
+refusal walks the same tuple and picked `record` up with no separate line. The frame a model and a
+golden read stays CLEAN — the "lift the overlay around the capture and restore it" mechanism was built
+by ADR-120 and is reused as-is.
+
+⚠ **Over CDP-attach the mode is IMPOSSIBLE, and that is a refusal, not a degradation.** `recordVideo`
+is a property of a context at the moment it is CREATED, and in CDP-attach the context is adopted.
+`slowMo` has the same shape of problem and DEGRADES: the executor pays the pacing with its own pause.
+Video has nothing to pay with — the run would simply end with no file, and a run that did not do the
+one thing it was asked for is not "slightly worse". So the combination is declined BEFORE the start
+(`exit 3`, `fatal.observe_refused`, and the reason names CDP), while the executor carries a second,
+louder `videoUnavailable` guard in case the switch arrives by another route. A blank `PW_CDP_ENDPOINT`
+is NOT an attachment: that is how compose spells "not configured", and refusing on it would be a
+refusal nobody can act on.
+
+⚠ **The decision to write is taken AT THE START — and that is a price, not a detail.** ADR-084 decides
+about the trace at the END, so a green run's bytes never touch the disk. Not possible here: the file
+is written as the run goes, and only a deletion afterwards remains. Per Alex's decision the recording
+is **dropped on green**, and `SENTINEL_VIDEO_ALWAYS=1` keeps it always. The discard is ANNOUNCED along
+with the name of that lever: otherwise a person who asked to record a passing run reads the absence as
+the mode being broken.
+
+`collect-live-run.sh` does **not** collect the video and has no `--with-video` counterpart. Same reason
+as the trace: pixels are not redactable. The structural and textual cleanup can blank a `value` in a
+step and mask a token in a log line, and can do nothing at all about a recording in which a filled
+login form was on screen for as long as it was on screen.
 
 ### A run performed FOR A PERSON is marked where its result is read
 

@@ -148,6 +148,9 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
     from . import budget  # M15.1: isolate per-run token totals — the mcp-server reuses one process across runs
     budget.tracker().reset()
     trace_path = str((out / "trace.zip").resolve())
+    # ADR-125: named beside the trace because the two artifacts are teardown siblings —
+    # one is stopped before the other, and both are kept only when the run is worth a look.
+    video_path = str((out / "video.webm").resolve())
     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
     goal = os.environ.get("GOAL", "").strip()            # M9.2a goal-mode
     describe = os.environ.get("DESCRIBE", "").strip()    # M9.2b describe-mode
@@ -228,6 +231,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         # have made every successful explore report failure.
         ok = plan_file.exists() and len(steps) >= 5
         _stop_trace(ex, trace_path, 0 if ok else 1)
+        # ADR-125: after the trace — stopping tracing needs a live context, finishing a video closes it.
+        _stop_video(ex, video_path, 0 if ok else 1)
         ex.call("shutdown")
         return 0 if ok else 1
     finally:
@@ -561,6 +566,9 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                         return 3   # health.check has already reported which component and why
                     log("run.chat_cold", conversation_id=conversation_id, target=target)
                     trace_path = str((out / "trace.zip").resolve())
+                    # ADR-125: named beside the trace because the two artifacts are teardown siblings —
+                    # one is stopped before the other, and both are kept only when the run is worth a look.
+                    video_path = str((out / "video.webm").resolve())
                     base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
                     ex = make_executor(os.environ["PW_EXECUTOR_CMD"])   # only the cold turn spawns a browser
                     try:
@@ -592,6 +600,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                         # ADR-084: a cold chat turn is an explore; same rule, and its exit code is
                         # the scenario write below, so keep the trace only when nothing was authored.
                         _stop_trace(ex, trace_path, 0 if final.get("scenario_steps") else 1)
+                        _stop_video(ex, video_path, 0 if final.get("scenario_steps") else 1)
                         ex.call("shutdown")
                     finally:
                         ex.close()
@@ -656,6 +665,55 @@ def _stop_trace(ex, trace_path: str, exit_code: int) -> None:
             ex.call("browser.traceStop")
     except Exception as e:
         log("system.trace_stop_error", error=e)
+
+
+def _keep_video(exit_code: int) -> bool:
+    """ADR-125: keep `video.webm` only when the run did NOT finish clean.
+
+    Alex's rule, recorded under `[PROD-FAIL-MEDIA]`: write always, delete on green, and the switch is
+    explicit. `observe=record` IS that explicit switch — nothing records without it.
+
+    ⚠ WHERE THIS DIFFERS FROM THE TRACE, and the difference is not cosmetic. ADR-084 gets to decide at
+    the END, so a green run's trace bytes never touch the disk at all. `recordVideo` is a `newContext`
+    option settled BEFORE the first step, when nobody knows yet whether the run will fail — so the
+    file is written either way and this is a DELETION, not an avoided write. On a green `record` run
+    there was a window in which the video existed. The executor says so in the log rather than letting
+    the difference be assumed away.
+
+    ⚠ AND IT IS THE ONE RULE HERE THAT COULD SURPRISE SOMEBODY. A person who asked for `observe=record`
+    on a run that then PASSED gets no file, which reads as a failure of the mode until you know the
+    rule. That is why the discard is announced with the lever that reverses it, exactly as
+    `browser.traceStop` announces its own — and why the lever is a single environment variable rather
+    than an argument somebody would have to thread through. If this default is ever judged wrong, it
+    is one line here and one sentence in ADR-125, not a redesign.
+    """
+    return exit_code != 0 or os.environ.get("SENTINEL_VIDEO_ALWAYS") == "1"
+
+
+def _stop_video(ex, video_path: str, exit_code: int) -> None:
+    """Finish the recording, keeping the file only when `_keep_video` says the run is worth watching.
+
+    ⚠ TERMINAL, and must be called LAST. Completing a video requires closing the browser context —
+    that is the only moment Playwright guarantees the bytes are whole — so this ends the session. It
+    therefore runs AFTER `_stop_trace`, which needs a live context to stop tracing on.
+
+    Swallows its own errors for the same reason `_stop_trace` does: teardown must not turn a finished
+    run into a crash, and every call site is already past the point where the result is decided. A
+    run that recorded nothing answers `{path: null}` and costs one RPC — cheaper than making every
+    call site re-derive whether recording was on, which is the kind of duplicated decision the
+    observation resolver exists to prevent.
+    """
+    try:
+        keep = _keep_video(exit_code)
+        r = ex.call("browser.videoStop", **({"path": video_path} if keep else {})) or {}
+        if r.get("kept"):
+            log("run.video_kept", path=video_path)
+        elif keep:
+            # Asked to keep and got nothing back: recording was never on for this run. Not an error —
+            # every run calls this — but worth one line when the caller expected a file.
+            log("run.video_absent", path=video_path)
+    except Exception as e:
+        log("system.video_stop_error", error=e)
 
 
 def _redact_trace(trace_path: str) -> None:
@@ -748,6 +806,9 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         log("fatal.secret_would_leak_to_trace")
         return 3
     trace_path = str((out / "trace.zip").resolve())
+    # ADR-125: named beside the trace because the two artifacts are teardown siblings —
+    # one is stopped before the other, and both are kept only when the run is worth a look.
+    video_path = str((out / "video.webm").resolve())
     store = make_store(_STORE_PATH)
     log("run.store_mode",
         store="grpc@" + os.environ["STORE_ADDR"] if os.environ.get("STORE_ADDR") else "local")
@@ -771,6 +832,7 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
             # ADR-084: keep the artifact only when the run is worth a post-mortem; otherwise the
             # executor discards the buffered trace and nothing reaches the disk.
             _stop_trace(ex, trace_path, int(report.get("exit_code", 1)))
+            _stop_video(ex, video_path, int(report.get("exit_code", 1)))
             ex.call("shutdown")
         except Exception as exc:
             # Said, not swallowed. An executor that will not shut down cleanly usually means a
@@ -1142,6 +1204,7 @@ def main() -> int:
     # meant the two ran together into one unreadable word ("…chosenSENTINEL_LIVE_FRAMES") on exactly
     # the runs where the line matters most: the ones where a hand-set switch outranks the plan.
     log("run.observation", mode=_obs.mode, frames=_obs.frames, decorations=_obs.decorations,
+        video=_obs.video,
         why=_obs.why, overridden=(f"; set by hand, overriding the plan: {','.join(_obs_manual)}"
                                   if _obs_manual else ""))
 

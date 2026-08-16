@@ -25,6 +25,7 @@ from .executor import ExecutorTransportError
 from .healing import AUTO as _HEAL_AUTO
 from .healing import is_reground
 from .eventlog import log
+from .frames import capture_frame   # PROD-FAIL-MEDIA part A: the picture of a failed step
 from .state import normalize_url, canonical_plan_hash
 from .store import GoldenIntegrityError
 
@@ -490,6 +491,26 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                         rec["regression"] = kinds
                         if gate:
                             regressions += 1   # a11y always; visual only when authoritative (GAP-RISK-009)
+
+        # PROD-FAIL-MEDIA part A: a picture of the moment a step failed.
+        #
+        # ⚠ ONE call site, not seven. `rec["outcome"]` is set to "failed" in seven separate branches
+        # above (navigate, click, assert, fill, the heal path, the unknown-verb fallback), and a
+        # capture bolted onto each of them would drift the first time an eighth branch is added —
+        # which is the failure mode `docs/DEVELOPMENT.md` §0 principle 5 describes: the branch nobody
+        # remembered has no representation, so its absence is invisible. Placed HERE, on the single
+        # line every branch already funnels through, a new failure branch is covered by construction.
+        #
+        # ⚠ ONLY on failure, deliberately. A frame per step in replay would change what every existing
+        # replay costs and produce hundreds of pictures of things that went right; the task is media
+        # AT THE FAILURE. `capture_frame` still honours `SENTINEL_LIVE_FRAMES`, so `observe=off`
+        # yields no picture here either — a person who asked for none does not get one by exception.
+        if rec.get("outcome") == "failed":
+            frame = capture_frame(ex, run_dir, rec.get("step_id") or idx)
+            if frame:
+                # The NAME, not the bytes — same contract as the live view (ADR-108d): the hub already
+                # knows how to fetch `frames/<name>` through the artifact route.
+                rec["frame"] = frame
 
         report["steps"].append(rec)
 

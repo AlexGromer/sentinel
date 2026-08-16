@@ -472,8 +472,8 @@ var FALLBACK_SCHEMA = {
           "ru": "ничего не снимается — быстрее всего; смотреть будет не на что"
         },
         "record": {
-          "en": "a video file as an artifact after the run; does not affect the live view",
-          "ru": "видеофайл артефактом после прогона; на живой вид не влияет"
+          "en": "a video file as an artifact after the run, WITH THE CURSOR. ⚠ CHANGES TIMING exactly as human does, such a run cannot be a golden. ⚠ IMPOSSIBLE when attached to a foreign browser over CDP",
+          "ru": "видеофайл артефактом после прогона, С КУРСОРОМ. ⚠ МЕНЯЕТ ТАЙМИНГ ровно как human, эталоном такой прогон быть не может. ⚠ НЕВОЗМОЖЕН при подключении к чужому браузеру по CDP"
         },
         "stream": {
           "en": "the live screen, undecorated — usable by a person and a machine",
@@ -489,9 +489,7 @@ var FALLBACK_SCHEMA = {
         "record"
       ],
       "group": "run",
-      "not_yet": [
-        "record"
-      ],
+      "not_yet": [],
       "type": "enum"
     },
     "plan_budget": {

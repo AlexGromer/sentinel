@@ -40,7 +40,13 @@ CATALOG = REPO / "brain" / "events.json"
 # Modules that emit diagnostics through the module-level log()/_log() helpers. Kept explicit rather
 # than globbed: a new brain module that logs must be added here deliberately, which is the point.
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
-               "record_bridge", "replay", "server", "budget", "report", "store", "otel", "health"]
+               "record_bridge", "replay", "server", "budget", "report", "store", "otel", "health",
+               "frames"]
+# `frames` joined with PROD-FAIL-MEDIA part A, and the gate is why the list is right. `capture_frame`
+# moved out of `graph.py` into its own module so `replay.py` could take the picture of a failed step;
+# the code it emits (`live.frame_failed`) did not change at all, but the FILE that emits it did — and
+# this gate immediately called the catalogue entry a PHANTOM, "emitted by nothing I look at". That is
+# exactly the answer a moved emitter should get from a list that is kept by hand.
 # `store` and `otel` joined in HEALTH-002, when two long-silent handlers were made to declare: the
 # chats projection (which had not been written by ANY deployment for months, and whose `except: pass`
 # is why nobody noticed) and tracing setup (which left an operator believing spans were being

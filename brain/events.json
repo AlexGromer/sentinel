@@ -527,7 +527,7 @@
       "ru_verdict": "живой вид был НЕПОЛОН: часть кадров снять не удалось, поэтому «браузер» в чате показывает не все шаги",
       "en_verdict": "the live view was INCOMPLETE: some frames could not be captured, so the browser view in the chat does not show every step",
       "modules": [
-        "graph"
+        "frames"
       ]
     },
     "chat.reply": {
@@ -1994,8 +1994,38 @@
     "run.observation": {
       "lvl": "info",
       "cat": "run",
-      "ru": "Наблюдение: режим {mode}, кадры {frames}, украшения {decorations} — {why}{overridden}",
-      "en": "Observation: mode {mode}, frames {frames}, decorations {decorations} — {why}{overridden}",
+      "ru": "Наблюдение: режим {mode}, кадры {frames}, украшения {decorations}, запись {video} — {why}{overridden}",
+      "en": "Observation: mode {mode}, frames {frames}, decorations {decorations}, video {video} — {why}{overridden}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.video_kept": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Запись прогона сохранена: {path}",
+      "en": "The run's video was kept: {path}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.video_absent": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Записи нет: прогон шёл не в режиме record, поэтому сохранять было нечего ({path})",
+      "en": "No video: this run was not in record mode, so there was nothing to keep ({path})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.video_stop_error": {
+      "lvl": "warn",
+      "cat": "system",
+      "degrades": true,
+      "ru": "Не удалось завершить запись прогона ({error}) — результат прогона не затронут",
+      "en": "The run's video could not be finalised ({error}) — the run's verdict is untouched",
+      "ru_verdict": "запись прогона могла не сохраниться: сам прогон завершился нормально, но видеофайла может не оказаться на месте",
+      "en_verdict": "the run's video may not have been saved: the run itself finished normally, but the video file may not be there",
       "modules": [
         "__main__"
       ]

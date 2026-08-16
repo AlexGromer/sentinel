@@ -17,8 +17,17 @@
  * (`slowMoUnavailable`) and compensates with a longer per-step pause on our own side, because a mode
  * that silently ran at full speed after being asked to slow down is the class of silence ADR-120
  * exists to remove.
+ *
+ * LIVE-RECORD (ADR-125) put the video decision here for the SAME structural reason and reached the
+ * OPPOSITE conclusion, which is the interesting part. `recordVideo` is a `newContext` option, so it
+ * too is settled before the first step, and over CDP the context is adopted rather than created — the
+ * same impossibility. But `slowMo` has a substitute and video has none: a run told to record and left
+ * unable to would simply end with no file. So this plan carries `videoUnavailable` NOT as "we degraded
+ * gracefully" but as a second, louder guard behind the refusal in `brain/observe.py`, which declines
+ * the combination before anything starts.
  */
 import { decorationsEnabled, DECOR_SLOW_MO_MS, DECOR_STEP_PAUSE_MS, DECOR_STEP_PAUSE_CDP_MS } from './decorate.js';
+import { recordEnabled } from './record.js';
 
 export interface LaunchPlan {
   /** 'launch' = we spawn Chromium; 'cdp' = we attach to an existing Chromium over CDP. */
@@ -35,11 +44,17 @@ export interface LaunchPlan {
   slowMoUnavailable: boolean;
   /** Our own pause before each acting verb; carries the whole pacing where `slowMo` cannot. */
   stepPauseMs: number;
+  /** ADR-125: this run records a video. Only ever true for kind === 'launch' — see `videoUnavailable`. */
+  video: boolean;
+  /** True when a recording was asked for and this launch path cannot carry it (CDP-attach). */
+  videoUnavailable: boolean;
 }
 
 export function resolveLaunchPlan(env: NodeJS.ProcessEnv): LaunchPlan {
   // The ONE reader of SENTINEL_DECORATE in this process (brain/observe.py::apply is its one writer).
   const decorate = decorationsEnabled(env);
+  // ...and likewise the ONE reader of SENTINEL_RECORD (ADR-125).
+  const record = recordEnabled(env);
   const cdp = (env.PW_CDP_ENDPOINT ?? '').trim();
   if (cdp)
     return {
@@ -47,6 +62,11 @@ export function resolveLaunchPlan(env: NodeJS.ProcessEnv): LaunchPlan {
       slowMo: 0,
       slowMoUnavailable: decorate,
       stepPauseMs: decorate ? DECOR_STEP_PAUSE_CDP_MS : 0,
+      // Not `record`: there is no context of ours to attach `recordVideo` to. The request is carried
+      // in the OTHER field so the executor can say what it could not do — reporting `video: true` here
+      // would be the plan lying about an option it never set.
+      video: false,
+      videoUnavailable: record,
     };
   // headed only on the explicit opt-in; any other value (unset/"1"/"true"/…) stays headless.
   const headed = env.PW_HEADLESS === '0' || env.PW_HEADED === '1';
@@ -55,6 +75,8 @@ export function resolveLaunchPlan(env: NodeJS.ProcessEnv): LaunchPlan {
     slowMo: decorate ? DECOR_SLOW_MO_MS : 0,
     slowMoUnavailable: false,
     stepPauseMs: decorate ? DECOR_STEP_PAUSE_MS : 0,
+    video: record,
+    videoUnavailable: false,
   };
 }
 
