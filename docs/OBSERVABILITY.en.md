@@ -130,6 +130,49 @@ part of the early design and was never implemented. Actual spend (per-role `prom
 `total`, `summary()`) is written into the report artifacts (`plan.json` / `heal-report.json`);
 the control-API converts it into `cost_usd` (§5) — not Prometheus.
 
+### Layer 4 — The supervision no delivery form had until 2026-08-16 (ADR-126)
+
+The three layers above live **in the brain** and always work. Layer 4 — the model-INDEPENDENT stop
+that ADR-021 introduced `orchestrator` for — worked **nowhere**, and that is worth saying plainly:
+the binary was built by every release and installed by the `.deb`, while no `docker-compose*.yml`, no
+`Dockerfile` and no `install.sh` launched it, and no systemd unit existed. Dead alongside it were
+**takeover and return** (ADR-054) and the **map gate** (ADR-108c): `control-api` answered
+`"no orchestrator wired"`, and `brain/runcontrol.py::_Noop.wired` was `False`.
+
+It is now a **long-lived service**, and the division of labour is the whole design:
+
+* **The orchestrator DECIDES.** `orchestrator --serve --addr <socket>` keeps a per-run ledger and
+  declares a breach. One socket per deployment, not one per run: `CONTROL_API_ORCH_ADDR` is read
+  ONCE at control-api startup, so the per-run path `state/sentinel-orch-<id>.sock` could never be
+  named at all — which is also why the old form could not support two concurrent runs.
+* **control-api ENFORCES.** It registers the run (`StartRun`) under ITS OWN id — the same one the hub
+  shows, the store persists and `Takeover(run_id)` carries; the orchestrator used to mint its own, so
+  a takeover would have addressed a run it had never heard of. The poll is a **zero-delta**
+  `ReportEvent` (an idiom that already existed: `brain/runcontrol.py::poll()` is exactly that), and a
+  declared breach calls `cancel.go`.
+
+⚠ **Why control-api enforces and not the orchestrator itself.** The old backstop was
+`cmd.Process.Signal(SIGTERM)`, possible only because that process was the brain's parent. A service
+cannot do it **physically**: under compose each service has its own PID namespace. control-api's
+mechanism is strictly **better** than the old one: the run has its own process group, and the signal
+goes to the GROUP — SIGTERM, then SIGKILL — reaching the brain, the executor and Chromium where the
+old backstop reached a single process.
+
+⚠ **Supervision is an addition, not a precondition.** No orchestrator, an unreachable socket, a
+service that dies mid-run — the run proceeds as before. Each failure is said ONCE rather than per
+poll: a supervisor that floods the journal with a line every two seconds after losing its peer is one
+people turn off.
+
+Turning it on takes two actions, and the second is the easier to forget:
+
+```bash
+docker compose up -d                       # the orchestrator service is already in the set
+# .deb:
+sudo systemctl enable --now sentinel-orchestrator
+# and, necessarily, the address in /etc/sentinel/control-api.env:
+CONTROL_API_ORCH_ADDR=unix:/var/lib/sentinel/orch.sock
+```
+
 ---
 
 ## 4. Playwright Traces

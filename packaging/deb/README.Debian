@@ -18,7 +18,20 @@ The Go CONTROL PLANE, statically linked, in /usr/bin:
                      it as a credential store. What it serves is declared in the
                      source repository by proto/store.proto and
                      proto/persistence.proto — the gateway registers both.
-    orchestrator     run-control gRPC (pause/resume/takeover)
+    orchestrator     run-control gRPC: the budget ceiling (ADR-021), operator
+                     takeover/return (ADR-054) and the map gate (ADR-108c).
+                     ⚠ It ships a unit — sentinel-orchestrator — as of ADR-126.
+                     Before that the binary was installed here with no way to
+                     start it, so all three of those were dead in the packaged
+                     deployment while looking present. Enable it AND tell
+                     control-api where it listens, or nothing changes:
+
+                         sudo systemctl enable --now sentinel-orchestrator
+                         # /etc/sentinel/control-api.env:
+                         CONTROL_API_ORCH_ADDR=unix:/var/lib/sentinel/orch.sock
+
+                     Not enabling it is a supported state: runs work exactly as
+                     they did, without supervision.
 
 What this package is NOT
 ------------------------

@@ -69,7 +69,12 @@ for b in $BINARIES; do
   install -m 0755 "$BIN_DIR/$b" "$TREE/usr/bin/$b"
 done
 
-install -m 0644 "$SRC/sentinel-control-api.service" "$TREE/usr/lib/systemd/system/"
+# ADR-126: the orchestrator gained a unit. The BINARY was already installed by the loop above
+# (it has been in $BINARIES since M8) — what was missing was any way to start it, which is
+# why takeover, the map gate and the budget ceiling were dead in the packaged deployment.
+for unit in sentinel-control-api sentinel-orchestrator; do
+  install -m 0644 "$SRC/$unit.service" "$TREE/usr/lib/systemd/system/"
+done
 install -m 0644 "$SRC/control-api.env"              "$TREE/etc/sentinel/"
 install -m 0644 "$SRC/README.Debian"                "$TREE/usr/share/doc/sentinel/"
 install -m 0644 "$ROOT/LICENSE"                     "$TREE/usr/share/doc/sentinel/copyright"
@@ -96,7 +101,9 @@ cat > "$TREE/DEBIAN/prerm" <<'EOF'
 set -e
 if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop sentinel-control-api >/dev/null 2>&1 || true
+        for unit in sentinel-control-api sentinel-orchestrator; do
+            systemctl stop "$unit" >/dev/null 2>&1 || true
+        done
     fi
 fi
 exit 0
@@ -106,7 +113,11 @@ cat > "$TREE/DEBIAN/postrm" <<'EOF'
 set -e
 if command -v systemctl >/dev/null 2>&1; then
     case "$1" in
-        remove|purge) systemctl disable sentinel-control-api >/dev/null 2>&1 || true ;;
+        remove|purge)
+            for unit in sentinel-control-api sentinel-orchestrator; do
+                systemctl disable "$unit" >/dev/null 2>&1 || true
+            done
+            ;;
     esac
     systemctl daemon-reload >/dev/null 2>&1 || true
 fi

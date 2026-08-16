@@ -34,7 +34,8 @@ COPY brain/embed.go brain/events.json brain/
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/agentctl ./cmd/agentctl \
  && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/store-gateway ./cmd/store-gateway \
- && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/control-api ./cmd/control-api
+ && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/control-api ./cmd/control-api \
+ && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/orchestrator ./cmd/orchestrator
 
 # --- stage 2: TypeScript pw-executor ----------------------------------------
 FROM node:24-bookworm AS ts-build
@@ -75,7 +76,10 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /bin/
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv UV_PYTHON_PREFERENCE=only-system UV_PYTHON=python3
 COPY brain/pyproject.toml brain/uv.lock /app/brain/
 RUN cd /app/brain && uv sync --frozen --no-dev
-COPY --from=go-build /out/agentctl /out/store-gateway /out/control-api /app/bin/
+# ⚠ ADR-126 добавил сюда `orchestrator` — ЧЕТВЁРТЫЙ бинарь. До этого образ вёз три из четырёх: пакет
+# `.deb` ставил все четыре (`scripts/build-deb.sh`), а образ — нет, поэтому в контейнерной поставке
+# оркестратора не было физически, и `CONTROL_API_ORCH_ADDR` было некуда указывать даже при желании.
+COPY --from=go-build /out/agentctl /out/store-gateway /out/control-api /out/orchestrator /app/bin/
 COPY --from=ts-build /pw/dist /app/pw-executor/dist
 COPY --from=ts-build /pw/node_modules /app/pw-executor/node_modules
 # Браузеры ставятся ЯВНО и поимённо — это и есть исполнение ADR-036 (Chromium-only) в поставке, а не

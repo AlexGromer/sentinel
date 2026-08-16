@@ -605,15 +605,15 @@ type runRequest struct {
 	// file. The hub rendered inputs for the budgets and the auth block and then wrote them into a
 	// downloadable run.yaml with "Pass via: --run-config <file>" — a form that assembled a file and
 	// sent the person back to the console, because the API had nowhere to put the values.
-	Scenario         string `json:"scenario"`      // --scenario: pick a named scenario out of the RunConfig
-	AutVersion       string `json:"aut_version"`   // --aut-version: app-under-test sha, keys flake quarantine
-	CI               bool   `json:"ci"`            // --ci: forbids --force-replay
-	ForceReplay      bool   `json:"force_replay"`  // --force-replay: bypass the plan_hash hard-abort
-	HealLLM          bool   `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
+	Scenario    string `json:"scenario"`     // --scenario: pick a named scenario out of the RunConfig
+	AutVersion  string `json:"aut_version"`  // --aut-version: app-under-test sha, keys flake quarantine
+	CI          bool   `json:"ci"`           // --ci: forbids --force-replay
+	ForceReplay bool   `json:"force_replay"` // --force-replay: bypass the plan_hash hard-abort
+	HealLLM     bool   `json:"heal_llm"`     // --heal-llm: allow LLM re-grounding during heal
 	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the deployment default, which the form
 	// SHOWS rather than implies — an invisible default makes "I did not choose" and "I chose exactly
 	// this" the same act, and then nobody can say what the run will produce.
-	Observe string `json:"observe"`
+	Observe          string `json:"observe"`
 	PlanBudget       string `json:"plan_budget"`   // RunConfig only — no flag exists
 	HealBudget       string `json:"heal_budget"`   // RunConfig only
 	TotalBudget      string `json:"total_budget"`  // RunConfig only
@@ -895,6 +895,14 @@ func (s *server) spawnRun(req runRequest) *run {
 	// agentctl would otherwise mint a second, unrelated id for the same run, and the live view (which
 	// is asked about the id the hub knows) would never resolve a page. One run, one name.
 	cmd.Env = append(cmd.Env, "SENTINEL_RUN_ID="+id)
+	// ADR-126: the brain reports its per-node token deltas to the orchestrator and reads its verdict
+	// (continue | abort | takeover, plus the map gate's answer) from the reply. `ORCH_ADDR` is the one
+	// variable that turns `brain/runcontrol.py` from a no-op into a client, and it passes agentctl's
+	// env allowlist because of the underscore-free prefix rule in `filteredEnv`. Empty when no
+	// orchestrator is wired — the brain then behaves exactly as it did before, by construction.
+	if s.orchAddr != "" {
+		cmd.Env = append(cmd.Env, "ORCH_ADDR="+s.orchAddr)
+	}
 	// LIVE-MATRIX: the chosen mode does NOT ride here. It is an argv flag like every other per-run knob
 	// (appendRunFlags), because agentctl's own run-vars overwrite an inherited SENTINEL_OBSERVE with the
 	// empty string. Read that comment before moving this back into the environment.
@@ -906,6 +914,13 @@ func (s *server) spawnRun(req runRequest) *run {
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 	setProcGroup(cmd) // M9-LIVE: own process group, so a cancel reaches brain + executor + Chromium
+
+	// ADR-126. BEFORE the spawn, so the orchestrator knows this run and its budgets by the time the
+	// brain's first `ReportEvent` arrives. Registering after would leave a window in which the run is
+	// reconciled against the deployment defaults instead of its own limits — a quiet wrong answer
+	// rather than a loud missing one. Fail-open inside: an absent or unreachable orchestrator costs
+	// one line and changes nothing about the run.
+	s.registerRun(id, req.PlanBudget, req.HealBudget, req.TotalBudget)
 
 	go func() {
 		if err := cmd.Start(); err != nil {
@@ -932,6 +947,11 @@ func (s *server) spawnRun(req runRequest) *run {
 		s.mu.Lock()
 		rec.pid = cmd.Process.Pid // published before the wait, so a cancel arriving immediately can act
 		s.mu.Unlock()
+		// ADR-126: started AFTER the pid is published, because a supervisor that decides to stop a run
+		// before there is anything to signal can only wait — and started as its own goroutine because
+		// this one is about to block in cmd.Wait() for the whole life of the run. It returns by itself
+		// when the run leaves "running"; there is no lifetime to manage.
+		go s.superviseRun(rec)
 		err := cmd.Wait()
 		s.mu.Lock()
 		rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)

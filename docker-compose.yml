@@ -205,6 +205,11 @@ services:
       # ONCE at startup — a miss is remembered for the process lifetime (cmd/control-api/store.go::
       # newStoreClient), which is why `depends_on` waits for it to be healthy instead of racing.
       CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR-unix:/app/state/store.sock}
+      # ADR-126: where the RunControl orchestrator listens. ONE address for the deployment, not one
+      # per run — the old per-run socket (`state/sentinel-orch-<id>.sock`) could never be named here,
+      # because this variable is read ONCE at startup. Empty = no orchestrator, and every run then
+      # behaves exactly as it did before: supervision is an addition, never a precondition.
+      CONTROL_API_ORCH_ADDR: ${CONTROL_API_ORCH_ADDR-unix:/app/state/orch.sock}
       # ADR-111: where the live VIDEO mode gets its frames — the `browser` service's live port.
       # Empty means this deployment has no browser service, and the UI says exactly that instead of
       # showing an empty box.
@@ -225,10 +230,37 @@ services:
     depends_on:
       store-gateway:
         condition: service_healthy
+      orchestrator:
+        condition: service_healthy
       browser:
         condition: service_healthy
     ports:
       - "127.0.0.1:8090:8090"
+
+  # ADR-126 — the RunControl orchestrator, at last with something starting it.
+  #
+  # It was built by M8 (ADR-021) and packaged into the .deb ever since, while NOTHING launched it: it
+  # is absent from every compose file, from the Dockerfile and from install.sh. So takeover/return
+  # (ADR-054) and the map gate (ADR-108c) were dead in every shipped configuration — `forwardControl`
+  # answered "no orchestrator wired" because CONTROL_API_ORCH_ADDR was set nowhere.
+  #
+  # No `environment:` block here ON PURPOSE. The anchor carries ANTHROPIC_API_KEY and PW_CDP_ENDPOINT,
+  # and a YAML merge key REPLACES a mapping rather than deepening it — declaring one line of our own
+  # would silently drop both. That is not hypothetical: it is the measured defect recorded on
+  # control-api above. This service needs none of the anchor's variables, so it declares none.
+  orchestrator:
+    logging: *logging
+    <<: *sentinel-base
+    entrypoint: ["/app/bin/orchestrator", "--serve", "--addr", "/app/state/orch.sock"]
+    # Same readiness signal, and the same reasoning, as store-gateway: control-api dials this path, so
+    # the path EXISTING is what "ready" means. The service removes it on shutdown, because a socket
+    # that answers nothing is indistinguishable from a healthy one to everything except a real call.
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /app/state/orch.sock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
 
   # Dedicated store-gateway for the control-API config/runs domains (M13, ADR-062) — the SERVICE tier.
   # Enables PUT/GET /v1/config and persisted-config-driven runs (ADR-063). Listens on a Unix socket in the

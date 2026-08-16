@@ -1,0 +1,65 @@
+# Sentinel RunControl orchestrator as a system service (ADR-126).
+#
+# INSTALLED DISABLED ON PURPOSE, for the same reason as sentinel-control-api:
+# a package install is not consent to open a listening service. The operator
+# enables it:
+#
+#   sudo systemctl enable --now sentinel-orchestrator
+#
+# WHAT IT IS FOR. Without it, three things a run can do are simply absent:
+# the model-independent budget ceiling (ADR-021), the operator's takeover and
+# return (ADR-054), and the map gate that asks a person before authoring a test
+# over an explored site (ADR-108c). control-api answers "no orchestrator wired"
+# for all three, and the brain's RunControl client is a documented no-op.
+#
+# ⚠ IT IS NOT A PREREQUISITE. A deployment without it runs exactly as it always
+# did — runs start, finish and produce the same artifacts. Enabling it ADDS
+# supervision; it does not switch the product on.
+#
+# PAIRING. control-api must be told where to find it:
+#
+#   CONTROL_API_ORCH_ADDR=unix:/var/lib/sentinel/orch.sock
+#
+# in /etc/sentinel/control-api.env. Both services get the same StateDirectory,
+# so the socket lands in a path both can reach without either being privileged.
+
+[Unit]
+Description=Sentinel RunControl orchestrator (budget ceiling, takeover, map gate)
+Documentation=https://github.com/AlexGromer/sentinel/blob/main/docs/OBSERVABILITY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/sentinel/control-api.env
+# --serve is REQUIRED by the binary (ADR-126) and is spelled out here rather than
+# defaulted, so a reader of this unit can see it is the service form and not the
+# per-run command the orchestrator used to be.
+ExecStart=/usr/bin/orchestrator --serve --addr /var/lib/sentinel/orch.sock
+Restart=on-failure
+RestartSec=5s
+
+# Same transient identity and the same state directory as control-api: the two
+# share the socket through it, and neither needs a system account created for it.
+DynamicUser=yes
+StateDirectory=sentinel
+WorkingDirectory=/var/lib/sentinel
+
+# It supervises budgets over a local socket: no device access, no network egress
+# of its own, and nothing to write outside its state directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

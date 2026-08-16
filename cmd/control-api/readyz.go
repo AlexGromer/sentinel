@@ -23,6 +23,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,6 +39,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/AlexGromer/sentinel/internal/configguard"
+
+	pb "github.com/AlexGromer/sentinel/internal/orchestrator/pb"
 )
 
 // isInvalidArgument reports whether the gateway refused the document (a caller error, HTTP 400) as
@@ -114,6 +117,41 @@ func (s *server) probeBrowser() readyCheck {
 	if resp.StatusCode != http.StatusOK {
 		return readyCheck{Status: "error",
 			Detail: "browser service " + base + " answered " + strconv.Itoa(resp.StatusCode)}
+	}
+	return readyCheck{Status: "ok"}
+}
+
+// probeOrchestrator asks the RunControl service whether it is there (ADR-126).
+//
+// It exists because the gate demanded it, and the gate was right: a service added to the default
+// stack and probed by nothing is a service the deployment calls healthy while it is absent. That
+// matters more here than for most components, because the failure is INVISIBLE from the outside —
+// runs still start, still finish and still produce artifacts. What silently stops happening is the
+// budget ceiling, the operator's takeover and the map gate, and nobody discovers that on the day it
+// breaks; they discover it on the day they reach for one of the three.
+//
+// ⚠ AN UNSET ADDRESS IS `skipped`, NEVER `error`, for the same reason as the browser probe above: a
+// deployment without an orchestrator is a supported deployment, not a broken one, and reporting an
+// error would leave it permanently 503 over a component it deliberately does not run.
+//
+// The question is asked with the cheapest call the contract has — a zero-delta `ReportEvent` against
+// a reserved id. No new RPC, no health-specific verb, and nothing added to any run's ledger: the
+// delta is zero, and the id belongs to no run. `StartRun` would have been the obvious alternative and
+// is the wrong one — it CREATES state, so a readiness probe would slowly fill the service's map with
+// runs that never existed.
+func (s *server) probeOrchestrator() readyCheck {
+	if s.orchAddr == "" {
+		return readyCheck{Status: "skipped", Detail: "CONTROL_API_ORCH_ADDR unset (no orchestrator in this deployment: no budget ceiling, no takeover, no map gate)"}
+	}
+	cl, done, err := s.orchClient()
+	if err != nil {
+		return readyCheck{Status: "error", Detail: "orchestrator address is unusable: " + err.Error()}
+	}
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), readyProbeTimeout)
+	defer cancel()
+	if _, err := cl.ReportEvent(ctx, &pb.RunEvent{RunId: orchProbeRunID, Node: orchPollNode, Status: "probe"}); err != nil {
+		return readyCheck{Status: "error", Detail: "orchestrator " + s.orchAddr + " did not answer: " + err.Error()}
 	}
 	return readyCheck{Status: "ok"}
 }
@@ -326,6 +364,7 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 	}
 	checks["llm"] = s.probeLLM(s.effectiveLLMBase(cfg))
 	checks["browser"] = s.probeBrowser()
+	checks["orchestrator"] = s.probeOrchestrator() // ADR-126
 
 	ready := true
 	for _, c := range checks {
