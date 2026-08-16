@@ -9,7 +9,17 @@
  * CDP-attach are OBSERVATION / live-drive modes whose screenshot bytes are NOT guaranteed stable
  * (see docs/DETERMINISM.md). Engine is Chromium-only by design (ADR-036) — connectOverCDP is
  * Chromium-only and golden hashes differ per rendering engine.
+ *
+ * LIVE-HUMAN (ADR-120) added the pacing of a decorated run HERE, and not by accident: `slowMo` is a
+ * `launch()` option, so by the time a step runs the browser exists and the value can no longer be
+ * applied. That also makes one case impossible rather than merely awkward — in CDP-attach the
+ * browser was launched by somebody else, so `slowMo` CANNOT be set at all. The plan says so
+ * (`slowMoUnavailable`) and compensates with a longer per-step pause on our own side, because a mode
+ * that silently ran at full speed after being asked to slow down is the class of silence ADR-120
+ * exists to remove.
  */
+import { decorationsEnabled, DECOR_SLOW_MO_MS, DECOR_STEP_PAUSE_MS, DECOR_STEP_PAUSE_CDP_MS } from './decorate.js';
+
 export interface LaunchPlan {
   /** 'launch' = we spawn Chromium; 'cdp' = we attach to an existing Chromium over CDP. */
   kind: 'launch' | 'cdp';
@@ -17,14 +27,35 @@ export interface LaunchPlan {
   headless: boolean;
   /** Set for kind === 'cdp' — the CDP endpoint, e.g. http://localhost:9222. */
   cdpEndpoint?: string;
+  /** LIVE-HUMAN: this run draws for a person (cursor, highlight, echo, per-character entry). */
+  decorate: boolean;
+  /** ms for `chromium.launch({slowMo})`; 0 when the run is not slowed. Only kind === 'launch'. */
+  slowMo: number;
+  /** True when decoration asked for `slowMo` and this launch path cannot carry it (CDP-attach). */
+  slowMoUnavailable: boolean;
+  /** Our own pause before each acting verb; carries the whole pacing where `slowMo` cannot. */
+  stepPauseMs: number;
 }
 
 export function resolveLaunchPlan(env: NodeJS.ProcessEnv): LaunchPlan {
+  // The ONE reader of SENTINEL_DECORATE in this process (brain/observe.py::apply is its one writer).
+  const decorate = decorationsEnabled(env);
   const cdp = (env.PW_CDP_ENDPOINT ?? '').trim();
-  if (cdp) return { kind: 'cdp', headless: false, cdpEndpoint: cdp };
+  if (cdp)
+    return {
+      kind: 'cdp', headless: false, cdpEndpoint: cdp, decorate,
+      slowMo: 0,
+      slowMoUnavailable: decorate,
+      stepPauseMs: decorate ? DECOR_STEP_PAUSE_CDP_MS : 0,
+    };
   // headed only on the explicit opt-in; any other value (unset/"1"/"true"/…) stays headless.
   const headed = env.PW_HEADLESS === '0' || env.PW_HEADED === '1';
-  return { kind: 'launch', headless: !headed };
+  return {
+    kind: 'launch', headless: !headed, decorate,
+    slowMo: decorate ? DECOR_SLOW_MO_MS : 0,
+    slowMoUnavailable: false,
+    stepPauseMs: decorate ? DECOR_STEP_PAUSE_MS : 0,
+  };
 }
 
 /* ---------------------------------------------------------------------------------------------

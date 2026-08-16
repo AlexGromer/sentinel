@@ -24,11 +24,19 @@ starting (brain/__main__.py). A mode called `off` that "turns observation off" b
 silently remove that guard; one that set it would break every login run. Both directions are wrong,
 so it stays out of the set and out of the interface.
 
-⚠ MODES THIS BUILD CANNOT DO ARE REFUSED, NOT FAKED. `human` (synthetic cursor, slowMo, highlight)
-and `record` (video artifact) are declared here because the set is the product's answer to "what can
-I ask for", but their machinery arrives with LIVE-HUMAN and LIVE-RECORD. Until then, asking for one
-is refused with the task named. Accepting a mode and quietly doing something else is the class of
-silence this whole arc exists to remove — a person who asked to watch would get frames and no reason.
+⚠ MODES THIS BUILD CANNOT DO ARE REFUSED, NOT FAKED. A mode is declared here because the set is the
+product's answer to "what can I ask for", but a declaration is not machinery: until the machinery
+lands, asking for one is refused with the task named. Accepting a mode and quietly doing something
+else is the class of silence this whole arc exists to remove — a person who asked to watch would get
+frames and no reason. `record` is still in that state (LIVE-RECORD). `human` no longer is: LIVE-HUMAN
+built the decoration side, so the refusal came out of `NOT_YET` IN THE SAME CHANGE as the switch that
+performs it — a mode leaves the waiting room only together with the thing that does the work.
+
+⚠ THE DECORATION SWITCH IS ONE HALF OF A PAIR. `SENTINEL_DECORATE` is written HERE and nowhere else,
+and read by pw-executor and nowhere else (LIVE-HUMAN). It is not a third frame switch: frames answer
+"is anything captured", decoration answers "is the picture drawn for a PERSON". They are separate
+because a decorated frame is the wrong input for a model and for a golden — hence the executor lifts
+the overlay AROUND such a capture instead of switching decoration off for the run (ADR-120).
 """
 import os
 
@@ -44,11 +52,15 @@ DEFAULT = FRAMES
 #: Modes whose machinery is not in this build. Declared as a mapping rather than an `if` chain so the
 #: gate can walk it, and so adding the machinery is a deletion here rather than a search.
 NOT_YET = {
-    HUMAN: "LIVE-HUMAN brings the synthetic cursor, slowMo and highlight; Playwright draws no cursor "
-           "at all and clicks are instantaneous, so this mode has to be BUILT rather than switched on",
     RECORD: "LIVE-RECORD brings the video artifact; recordVideo is a newContext option and the "
             "CDP-attach path adopts a context it did not create, which is the part that needs deciding",
 }
+
+#: The environment switches this resolver OWNS: `apply` writes exactly these and `overrides` reports
+#: exactly these, both by walking this tuple. Two hand-kept lists is how the four switches drifted
+#: apart in the first place — a switch added to one and forgotten in the other would be set silently
+#: and then contradict the plan in the log without saying so.
+SWITCHES = ("SENTINEL_LIVE_FRAMES", "SENTINEL_TRACE_SCREENSHOTS", "SENTINEL_DECORATE")
 
 #: What each mode COSTS, in the words the interface must show beside it. A mode that only has a name
 #: leaves a person choosing by vibe; ADR-120 requires the applicability and the price on screen.
@@ -140,6 +152,20 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
         raise Refusal(f"observe={mode} is not implemented in this build — {NOT_YET[mode]}")
 
     frames = mode != OFF
+
+    # DOES `human` BEHAVE LIKE `stream` ON THE FRAME AXIS? Decided by reading the code rather than by
+    # analogy with the docstring's "stream + cursor". The plan's frame axis expands into exactly the two
+    # switches `apply` writes, and `stream` writes them exactly as `frames` does: the live screencast is
+    # NOT gated by this plan at all — it is started per run by the executor's `browser.screencastStart`
+    # (pw-executor/src/server.ts), which no mode here touches. So "human behaves like stream" reduces,
+    # in THIS build, to "frames stay on", which `mode != OFF` already yields. DECISION: no special case
+    # for `human` on the frame axis; the only thing it adds is decoration. If the screencast ever
+    # becomes a switch this resolver owns, `stream` and `human` acquire it TOGETHER — one line, not two.
+    #
+    # Decoration is a property of the PERSON's chosen mode, not a derived state (ADR-120): it is on for
+    # `human` and off for everything else, and nothing else in the run may turn it on.
+    decorations = mode == HUMAN
+
     if mode == OFF:
         why = "off: nothing is captured, by request"
     elif ci and mode != OFF:
@@ -150,7 +176,7 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
     else:
         why = f"{mode}: chosen" + ("" if raw_mode else " by default (nothing was asked for)")
 
-    plan = ObservationPlan(mode=mode, frames=frames, decorations=False, video=False, why=why)
+    plan = ObservationPlan(mode=mode, frames=frames, decorations=decorations, video=False, why=why)
 
     # The VLM layer is not a mode: it is a consequence of having a model that can read our frames. It
     # cannot turn capture ON — the person decides that — but a heal that will never receive a frame
@@ -165,9 +191,14 @@ def resolve(raw_mode, *, baseline=False, ci=False, heal_llm=False, vision_config
 def apply(plan, env):
     """Expand the plan into the switches the two processes already read.
 
-    ⚠ THE ONLY PLACE THEY ARE WRITTEN, which is the whole point. Both variables gate the SAME picture
-    in two languages; written apart, they produce a half-observed run that reports nothing about the
-    half that is missing. Written here, they cannot be set apart.
+    ⚠ THE ONLY PLACE THEY ARE WRITTEN, which is the whole point. The two frame variables gate the SAME
+    picture in two languages; written apart, they produce a half-observed run that reports nothing
+    about the half that is missing. Written here, they cannot be set apart.
+
+    `SENTINEL_DECORATE` (LIVE-HUMAN) rides the SAME expansion for the same reason, not because it is a
+    third frame switch: it carries `plan.decorations` — the person's `human` mode — across the process
+    boundary to the only reader, pw-executor. Expanding it anywhere else would put a second author on
+    one decision, which is exactly how the original four switches came apart.
 
     ⚠ PW_NO_TRACE is not touched — see the module docstring.
 
@@ -177,14 +208,21 @@ def apply(plan, env):
     """
     out = dict(env)
     frames = "1" if plan.frames else "0"
-    out.setdefault("SENTINEL_LIVE_FRAMES", frames)
-    out.setdefault("SENTINEL_TRACE_SCREENSHOTS", frames)
+    values = {"SENTINEL_LIVE_FRAMES": frames,
+              "SENTINEL_TRACE_SCREENSHOTS": frames,
+              "SENTINEL_DECORATE": "1" if plan.decorations else "0"}
+    for var in SWITCHES:
+        out.setdefault(var, values[var])
     return out
 
 
 def overrides(env):
-    """Observation switches the caller had already set by hand, so the log can say the plan was overridden."""
-    return sorted(k for k in ("SENTINEL_LIVE_FRAMES", "SENTINEL_TRACE_SCREENSHOTS") if k in env)
+    """Observation switches the caller had already set by hand, so the log can say the plan was overridden.
+
+    Walks `SWITCHES` rather than its own list: a switch this resolver writes but does not report would
+    be set by hand, silently, while the log kept claiming the plan it no longer describes.
+    """
+    return sorted(k for k in SWITCHES if k in env)
 
 
 def from_env(env=None, *, run_mode="explore"):

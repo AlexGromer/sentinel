@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>SENTINEL cursor=none samples=0 clicks=0 input=0 keydown=0</title>
+<style>
+  /* Every pixel on this page is fixed on purpose. The gate compares a screenshot taken BEFORE the
+     cursor exists against one taken after — so anything that changes appearance on hover, focus or
+     click would be indistinguishable from the overlay it is meant to detect. Hence the identical
+     :hover/:focus/:active declarations and the suppressed outline: not styling, but the removal of
+     every pixel source except the one under test. */
+  html, body { margin: 0; padding: 0; background: #ffffff; color: #111111;
+               font: 14px/1.4 "DejaVu Sans Mono", monospace; }
+  #target { position: absolute; left: 200px; top: 150px; width: 180px; height: 44px;
+            margin: 0; padding: 0; background: #dcdcdc; color: #111111;
+            border: 2px solid #888888; border-radius: 4px;
+            font: 14px "DejaVu Sans Mono", monospace; }
+  #target:hover, #target:focus, #target:active, #target:focus-visible {
+            background: #dcdcdc; border-color: #888888; outline: none; box-shadow: none; }
+  #field, #pw { position: absolute; left: 200px; width: 220px; height: 26px;
+                margin: 0; padding: 0 4px; background: #ffffff; color: #111111;
+                border: 2px solid #888888; border-radius: 4px;
+                font: 14px "DejaVu Sans Mono", monospace; }
+  #field { top: 260px; }
+  #pw { top: 310px; }
+  #field:focus, #pw:focus { outline: none; border-color: #888888; }
+  label { position: absolute; left: 200px; }
+  label[for=field] { top: 236px; }
+  label[for=pw] { top: 286px; }
+  #far { position: absolute; left: 200px; top: 1800px; width: 180px; height: 40px; }
+</style>
+</head>
+<body>
+
+<button id="target" data-testid="target">Нажми меня</button>
+
+<label for="field">Поле</label>
+<input id="field" type="text" data-testid="field">
+
+<label for="pw">Пароль</label>
+<input id="pw" type="password" data-testid="pw">
+
+<!-- Below the fold on purpose: `announce` must scroll BEFORE it reads the box, or the cursor is
+     aimed at coordinates the control is about to leave. -->
+<button id="far" data-testid="far">Далеко внизу</button>
+
+<script>
+/* L11 — the fixture watches the DECORATION and reports what it saw.
+ *
+ * WHY THE PAGE DOES THE WATCHING. The gate drives the executor over its JSON-RPC transport, from
+ * outside the browser: there is no handle on the page from there, and adding an RPC that returns
+ * overlay coordinates would mean the product growing a verb whose only caller is a test. So the
+ * page — the one place that can see both the cursor and the target — measures it and publishes the
+ * result through a channel the transport already carries.
+ *
+ * THE CHANNEL IS document.title, AND THAT IS THE POINT. It travels back in `browser.navigate` and
+ * `browser.currentUrl`, and it CHANGES NO PIXELS. Writing the same numbers into an element on the
+ * page would repaint it, and the screenshot comparison this fixture exists to support could then
+ * never tell an overlay from the fixture's own bookkeeping.
+ *
+ * Sampling is on a timer, not requestAnimationFrame: rAF is compositor-driven, and a headless shell
+ * with nothing to present can starve it — the sampler would then report a cursor that never moved
+ * while the cursor moved perfectly well.
+ */
+(function () {
+  var samples = 0, clicks = 0, inputs = 0, keydowns = 0;
+  var last = '', cursor = 'none', title = '';
+
+  /* Every counter republishes AS IT CHANGES, not on the sampler's tick.
+   *
+   * Measured, not anticipated: an undecorated `fill` returns in under a millisecond, and a reader
+   * that asks for the title immediately afterwards can beat a 10ms timer to it. The gate then sees
+   * "the field was never filled" for a field that was filled perfectly well — a race in the
+   * INSTRUMENT reported as a defect in the product, which is the worst reading a gate can produce.
+   * Only the cursor position stays on the timer: nothing fires an event when a style changes. */
+  document.getElementById('target').addEventListener('click', function () { clicks++; publish(); });
+  document.getElementById('far').addEventListener('click', function () { clicks++; publish(); });
+  ['field', 'pw'].forEach(function (id) {
+    var el = document.getElementById(id);
+    // Counted per FIELD-INDEPENDENT event so the gate can tell one pasted value (`fill`) from a
+    // value entered key by key (`pressSequentially`) — the difference is the whole of requirement
+    // (в), and it is invisible in the final value, which is identical either way.
+    el.addEventListener('input', function () { inputs++; publish(); });
+    el.addEventListener('keydown', function () { keydowns++; publish(); });
+  });
+
+  function publish() {
+    var t = 'SENTINEL cursor=' + cursor + ' samples=' + samples + ' clicks=' + clicks
+          + ' input=' + inputs + ' keydown=' + keydowns;
+    if (t !== title) { title = t; document.title = t; }
+  }
+
+  setInterval(function () {
+    var c = document.getElementById('__sentinel_cursor__');
+    if (c) {
+      var r = c.getBoundingClientRect();
+      // A hidden overlay (display:none) collapses to a zero box. Skipped rather than recorded as a
+      // move to 0,0: the cursor did not go anywhere, it was taken down for a clean capture.
+      if (r.width > 0 || r.height > 0) {
+        var p = Math.round(r.left) + ',' + Math.round(r.top);
+        if (p !== last) { last = p; cursor = p; samples++; }
+      }
+    }
+    publish();
+  }, 10);
+
+  publish();
+})();
+</script>
+</body>
+</html>
