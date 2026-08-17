@@ -2383,7 +2383,10 @@ func main() {
 		s.journalEvent("service.stopped", "info", map[string]string{"svc": "control-api", "reason": "signal " + got.String()}, nil)
 		s.journal.Close()
 		signal.Stop(sig)
-		_ = syscall.Kill(syscall.Getpid(), got.(syscall.Signal))
+		// Platform-split (reraise_unix.go / reraise_windows.go): `syscall.Kill` does not exist on
+		// Windows, and this line broke the cross-build for eleven days without anything noticing —
+		// nothing compiles for Windows except `release.yml`, which had not run since the last tag.
+		dieOfSignal(got.(syscall.Signal))
 	}()
 	s.journalEvent("service.started", "info", map[string]string{
 		"svc": "control-api", "version": version, "supervisor": svclog.Supervisor(),
