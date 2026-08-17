@@ -27,6 +27,7 @@ Variable substitution is NOT resolved (that is docker's job at up-time), so `use
 SHAPE — it must reference UID and GID with defaults — rather than by value.
 """
 import os
+import re
 import sys
 
 import yaml
@@ -36,10 +37,25 @@ FILES = ["docker-compose.yml", "docker-compose.ghcr.yml", "docker-compose.offlin
 
 # Services built from OUR image must run as the operator. Third-party images must not be forced into
 # a uid their own entrypoints were never written for, and they do not write into our bind mounts —
-# ollama keeps its blobs in a named volume, litellm reads a read-only config. Distinguished by the
-# image reference rather than by a list of names, so a service added later is classified by what it
-# actually is.
-OURS = ("sentinel:local", "ghcr.io/alexgromer/sentinel")
+# ollama keeps its blobs in a named volume, litellm reads a read-only config.
+#
+# WHY THIS IS DERIVED AND NOT A TUPLE OF PREFIXES (2026-08-17, found while planning `[LIVE-VNC]`).
+# It used to be
+#     OURS = ("sentinel:local", "ghcr.io/alexgromer/sentinel")
+# and a second image variant breaks it in the quietest possible way. `sentinel:vnc` does not start
+# with `sentinel:local`, so a service running an image WE build, from a stage of OUR Dockerfile,
+# mounting OUR ./state, would be classified as somebody else's — and this gate would then DEMAND it
+# carry no `user:`. Obeying that makes it run as root and drop root-owned files on the host bind
+# mount: the exact defect the `user:` half of this file exists to prevent, produced by the check that
+# exists to prevent it. Worse, the SAME service in docker-compose.ghcr.yml DOES match the GHCR
+# prefix, so the two files would be held to opposite rules while the parity gates call them equal.
+#
+# A prefix tuple answers "does this string look familiar", which is not the question being asked. The
+# question is "is this image built from this repository", and that has a source IN the repository:
+# the services carrying a `build:` key, plus the repository release.yml publishes to. Both are read
+# below, so a third image variant is classified correctly by EXISTING rather than by somebody
+# remembering to widen a tuple.
+MIN_OURS_REPOS = 2   # `sentinel` (built here) and the GHCR repository release.yml pushes
 
 failures: "list[str]" = []
 
@@ -48,9 +64,38 @@ def fail(msg: str) -> None:
     failures.append(msg)
 
 
+def repo_of(image: str) -> str:
+    """The repository part of an image reference, with compose's ${VAR:-default} removed first.
+
+    `${SENTINEL_VERSION:-latest}` carries a colon INSIDE the substitution, so a naive split on ':'
+    returns a repository that does not exist. Stripping substitutions first is the difference between
+    `ghcr.io/alexgromer/sentinel` and `ghcr.io/alexgromer/sentinel:${SENTINEL_VERSION`.
+    """
+    ref = re.sub(r"\$\{[^}]*\}", "", str(image))
+    head, _, tail = ref.rpartition("/")   # a tag's colon is only ever after the last slash
+    name = tail.partition(":")[0]
+    return f"{head}/{name}" if head else name
+
+
+def ours_repos() -> "set[str]":
+    repos = set()
+    with open(os.path.join(REPO, "docker-compose.yml"), encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)          # PyYAML resolves `<<:`, so an anchored `build:` counts too
+    for svc in (doc.get("services") or {}).values():
+        if isinstance(svc, dict) and svc.get("build") and svc.get("image"):
+            repos.add(repo_of(svc["image"]))
+    with open(os.path.join(REPO, ".github", "workflows", "release.yml"), encoding="utf-8") as fh:
+        m = re.search(r"(?m)^\s{2}IMAGE:\s*(\S+)\s*$", fh.read())
+    if m:
+        repos.add(repo_of(m.group(1)))
+    return repos
+
+
+OURS_REPOS = ours_repos()
+
+
 def is_ours(svc: dict) -> bool:
-    image = str(svc.get("image", ""))
-    return any(image.startswith(p) for p in OURS)
+    return repo_of(svc.get("image", "")) in OURS_REPOS
 
 
 def main() -> int:
@@ -128,6 +173,14 @@ def main() -> int:
     if total_foreign < 2:
         fail(f"only {total_foreign} third-party services found — the 'do not force a uid on someone "
              f"else's image' half of this gate asserted almost nothing")
+    # A floor on the CLASSIFIER itself, not on what it classified. With an empty set of our
+    # repositories every service is foreign: the `user:` half asserts nothing at all, and the
+    # 'do not force a uid on someone else's image' half fails on every one of ours at once — a
+    # confusing red rather than an informative one.
+    if len(OURS_REPOS) < MIN_OURS_REPOS:
+        fail(f"only {len(OURS_REPOS)} repository/ies derived as ours ({sorted(OURS_REPOS)}, floor "
+             f"{MIN_OURS_REPOS}) — the derivation, not the stack, is what regressed. It reads the "
+             f"services carrying `build:` in docker-compose.yml plus IMAGE: in release.yml")
 
     if failures:
         print(f"FAIL — {len(failures)} problem(s):")

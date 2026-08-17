@@ -595,6 +595,15 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          # ⚠ NAMED, not left to the default. A build that names no target gets the Dockerfile's LAST
+          # stage, and until LIVE-VNC `runtime` happened to be it — so all three build sites in this
+          # repository relied on stage ORDER without saying so. Adding any stage after `runtime` would
+          # have silently re-pointed every one of them at the new image, and nothing would have been
+          # red: the tags, the steps and the assertions below would all still be about `sentinel:local`.
+          # tests/test_build_targets_offline.py derives the stages from the Dockerfile and the build
+          # sites from this file, release.yml and scripts/offline-verify.sh, and fails any site that
+          # does not name one.
+          target: runtime
           load: true
           tags: sentinel:local
           cache-from: type=gha
@@ -684,7 +693,18 @@ jobs:
         with:
           go-version: '1.26'
       - name: shellcheck all shell scripts
-        run: shellcheck install.sh scripts/offline-verify.sh scripts/build-airgap-bundle.sh scripts/gen-brew-formula.sh scripts/collect-live-run.sh scripts/build-deb.sh
+        # DERIVED, not listed (docs/DEVELOPMENT.md §0, principle 5). This step used to name six files
+        # on one line, so a script added under scripts/ was linted only if somebody also remembered to
+        # extend that line — and a linter that never runs is indistinguishable from one that passes.
+        # The step's own name has said "all shell scripts" the whole time.
+        run: |
+          set -euo pipefail
+          mapfile -t sh < <(git ls-files '*.sh')
+          # A floor, for the same reason every derived list in this repository carries one: a walk
+          # that stops finding files lints nothing and reports success in exactly the same words.
+          [ "${#sh[@]}" -ge 6 ] || { echo "::error::only ${#sh[@]} shell script(s) found by the walk — the walk, not the tree, is what broke"; exit 1; }
+          printf '  %s\n' "${sh[@]}"
+          shellcheck "${sh[@]}"
       - name: install.sh e2e vs a local fake release (+ tampered-checksum negative)
         run: |
           set -euo pipefail

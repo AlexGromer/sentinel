@@ -131,6 +131,11 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          # ⚠ NAMED, not left to the default — see the same comment in ci.yml. This is the site where
+          # the omission would have cost the most: an unnamed target here publishes whatever stage
+          # happens to be last to `ghcr.io/.../sentinel:<tag>` and `:latest`, under a version number
+          # that promises the image people already run.
+          target: runtime
           # dry-run builds a single arch (fast Dockerfile smoke); a tag builds + pushes both.
           platforms: ${{ steps.meta.outputs.push == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ steps.meta.outputs.push == 'true' }}
