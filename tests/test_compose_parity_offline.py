@@ -125,30 +125,86 @@ def test_a_service_carries_the_same_profile_in_both_stacks():
             f"command would start different stacks.")
 
 
-def test_the_pulled_stack_never_builds_and_the_browser_port_is_never_published():
+def _cdp_services(path: pathlib.Path) -> "dict[str, str]":
+    """service name -> its block, for every service that RUNS cdp-service.js — DERIVED, never listed.
+
+    The rule this feeds is about a PROPERTY (an unauthenticated CDP relay), not about a name. Its
+    predecessor asked for the literal service `browser`, which was true and sufficient for exactly as
+    long as there was one such service — and `[LIVE-VNC]` adds a second one running the same relay.
+
+    Read from the `entrypoint:`/`command:` FLOW SEQUENCES specifically, not from the segment text: a
+    comment written ABOVE a service belongs, to a splitter that cuts at the service key, to the
+    PREVIOUS service's block — and docker-compose.yml really does explain cdp-service.js in the
+    comment above `browser`, i.e. inside `store-gateway`'s segment. A substring search over the
+    segment would classify store-gateway as a CDP service and quietly inflate the floor below.
+
+    BOTH keys are read because compose CLEARS the image's CMD when `entrypoint:` is overridden, so a
+    service may legitimately split "what runs" across the two.
+    """
+    out: "dict[str, str]" = {}
+    for name, seg in _segments(path).items():
+        argv = " ".join(m.group(1) for m in
+                        re.finditer(r"(?m)^    (?:entrypoint|command):\s*\[(.+)\]\s*$", seg))
+        if "cdp-service.js" in argv:
+            out[name] = seg
+    return out
+
+
+# A FLOOR on that derivation, in the shape DEFAULT_STACK uses: a number somebody edits on purpose,
+# not a count that follows whatever the file says today. One service relays CDP now — `browser`.
+# ⚠ It goes to 2 with `browser-vnc` (LIVE-VNC): headed Chromium behind the `vnc` profile runs the
+# same relay. A floor only ever goes UP, and it moving is the point — it makes "a second browser
+# arrived" a thing somebody states rather than a thing that happens.
+CDP_SERVICES = 1
+
+
+def test_the_pulled_stack_never_builds_and_no_cdp_service_publishes_a_port():
     """Two properties that make the file what it claims to be.
 
     A stray `build:` would send someone with no checkout into a build failure, which is the exact
-    situation this file exists to remove. And the CDP port has no authentication and cannot be given
-    any (see pw-executor/src/cdp-service.ts), so publishing it would hand whoever reaches the host a
-    browser to drive — a `ports:` key on that service is a security regression, not a convenience.
+    situation this file exists to remove.
+
+    And the CDP port has no authentication and cannot be given any (see pw-executor/src/
+    cdp-service.ts): whoever reaches it drives the browser and reads its cookies. Reachability is the
+    ONLY control there is, so a `ports:` key on a service that relays CDP is a security regression,
+    not a convenience.
+
+    ⚠ THE RULE IS DERIVED FROM WHAT A SERVICE RUNS, NOT FROM ITS NAME, and that is the whole edit
+    (2026-08-17). The previous version searched for the literal service `browser` and checked that
+    one block. It was correct and sufficient for exactly as long as there was one CDP service;
+    `[LIVE-VNC]` adds `browser-vnc`, which relays the same unauthenticated protocol and would have
+    been covered by nothing at all — this gate would have gone on passing, about a service it could
+    not see. Note what is NOT forbidden: a service that merely sits near one, or a future bridge that
+    carries its own credential, may publish a port. Only a derived rule can tell those apart.
     """
     pulled_text = PULLED.read_text()
     assert not re.search(r"(?m)^\s+build:\s*$", pulled_text), (
         f"{PULLED.name} contains a `build:` key — the pulled stack must resolve every image from "
         f"the registry, or it is just the built stack with extra steps.")
 
+    sets = {}
     for path in (BUILT, PULLED):
-        text = path.read_text()
-        m = re.search(r"(?m)^  browser:\s*$", text)
-        assert m, f"{path.name} has no `browser` service"
-        seg = text[m.end():]
-        nxt = re.search(r"(?m)^  [a-z0-9][\w-]*:\s*$|^[a-zA-Z_][\w-]*:\s*$", seg)
-        seg = seg[: nxt.start()] if nxt else seg
-        assert "ports:" not in seg, (
-            f"{path.name}: the `browser` service publishes ports. CDP is unauthenticated by "
-            f"construction — anything that reaches that port drives the browser and reads its "
-            f"cookies. Reachability is the ONLY control there is.")
+        cdp = _cdp_services(path)
+        # Every assertion under this loop is vacuously true over an empty dict, and a regex that
+        # stops matching yields exactly that — the failure the derivation itself cannot see.
+        assert len(cdp) >= CDP_SERVICES, (
+            f"{path.name}: derived only {len(cdp)} CDP service(s) {sorted(cdp)}, expected at least "
+            f"{CDP_SERVICES}. Either a service that relays CDP stopped being visible to this parser "
+            f"— in which case the rule below silently stopped applying to it — or one was removed "
+            f"and this number must come down with it, as an edit somebody makes on purpose.")
+        for name, seg in sorted(cdp.items()):
+            assert "ports:" not in seg, (
+                f"{path.name}: the `{name}` service relays CDP and publishes ports. CDP is "
+                f"unauthenticated BY CONSTRUCTION — anything that reaches that port drives the "
+                f"browser and reads its cookies, and there is no token to add because the protocol "
+                f"has none. Reachability is the only control there is.")
+        sets[path.name] = set(cdp)
+
+    built_set, pulled_set = sets[BUILT.name], sets[PULLED.name]
+    assert built_set == pulled_set, (
+        f"the two stacks relay CDP from different services: {sorted(built_set)} in {BUILT.name} vs "
+        f"{sorted(pulled_set)} in {PULLED.name}. One file has a browser the other does not, and the "
+        f"port rule above was applied to a different set in each.")
 
 
 def test_up_with_no_flags_starts_the_product():

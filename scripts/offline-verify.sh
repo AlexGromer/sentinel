@@ -56,7 +56,11 @@ verify_local() {
   else
     info "building $IMAGE (docker buildx, amd64/native)"
     # shellcheck disable=SC2086  # AIRGAP_CACHE is intentionally word-split into separate flags
-    docker buildx build -f Dockerfile -t "$IMAGE" --load $AIRGAP_CACHE . \
+    # --target runtime is NAMED rather than left to the Dockerfile's last stage; see the comment on
+    # the same flag in .github/workflows/ci.yml. The air-gapped bundle is the worst place to inherit
+    # a stage by accident: what this builds is what `docker save` ships to a machine with no network,
+    # and nobody there can compare it with anything.
+    docker buildx build -f Dockerfile --target runtime -t "$IMAGE" --load $AIRGAP_CACHE . \
       || fail "image build failed"
   fi
 
