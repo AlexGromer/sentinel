@@ -144,6 +144,32 @@ jobs:
           go vet ./...
           go test ./...
 
+      # ⚠ THIS STEP EXISTS BECAUSE ITS ABSENCE COST A RELEASE. `syscall.Kill` reached
+      # cmd/control-api on 2026-08-06; it does not exist on Windows, and the cross-build stayed broken
+      # for ELEVEN DAYS. Nothing here could have caught it: every Go step above compiles for the HOST
+      # only, the cross-build lived solely in release.yml, and that had not run since the previous tag.
+      # `install-ps1-smoke` does run on windows-latest — but it exercises install.ps1 against a fake
+      # release and never touches the Go toolchain. The first symptom was a failed release.
+      #
+      # The platform list is DERIVED from release.yml's matrix rather than repeated here. A hand-kept
+      # copy is the failure this repository keeps measuring: it shows what is superfluous and never
+      # what is absent, so a seventh platform added to the release would ship ungated while this step
+      # stayed green. Compile only — `go test` for a foreign GOOS cannot run its binaries.
+      - name: Cross-build every platform the release ships (compile only; list derived from release.yml)
+        run: |
+          set -euo pipefail
+          mapfile -t PAIRS < <(grep -oE '\{ goos: [a-z0-9]+, goarch: [a-z0-9]+ \}' .github/workflows/release.yml \
+            | sed -E 's/.*goos: ([a-z0-9]+), goarch: ([a-z0-9]+).*/\1\/\2/')
+          if [ "${#PAIRS[@]}" -lt 4 ]; then
+            echo "::error::derived only ${#PAIRS[@]} platform(s) from release.yml — the matrix moved and this gate is now vacuous"
+            exit 1
+          fi
+          echo "platforms under the gate: ${PAIRS[*]}"
+          for p in "${PAIRS[@]}"; do
+            echo "--- GOOS=${p%/*} GOARCH=${p#*/}"
+            CGO_ENABLED=0 GOOS="${p%/*}" GOARCH="${p#*/}" go build ./...
+          done
+
       # Walks docs/ instead of an enumerated page list: the list had drifted to 3 of the 6 pages,
       # leaving docs/calculators/*.html (inline JS) ungated while the docs claimed full coverage.
       - name: SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)
