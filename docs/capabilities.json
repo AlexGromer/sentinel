@@ -575,6 +575,33 @@
       }
     },
     {
+      "id": "vnc-profile",
+      "group": "Deployment",
+      "severity": "high",
+      "title_ru": "Настоящий экран браузера (профиль vnc)",
+      "title_en": "The browser's real screen (the vnc profile)",
+      "how_ru": "docker compose --profile vnc up -d browser-vnc — головной Chromium внутри виртуального дисплея Xvfb, экспортированного x11vnc по RFB. Единственный режим с НАСТОЯЩИМ курсором и настоящим вводом; дефолтный сервис browser остаётся headless, потому что головной браузер рисует другие пиксели и эталоны, снятые в headless, перестали бы совпадать (docs/DETERMINISM.md). Пароль обязателен: SENTINEL_VNC_PASSWORD либо сгенерированный state/vnc.password (0600, agentctl vnc-password). Порт наружу НЕ публикуется. ⚠ Смотреть экран пока нечем из интерфейса — реле и вкладка «Экран» приходят следующим PR дуги LIVE; сегодня профиль поднимает транспорт и наблюдается пробой /readyz.",
+      "how_en": "docker compose --profile vnc up -d browser-vnc — a headed Chromium inside an Xvfb virtual display exported by x11vnc over RFB. The only mode with a REAL cursor and real input; the default `browser` service stays headless, because a headed browser renders different pixels and goldens captured headless would stop matching (docs/DETERMINISM.md). A password is mandatory: SENTINEL_VNC_PASSWORD or the generated state/vnc.password (0600, agentctl vnc-password). The port is NEVER published to a host. ⚠ There is nothing to watch it with from the UI yet — the relay and the Screen tab arrive in the next PR of the LIVE arc; today the profile brings up the transport and is observed by the /readyz probe.",
+      "access": [
+        {
+          "kind": "profile",
+          "ref": "vnc"
+        },
+        {
+          "kind": "cli",
+          "ref": "vnc-password"
+        },
+        {
+          "kind": "env",
+          "ref": "SENTINEL_VNC_PASSWORD"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "артефакт развёртывания, а не способность продукта: профиль поднимает транспорт. Способность «смотреть настоящий экран» появится записью live-screen вместе с реле и вкладкой в UI"
+      }
+    },
+    {
       "id": "litellm-profile",
       "group": "Deployment",
       "severity": "medium",

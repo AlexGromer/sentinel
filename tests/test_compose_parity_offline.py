@@ -151,11 +151,11 @@ def _cdp_services(path: pathlib.Path) -> "dict[str, str]":
 
 
 # A FLOOR on that derivation, in the shape DEFAULT_STACK uses: a number somebody edits on purpose,
-# not a count that follows whatever the file says today. One service relays CDP now — `browser`.
-# ⚠ It goes to 2 with `browser-vnc` (LIVE-VNC): headed Chromium behind the `vnc` profile runs the
-# same relay. A floor only ever goes UP, and it moving is the point — it makes "a second browser
-# arrived" a thing somebody states rather than a thing that happens.
-CDP_SERVICES = 1
+# not a count that follows whatever the file says today. TWO services relay CDP: `browser` (headless,
+# the default stack) and `browser-vnc` (headed, behind the `vnc` profile, LIVE-VNC). A floor only ever
+# goes UP, and it moving is the point — it made "a second browser arrived" a thing somebody stated
+# rather than a thing that happened.
+CDP_SERVICES = 2
 
 
 def test_the_pulled_stack_never_builds_and_no_cdp_service_publishes_a_port():
@@ -193,7 +193,14 @@ def test_the_pulled_stack_never_builds_and_no_cdp_service_publishes_a_port():
             f"— in which case the rule below silently stopped applying to it — or one was removed "
             f"and this number must come down with it, as an edit somebody makes on purpose.")
         for name, seg in sorted(cdp.items()):
-            assert "ports:" not in seg, (
+            # ⚠ THE KEY AT ITS OWN INDENT, not the substring anywhere in the block. A substring search
+            # is what the previous version did, and it was fine only while no service body EXPLAINED
+            # the rule: the moment `browser-vnc` carried the comment "NO `ports:` KEY, for the same
+            # reason as browser", the gate failed on the very sentence promising it would not publish
+            # a port. A check that fires on legitimate content gets an exception carved into it, and
+            # an exception is how a gate stops applying to the thing it was written for. Narrowed to
+            # the shape compose actually emits — four spaces, the key, end of line.
+            assert not re.search(r"(?m)^    ports:\s*$", seg), (
                 f"{path.name}: the `{name}` service relays CDP and publishes ports. CDP is "
                 f"unauthenticated BY CONSTRUCTION — anything that reaches that port drives the "
                 f"browser and reads its cookies, and there is no token to add because the protocol "

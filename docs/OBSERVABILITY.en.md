@@ -365,8 +365,11 @@ account, changing a password, deleting an account and editing the global config 
 (ADR-075), and an audit trail absent from the deployment where people most often work alone is not an
 audit trail. And a store that has fallen over must not take down the record of it falling over.
 
-**One file for every service, distinguished by `svc`.** Three writers: `control-api`, `agentctl` (only
-`service.log_purged`) and `browser`. Four files would mean answering "what happened at 14:32" by
+**One file for every service, distinguished by `svc`.** Four writers: `control-api`, `agentctl`
+(`service.log_purged` and `service.vnc_password_source`), `browser` and — as of LIVE-VNC —
+`browser-vnc`. ⚠ The last two run THE SAME binary, and only `SENTINEL_SVC_NAME` tells them apart:
+without that variable both would write `svc: "browser"`, and the field would stop answering the
+question it exists for. Four files would mean answering "what happened at 14:32" by
 merging them by hand.
 
 **Levels remove VOLUME, not selection** (the directive was: record everything, and have levels). Reads

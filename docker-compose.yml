@@ -318,5 +318,96 @@ services:
       retries: 20
       start_period: 10s
 
+  # -------------------------------------------------------------------------------------------------
+  # LIVE-VNC (W3, ADR-127) — the "real screen": a HEADED Chromium on a virtual X display, exported over
+  # VNC. The only transport where the cursor is REAL rather than drawn, and the one that makes takeover
+  # (ADR-054) something a person can actually do with a mouse.
+  #
+  #   docker compose --profile vnc up -d browser-vnc
+  #   PW_CDP_ENDPOINT=http://browser-vnc:9223 docker compose run --rm sentinel run --target <URL>
+  #   password: SENTINEL_VNC_PASSWORD, or the generated ./state/vnc.password (0600)
+  #
+  # ⚠ THE DEFAULT `browser` SERVICE ABOVE STAYS HEADLESS AND IS NOT TOUCHED (Alex, 2026-08-16). A
+  # headed Chromium renders DIFFERENT pixels, and `screenshot_hash` is byte-stable ONLY in headless
+  # (docs/DETERMINISM.md) — flipping the default service would invalidate every golden ever taken,
+  # silently, on the next replay. Two services, one image: the profile decides what RUNS, and after the
+  # 2026-08-17 measurement (+10 MB for x11vnc, because the X stack is already here for Chromium) there
+  # is nothing left for it to decide about what is INSIDE the image.
+  #
+  # ⚠ NO `<<: *sentinel-base` HERE, and that is a decision rather than an oversight. This service must
+  # declare an `environment:` block of its own, and a YAML merge key REPLACES that mapping instead of
+  # deepening it — inheriting the anchor and then writing one line would drop ANTHROPIC_API_KEY and
+  # PW_CDP_ENDPOINT without a word. That is not hypothetical: it is the measured defect recorded on
+  # control-api above. Written out, there is no merge left to lose.
+  browser-vnc:
+    logging: *logging
+    profiles: ["vnc"]
+    build:
+      context: .
+      # Named for the same reason every other build site now names it (tests/test_build_targets_offline.py):
+      # a build that names no target takes whatever stage the Dockerfile ends with, which is a property
+      # of stage ORDER rather than of this service.
+      target: runtime
+    image: sentinel:local
+    # Same reasoning as *sentinel-base, and here it is load-bearing rather than tidy: this container
+    # CREATES state/vnc.password on the host bind mount. As root that would be a 0600 secret owned by
+    # root — unreadable by the operator it was generated FOR, and unremovable without sudo.
+    user: "${UID:-1000}:${GID:-1000}"
+    # docker's own tini as pid 1. The entrypoint EXECs into the browser service, which would otherwise
+    # be pid 1 and would never reap Xvfb and x11vnc — the two children it did not spawn.
+    init: true
+    volumes:
+      - ./runs:/app/runs
+      - ./state:/app/state     # state/vnc.password (0600) is written here on first start
+      - ./config:/config
+    # BOTH keys deliberately: compose CLEARS the image's CMD when `entrypoint:` is overridden, so the
+    # command has to be repeated — and repeating it is what makes "what actually runs" readable here
+    # instead of only in the Dockerfile.
+    entrypoint: ["/app/bin/vnc-entrypoint.sh"]
+    command: ["node", "/app/pw-executor/dist/cdp-service.js"]
+    environment:
+      # ⚠ EVERY key of *sentinel-base is repeated here ON PURPOSE — see the block comment above.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
+      # The virtual display Xvfb creates and Chromium draws into. x11vnc finds it over the unix socket
+      # /tmp/.X11-unix/X99 — Xvfb runs with -nolisten tcp, so the X server has no network socket at all
+      # and nothing but this container's own processes can reach it.
+      DISPLAY: ":99"
+      SENTINEL_VNC_GEOMETRY: ${SENTINEL_VNC_GEOMETRY:-1280x800x24}
+      # ⚠ WITHOUT THIS LINE THE WHOLE PROFILE IS A BLACK SCREEN WITH GREEN PROBES. cdp-service.js calls
+      # chromium.launch(), and until LIVE-VNC that call passed no headless option at all — Playwright's
+      # default is HEADLESS, and a headless Chromium draws nothing onto :99 while x11vnc faithfully
+      # exports an empty desktop and /live/status answers 200. The variable is the one
+      # resolveLaunchPlan already reads (pw-executor/src/launch.ts), not a new dialect.
+      PW_HEADED: "1"
+      # ONE journal file for every service, told apart by `svc`. Both browser services run the same
+      # binary, so without this they both write svc:"browser" and the field stops answering the
+      # question it exists to answer.
+      SENTINEL_SVC_NAME: browser-vnc
+      # Path 1 of the two a password may arrive by. Unset — the default — means path 2: the entrypoint
+      # asks `agentctl vnc-password`, which generates state/vnc.password 0600 and says where it put it.
+      # "Neither" is impossible by construction: the verb exits 2 and `set -e` stops the container.
+      SENTINEL_VNC_PASSWORD: ${SENTINEL_VNC_PASSWORD:-}
+    # ⚠ NO `ports:` KEY, for the SAME reason as `browser` and one more besides. CDP (9223) is
+    # unauthenticated by construction. RFB (5900) does carry a password — but VNC's classic auth is DES
+    # over the FIRST EIGHT BYTES of it (measured against x11vnc 0.9.16: a server holding
+    # `ABCDEFGH12345678` accepts `ABCDEFGH`), which is a lock, not a wall. Reachability stays the
+    # control: both ports live on the compose network only, and the hub reaches the screen through
+    # control-api's relay behind a bearer token. tests/test_compose_parity_offline.py derives this rule
+    # from "runs cdp-service.js" rather than from the name `browser`, so this service is covered by
+    # construction rather than by somebody remembering it.
+    healthcheck:
+      # BOTH halves, because either alone is a green tick with no subject: /live/status proves the
+      # browser service is up (it would be up in headless too, showing nothing), and the RFB connect
+      # proves x11vnc is actually exporting the display. A container that answers one and not the other
+      # is precisely the state in which the operator opens the live view and sees black.
+      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect(5900,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      # 20s rather than the headless service's 10s: an X server plus a HEADED Chromium is measurably
+      # slower to first paint. Measured live at ~12s to CDP_SERVICE_READY on this machine.
+      start_period: 20s
+
 volumes:
   ollama:

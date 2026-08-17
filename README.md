@@ -91,7 +91,9 @@ CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api
 
 **Весь стек одной командой:** `docker compose up` поднимает control-API, хранилище, сервис браузера
 (живой вид) и setup-WebUI — четыре сервиса, связанные между собой по умолчанию. Отдельные флаги нужны
-только тому, что развёртывание может не хотеть: `--profile ollama`, `--profile litellm`, `--profile demo`.
+только тому, что развёртывание может не хотеть: `--profile ollama`, `--profile litellm`,
+`--profile demo`, `--profile vnc` (настоящий экран браузера через VNC — головной Chromium,
+настоящий курсор, обязательный пароль; порт наружу не публикуется).
 
 **Setup-WebUI (статика, air-gapped, в составе бандла)** входит в этот же `up` →
 открой `http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
