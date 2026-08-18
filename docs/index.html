@@ -4320,9 +4320,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                           + 'start-up: a headed browser renders DIFFERENT pixels, and goldens captured headless would '
                           + 'stop matching (<code>docs/DETERMINISM.md</code>).')
         + '<br><code>docker compose --profile vnc up -d browser-vnc</code>'
-        + '<br><br>' + bi('Вне compose поднимите Xvfb + x11vnc сами и задайте адрес:',
-                          'Outside compose, start Xvfb + x11vnc yourself and set the address:')
-        + '<br><code>CONTROL_API_VNC_ADDR=browser-vnc:5900</code>'
+        + '<br><br>' + bi('Вне compose поднимите Xvfb + x11vnc сами (на unix-сокете, без пароля) и задайте путь:',
+                          'Outside compose, start Xvfb + x11vnc yourself (on a unix socket, no password) and set the path:')
+        + '<br><code>CONTROL_API_VNC_SOCK=/app/state/vnc.sock</code>'
         + '<br><br>' + bi('Пока его нет, вкладка «Видео» показывает headless-браузер — без настоящего курсора, но всегда.',
                           'Until then the "Video" tab shows the headless browser — no real cursor, but it always works.')
         + '</p>';

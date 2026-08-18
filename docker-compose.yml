@@ -384,24 +384,29 @@ services:
       # binary, so without this they both write svc:"browser" and the field stops answering the
       # question it exists to answer.
       SENTINEL_SVC_NAME: browser-vnc
-      # Path 1 of the two a password may arrive by. Unset — the default — means path 2: the entrypoint
-      # asks `agentctl vnc-password`, which generates state/vnc.password 0600 and says where it put it.
-      # "Neither" is impossible by construction: the verb exits 2 and `set -e` stops the container.
-      SENTINEL_VNC_PASSWORD: ${SENTINEL_VNC_PASSWORD:-}
-    # ⚠ NO `ports:` KEY, for the SAME reason as `browser` and one more besides. CDP (9223) is
-    # unauthenticated by construction. RFB (5900) does carry a password — but VNC's classic auth is DES
-    # over the FIRST EIGHT BYTES of it (measured against x11vnc 0.9.16: a server holding
-    # `ABCDEFGH12345678` accepts `ABCDEFGH`), which is a lock, not a wall. Reachability stays the
-    # control: both ports live on the compose network only, and the hub reaches the screen through
-    # control-api's relay behind a bearer token. tests/test_compose_parity_offline.py derives this rule
-    # from "runs cdp-service.js" rather than from the name `browser`, so this service is covered by
-    # construction rather than by somebody remembering it.
+      # ⚠ NO PASSWORD VARIABLE, and that is the security decision. RFB is served on a UNIX SOCKET in
+      # ./state with mode 0600 and NO TCP listener at all (`-unixsock … -rfbport 0`), so access control
+      # is file permissions — measured: a foreign uid gets EACCES on connect, the owner connects. The
+      # classic alternative, VNC Authentication, is DES over the first eight bytes of a password over
+      # an unencrypted channel; weak ciphers do not ship here, so the algorithm was removed rather than
+      # the alert reclassified.
+      SENTINEL_VNC_SOCK: /app/state/vnc.sock
+    # ⚠ NO `ports:` KEY, for the SAME reason as `browser`: CDP (9223) is unauthenticated by
+    # construction, and reachability is the only control there is. RFB is not in this list at all any
+    # more — it has no TCP port to publish, by construction rather than by restraint (see
+    # SENTINEL_VNC_SOCK above). ⚠ Worth stating once: "not published" was never "not reachable from
+    # this machine" — measured 2026-08-17, the RFB port answered on the container's bridge IP straight
+    # from the host. A unix socket cannot be reached that way at all.
+    # tests/test_compose_parity_offline.py derives the CDP rule from "runs cdp-service.js" rather than
+    # from the name `browser`, so this service is covered by construction rather than by memory.
     healthcheck:
       # BOTH halves, because either alone is a green tick with no subject: /live/status proves the
-      # browser service is up (it would be up in headless too, showing nothing), and the RFB connect
-      # proves x11vnc is actually exporting the display. A container that answers one and not the other
-      # is precisely the state in which the operator opens the live view and sees black.
-      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect(5900,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
+      # browser service is up (it would be up in headless too, showing nothing), and CONNECTING TO THE
+      # SOCKET proves x11vnc is actually exporting the display. A container that answers one and not
+      # the other is precisely the state in which the operator opens the live view and sees black.
+      # ⚠ The socket is CONNECTED to, not stat'ed: a stale socket file outlives the process that made
+      # it, so "the file exists" would report health for a dead server.
+      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect('/app/state/vnc.sock',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
       interval: 3s
       timeout: 5s
       retries: 20

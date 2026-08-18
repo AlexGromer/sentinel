@@ -1963,14 +1963,6 @@
       "en": "The machine token came from {source}{detail}",
       "emitter": "control-api"
     },
-    "service.vnc_password_source": {
-      "lvl": "info",
-      "cat": "service",
-      "phase": "report",
-      "ru": "Пароль VNC получен, источник — {source}, файл {path}{detail}",
-      "en": "The VNC password came from {source}, file {path}{detail}",
-      "emitter": "agentctl"
-    },
     "service.screen_opened": {
       "lvl": "info",
       "cat": "service",

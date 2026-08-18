@@ -78,7 +78,12 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # catalogue gate performs, exactly the blind spot the control-api widening had already fixed once.
 # A DIRECTORY, therefore, for the same reason and by the same rule: a file added tomorrow is scanned
 # because of where it lives, not because somebody remembered to add a line here.
-EMITTER_FLOORS = {"pw-executor": 9, "control-api": 18, "agentctl": 2}   # control-api 14→18: LIVE-VNC added the four service.screen_* codes   # agentctl 1→2: LIVE-VNC added service.vnc_password_source
+EMITTER_FLOORS = {"pw-executor": 9, "control-api": 18, "agentctl": 1}   # control-api 14→18: four service.screen_* codes (measured 19).
+# ⚠ agentctl went 1→2 and BACK to 1 within the same arc, which is the honest shape of a ratchet: the
+# VNC password (and its `service.vnc_password_source` code) existed only to feed VNC Authentication —
+# DES over eight bytes — and the transport moved to a 0600 unix socket where the kernel decides who
+# connects. A floor is "just below the measured number", not "the highest it has ever been": leaving
+# it at 2 would fail on the truth.
 
 FILE_SUFFIXES = {"json", "jsonl", "ts", "js", "go", "py", "md", "html", "yml", "yaml", "log"}
 

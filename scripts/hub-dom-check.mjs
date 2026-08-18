@@ -1916,7 +1916,7 @@ try {
     // keep the standing-hint promise. This gate runs control-api with neither CONTROL_API_CDP_LIVE
     // nor CONTROL_API_VNC_ADDR, i.e. both network modes are in exactly the refusal state a
     // single-container deployment shows every day.
-    const WHY = { video: /screencast|CDP/i, screen: /CONTROL_API_VNC_ADDR/ };
+    const WHY = { video: /screencast|CDP/i, screen: /CONTROL_API_VNC_SOCK/ };
     for (const k of Object.keys(WHY)) ok(LV_MODES.includes(k), `WHY names ${k}, which is not a live mode any more`);
     for (const mode of LV_MODES) {
       await page.click(`#lv-mode-${mode}`);
@@ -1935,7 +1935,7 @@ try {
         [mode, want ? want.toString() : ''], { timeout: 20000 });
       const text = (await page.locator(`#lv-${mode}`).innerText()).trim();
       ok(text.length > 20, `the ${mode} mode is an empty box — indistinguishable from a broken one`);
-      // ⚠ The screen regex is CONTROL_API_VNC_ADDR, not /vnc|экран/i: the word "экран" is also the tab
+      // ⚠ The screen regex is CONTROL_API_VNC_SOCK, not /vnc|экран/i: the word "экран" is also the tab
       // label, so the looser pattern would pass over a pane whose reason had been replaced by a
       // literal. The check has to name something only the SERVER could have said.
       if (WHY[mode]) ok(WHY[mode].test(text), `the ${mode} mode does not say WHY it is unavailable: ${text}`);

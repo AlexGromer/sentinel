@@ -2,34 +2,44 @@ package main
 
 // The real screen, relayed (LIVE-VNC, ADR-127).
 //
-// The `vnc` profile puts a HEADED Chromium on a virtual X display and exports it over RFB. The port
-// is never published to a host, so the operator's browser has no path to it at all — and that is the
-// problem this file solves: control-api becomes a WebSocket SERVER for the page and a raw TCP CLIENT
-// for x11vnc, which is the shortest arrangement that keeps every promise at once.
+// The `vnc` profile puts a HEADED Chromium on a virtual X display and exports it over RFB — on a UNIX
+// SOCKET in the shared ./state mount, with no TCP listener anywhere. control-api becomes a WebSocket
+// SERVER for the page and a unix-socket CLIENT for x11vnc.
 //
-// WHY A RELAY RATHER THAN PUBLISHING THE PORT. Three properties, none of which survives publishing:
+// ⚠ THERE IS NO PASSWORD AND NO DES, AND THAT IS THE SECURITY DECISION OF THIS FILE.
 //
-//  1. the bearer token stays the only way in. The RFB port carries a password, but VNC's classic auth
-//     is DES over the FIRST EIGHT BYTES (measured: a server holding `ABCDEFGH12345678` accepts
-//     `ABCDEFGH`), over an unencrypted channel. That is a lock, not a wall, and it must never be
-//     described as the equivalent of a token.
-//  2. THE PASSWORD NEVER REACHES THE PAGE. control-api spends it here and offers the browser security
-//     type None. Handing it to the page would mean fetching a secret over HTTP to send it back over
-//     WebSocket, and putting it in every tab's memory, in ui-smoke screenshots and in any HAR attached
-//     to a bug report. `internal/configguard` refuses a config document containing `password` for the
-//     same reason.
-//  3. taking the mouse becomes OBSERVABLE. The relay sees the bytes, so `service.screen_control_taken`
+// The first version served RFB over TCP with the protocol's classic "VNC Authentication", and CodeQL
+// was right to flag it: that scheme is DES over the FIRST EIGHT BYTES of the password, over an
+// unencrypted channel. Reclassifying the alert as "mandated by the protocol" would have been true and
+// beside the point — the rule here is that weak ciphers do not ship, so the algorithm had to go.
+//
+// What replaced it is stronger, not weaker. Measured 2026-08-18 on this image (x11vnc 0.9.16):
+//
+//	-unixsock <path> -rfbport 0  →  /proc/net/tcp EMPTY: no listening port at all
+//	                             →  security types [1] = None: DES appears nowhere
+//	                             →  a full session works (ServerInit + 655 360 bytes of pixels)
+//	socket at mode 0600          →  a foreign uid gets EACCES on connect; the owner connects
+//
+// So the access control is FILE PERMISSIONS, enforced by the kernel before a byte of RFB is spoken.
+// It also closes a surface measured the day before: the old RFB port answered on the container's
+// bridge IP straight from the host, so "not published" never meant "not reachable from this machine".
+// A unix socket cannot be reached that way at all.
+//
+// The three properties the relay exists for are unchanged:
+//
+//  1. the bearer token is the only way in from a browser;
+//  2. nothing secret reaches the page — there is no longer a secret to reach it;
+//  3. taking the mouse is OBSERVABLE, because the relay sees the bytes: `service.screen_control_taken`
 //     records what happened rather than what the interface claimed.
 //
-// WHY NO NEW PROTOCOL CODE. The frames written to the browser are server→client, i.e. UNMASKED, which
-// `wsWriteFrame` already does; the frames read from it are client→server, i.e. masked, which
-// `wsReadClientFrame` already unmasks. The upstream side is a plain TCP socket. `crypto/des` is in the
-// standard library, so the obstacle ADR-111 hit — no websocket library in go.mod, and dragging one in
-// has broken the air-gapped build before — does not arise here.
+// WHY NO NEW PROTOCOL CODE. Frames written to the browser are server→client, i.e. UNMASKED, which
+// `wsWriteFrame` already does; frames read from it are client→server, i.e. masked, which
+// `wsReadClientFrame` already unmasks. The upstream side is a plain socket. Nothing was added to
+// go.mod — the obstacle ADR-111 hit (no websocket library, and dragging one in has broken the
+// air-gapped build) does not arise here.
 
 import (
 	"bufio"
-	"crypto/des"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -37,17 +47,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-
 	"strings"
 	"time"
-
-	"github.com/AlexGromer/sentinel/internal/vncsecret"
 )
 
-// vncAddr is the RFB address of the vnc profile's browser service (host:port), e.g. browser-vnc:5900.
-// Empty means the profile is not part of this deployment — the default, and a true answer rather than
-// an error.
-func vncAddr() string { return strings.TrimSpace(os.Getenv("CONTROL_API_VNC_ADDR")) }
+// vncSock is the path of the RFB unix socket the `vnc` profile serves. Empty means the profile is not
+// part of this deployment — the default, and a true answer rather than an error.
+func vncSock() string { return strings.TrimSpace(os.Getenv("CONTROL_API_VNC_SOCK")) }
 
 // vncServerInfo is what the RFB ServerInit message tells us about the screen.
 type vncServerInfo struct {
@@ -55,34 +61,25 @@ type vncServerInfo struct {
 	Desktop       string
 }
 
-// vncKey turns a password into the DES key VNC actually uses: exactly 8 bytes, zero-padded or
-// TRUNCATED, with the BITS OF EACH BYTE REVERSED.
-//
-// ⚠ The bit reversal is the part nobody guesses and no document here would have told us: it exists
-// because the original implementation fed the bytes to a DES routine that read them
-// least-significant-bit first, and every VNC server has been bug-compatible with it ever since.
-// Verified against a live x11vnc before this file was written — without the reversal the server
-// answers "refused" to the correct password.
-func vncKey(pass string) []byte {
-	k := make([]byte, 8)
-	copy(k, pass) // copy() stops at 8 — this IS the truncation the protocol imposes
-	for i, b := range k {
-		var r byte
-		for j := 0; j < 8; j++ {
-			r |= ((b >> j) & 1) << (7 - j)
-		}
-		k[i] = r
+// vncSocketMode reports the socket's permission bits, because THEY are the authentication. A socket
+// that has been widened to 0666 authenticates nobody, and the product should say so rather than serve
+// a desktop to whoever asks — the check exists so that the claim "permissions are the access control"
+// is verified at runtime instead of merely written down.
+func vncSocketMode(path string) (os.FileMode, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, err
 	}
-	return k
+	return fi.Mode().Perm(), nil
 }
 
-// vncHandshakeUpstream performs RFB 3.8 VncAuth against x11vnc and stops right after SecurityResult,
-// leaving the connection exactly where a client would be: waiting to send ClientInit.
+// vncHandshakeUpstream performs the RFB 3.8 handshake against x11vnc and stops right after
+// SecurityResult, leaving the connection where a client would be: waiting to send ClientInit.
 //
 // Errors are phrased for a PERSON, because every one of them ends up in the `reason` a human reads in
-// the hub. "dial: connection refused" and "the password was refused" are different problems with
-// different fixes, and a single "screen unavailable" would hide which.
-func vncHandshakeUpstream(conn net.Conn, pass string) error {
+// the hub. "the socket refused us" and "the server wants a password" are different problems with
+// different fixes, and one flat "screen unavailable" would hide which.
+func vncHandshakeUpstream(conn net.Conn) error {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	banner := make([]byte, 12)
@@ -107,55 +104,34 @@ func vncHandshakeUpstream(conn net.Conn, pass string) error {
 	if _, err := io.ReadFull(conn, types); err != nil {
 		return fmt.Errorf("truncated security-type list: %w", err)
 	}
-	hasVNCAuth := false
+	hasNone := false
 	for _, t := range types {
-		if t == 2 {
-			hasVNCAuth = true
+		if t == 1 {
+			hasNone = true
 		}
 	}
-	if !hasVNCAuth {
-		// Worth its own sentence: a server offering only None is a screen ANYONE on that network can
-		// drive, and the profile promises the opposite.
-		return fmt.Errorf("the VNC server does not require a password (offered types %v) — refusing to relay an unauthenticated desktop", types)
+	if !hasNone {
+		// ⚠ A server that will not accept `None` wants VNC Authentication, i.e. DES over eight bytes.
+		// We do not implement it and will not: the refusal is the point of this file. Over a 0600 unix
+		// socket the kernel has already decided who may connect, so a password would add a weak cipher
+		// to a boundary that does not need one.
+		return fmt.Errorf("the VNC server offers security types %v but not 1 (None) — it is asking for "+
+			"VNC Authentication, which is DES over eight bytes of a password. This relay speaks to a "+
+			"unix socket whose 0600 permissions ARE the access control, and deliberately implements no "+
+			"weak cipher; start x11vnc with `-unixsock <path> -rfbport 0` and no password", types)
 	}
-	if pass == "" {
-		return fmt.Errorf("the VNC server requires a password and none is readable (SENTINEL_VNC_PASSWORD, or state/vnc.password written by `agentctl vnc-password`)")
-	}
-	if _, err := conn.Write([]byte{2}); err != nil {
-		return fmt.Errorf("could not choose VNC authentication: %w", err)
-	}
-
-	challenge := make([]byte, 16)
-	if _, err := io.ReadFull(conn, challenge); err != nil {
-		return fmt.Errorf("no authentication challenge: %w", err)
-	}
-	blk, err := des.NewCipher(vncKey(pass))
-	if err != nil {
-		return fmt.Errorf("cannot build the DES key: %w", err)
-	}
-	resp := make([]byte, 16)
-	blk.Encrypt(resp[0:8], challenge[0:8]) // ECB, both halves under the same key
-	blk.Encrypt(resp[8:16], challenge[8:16])
-	if _, err := conn.Write(resp); err != nil {
-		return fmt.Errorf("could not send the authentication response: %w", err)
+	if _, err := conn.Write([]byte{1}); err != nil { // choose None
+		return fmt.Errorf("could not choose the None security type: %w", err)
 	}
 	var res [4]byte
 	if _, err := io.ReadFull(conn, res[:]); err != nil {
-		return fmt.Errorf("no authentication result: %w", err)
+		return fmt.Errorf("no security result: %w", err)
 	}
 	if binary.BigEndian.Uint32(res[:]) != 0 {
-		return fmt.Errorf("the VNC server refused the password from %s", vncPassOrigin())
+		return fmt.Errorf("the VNC server rejected the connection after the handshake")
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return nil
-}
-
-// vncPassOrigin names WHERE the password came from, for a refusal message. Never the value.
-func vncPassOrigin() string {
-	if strings.TrimSpace(os.Getenv("SENTINEL_VNC_PASSWORD")) != "" {
-		return "SENTINEL_VNC_PASSWORD"
-	}
-	return "state/vnc.password"
 }
 
 // vncServerInit completes ClientInit/ServerInit so the screen's size and desktop name can be reported.
@@ -193,19 +169,26 @@ func vncServerInit(conn net.Conn) (*vncServerInfo, error) {
 // than a refusal — a false "not attached" (a legitimate topology we did not model) must never take the
 // picture away.
 func screenAttached() bool {
-	vnc := vncAddr()
-	cdp := strings.TrimSpace(os.Getenv("PW_CDP_ENDPOINT"))
-	if vnc == "" || cdp == "" {
+	if vncSock() == "" {
 		return false
 	}
-	host := vnc
-	if h, _, err := net.SplitHostPort(vnc); err == nil {
-		host = h
+	cdp := strings.TrimSpace(os.Getenv("PW_CDP_ENDPOINT"))
+	if cdp == "" {
+		return false
+	}
+	// ⚠ WEAKER EVIDENCE THAN BEFORE, AND SAID SO. With a TCP endpoint the screen's host could be
+	// compared with the CDP host directly. A unix socket has no host, so the only thing left to compare
+	// is the SERVICE NAME the runs are pointed at: `browser-vnc` is the service that owns this socket
+	// (it is the one that mounts ./state and runs x11vnc). This is an inference about a deployment
+	// convention, which is exactly why the hub shows it as a warning strip and never as a refusal.
+	want := strings.TrimSpace(os.Getenv("CONTROL_API_VNC_SERVICE"))
+	if want == "" {
+		want = "browser-vnc"
 	}
 	if u, err := url.Parse(cdp); err == nil && u.Host != "" {
-		return strings.EqualFold(u.Hostname(), host)
+		return strings.EqualFold(u.Hostname(), want)
 	}
-	return strings.Contains(cdp, host)
+	return strings.Contains(cdp, want)
 }
 
 // screenState is the `screen` member of GET /v1/live/status.
@@ -220,15 +203,27 @@ func screenAttached() bool {
 //   - it is declared but does not answer   → available:false, and the reason says what failed
 //   - it works                             → available:true, with size, desktop name and `attached`
 func (s *server) screenState() map[string]any {
-	addr := vncAddr()
+	addr := vncSock()
 	if addr == "" {
 		return map[string]any{
 			"available": false,
-			"reason":    "no VNC screen configured (CONTROL_API_VNC_ADDR is unset) — this deployment did not start the `vnc` compose profile",
+			"reason":    "no VNC screen configured (CONTROL_API_VNC_SOCK is unset) — this deployment did not start the `vnc` compose profile",
 			"attached":  false,
 		}
 	}
-	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	// The permissions ARE the access control, so a widened socket is reported rather than used. A
+	// screen served to whoever asks is not the feature this profile promises, and finding out from a
+	// health view beats finding out from an incident.
+	if mode, merr := vncSocketMode(addr); merr == nil && mode&0o077 != 0 {
+		return map[string]any{
+			"available": false,
+			"reason": fmt.Sprintf("the VNC socket %s is mode %#o — group/other can reach it. Access "+
+				"control for this screen IS the socket's permissions (there is no password by design), "+
+				"so a widened socket means an unguarded desktop. Restore 0600.", addr, mode),
+			"attached": false,
+		}
+	}
+	conn, err := net.DialTimeout("unix", addr, 5*time.Second)
 	if err != nil {
 		return map[string]any{
 			"available": false,
@@ -237,8 +232,7 @@ func (s *server) screenState() map[string]any {
 		}
 	}
 	defer conn.Close()
-	pass, _ := vncsecret.Read(s.repo)
-	if err := vncHandshakeUpstream(conn, pass); err != nil {
+	if err := vncHandshakeUpstream(conn); err != nil {
 		return map[string]any{
 			"available": false,
 			"reason":    fmt.Sprintf("the VNC screen at %s is declared but unusable: %v", addr, err),
@@ -260,7 +254,7 @@ func (s *server) screenState() map[string]any {
 		"height":    info.Height,
 		"desktop":   info.Desktop,
 		"attached":  screenAttached(),
-		"auth":      "the vnc password is spent by control-api; the browser is offered None behind the bearer token",
+		"auth":      "no password: the 0600 unix socket is the access control, and the browser is offered None behind the bearer token",
 	}
 }
 
@@ -299,24 +293,23 @@ func (s *server) handleLiveScreen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	who, _ := s.actorOf(r)
-	addr := vncAddr()
+	addr := vncSock()
 	if addr == "" {
 		// 501, not 404: the route exists and this deployment does not implement it — the same
 		// distinction proxyLive makes, and the one the hub turns into a sentence naming the profile.
 		writeJSON(w, http.StatusNotImplemented, map[string]string{
-			"error": "no VNC screen configured (CONTROL_API_VNC_ADDR is unset) — start the `vnc` compose profile",
+			"error": "no VNC screen configured (CONTROL_API_VNC_SOCK is unset) — start the `vnc` compose profile",
 		})
 		return
 	}
 
-	up, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	up, err := net.DialTimeout("unix", addr, 5*time.Second)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("the VNC screen at %s did not answer: %v", addr, err)})
 		return
 	}
 	defer up.Close()
-	pass, _ := vncsecret.Read(s.repo)
-	if err := vncHandshakeUpstream(up, pass); err != nil {
+	if err := vncHandshakeUpstream(up); err != nil {
 		s.journalEvent("service.screen_refused", "warn", map[string]string{
 			"addr": addr, "actor": who, "reason": err.Error(),
 		}, r)
@@ -456,13 +449,4 @@ func readWSBinary(br *bufio.Reader) (byte, []byte, bool, error) {
 		}
 		return op, payload, fin, nil
 	}
-}
-
-// desCipher exposes the key schedule to the test's fake server, which has to compute the SAME
-// response to prove the relay authenticated rather than echoed. Kept beside the code it mirrors so
-// the two cannot drift into agreeing on a wrong answer.
-func desCipher(pass string) (interface {
-	Encrypt(dst, src []byte)
-}, error) {
-	return des.NewCipher(vncKey(pass))
 }
