@@ -127,7 +127,8 @@ class _Stack:
             time.sleep(0.3)
         return False
 
-    def run_explore(self, artifact_dir: str, run_id: "str | None" = None) -> subprocess.Popen:
+    def run_explore(self, artifact_dir: str, run_id: "str | None" = None,
+                    target: str = "testdata/site/index.html") -> subprocess.Popen:
         env = {**os.environ,
                "PW_CDP_ENDPOINT": f"http://127.0.0.1:{self.cdp_port}",
                "PW_NO_TRACE": "1",
@@ -138,8 +139,11 @@ class _Stack:
             # exercised — a derivation nobody can override is a derivation nobody can test.
             env["SENTINEL_RUN_ID"] = run_id
             env["PW_LIVE_CLAIM"] = f"http://127.0.0.1:{self.live_port}/live/claim"
+        # ADR-128: the target is a PARAMETER because two concurrent runs have to be told apart by
+        # what is on their screens. Same fixture twice would produce two frames that look alike, and
+        # a check that cannot fail on a swapped picture is not checking the thing it is named for.
         return subprocess.Popen(
-            [str(AGENTCTL), "run", "--target", f"file://{REPO}/testdata/site/index.html",
+            [str(AGENTCTL), "run", "--target", f"file://{REPO}/{target}",
              "--planner", "heuristic", "--artifact-dir", artifact_dir],
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -588,6 +592,183 @@ def test_control_api_carries_run_id_through_to_the_browser_service():
             except Exception:
                 pass
         st.close()
+
+# ------------------------------------------------------------------------------ ADR-128 (LIVE-OWN-TAB)
+#
+# The remainder LIVE-PER-RUN could not reach: the two runs above are one real run plus a name that
+# was never claimed, because until ADR-128 two REAL concurrent runs adopted the same tab and the
+# service — correctly — refused them both. A run opens its own page now, so the case the whole live
+# view exists for is finally expressible as a check.
+
+
+def _get_with_headers(url: str, timeout: float = 20.0):
+    """Like _get, but keeps the headers: whose frame this is cannot be read from a JPEG's body.
+
+    ⚠ The headers object is returned AS IS rather than as a dict. The browser service writes
+    `x-sentinel-run` in lower case and control-api forwards it in title case, so a plain dict makes
+    this check depend on which of the two answered — measured here, by writing it the wrong way
+    first. `http.client.HTTPMessage` matches case-insensitively, which is what HTTP actually means.
+    """
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read(), r.headers
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers
+
+
+def _await_page(live_port: int, run_id: str, timeout: float = PAGE_WAIT_S + 30):
+    """Wait for a run to resolve to a page — on STATE, never on a guessed sleep."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        code, body = _get(f"http://127.0.0.1:{live_port}/live/status?run_id={run_id}", timeout=5)
+        if code == 200:
+            j = json.loads(body)
+            if j.get("has_page") and j.get("url"):
+                return j
+        time.sleep(0.4)
+    return None
+
+
+def test_two_concurrent_runs_each_get_their_own_page_and_their_own_picture():
+    """THE property of ADR-128: two runs, two pages, two pictures, each answering for itself.
+
+    Before it, both runs announced ONE targetId (measured live: 84DC6185) and `resolve` had to refuse
+    them both — honest, and the live view worked for nobody whenever two runs overlapped."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st, a, b = _Stack(), None, None
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        with tempfile.TemporaryDirectory() as da, tempfile.TemporaryDirectory() as db:
+            # DIFFERENT fixtures on purpose — see run_explore. Same fixture twice would make the
+            # frame comparison below pass even if both runs shared one page.
+            a = st.run_explore(da, run_id="run-alpha", target="testdata/site/index.html")
+            b = st.run_explore(db, run_id="run-beta", target="testdata/site-v2/index.html")
+            ja = _await_page(st.live_port, "run-alpha")
+            jb = _await_page(st.live_port, "run-beta")
+            assert ja, "run-alpha never resolved to a page"
+            assert jb, "run-beta never resolved to a page"
+            assert ja["scoped"] is True and jb["scoped"] is True, f"a named request answered unscoped: {ja} {jb}"
+
+            # Each run is shown ITS OWN fixture. This is the assertion that fails if the two runs
+            # end up on one page: they would report the same URL, whichever it was.
+            assert "/testdata/site/" in ja["url"], f"run-alpha is looking at somebody else's page: {ja['url']}"
+            assert "/testdata/site-v2/" in jb["url"], f"run-beta is looking at somebody else's page: {jb['url']}"
+
+            ca, fa, ha = _get_with_headers(f"http://127.0.0.1:{st.live_port}/live/frame.jpg?run_id=run-alpha")
+            cb, fb, hb = _get_with_headers(f"http://127.0.0.1:{st.live_port}/live/frame.jpg?run_id=run-beta")
+            assert ca == 200 and cb == 200, f"a claimed run could not be photographed: {ca} {cb}"
+            assert ha.get("X-Sentinel-Run") == "run-alpha" and hb.get("X-Sentinel-Run") == "run-beta", (
+                f"the frame does not say whose it is: {ha.get('X-Sentinel-Run')} {hb.get('X-Sentinel-Run')}")
+            assert ha.get("X-Sentinel-Scoped") == "true" and hb.get("X-Sentinel-Scoped") == "true"
+            # The pixels themselves differ. Byte equality here would mean one page served twice —
+            # the defect, wearing two correct run ids.
+            assert fa and fb and fa != fb, (
+                f"both runs were served the SAME image ({len(fa)} vs {len(fb)} bytes) — the label is "
+                "right and the picture is one, which is exactly what ADR-128 removes")
+    finally:
+        for p in (a, b):
+            if p:
+                p.kill()
+                try:
+                    p.wait(timeout=20)
+                except Exception:
+                    pass
+        st.close()
+
+
+def _open_bystander_tab(cdp_port: int, url: str) -> "str | None":
+    """A tab nobody's run owns — the human's, in the topology ADR-128 exists for.
+
+    Deliberately NOT a second run: a run has a lifetime of its own, and a check that depends on one
+    still being alive races its own subject. This tab stays until something closes it, which is
+    precisely the fact under test.
+    """
+    target = f"http://127.0.0.1:{cdp_port}/json/new?{url}"
+    for method in ("PUT", "GET"):  # Chrome requires PUT since 111; GET is the older spelling
+        try:
+            req = urllib.request.Request(target, method=method)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read()).get("id")
+        except Exception:
+            continue
+    return None
+
+
+def _tab_ids(cdp_port: int) -> "list[str]":
+    code, body = _get(f"http://127.0.0.1:{cdp_port}/json/list", timeout=10)
+    if code != 200:
+        return []
+    return [t["id"] for t in json.loads(body) if t.get("type") == "page"]
+
+
+def test_a_run_that_is_stopped_hands_its_page_back_and_leaves_every_other_tab_alone():
+    """The other half of owning a page: giving it back, on EVERY exit path — and only that one.
+
+    A run stopped by a signal — a budget kill, `agentctl` cancel, `docker compose down` — must leave
+    no tab behind, or the browser service accumulates one per run and the newest of them keeps
+    answering unnamed requests on a finished run's behalf. It must also close NOTHING ELSE: the
+    difference between owning a page and owning the browser is the entire ADR-037 guard."""
+    why = _prereq()
+    if why:
+        return _skip(why)
+    st, a = _Stack(), None
+    try:
+        if not st.wait_service():
+            return _skip("cdp-service did not come up")
+        bystander = _open_bystander_tab(st.cdp_port, f"file://{REPO}/testdata/site-v2/index.html")
+        assert bystander, "could not open a bystander tab — the rest of this check would prove nothing"
+        with tempfile.TemporaryDirectory() as da:
+            a = st.run_explore(da, run_id="run-going", target="testdata/site/index.html")
+            claimed = _await_page(st.live_port, "run-going")
+            assert claimed, "run-going never resolved to a page"
+            # ⚠ The run did NOT adopt the tab that was already open. Before ADR-128 it would have:
+            # `pages()[0]` is exactly this tab, and the run would be driving somebody else's page.
+            assert "/testdata/site/" in claimed["url"], (
+                f"the run adopted the tab that was already open instead of opening its own: {claimed['url']}")
+            before = _tab_ids(st.cdp_port)
+            assert bystander in before and len(before) >= 2, f"expected the run's tab beside the bystander: {before}"
+
+            # SIGTERM, not SIGKILL: this is the signal a stopped run really receives, and the point
+            # is that the executor's teardown runs and hands the page back.
+            a.terminate()
+            try:
+                a.wait(timeout=30)
+            except Exception:
+                pass
+
+            deadline, gone = time.time() + 60, None
+            while time.time() < deadline:
+                code, body = _get(f"http://127.0.0.1:{st.live_port}/live/status?run_id=run-going", timeout=5)
+                if code == 200 and json.loads(body).get("has_page") is False:
+                    gone = json.loads(body)
+                    break
+                time.sleep(0.5)
+            assert gone, ("the stopped run's page is still open — a killed run leaked its tab into a "
+                          "service that outlives it")
+            assert gone["reason"] and "no longer open" in gone["reason"], (
+                f"the refusal does not distinguish 'finished' from 'never claimed': {gone}")
+
+            code, _ = _get(f"http://127.0.0.1:{st.live_port}/live/frame.jpg?run_id=run-going", timeout=10)
+            assert code == 503, (f"a finished run was handed a picture anyway — with a tab still open in "
+                                 f"the browser, that picture would be the bystander's: HTTP {code}")
+
+            after = _tab_ids(st.cdp_port)
+            assert bystander in after, ("the run closed a tab it did not open — that is the browser's "
+                                        f"lifetime, not the run's: {before} -> {after}")
+            assert len(after) < len(before), (f"the run's own tab survived its teardown: {before} -> {after}")
+    finally:
+        if a:
+            a.kill()
+            try:
+                a.wait(timeout=20)
+            except Exception:
+                pass
+        st.close()
+
 
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

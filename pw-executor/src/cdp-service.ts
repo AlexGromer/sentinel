@@ -33,7 +33,7 @@
 import * as http from 'node:http';
 import * as net from 'node:net';
 import { chromium, Browser, CDPSession, Page } from 'playwright';
-import { journal, startedMsg, stoppedMsg, supervisor } from './svcjournal.js';
+import { journal, startedMsg, stoppedMsg, supervisor, claimConflictMsg } from './svcjournal.js';
 
 const log = (...a: unknown[]): void => console.error('[cdp-service]', ...a);
 
@@ -269,12 +269,15 @@ async function resolve(runId: string): Promise<Resolution> {
   }
   // A page two runs share cannot be attributed to either. Saying so is the whole point: a picture
   // that is true for one run and false for the other, with nothing on screen to tell which, is
-  // exactly what this task exists to stop.
+  // exactly what this task exists to stop. Since ADR-128 a run opens its own page, so reaching this
+  // means the runs did NOT get their own — the reason names that, because "you share a tab" without
+  // it sends the reader looking at their own two runs instead of at the version they are running.
   const sharers = [...claims.entries()].filter(([, c]) => c.targetId === claim.targetId).map(([r]) => r);
   if (sharers.length > 1) {
     return { page: null, targetId: claim.targetId, scoped: true,
              why: `run ${runId} shares one browser page with ${sharers.filter((r) => r !== runId).join(', ')} ` +
-                  '— in CDP-attach mode runs adopt the same tab, so this picture cannot be attributed to one of them' };
+                  '— since ADR-128 each run opens its own page, so this means an executor older than that ' +
+                  'is driving this browser service; upgrade it and the two runs separate' };
   }
   for (const p of openPages(b)) {
     if ((await targetIdOf(p)) === claim.targetId) {
@@ -403,23 +406,29 @@ function startLiveServer(): Promise<http.Server> {
         res.writeHead(400, { 'content-type': 'text/plain' });
         return res.end('run_id and target_id are both required');
       }
-      // ⚠ TWO RUNS CAN CLAIM ONE PAGE, and it is not a bug in the claim — it is the topology.
+      // ⚠ TWO RUNS CLAIMING ONE PAGE USED TO BE THE TOPOLOGY, AND SINCE ADR-128 IT IS A SYMPTOM.
       // MEASURED with two concurrent runs against one browser service: both announced target
-      // 84DC6185, because in CDP-attach mode the executor adopts `contexts()[0]` and then
-      // `pages()[0]` — the SECOND run drives the SAME TAB as the first. A label cannot separate what
-      // the browser did not separate.
+      // 84DC6185, because in CDP-attach mode the executor adopted `contexts()[0]` and then
+      // `pages()[0]` — the SECOND run drove the SAME TAB as the first, and a label cannot separate
+      // what the browser did not separate. ADR-128 separated it: a run now OPENS its own page in the
+      // adopted context, so two runs get two targets by construction.
       //
-      // So the collision is DETECTED and SAID rather than papered over. Answering either run with
-      // that shared page would be the original defect wearing a run id: the picture would be true
-      // for one of them and a lie for the other, and nothing on screen would tell them apart.
-      // Whether a run should instead create its OWN page in the adopted context is a change to
-      // ADR-037's promise (reuse the user's session AND their open tab), so it is a decision to be
-      // taken deliberately — not one this endpoint makes by itself while nobody is looking.
+      // THE CHECK STAYS, and that is a decision rather than leftovers. It is now reachable by
+      // exactly one thing — an executor older than ADR-128 driving a service newer than it, which is
+      // a version skew nobody would suspect from the symptom (the live view refuses BOTH runs with a
+      // reason about sharing). Deleting it would return that deployment to the original defect:
+      // answering either run with the shared page, true for one of them and a lie for the other,
+      // with nothing on screen to tell them apart.
+      //
+      // It is JOURNALLED, not just logged, for the same reason: a branch that should now be
+      // impossible is precisely the one whose firing must reach the deployment's own record instead
+      // of the stderr of a container nobody is tailing.
       const conflict = [...claims.entries()].find(([r, c]) => r !== rid && c.targetId === tid);
       claims.set(rid, { targetId: tid, at: Date.now() });
       if (conflict) {
         log(`run ${rid} claimed target ${tid.slice(0, 8)} — ALSO claimed by ${conflict[0]}; ` +
             'the live view cannot attribute a page two runs share');
+        journal('service.live_claim_conflict', 'warn', claimConflictMsg(`${rid}, ${conflict[0]}`, tid));
       } else {
         log(`run ${rid} claimed target ${tid.slice(0, 8)}`);
       }

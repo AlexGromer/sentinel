@@ -455,10 +455,15 @@ reason — three cases are distinguished, not collapsed into one generic "no pic
 | "run \<id\> has not claimed a page — …" | the run has not claimed a page yet (its browser has not started, or this deployment has no browser service at all) |
 | "run \<id\> claimed a page that is no longer open — …" | a claim exists but the page is closed (the run finished) |
 | "the browser has no page yet — start a run first" | (unnamed request only) the browser has no page open at all |
+| "run \<id\> shares one browser page with …" | ⚠ **version skew, not ordinary work.** Two runs claimed ONE page. Before ADR-128 this was the topology (the executor adopted `pages()[0]`, so the second run drove the same tab); a run now opens its own, so the only remaining way here is an executor older than ADR-128 against a newer browser service. The refusal says exactly that, and the case itself is written to the service journal as `service.live_claim_conflict` |
 
 A claim outlives its page on the `CDP_LIVE_PORT` service for `CLAIM_TTL_MS` (12 hours by default) —
 that is what makes "the run finished, its page closed" distinguishable from "the run never claimed a
 page": the claim does not vanish the moment the page closes.
+
+**ADR-128: every run gets its own page.** The mechanism above was built while runs shared one tab: in CDP-attach the executor adopted `pages()[0]`, so two concurrent runs announced ONE `targetId` (measured live: both `84DC6185`) and `resolve` honestly refused BOTH — a picture cannot be attributed to one of two. A run now opens its own page (`context.newPage()`) in the same adopted context: the user's session is reused, their open tab is not. Measured after the change: two runs on different fixtures give different `url`s in `/live/status` and frames that differ byte-for-byte (9 882 vs 10 105 bytes), each carrying its own `X-Sentinel-Run`. The whole claim machinery — `targetId`, `SENTINEL_RUN_ID`, `liveTargetURL`, `scoped:false` for an unnamed request — is exactly as it was; what changed is that "two runs" stopped being grounds for a refusal and became ordinary work.
+
+⚠ **A run closes its pages, and that is visible from here.** Its own and the popups it opened, on every exit path including being killed by a signal. So once a run ends, `?run_id=` answers with the table's second row ("the page is closed") instead of the neighbouring tab's picture — not a new reason, the same one become ordinary. ⚠ Its own PAGE does not make video recording possible over CDP: `recordVideo` is a property of the CONTEXT at creation and the context stays adopted, so ADR-125's refusal at the door stands.
 
 **`/live/status` carries three new fields**, without renaming the old ones (`streaming`/`has_page`/
 `url`/`last_frame_ts`/`ack_errors`/`error` are unchanged):

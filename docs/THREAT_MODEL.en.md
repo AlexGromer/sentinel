@@ -163,6 +163,8 @@ Boundary points ❶–❼ correspond to rows in the table below.
 ### 4.8 Boundary ❽ — CDP-attach to the user's browser (M9.6)
 
 > A new surface (M9.6, ADR-037). Active ONLY with `PW_CDP_ENDPOINT` — Sentinel connects to the user's **existing** Chrome (`--remote-debugging-port`) and drives their live session (their cookies/login), not its own headless instance.
+>
+> ⚠ **Sharpened by ADR-128 (2026-08-18), and sharpening is NOT narrowing.** The run no longer drives the user's tab: it opens ITS OWN page in their context, so their tab stopped being the subject of our actions, screenshots and console capture (ADR-067) and is unreachable through `browser.switchTab`. But `tracing` and `route` are properties of the **CONTEXT** in Playwright, and the context stays adopted — MEASURED, not assumed: with a run in flight, a request from the user's tab went through our route injection, and its URL plus a title set AFTER tracing started appeared in `trace.network` and `trace.trace` of our `trace.zip`. The row below therefore stands in full; what changed is WHAT lands there — network and page events of somebody else's tabs, rather than our work inside them. The lever is unchanged: `PW_NO_TRACE=1`. Narrowing the injection to the run's own pages is filed separately as `[SEC-CDP-CONTEXT-SCOPE]`.
 
 | Threat | Boundary | STRIDE | Prob / Impact | Existing control | Residual risk | Owner / Milestone |
 |---|---|---|---|---|---|---|
