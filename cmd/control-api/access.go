@@ -137,6 +137,16 @@ func (s *server) routes() []routeSpec {
 		{pattern: "GET /v1/live/status", access: accessAuthed, h: s.handleLiveStatus},
 		{pattern: "GET /v1/live/frame.jpg", access: accessAuthed, h: s.handleLiveFrame},
 		{pattern: "GET /v1/live/mjpeg", access: accessAuthed, h: s.handleLiveStream},
+		// LIVE-VNC (ADR-127). `open` at the guard and authenticated INSIDE the handler, deliberately: a
+		// browser WebSocket cannot send an Authorization header, and the guard's check reads only that
+		// header (session.go::bearerOf). The credential rides in Sec-WebSocket-Protocol as
+		// `bearer.<token>` and is compared constant-time by wsAuthed — the same arrangement /v1/stream
+		// has, stated here rather than inherited from `legacyOpen`, whose real meaning is "no accounts
+		// exist yet" and which therefore stops relaxing the moment identity is switched on.
+		{pattern: "GET /v1/live/screen", access: accessOpen, h: s.handleLiveScreen,
+			why: "the bearer travels in the WebSocket subprotocol, not in a header the guard can read; " +
+				"the handler refuses with 403 before hijacking, and the VNC port it reaches is never " +
+				"published to a host"},
 		{pattern: "POST /v1/users", access: accessAdmin, h: s.handleCreateUser},
 		{pattern: "GET /v1/users", access: accessAdmin, h: s.handleListUsers},
 		{pattern: "DELETE /v1/users/{id}", access: accessAdmin, h: s.handleDeleteUser},

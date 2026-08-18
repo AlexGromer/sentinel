@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hubViews, MIN_VIEWS } from './hub-views.mjs';
+import { liveModes, MIN_LIVE_MODES } from './live-modes.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(REPO, 'pw-executor', 'package.json'));
@@ -177,23 +178,31 @@ async function main() {
       await shot(page, 'goal-without-a-model');
     });
 
-    await check('the live area offers all three modes and says what each one is', async () => {
+    await check('the live area offers every mode it declares, and says what each one is', async () => {
       await page.evaluate(() => { location.hash = '#v=chat'; });
       await page.waitForSelector('#lv-mode-frame', { state: 'visible' });
-      for (const mode of ['frame', 'actions', 'video']) {
+      // Derived, not listed — this was the fourth hand-kept copy of the mode list.
+      const modes = liveModes();
+      ok(modes.length >= MIN_LIVE_MODES,
+        `derived only ${modes.length} live modes — a walk over a short list covers nothing`);
+      for (const mode of modes) {
         const btn = await page.$(`#lv-mode-${mode}`);
         ok(btn, `the live area has no ${mode} mode button`);
         await btn.click();
         // Wait for the pane to be SHOWN — the thing the assertions below are about — instead of
-        // guessing how long the switch takes. The video mode then goes to the network, so it is
-        // given its own wait for content rather than a shared sleep.
+        // guessing how long the switch takes. (This comment used to end "the video mode then goes to
+        // the network, so it is given its own wait": that sentence outlived the code it described by
+        // one commit, which is its own small version of the drift this file gates against.)
         await page.waitForSelector(`#lv-${mode}`, { state: 'visible', timeout: 10000 });
-        if (mode === 'video') {
-          await page.waitForFunction(
-            () => ((document.getElementById('lv-video') || {}).innerText || '').trim().length > 20
-                  || !!document.querySelector('#lv-video img'),
-            undefined, { timeout: 20000 });
-        }
+        // Every mode, not just the one that happens to go to the network. `if (mode === 'video')` was
+        // a special case keyed on a NAME, which is the shape this wave exists to remove — and it made
+        // the check race the `screen` mode, whose pane is replaced asynchronously exactly like the
+        // video one. The wait is the SAME condition the assertion below makes, so a pane that answers
+        // instantly satisfies it instantly and nothing is slowed down.
+        await page.waitForFunction(
+          (m) => ((document.getElementById('lv-' + m) || {}).innerText || '').trim().length > 20
+                 || !!document.querySelector(`#lv-${m} img, #lv-${m} canvas`),
+          mode, { timeout: 20000 });
         const pane = await page.$(`#lv-${mode}`);
         ok(pane && !(await pane.evaluate((e) => e.hidden)), `the ${mode} pane did not become visible`);
         const text = (await pane.innerText()).trim();

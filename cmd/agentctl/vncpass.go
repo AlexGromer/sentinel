@@ -42,16 +42,16 @@ import (
 
 	"github.com/AlexGromer/sentinel/internal/eventlog"
 	"github.com/AlexGromer/sentinel/internal/svclog"
+	"github.com/AlexGromer/sentinel/internal/vncsecret"
 )
 
 const (
-	// ⚠ NAMED `vnc.password`, not `vnc.pass`, and the difference is machine-checked rather than
-	// cosmetic: configguard.Secretish("vnc_password") is TRUE (substring `password`), while
-	// Secretish("vnc_pass") is FALSE — the bare word `pass` is not in secretNameParts, and hasWord
-	// only knows `token`/`key`. Every redaction path in internal/redact keys off Secretish, so the
-	// shorter name would have produced a field nobody redacts. Asserted by
-	// TestEveryNameThatCanCarryTheVNCPasswordIsSecretish.
-	vncPassFileName = "vnc.password"
+	// ⚠ The name, the length bounds and the "what counts as usable" rule now live in
+	// internal/vncsecret, because ADR-127's relay in control-api became the SECOND consumer — the
+	// trigger this file wrote down when it deliberately kept them local. Generation and the
+	// never-clobber rules stay HERE: they belong to the single producer, and a reader that could
+	// create the file would be a second producer of one secret.
+	vncPassFileName = vncsecret.FileName
 
 	// ⚠ EIGHT, and this number is MEASURED, not chosen (2026-08-17, x11vnc 0.9.16 in bookworm).
 	// Classic RFB "VNC Authentication" builds its DES key from the FIRST EIGHT BYTES of the password
@@ -64,8 +64,8 @@ const (
 	// worst kind of security theatre, because the reassuring part is the number in the log.
 	vncPassChars = 8
 
-	vncPassMinLen = 8   // below the protocol's effective width there is nothing left to protect
-	vncPassMaxLen = 512 // same sanity ceiling as tokenMaxLen: an operator's file is not a payload
+	vncPassMinLen = vncsecret.MinLen
+	vncPassMaxLen = vncsecret.MaxLen
 )
 
 // vncPassAlphabet is what we GENERATE from; usableVNCPass (what we ACCEPT) stays exactly as
@@ -94,12 +94,7 @@ const (
 
 // vncPassFilePath: SENTINEL_VNC_PASSWORD_FILE overrides <repo>/state/vnc.password — the same shape
 // and the same reason as tokenFilePath.
-func vncPassFilePath(repo string) string {
-	if p := strings.TrimSpace(os.Getenv("SENTINEL_VNC_PASSWORD_FILE")); p != "" {
-		return p
-	}
-	return filepath.Join(repo, "state", vncPassFileName)
-}
+func vncPassFilePath(repo string) string { return vncsecret.FilePath(repo) }
 
 // usableVNCPass: one line, no inner whitespace, printable ASCII, bounded length.
 //
@@ -107,17 +102,7 @@ func vncPassFilePath(repo string) string {
 // space, tab, CR/LF and EVERY non-ASCII rune. For VNC that is not cosmetic — RFB puts the password
 // bytes into the DES key as-is, so a non-ASCII rune would contribute a different number of bytes
 // under a different terminal encoding, i.e. a password that "sometimes works".
-func usableVNCPass(s string) bool {
-	if len(s) < vncPassMinLen || len(s) > vncPassMaxLen {
-		return false
-	}
-	for _, r := range s {
-		if r < '!' || r > '~' {
-			return false
-		}
-	}
-	return true
-}
+func usableVNCPass(s string) bool { return vncsecret.Usable(s) }
 
 func newVNCPass() (string, error) {
 	b := make([]byte, vncPassChars)

@@ -23,6 +23,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(REPO, 'pw-executor', 'package.json'));
 const { chromium } = require('playwright');
 import { hubViews, MIN_VIEWS } from './hub-views.mjs';
+import { liveModes, MIN_LIVE_MODES } from './live-modes.mjs';
 
 const PORT = Number(process.env.HUB_GATE_PORT || 18744);
 const FIXTURE = `file://${REPO}/testdata/fixtures/l2.html`;
@@ -200,6 +201,12 @@ try {
   // independent copy of the same list; the third one, in ui-smoke, held seven of nine and nobody saw
   // it. A list that has to be kept in step by hand is a list that eventually is not.
   const VIEWS = hubViews();
+  // Derived from the hub, not restated here — this was the SECOND and THIRD copies of the mode list.
+  const LV_MODES = liveModes();
+  if (LV_MODES.length < MIN_LIVE_MODES) {
+    throw new Error(`derived only ${LV_MODES.length} live modes, expected >= ${MIN_LIVE_MODES} — the `
+      + 'switch check iterates this list, so a short one silently stops covering the modes it omits');
+  }
   if (VIEWS.length < MIN_VIEWS) {
     throw new Error(`derived only ${VIEWS.length} views, expected >= ${MIN_VIEWS} — the neighbour-leak `
       + 'check iterates this list, so a short one silently narrows every navigation assertion below');
@@ -1864,16 +1871,21 @@ try {
     await page.waitForTimeout(200);
   });
 
-  await check('three-pane: all three live modes switch WITHOUT reloading', async () => {
+  await check('three-pane: every live mode the hub declares switches WITHOUT reloading', async () => {
     const url0 = page.url();
-    // The frame pane starts visible; the other two are hidden but PRESENT — a mode that does not exist
-    // until clicked cannot be said to be switchable.
-    ok(await page.locator('#lv-frame').isVisible(), 'the browser-frame pane is not the default');
-    for (const mode of ['actions', 'video', 'frame']) {
+    // "all three" was a FIFTH copy of the number. The list is derived from the hub itself, so a mode
+    // added tomorrow is covered here without anybody editing this file.
+    const DEFAULT_MODE = LV_MODES[0];
+    ok(await page.locator(`#lv-${DEFAULT_MODE}`).isVisible(), `the ${DEFAULT_MODE} pane is not the default`);
+    // The markup's initially-selected tab was a SIXTH statement of the same fact until this line.
+    eq(await page.locator(`#lv-mode-${DEFAULT_MODE}`).getAttribute('aria-selected'), 'true',
+       'the markup marks a different tab selected than the one the JS defaults to');
+    // Every non-default mode, then back — so the checks after this one start where they used to.
+    for (const mode of [...LV_MODES.filter((m) => m !== DEFAULT_MODE), DEFAULT_MODE]) {
       await page.click(`#lv-mode-${mode}`);
       await page.waitForTimeout(150);
       ok(await page.locator(`#lv-${mode}`).isVisible(), `mode ${mode} did not reveal its pane`);
-      for (const other of ['frame', 'actions', 'video'].filter((m) => m !== mode)) {
+      for (const other of LV_MODES.filter((m) => m !== mode)) {
         ok(!(await page.locator(`#lv-${other}`).isVisible()), `mode ${mode} left ${other} on screen`);
       }
       eq(await page.locator(`#lv-mode-${mode}`).getAttribute('aria-selected'), 'true',
@@ -1882,13 +1894,53 @@ try {
     eq(page.url(), url0, 'switching modes navigated — the toggle must not reload (Alex: без перезагрузки)');
   });
 
-  await check('three-pane: the unbuilt mode says so instead of showing an empty box', async () => {
-    await page.click('#lv-mode-video');
-    await page.waitForTimeout(150);
-    const text = (await page.locator('#lv-video').innerText()).trim();
-    ok(text.length > 0, 'the video mode is an empty box — indistinguishable from a broken one');
-    ok(/screencast|CDP/i.test(text), `the video mode does not say WHY it is unavailable: ${text}`);
-    await page.click('#lv-mode-frame');
+  await check('three-pane: every declared mode has a button, a pane and an enter/leave entry', async () => {
+    // The reason the derived list exists at all. A button present in the markup and absent from
+    // LIVE_MODES sits on screen, takes clicks and does nothing — and no walk over the JS list can see
+    // it, because it never clicks it. live-modes.mjs refuses on that disagreement; this asserts the
+    // other half, that a declared mode is actually wired.
+    const seam = await page.evaluate(() => (window.lvModes ? window.lvModes() : null));
+    ok(seam, 'the hub exposes no window.lvModes seam — this check would be asserting over a copy');
+    for (const m of LV_MODES) {
+      eq(await page.locator(`#lv-mode-${m}`).count(), 1, `mode ${m} has no button`);
+      eq(await page.locator(`#lv-${m}`).count(), 1, `mode ${m} has no pane`);
+      ok(seam.hooks.includes(m),
+         `mode ${m} has no entry in LV_HOOKS — it would neither start nor stop anything, and `
+         + '"nothing happened" is indistinguishable from "nothing needed to happen"');
+    }
+  });
+
+  await check('three-pane: a mode this deployment cannot serve says so instead of showing an empty box', async () => {
+    // A map of REASONS, not of modes, and guarded in BOTH directions so a fifth mode cannot fall
+    // between the arms: a key that is no longer a mode is stale, and a mode with no key must still
+    // keep the standing-hint promise. This gate runs control-api with neither CONTROL_API_CDP_LIVE
+    // nor CONTROL_API_VNC_ADDR, i.e. both network modes are in exactly the refusal state a
+    // single-container deployment shows every day.
+    const WHY = { video: /screencast|CDP/i, screen: /CONTROL_API_VNC_ADDR/ };
+    for (const k of Object.keys(WHY)) ok(LV_MODES.includes(k), `WHY names ${k}, which is not a live mode any more`);
+    for (const mode of LV_MODES) {
+      await page.click(`#lv-mode-${mode}`);
+      // ⚠ WAIT FOR THE STATE, NOT FOR A LENGTH. The first version waited for "more than 20
+      // characters", and the network modes answered it INSTANTLY with their own progress line
+      // ("подключаюсь к живому виду…") — long enough to satisfy the wait, and not the answer at all.
+      // The gate caught it on its first run: a condition weaker than the assertion is a race the
+      // assertion loses. For a mode with a known reason, the wait IS that reason.
+      const want = WHY[mode];
+      await page.waitForFunction(
+        ([m, src]) => {
+          const t = ((document.getElementById('lv-' + m) || {}).innerText || '').trim();
+          return src ? new RegExp(src.slice(1, src.lastIndexOf('/')), src.slice(src.lastIndexOf('/') + 1)).test(t)
+                     : t.length > 20;
+        },
+        [mode, want ? want.toString() : ''], { timeout: 20000 });
+      const text = (await page.locator(`#lv-${mode}`).innerText()).trim();
+      ok(text.length > 20, `the ${mode} mode is an empty box — indistinguishable from a broken one`);
+      // ⚠ The screen regex is CONTROL_API_VNC_ADDR, not /vnc|экран/i: the word "экран" is also the tab
+      // label, so the looser pattern would pass over a pane whose reason had been replaced by a
+      // literal. The check has to name something only the SERVER could have said.
+      if (WHY[mode]) ok(WHY[mode].test(text), `the ${mode} mode does not say WHY it is unavailable: ${text}`);
+    }
+    await page.click(`#lv-mode-${LV_MODES[0]}`);
   });
 
   await check('three-pane: the run flow explains an empty screen, and the reasons differ', async () => {

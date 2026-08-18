@@ -127,6 +127,7 @@ var apiRoutesWithoutCLI = map[string]string{
 	"POST /v1/login":            "a CLI already holds the machine token, which is strictly more powerful than any session, so logging in from a terminal buys nothing — and would put a password on an argv that every `ps` on the host can read",
 	"POST /v1/logout":           "there is no CLI session to end (see POST /v1/login)",
 	"GET /v1/":                  "the catch-all 404 for unknown /v1 paths, not a capability",
+	"GET /v1/live/screen":       "a WebSocket carrying RFB — PIXELS, not text. There is nothing for a terminal to render, and a verb that dumped a framebuffer would be a file nobody asked for; `agentctl live status` answers what a CLI can actually use (whether there IS a screen, why not, and at which in-network address)",
 
 	// The four revision routes ARE reachable from a terminal: `agentctl revisions list|show|diff|rollback`
 	// (cmdRevisions) predates them and reads the store DIRECTLY rather than through a server. That is the

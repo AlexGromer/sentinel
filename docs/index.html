@@ -292,6 +292,11 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
 #chat3-left { min-width:0 }
 .lv-pane { min-height:12rem; max-height:46vh; overflow:auto; border:1px solid var(--bd); border-radius:.4rem; padding:.4rem; background:rgba(0,0,0,.15) }
 #lv-frame img { width:100%; height:auto; display:block; border-radius:.3rem }
+/* ADR-127: the real screen. A canvas rather than an <img> because RFB delivers RECTANGLES, not
+   whole images — the black background is what an un-painted region looks like before the first
+   full frame arrives, and it is honest: nothing has been drawn there yet. */
+#lv-screen canvas { width:100%; height:auto; display:block; border-radius:.3rem; background:#000; cursor:default }
+#lv-screen .lv-warn { border-left:3px solid var(--warn,#e0a800); padding:.3rem .5rem; margin:0 0 .4rem; font-size:.8rem }
 .rf-row { display:flex; gap:.4rem; padding:.15rem .2rem; border-left:2px solid transparent }
 .rf-row.rf-business { border-left-color:var(--ok) }
 .rf-row.rf-tool { border-left-color:var(--mut); opacity:.75 }
@@ -1116,6 +1121,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
                 <button type="button" class="subtab-btn" id="lv-mode-frame" data-lvmode="frame" role="tab" aria-selected="true">🖼 <span data-lang="ru">Браузер</span><span data-lang="en">Browser</span></button>
                 <button type="button" class="subtab-btn" id="lv-mode-actions" data-lvmode="actions" role="tab" aria-selected="false">🖱 <span data-lang="ru">Действия</span><span data-lang="en">Actions</span></button>
                 <button type="button" class="subtab-btn" id="lv-mode-video" data-lvmode="video" role="tab" aria-selected="false">🎞 <span data-lang="ru">Видео</span><span data-lang="en">Video</span></button>
+                <button type="button" class="subtab-btn" id="lv-mode-screen" data-lvmode="screen" role="tab" aria-selected="false">🖥 <span data-lang="ru">Экран</span><span data-lang="en">Screen</span></button>
               </div>
               <span id="lv-status" class="hint" style="margin-left:auto"></span>
             </div>
@@ -1129,6 +1135,13 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
                  (lvVideoStart writes either the stream, or the sentence saying why there is none),
                  so the hint only covers the window before anyone has asked. -->
             <div id="lv-video" class="lv-pane" hidden><p class="hint"><span data-lang="ru">Выберите этот режим, чтобы запросить живое видео у сервиса браузера.</span><span data-lang="en">Choose this mode to ask the browser service for live video.</span></p></div>
+            <!-- Same rule, third time. The screen path replaces this wholesale the moment the mode is
+                 chosen (lvRenderScreen writes either the VNC canvas, or the sentence saying why there
+                 is none), so the hint only covers the window before anyone has asked. It names the
+                 PROFILE out loud because "Экран" behind a profile nobody started is the one case a
+                 person cannot guess from an empty box: the video mode at least has a service in the
+                 default stack, this one has nothing until `--profile vnc`. -->
+            <div id="lv-screen" class="lv-pane" hidden><p class="hint"><span data-lang="ru">Выберите этот режим, чтобы увидеть настоящий экран браузера — с настоящим курсором. Нужен профиль compose <code>vnc</code>.</span><span data-lang="en">Choose this mode to see the browser's real screen, with a real cursor. Needs the <code>vnc</code> compose profile.</span></p></div>
           </div>
 
           <!-- The run as it happens. The business/tool split already exists in the catalogue
@@ -3916,7 +3929,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      The live area shows the SAME run three ways, switched without reloading; the flow below it shows
      what is happening with the tool and the business plainly apart. Both are fed by the AG-UI events
      the hub already receives — this adds a second consumer, it does not add a second stream. */
-  var lvMode = 'frame', lvRunId = '', lvLastFrame = '';
+  /* THE live-mode list, declared ONCE (docs/DEVELOPMENT.md §0.5). It used to be written out in four
+     places — twice below, once in the DOM gate, once in the UI smoke. scripts/live-modes.mjs reads
+     THIS line, so a mode added here is covered by construction rather than by memory, and it also
+     compares this list against the `data-lvmode` buttons: a button with no entry here is on screen,
+     clickable and wired to nothing, which no walk over this list could ever notice.
+     [0] is the default: `lvMode` below takes it rather than repeating the name. */
+  var LIVE_MODES = ['frame','actions','video','screen'];
+  var lvMode = LIVE_MODES[0], lvRunId = '', lvLastFrame = '';
   /* LIVE-PER-RUN (ADR-121). The live view names the run it is about. Without this the request
      reached control-api unscoped and the browser service answered about the NEWEST page — with two
      runs in flight that is somebody else's screen, and a wrong picture is indistinguishable from a
@@ -4030,9 +4050,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   if (ge('art-refresh')) ge('art-refresh').addEventListener('click', function(){ artList(); });
   if (ge('art-close')) ge('art-close').addEventListener('click', function(){ ge('art-view').hidden = true; });
 
+  /* What a mode DOES on entry and on leaving. A TABLE, not a chain of `if (mode === …)`.
+     The chain had exactly one arm and was already wrong in the shape that matters: a mode added
+     without touching it would get neither an enter nor a leave, and "nothing happened" is
+     indistinguishable from "nothing needed to happen". A mode with an empty entry DECLARES that it
+     needs neither — and the DOM gate asserts every LIVE_MODES member is a key here, so the
+     declaration cannot be skipped.
+     ⚠ All four values are hoisted `function` declarations of this IIFE. Converting one to
+     `var f = function` would put `undefined` in this table; the gate's hook-coverage check is what
+     would notice. */
+  var LV_HOOKS = {
+    frame:   {},                                            /* holds the last frame; nothing to start or stop */
+    actions: {},                                            /* an append-only list; nothing to start or stop */
+    video:   { enter: lvRenderVideo,  leave: lvVideoStop  }, /* ADR-111: a screencast nobody watches still costs the browser every frame it encodes */
+    screen:  { enter: lvRenderScreen, leave: lvScreenStop }  /* ADR-127: an abandoned RFB socket holds a VNC session open for the tab's lifetime */
+  };
+
   function lvSetMode(mode){
     lvMode = mode;
-    ['frame','actions','video'].forEach(function(m){
+    LIVE_MODES.forEach(function(m){
       var pane = ge('lv-'+m), btn = ge('lv-mode-'+m);
       if (pane) pane.hidden = (m !== mode);
       if (btn) btn.setAttribute('aria-selected', String(m === mode));
@@ -4040,15 +4076,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     /* Switching is a VIEW change, so nothing is refetched and nothing is lost: the frame stays the
        frame that was last received, the action list keeps its rows. Reloading here would make the
        toggle destructive, which is the opposite of what a toggle is for. */
-    /* ADR-111: leaving the video mode must CLOSE the stream. A screencast nobody is looking at still
-       costs the browser every frame it encodes, and an abandoned reader would hold the connection
-       open for the tab's lifetime. */
-    if (mode === 'video') lvRenderVideo(); else lvVideoStop();
+    /* Every OTHER mode's leave runs first, then this mode's enter — and both come from the table, so
+       a mode added tomorrow cannot leave a stream running merely because nobody remembered a line
+       here. (ADR-111's reason, generalised: an abandoned reader holds the connection open for the
+       tab's lifetime.) */
+    LIVE_MODES.forEach(function(m){
+      var h = LV_HOOKS[m] || {};
+      if (m !== mode && h.leave) h.leave();
+    });
+    var hook = LV_HOOKS[mode] || {};
+    if (hook.enter) hook.enter();
   }
-  ['frame','actions','video'].forEach(function(m){
+  LIVE_MODES.forEach(function(m){
     var b = ge('lv-mode-'+m);
     if (b) b.addEventListener('click', function(){ lvSetMode(m); });
   });
+  /* Exposed as a seam for the DOM gate, same technique and same reason as window.lvOnEvent: an
+     extracted copy is a test of the copy. It reports the LIST and the hook table's keys, because the
+     interesting failure is a mode that is declared and has no enter/leave entry. */
+  window.lvModes = function(){ return { modes: LIVE_MODES.slice(), hooks: Object.keys(LV_HOOKS), mode: lvMode }; };
 
   function lvSetStatus(html){ var el = ge('lv-status'); if (el) el.innerHTML = html; }
 
@@ -4204,6 +4250,304 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (ok) return i;
     }
     return -1;
+  }
+
+
+  /* ---- ADR-127: the screen mode — a MINIMAL RFB client, written here ---------------------------
+     Why ours and not noVNC. The relay in control-api already speaks RFB (crypto/des, stdlib), the
+     repository vendors no third-party tree at all, ships no minified JS outside node_modules and the
+     hub has not one `<script src>` — it is one file on purpose. Vendoring ~1 MB of ESM would have been
+     a new operation for this project, two more allowlists (docs/embed.go and uiPathAllowed), an
+     MPL-2.0 obligation and a copy somebody has to keep updating. What we need instead is small enough
+     to read: a handshake we already perform on the other side, two encodings, and two input messages.
+
+     ⚠ THE COST IS NAMED RATHER THAN HIDDEN. We ask for Raw and CopyRect only, so the FIRST frame is
+     the whole screen uncompressed (~4 MB at 1280x800x32). Every frame after it is INCREMENTAL — the
+     server sends only rectangles that changed, which for a page under test is usually a few kilobytes.
+     If that ever becomes the wrong trade, the fix is an encoding (Tight/ZRLE), not a library.
+
+     The password is NOT here and never will be: control-api spends it upstream and offers this page
+     security type None. A page that held the VNC password would leak it into every tab's memory, into
+     ui-smoke screenshots and into any HAR attached to a bug report. */
+  var lvScr = null;   /* the live screen session, or null */
+
+  /* The hub has no lang() accessor — the choice lives in localStorage, read the same way initLang
+     does. Used only for the two BUTTON labels, which are rewritten on click and therefore cannot be
+     the usual pair of data-lang spans. */
+  function lvLangRU(){ try { return (localStorage.getItem('sentinel_lang') || 'ru') !== 'en'; } catch(e){ return true; } }
+
+  function lvScreenStop(){
+    if (!lvScr) return;
+    try { lvScr.ws.close(); } catch(e){}
+    if (lvScr.detach) lvScr.detach();
+    lvScr = null;
+  }
+  /* A seam for the DOM gate, same technique and reason as window.lvOnEvent: asserting on an extracted
+     copy would be a test of the copy. */
+  window.lvScreenState = function(){ return lvScr ? (lvScr.state || 'open') : 'closed'; };
+
+  function lvScrU16(b, o){ return (b[o] << 8) | b[o+1]; }
+
+  async function lvRenderScreen(){
+    var box = ge('lv-screen'); if (!box) return;
+    lvScreenStop();
+    if (!capiBase()){
+      box.innerHTML = '<p class="hint">'+bi('нет подключения к control-API','not connected to a control-API')+'</p>';
+      return;
+    }
+    box.innerHTML = '<p class="hint">'+bi('спрашиваю про экран…','asking about the screen…')+'</p>';
+
+    var st;
+    try {
+      var rs = await fetch(capiBase()+'/v1/live/status'+lvQuery(), {headers: authHdr()});
+      st = await rs.json();
+    } catch(e){
+      box.innerHTML = '<p class="fail">'+bi('не удалось спросить состояние экрана: ','could not ask for the screen state: ')+esc(e.message)+'</p>';
+      return;
+    }
+    var scr = (st && st.screen) || {available:false, reason:'the server did not answer about the screen'};
+    if (!scr.available){
+      /* The server's own reason, unedited — "the profile is not running" and "it is declared and
+         broken" are different problems, and the sentence that distinguishes them comes from the side
+         that knows. */
+      box.innerHTML = '<p class="hint">'
+        + bi('экран недоступен в этом развёртывании: ','the screen is unavailable in this deployment: ')
+        + esc(scr.reason || '?')
+        + '<br><br>' + bi('Настоящий экран отдаёт профиль <code>vnc</code>. Он НЕ входит в дефолтный запуск: '
+                          + 'головной браузер рисует ДРУГИЕ пиксели, и эталоны, снятые в headless, перестали бы совпадать '
+                          + '(<code>docs/DETERMINISM.md</code>).',
+                          'The real screen comes from the <code>vnc</code> profile. It is NOT part of the default '
+                          + 'start-up: a headed browser renders DIFFERENT pixels, and goldens captured headless would '
+                          + 'stop matching (<code>docs/DETERMINISM.md</code>).')
+        + '<br><code>docker compose --profile vnc up -d browser-vnc</code>'
+        + '<br><br>' + bi('Вне compose поднимите Xvfb + x11vnc сами и задайте адрес:',
+                          'Outside compose, start Xvfb + x11vnc yourself and set the address:')
+        + '<br><code>CONTROL_API_VNC_ADDR=browser-vnc:5900</code>'
+        + '<br><br>' + bi('Пока его нет, вкладка «Видео» показывает headless-браузер — без настоящего курсора, но всегда.',
+                          'Until then the "Video" tab shows the headless browser — no real cursor, but it always works.')
+        + '</p>';
+      return;
+    }
+
+    /* attached:false is a WARNING STRIP, never a refusal. With the vnc profile up, the default
+       headless `browser` keeps running and PW_CDP_ENDPOINT still points at it — so the screen can be
+       perfectly alive and show an IDLE browser while the runs happen elsewhere. That is worse than an
+       outage, because it looks like it works. ⚠ It is inferred from two addresses, not measured, so a
+       false negative must not take the picture away. */
+    var warn = scr.attached ? '' :
+      '<p class="lv-warn">' + bi('⚠ Этот экран принадлежит сервису <code>browser-vnc</code>, а прогоны идут в другой браузер '
+                                 + '(<code>PW_CDP_ENDPOINT</code>). Вы смотрите не на тот браузер. Чтобы прогоны шли сюда: '
+                                 + '<code>PW_CDP_ENDPOINT=http://browser-vnc:9223</code>. Вывод сделан по двум адресам, а не измерен.',
+                                 '⚠ This screen belongs to the <code>browser-vnc</code> service while runs go to a different '
+                                 + 'browser (<code>PW_CDP_ENDPOINT</code>). You are looking at the wrong browser. To send runs '
+                                 + 'here: <code>PW_CDP_ENDPOINT=http://browser-vnc:9223</code>. Inferred from two addresses, '
+                                 + 'not measured.') + '</p>';
+
+    box.innerHTML = warn
+      + '<canvas id="lv-screen-canvas" width="'+(scr.width||1280)+'" height="'+(scr.height||800)+'"></canvas>'
+      + '<div class="ctl-row" style="margin:.4rem 0 0">'
+      + '<button type="button" class="btn" id="lv-screen-grab">🖐 '+bi('Взять мышь','Take the mouse')+'</button>'
+      + '<span class="libmeta" id="lv-screen-meta" style="margin-left:auto"></span></div>'
+      + '<p class="hint" id="lv-screen-hint">'
+      + bi('это управление ЭКРАНОМ, а не прогоном — прогон перехватывается кнопкой «Взять управление» в баннере HITL',
+           'this drives the SCREEN, not the run — the run is taken over with "Take over" in the HITL banner')
+      + '</p>';
+
+    var cv = ge('lv-screen-canvas'), ctx = cv.getContext('2d'), meta = ge('lv-screen-meta');
+    var wsBase = capiBase().replace(/^https/i,'wss').replace(/^http/i,'ws');
+    var protocols = ['sentinel.recorder.v1'];
+    var tok = capiTok(); if (tok) protocols.push('bearer.'+tok);
+    var ws;
+    try { ws = new WebSocket(wsBase+'/v1/live/screen', protocols); }
+    catch(e){ box.innerHTML = '<p class="fail">'+esc(e.message)+'</p>'; return; }
+    ws.binaryType = 'arraybuffer';
+
+    var sess = { ws: ws, state: 'version', buf: new Uint8Array(0), w: 0, h: 0, grabbed: false, detach: null };
+    lvScr = sess;
+
+    function send(bytes){ if (ws.readyState === 1) ws.send(new Uint8Array(bytes)); }
+    function meta_(txt){ if (meta) meta.textContent = txt; }
+
+    ws.addEventListener('close', function(){
+      if (lvScr === sess){ sess.state = 'closed'; meta_(lvLangRU() ? 'экран отключён' : 'screen disconnected'); }
+    });
+    ws.addEventListener('error', function(){
+      if (lvScr === sess) meta_(lvLangRU() ? 'ошибка соединения' : 'connection error');
+    });
+
+    ws.addEventListener('message', function(ev){
+      var chunk = new Uint8Array(ev.data);
+      var b = new Uint8Array(sess.buf.length + chunk.length);
+      b.set(sess.buf); b.set(chunk, sess.buf.length);
+      sess.buf = b;
+      /* One pass per arrival, consuming as much as is complete. A WebSocket frame boundary has
+         nothing to do with an RFB message boundary, so every read must tolerate a partial tail. */
+      for (;;){
+        var before = sess.buf.length;
+        lvScrStep(sess, ctx, send, meta_);
+        if (sess.buf.length === before) break;
+      }
+    });
+
+    /* Taking the mouse is an EXPLICIT act: a stray click while watching would drive the application
+       under test, and the run would look like a person did it — which, from that moment, it did. */
+    var grab = ge('lv-screen-grab');
+    function onMouse(e){
+      if (!sess.grabbed) return;
+      var r = cv.getBoundingClientRect();
+      var x = Math.round((e.clientX - r.left) * cv.width / r.width);
+      var y = Math.round((e.clientY - r.top) * cv.height / r.height);
+      var mask = e.buttons & 0x07;
+      send([5, mask, x>>8, x&255, y>>8, y&255]);
+      e.preventDefault();
+    }
+    function onKey(e){
+      if (!sess.grabbed) return;
+      var k = lvScrKeysym(e);
+      if (!k) return;
+      send([4, e.type === 'keydown' ? 1 : 0, 0, 0, (k>>>24)&255, (k>>>16)&255, (k>>>8)&255, k&255]);
+      e.preventDefault();
+    }
+    cv.addEventListener('mousemove', onMouse);
+    cv.addEventListener('mousedown', onMouse);
+    cv.addEventListener('mouseup', onMouse);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    sess.detach = function(){
+      cv.removeEventListener('mousemove', onMouse);
+      cv.removeEventListener('mousedown', onMouse);
+      cv.removeEventListener('mouseup', onMouse);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+    };
+    if (grab) grab.addEventListener('click', function(){
+      sess.grabbed = !sess.grabbed;
+      grab.textContent = sess.grabbed ? (lvLangRU() ? '🖐 Отпустить мышь' : '🖐 Release the mouse')
+                                      : (lvLangRU() ? '🖐 Взять мышь' : '🖐 Take the mouse');
+      cv.style.outline = sess.grabbed ? '2px solid var(--accent)' : '';
+    });
+  }
+
+  /* One step of the RFB state machine. Returns having consumed whatever was complete; the caller
+     loops until nothing more can be consumed. */
+  function lvScrStep(s, ctx, send, meta_){
+    var b = s.buf;
+    function take(n){ var out = b.subarray(0, n); s.buf = b.subarray(n); return out; }
+
+    if (s.state === 'version'){
+      if (b.length < 12) return;
+      take(12);
+      /* We answer 3.8 and nothing else: the relay upstream already fixed the version, so a page
+         negotiating its own would be a second opinion about one connection. */
+      send([82,70,66,32,48,48,51,46,48,48,56,10]); // "RFB 003.008\n"
+      s.state = 'sectypes'; return;
+    }
+    if (s.state === 'sectypes'){
+      if (b.length < 1) return;
+      var n = b[0];
+      if (b.length < 1 + n) return;
+      take(1 + n);
+      send([1]);              // type 1 = None; the password was spent by control-api
+      s.state = 'secresult'; return;
+    }
+    if (s.state === 'secresult'){
+      if (b.length < 4) return;
+      take(4);
+      send([1]);              // ClientInit: shared, so a second viewer does not evict the first
+      s.state = 'serverinit'; return;
+    }
+    if (s.state === 'serverinit'){
+      if (b.length < 24) return;
+      var nameLen = (b[20]<<24 | b[21]<<16 | b[22]<<8 | b[23]) >>> 0;
+      if (b.length < 24 + nameLen) return;
+      s.w = lvScrU16(b, 0); s.h = lvScrU16(b, 2);
+      var name = '';
+      for (var i = 0; i < nameLen; i++) name += String.fromCharCode(b[24+i]);
+      take(24 + nameLen);
+      /* Raw (0) and CopyRect (1). Named rather than "whatever the server likes": an encoding we
+         cannot decode would arrive as a rectangle we silently skip, i.e. a screen that is subtly
+         wrong instead of visibly broken. */
+      send([2, 0, 0, 2, 0,0,0,0, 0,0,0,1]);
+      send([3, 0, 0,0, 0,0, s.w>>8, s.w&255, s.h>>8, s.h&255]);   // full update first
+      s.state = 'normal';
+      meta_((s.w+'×'+s.h) + ' · ' + name);
+      return;
+    }
+
+    // --- normal: server messages ---
+    if (b.length < 1) return;
+    var msg = b[0];
+    if (msg === 1){                     // SetColourMapEntries — we are truecolour; skip it
+      if (b.length < 6) return;
+      var cnt = lvScrU16(b, 4);
+      if (b.length < 6 + cnt*6) return;
+      take(6 + cnt*6); return;
+    }
+    if (msg === 2){ take(1); return; }  // Bell
+    if (msg === 3){                     // ServerCutText — the AUT's clipboard; not shown, but consumed
+      if (b.length < 8) return;
+      var len = (b[4]<<24 | b[5]<<16 | b[6]<<8 | b[7]) >>> 0;
+      if (b.length < 8 + len) return;
+      take(8 + len); return;
+    }
+    if (msg !== 0) { take(1); return; }  // unknown: drop one byte rather than wedge the stream
+
+    if (b.length < 4) return;
+    var rects = lvScrU16(b, 2);
+    var off = 4;
+    for (var r = 0; r < rects; r++){
+      if (b.length < off + 12) return;                 // wait for the whole rectangle header
+      var x = lvScrU16(b, off), y = lvScrU16(b, off+2);
+      var w = lvScrU16(b, off+4), h = lvScrU16(b, off+6);
+      var enc = (b[off+8]<<24 | b[off+9]<<16 | b[off+10]<<8 | b[off+11]) | 0;
+      off += 12;
+      if (enc === 0){
+        var need = w*h*4;
+        if (b.length < off + need) return;             // partial pixels: leave it all in the buffer
+        var img = ctx.createImageData(w, h);
+        for (var p = 0; p < w*h; p++){
+          var o = off + p*4;
+          /* The server's pixel format is little-endian BGRX (32bpp truecolour), which is what x11vnc
+             offers and what the relay passes through untouched. */
+          img.data[p*4+0] = b[o+2];
+          img.data[p*4+1] = b[o+1];
+          img.data[p*4+2] = b[o+0];
+          img.data[p*4+3] = 255;
+        }
+        ctx.putImageData(img, x, y);
+        off += need;
+      } else if (enc === 1){
+        if (b.length < off + 4) return;
+        var sx = lvScrU16(b, off), sy = lvScrU16(b, off+2);
+        off += 4;
+        ctx.drawImage(ctx.canvas, sx, sy, w, h, x, y, w, h);
+      } else {
+        /* An encoding we did not ask for. Consuming an unknown length is impossible, so the honest
+           move is to stop reading rather than to guess and desynchronise the stream. */
+        s.buf = b.subarray(b.length);
+        return;
+      }
+    }
+    s.buf = b.subarray(off);
+    /* Incremental from here: only what changed, which is what makes Raw affordable. */
+    send([3, 1, 0,0, 0,0, s.w>>8, s.w&255, s.h>>8, s.h&255]);
+  }
+
+  /* X11 keysyms for the keys a person actually presses while driving a page. Latin-1 and ASCII map
+     to themselves, which covers typing; the rest are the navigation/editing keys. Anything else is
+     ignored rather than guessed — a wrong keysym types the wrong character into the application
+     under test, which is worse than nothing happening. */
+  function lvScrKeysym(e){
+    var map = { Backspace:0xff08, Tab:0xff09, Enter:0xff0d, Escape:0xff1b, Delete:0xffff,
+                Home:0xff50, End:0xff57, PageUp:0xff55, PageDown:0xff56,
+                ArrowLeft:0xff51, ArrowUp:0xff52, ArrowRight:0xff53, ArrowDown:0xff54,
+                Shift:0xffe1, Control:0xffe3, Alt:0xffe9, Meta:0xffeb };
+    if (map[e.key]) return map[e.key];
+    if (e.key && e.key.length === 1){
+      var c = e.key.charCodeAt(0);
+      if (c >= 0x20 && c <= 0xff) return c;
+    }
+    return 0;
   }
 
   /* The run flow: the same events, laid out so the two audiences are visible at once rather than

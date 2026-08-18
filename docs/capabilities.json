@@ -602,6 +602,42 @@
       }
     },
     {
+      "id": "live-screen",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Настоящий экран браузера, с настоящим курсором",
+      "title_en": "The browser's real screen, with a real cursor",
+      "how_ru": "Режим «Экран» живой области (вкладка «Чат») показывает НАСТОЯЩИЙ экран головного браузера через VNC: настоящий курсор, настоящие всплывающие меню и мышь, которую можно взять себе. Нужен профиль compose `vnc` (`docker compose --profile vnc up -d browser-vnc`) — он НЕ входит в дефолтный запуск, потому что головной браузер рисует другие пиксели и эталоны, снятые в headless, перестали бы совпадать (docs/DETERMINISM.md). Порт VNC наружу не публикуется никогда: единственный путь к нему — `GET /v1/live/screen` за bearer-токеном (токен едет в Sec-WebSocket-Protocol, как у `/v1/stream`), а пароль VNC тратит сам control-API — браузеру он не показывается, странице предъявляется security type None. Состояние — `GET /v1/live/status` (поле `screen`) и `agentctl live status`. ⚠ Поле `attached` предупреждает, когда экран принадлежит одному сервису браузера, а прогоны идут в другой (`PW_CDP_ENDPOINT`); вывод сделан по двум адресам, а не измерен. ⚠ Взятие мыши — это управление ЭКРАНОМ; перехват ПРОГОНА — это `takeover` по каналу RunControl, другая возможность. ⚠ Смотреть экран из терминала нечем: RFB — это пиксели, а не текст; `agentctl live status` отвечает, ЕСТЬ ли экран, почему нет и по какому адресу он внутри сети.",
+      "how_en": "The \"Screen\" mode of the live area (Chat view) shows the headed browser's REAL screen over VNC: a real cursor, real native menus, and a mouse you can take. Needs the `vnc` compose profile (`docker compose --profile vnc up -d browser-vnc`) — it is NOT part of the default start-up, because a headed browser renders different pixels and goldens captured headless would stop matching (docs/DETERMINISM.md). The VNC port is never published to a host: the only way in is `GET /v1/live/screen` behind the bearer token (carried in Sec-WebSocket-Protocol, exactly as `/v1/stream` does), and the VNC password is spent by control-api itself — the browser never sees it and the page is offered security type None. State comes from `GET /v1/live/status` (the `screen` field) and `agentctl live status`. ⚠ The `attached` field warns when the screen belongs to one browser service while runs go to another (`PW_CDP_ENDPOINT`); it is inferred from two addresses, not measured. ⚠ Taking the mouse drives the SCREEN; taking over the RUN is `takeover` over the RunControl channel, a different capability. ⚠ There is nothing to watch a screen with from a terminal: RFB is pixels, not text; `agentctl live status` answers whether there IS a screen, why not, and at which in-network address.",
+      "access": [
+        {
+          "kind": "http",
+          "ref": "GET /v1/live/screen"
+        },
+        {
+          "kind": "http",
+          "ref": "GET /v1/live/status"
+        },
+        {
+          "kind": "cli",
+          "ref": "live status"
+        },
+        {
+          "kind": "ui",
+          "ref": "chat"
+        },
+        {
+          "kind": "profile",
+          "ref": "vnc"
+        },
+        {
+          "kind": "env",
+          "ref": "CONTROL_API_VNC_ADDR"
+        }
+      ],
+      "reach": "capability"
+    },
+    {
       "id": "litellm-profile",
       "group": "Deployment",
       "severity": "medium",
