@@ -94,6 +94,49 @@ COPY testdata/ /app/testdata/
 # Static web assets (setup-WebUI + calculators) for the `webui` compose profile — air-gapped, served
 # locally via `python -m http.server` (no network). .dockerignore keeps this to the web subset only.
 COPY docs/ /app/docs/
+# LIVE-VNC (W3, ADR-127): the `vnc` compose profile runs a HEADED Chromium on a virtual X display and
+# exports it over RFB. Both tools live in THIS image rather than in a second one, and the number is
+# why — measured 2026-08-17 by building both shapes:
+#
+#   runtime as it was      1513 MB
+#   runtime + a vnc stage  1524 MB      →  +10 MB, 0.66%
+#
+# The estimate that had argued for a separate image (+246 MB, "xvfb alone is +225") was taken against
+# a BARE base, where it is right: on `node:24-bookworm-slim` the same two packages cost +235 MB. It is
+# wrong for OUR runtime, because `playwright install --with-deps chromium` above already installs the
+# X stack — the same reason the comment there keeps the full Chromium "for headed mode and the LIVE
+# arc". What is actually added here is `x11vnc` and its 17 dependencies.
+#
+# So the second image would have bought 10 MB at the price of a second GHCR tag, a second cosign
+# signature, a second SBOM, a branch in release.yml, and a docker-compose.ghcr.yml that only works if
+# that second image was published — five surfaces that execute only on a tag. That is the class of
+# surface this project found three times in one session (the orchestrator, the ghcr form, the Windows
+# cross-build), bought for two thirds of one percent.
+#
+# ⚠ `xvfb` IS NAMED EXPLICITLY even though it is already present transitively. Depending on
+# `--with-deps` to keep providing it would make the whole profile hostage to a Playwright release that
+# trims its dependency list — and the failure would arrive as "Xvfb: not found" inside a container
+# nobody rebuilt on purpose. Naming it costs nothing (apt sees it installed) and states the need.
+#
+# NOT installed, each with a reason rather than by omission:
+#   x11vnc's alternatives — NOT tigervnc/`Xvnc`, which is an X server AND a VNC server in one: that
+#                would put a second X server in the image with no way to point it at the display
+#                Chromium already holds. x11vnc exports an EXISTING display, which is what we have.
+#   websockify — the hub reaches the screen through control-api's own relay (ADR-127), which speaks
+#                WebSocket to the browser and raw TCP to x11vnc. A websockify container would be a
+#                service nobody exercises between releases. `[LIVE-VNC-OWN-BRIDGE]` is closed early.
+#   x11-utils  — `xdpyinfo` would be a nicer readiness probe than waiting for the X socket, and it
+#                drags the X client stack in for one binary. The socket is the same fact, for free.
+#   xauth      — the vnc container has exactly ONE X client, its own, in its own namespace. A
+#                MIT-MAGIC-COOKIE between two processes that already share a pid namespace protects
+#                nothing and adds a file to get wrong.
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc \
+ && rm -rf /var/lib/apt/lists/*
+# The entrypoint the `browser-vnc` service overrides to. It is NOT this image's ENTRYPOINT: the image
+# stays `agentctl`, and one compose service points at this script instead — so the default deployment
+# is byte-identical in behaviour to what it was before this line existed.
+COPY scripts/vnc-entrypoint.sh /app/bin/vnc-entrypoint.sh
+RUN chmod 0755 /app/bin/vnc-entrypoint.sh
 ENV PYTHONPATH=/app BRAIN_PYTHON=/app/.venv/bin/python
 ENTRYPOINT ["/app/bin/agentctl"]
 CMD ["--help"]

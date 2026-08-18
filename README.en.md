@@ -91,7 +91,9 @@ you no longer have to invent one up front.
 
 **The whole stack in one command:** `docker compose up` starts the control-API, the store, the browser
 service (the live view) and the setup-WebUI — four services, wired to each other by default. Flags are
-only for what a deployment may not want: `--profile ollama`, `--profile litellm`, `--profile demo`.
+only for what a deployment may not want: `--profile ollama`, `--profile litellm`, `--profile demo`,
+`--profile vnc` (the browser's real screen over VNC — a headed Chromium, a real cursor, a mandatory
+password; the port is never published to the host).
 
 **setup-WebUI (static, air-gapped, part of the bundle)** is part of that same `up` →
 open `http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.

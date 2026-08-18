@@ -267,5 +267,58 @@ services:
       retries: 20
       start_period: 10s
 
+  # LIVE-VNC (W3, ADR-127) — the "real screen": a HEADED Chromium on a virtual X display, exported over
+  # VNC, behind the `vnc` profile. Same image as everything else here: measured 2026-08-17, x11vnc adds
+  # 10 MB to a runtime that already carries the X stack for Chromium, so there is no second tag to pull
+  # and nothing extra to verify.
+  #
+  # ⚠ The default `browser` above stays HEADLESS and is not touched — a headed Chromium renders
+  # different pixels, and goldens are byte-stable only in headless (docs/DETERMINISM.md).
+  #
+  # ⚠ NO `<<: *sentinel-ghcr`: this service declares its own `environment:`, and a YAML merge key
+  # REPLACES that mapping rather than deepening it — the measured defect recorded on control-api.
+  #
+  # ⚠ NEEDS AN IMAGE THAT CONTAINS THE ENTRYPOINT — i.e. anything published AFTER ADR-127. Measured
+  # 2026-08-17 against the then-current `:latest` (v0.2.1), which predates it:
+  #
+  #     browser-vnc exited (127)
+  #     [FATAL tini (7)] exec /app/bin/vnc-entrypoint.sh failed: No such file or directory
+  #
+  # That message is true and useless to the person reading it — it names a path, not the reason. If
+  # you pinned SENTINEL_VERSION to a release older than ADR-127, the `vnc` profile cannot work with
+  # it: the image ships neither the entrypoint nor x11vnc. Use `:latest`, or build locally with
+  # docker-compose.yml. There is nothing to fix in this file: the container has to start before it can
+  # explain anything, and it is the image that is missing the explanation.
+  browser-vnc:
+    logging: *logging
+    profiles: ["vnc"]
+    image: ghcr.io/alexgromer/sentinel:${SENTINEL_VERSION:-latest}
+    user: "${UID:-1000}:${GID:-1000}"
+    init: true
+    volumes:
+      - ./runs:/app/runs
+      - ./state:/app/state     # state/vnc.password (0600) is written here on first start
+      - ./config:/config
+    entrypoint: ["/app/bin/vnc-entrypoint.sh"]
+    command: ["node", "/app/pw-executor/dist/cdp-service.js"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
+      DISPLAY: ":99"
+      SENTINEL_VNC_GEOMETRY: ${SENTINEL_VNC_GEOMETRY:-1280x800x24}
+      # Without this the profile is a black screen with green probes — see the built stack's comment.
+      PW_HEADED: "1"
+      SENTINEL_SVC_NAME: browser-vnc
+      SENTINEL_VNC_PASSWORD: ${SENTINEL_VNC_PASSWORD:-}
+    # ⚠ NO `ports:`. CDP is unauthenticated; RFB carries a password that the protocol truncates to
+    # eight bytes. Reachability is the control, and the hub reaches the screen through control-api's
+    # relay behind a bearer token.
+    healthcheck:
+      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect(5900,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
 volumes:
   ollama:

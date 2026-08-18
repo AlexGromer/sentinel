@@ -121,6 +121,46 @@ func (s *server) probeBrowser() readyCheck {
 	return readyCheck{Status: "ok"}
 }
 
+// probeVNC reports on the `vnc` profile's browser service (LIVE-VNC, ADR-127).
+//
+// REGISTERED EVEN THOUGH THE READINESS GATE DOES NOT DEMAND IT. tests/test_readyz_covers_the_stack_offline.py
+// derives its expectations from NON-profiled services, so a service behind `profiles: ["vnc"]` is
+// invisible to it — and "invisible to the gate" is not the same as "nobody needs to know". Principle 7
+// (docs/DEVELOPMENT.md §0) asks a new component to bring its own observation or a recorded reason;
+// being behind a profile is a reason to answer `skipped`, not a reason to answer nothing.
+//
+// ⚠ AN UNSET ADDRESS IS `skipped`, NEVER `error` — the same decision probeBrowser and probeOrchestrator
+// make, and here it is load-bearing in the most literal way: the `vnc` profile is DOWN in every
+// default deployment, so an `error` would put a permanent 503 on every stack that made the ordinary
+// choice.
+//
+// WHAT IT PROVES AND WHAT IT DOES NOT, stated because the difference is the whole value. It reads the
+// vnc browser service's /live/status — the same 200-with-a-reason contract probeBrowser uses — so it
+// proves the browser service inside that container is alive. It does NOT prove that Xvfb is drawing
+// or that x11vnc is exporting: that is what the compose healthcheck opens the RFB port for, and
+// duplicating it here would be a second, weaker claim about the same fact.
+func (s *server) probeVNC() readyCheck {
+	base := strings.TrimRight(os.Getenv("CONTROL_API_VNC_LIVE"), "/")
+	if base == "" {
+		return readyCheck{Status: "skipped",
+			Detail: "CONTROL_API_VNC_LIVE unset (the `vnc` compose profile is not running in this deployment)"}
+	}
+	req, err := http.NewRequest(http.MethodGet, base+liveStatusPath, nil)
+	if err != nil {
+		return readyCheck{Status: "error", Detail: "vnc browser service address is unusable: " + err.Error()}
+	}
+	resp, err := s.client().Do(req)
+	if err != nil {
+		return readyCheck{Status: "error", Detail: "vnc browser service " + base + " did not answer: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readyCheck{Status: "error",
+			Detail: "vnc browser service " + base + " answered " + strconv.Itoa(resp.StatusCode)}
+	}
+	return readyCheck{Status: "ok"}
+}
+
 // probeOrchestrator asks the RunControl service whether it is there (ADR-126).
 //
 // It exists because the gate demanded it, and the gate was right: a service added to the default
@@ -365,6 +405,7 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 	checks["llm"] = s.probeLLM(s.effectiveLLMBase(cfg))
 	checks["browser"] = s.probeBrowser()
 	checks["orchestrator"] = s.probeOrchestrator() // ADR-126
+	checks["vnc"] = s.probeVNC()                   // LIVE-VNC / ADR-127
 
 	ready := true
 	for _, c := range checks {

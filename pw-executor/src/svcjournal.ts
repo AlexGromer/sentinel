@@ -96,7 +96,12 @@ export function journal(code: string, lvl: string, msg: string): void {
     cat: 'service',
     code,
     msg,
-    svc: 'browser',
+    // LIVE-VNC: TWO services now run this same binary — `browser` (headless, the default stack) and
+    // `browser-vnc` (headed, behind the `vnc` profile) — and they append to the SAME journal file.
+    // Without this they would both write svc:"browser", and the field that exists to answer "which
+    // service said this" would stop answering it. The default is unchanged, so the single-service
+    // deployment and every existing test see exactly what they saw before.
+    svc: process.env.SENTINEL_SVC_NAME || 'browser',
   } satisfies JournalRecord) + '\n';
   try {
     // 0750/0640 match what the Go writer creates, so the file's permissions do not depend on which

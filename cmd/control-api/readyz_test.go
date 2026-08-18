@@ -504,6 +504,70 @@ func TestALiveBrowserServiceIsOkEvenWithNoPageOpen(t *testing.T) {
 	}
 }
 
+// --- LIVE-VNC (ADR-127): the vnc profile's browser service ---------------------------------------
+
+func TestAnUnsetVNCServiceIsSkippedRatherThanBroken(t *testing.T) {
+	// This one carries more weight than its twin above, because the DEFAULT is the unset case: the
+	// `vnc` profile is down in every ordinary deployment. An `error` here would put a permanent 503 on
+	// every stack that simply did not ask for a screen — a health view that cries wolf about a
+	// component nobody wanted is a health view people stop reading.
+	t.Setenv("CONTROL_API_VNC_LIVE", "")
+	s := newTestServer()
+	c := s.probeVNC()
+	if c.Status != "skipped" {
+		t.Fatalf("an unset vnc service must be skipped, got %q (%s)", c.Status, c.Detail)
+	}
+	// The detail must name the PROFILE, not just the variable: "CONTROL_API_VNC_LIVE unset" tells a
+	// developer what to set and an operator nothing at all.
+	if !strings.Contains(c.Detail, "vnc") {
+		t.Fatalf("the skip does not mention the profile that would provide it: %q", c.Detail)
+	}
+}
+
+func TestAnUnreachableVNCServiceIsAnErrorThatNamesTheAddress(t *testing.T) {
+	t.Setenv("CONTROL_API_VNC_LIVE", "http://127.0.0.1:1")
+	s := newTestServer()
+	c := s.probeVNC()
+	if c.Status != "error" {
+		t.Fatalf("an unreachable vnc service must be an error, got %q", c.Status)
+	}
+	if !strings.Contains(c.Detail, "127.0.0.1:1") {
+		t.Fatalf("the detail does not name the address that failed: %q", c.Detail)
+	}
+}
+
+func TestALiveVNCServiceIsOkEvenWithNoPageOpen(t *testing.T) {
+	// ⚠ The fake answers ONLY the real path, for the reason recorded on the browser twin above: a fake
+	// that cannot refuse cannot catch a probe asking for the wrong path, and that exact defect once
+	// had to be found by a live docker run instead of here.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != liveStatusPath {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"available": false, "reason": "no page open"})
+	}))
+	defer srv.Close()
+	t.Setenv("CONTROL_API_VNC_LIVE", srv.URL)
+	s := newTestServer()
+	if c := s.probeVNC(); c.Status != "ok" {
+		t.Fatalf("an idle-but-live vnc service must be ok, got %q (%s)", c.Status, c.Detail)
+	}
+}
+
+func TestTheVNCProbeDoesNotReadTheHeadlessBrowsersAddress(t *testing.T) {
+	// Two browser services, two variables. A probe that fell back to CONTROL_API_CDP_LIVE would report
+	// the `vnc` component as healthy by looking at the HEADLESS browser — the component would be
+	// "green" in a deployment where the profile was never started, which is worse than absent.
+	t.Setenv("CONTROL_API_CDP_LIVE", "http://127.0.0.1:9999")
+	t.Setenv("CONTROL_API_VNC_LIVE", "")
+	s := newTestServer()
+	if c := s.probeVNC(); c.Status != "skipped" {
+		t.Fatalf("the vnc probe answered %q while its own address was unset — it is reading the "+
+			"headless browser's address and reporting about the wrong service", c.Status)
+	}
+}
+
 func TestTheProberReportsTransitionsAndSaysNothingOnATickThatChangedNothing(t *testing.T) {
 	// The volume rule, asserted rather than trusted. A prober that journalled every tick would write
 	// ~5 700 records a day saying nothing changed and would bury the single record saying the store

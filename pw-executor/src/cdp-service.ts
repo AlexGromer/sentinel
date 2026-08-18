@@ -45,6 +45,33 @@ const LISTEN_ADDR = process.env.CDP_LISTEN_ADDR ?? '0.0.0.0';
 /** Port serving the live screencast (see the LIVE VIEW section below). */
 const LIVE_PORT = Number(process.env.CDP_LIVE_PORT ?? 9224);
 
+/**
+ * Chromium window geometry for the HEADED case — FOUND BY LOOKING AT THE FIRST VNC FRAME, not by any
+ * gate (LIVE-VNC, 2026-08-17).
+ *
+ * The first screenshot taken over RFB showed a real browser window sitting on a 1280x800 virtual
+ * display at roughly 1060x790, with black bands down the right side and along the bottom — about 17%
+ * of the screen. Every check was green: the container was healthy, the service answered, the frame
+ * had content. It simply looked broken to a person, which is exactly the class of defect the "open
+ * the pictures" rule exists for.
+ *
+ * The cause is that the vnc container has NO WINDOW MANAGER, deliberately (one more package, one more
+ * process, and nothing for it to manage). Without a WM nothing maximises a window and nothing places
+ * it, so Chromium keeps its built-in default size wherever it opened. `--start-maximized` needs a WM
+ * and would do nothing here; the size has to be stated.
+ *
+ * The geometry comes from the same variable the entrypoint hands to Xvfb, so the window and the
+ * screen cannot drift apart — a second number would be a second source of truth for one fact.
+ * Returns NOTHING in the headless case: a headless Chromium has no window, and passing a size there
+ * would change the viewport the goldens were captured at.
+ */
+function windowArgs(): string[] {
+  if (!(process.env.PW_HEADED === '1' || process.env.PW_HEADLESS === '0')) return [];
+  const m = /^(\d+)x(\d+)/.exec(process.env.SENTINEL_VNC_GEOMETRY ?? '');
+  if (!m) return [];
+  return [`--window-position=0,0`, `--window-size=${m[1]},${m[2]}`];
+}
+
 /* ================================================================== LIVE VIEW (ADR-111)
  * The video mode of the live area, served from HERE rather than from the executor.
  *
@@ -511,7 +538,18 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   browser = await chromium.launch({
-    args: [`--remote-debugging-port=${INTERNAL_PORT}`],
+    // LIVE-VNC. Until this line the call passed NO headless option at all, so Playwright's default
+    // (headless: true) won unconditionally — and the whole `vnc` profile would have been an X server
+    // faithfully exporting an EMPTY desktop while /live/status answered 200 and the container
+    // reported healthy. The predicate is the SAME one resolveLaunchPlan already uses (launch.ts), not
+    // a second dialect: a service that decided headedness its own way would be a third answer to a
+    // question the executor already answers.
+    //
+    // ⚠ The DEFAULT stays headless, deliberately and by construction — `browser` sets neither
+    // variable. `screenshot_hash` is byte-stable ONLY in headless (docs/DETERMINISM.md), so flipping
+    // this default would invalidate every golden ever taken, silently, on the next replay.
+    headless: !(process.env.PW_HEADED === '1' || process.env.PW_HEADLESS === '0'),
+    args: [`--remote-debugging-port=${INTERNAL_PORT}`, ...windowArgs()],
   });
   await waitForCdp(INTERNAL_PORT);
   await startForwarder();
