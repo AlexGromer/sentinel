@@ -166,7 +166,7 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 4          # ⚠ may only ever go UP; today's honest number.
+    MIN_THREE_WAY = 5          # ⚠ may only ever go UP; today's honest number.
     #                            HEALTH-006 PR-B moved it off ZERO for the first time in the
     #                            project's life: readiness is reachable as GET /readyz, as
     #                            `agentctl health`, and as the `health` view. The number was 0

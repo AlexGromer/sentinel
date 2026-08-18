@@ -130,37 +130,71 @@ def test_a_headed_browser_is_told_how_big_the_screen_is():
                 f"browser window each fall back to their own default and stop matching.")
 
 
-def test_the_healthcheck_probes_the_port_x11vnc_actually_serves():
-    """Two ends again: the port the entrypoint serves and the port the healthcheck opens.
+def test_the_healthcheck_opens_the_socket_x11vnc_actually_serves():
+    """Two ends again: the socket the entrypoint serves and the socket the healthcheck connects to.
 
-    Both are read from their own file and COMPARED. Repeating the literal 5900 in this test would
-    assert that the file says what it says — and would stay green while the two halves disagreed,
-    which is the only interesting failure.
+    Both are read from their own file and COMPARED. Repeating the path in this test would assert that
+    the file says what it says — and would stay green while the two halves disagreed, which is the only
+    interesting failure.
     """
     ep = ENTRYPOINT.read_text()
-    m = re.search(r'(?m)^:\s*"\$\{SENTINEL_VNC_PORT:=(\d+)\}"', ep)
-    assert m, "vnc-entrypoint.sh no longer defaults SENTINEL_VNC_PORT in a readable shape"
-    port = m.group(1)
-    assert re.search(rf'-rfbport\s+"?\$\{{?SENTINEL_VNC_PORT', ep), (
-        "x11vnc is started without -rfbport $SENTINEL_VNC_PORT — the default above would then be a "
-        "number nobody reads, and the healthcheck below would be probing a port by coincidence.")
+    m = re.search(r'(?m)^:\s*"\$\{SENTINEL_VNC_SOCK:=([^}]+)\}"', ep)
+    assert m, "vnc-entrypoint.sh no longer defaults SENTINEL_VNC_SOCK in a readable shape"
+    sock = m.group(1)
+    assert re.search(r'-unixsock\s+"?\$\{?SENTINEL_VNC_SOCK', ep), (
+        "x11vnc is started without -unixsock $SENTINEL_VNC_SOCK — the default above would then be a "
+        "path nobody reads, and the healthcheck below would be opening a socket by coincidence.")
     for path in (BUILT, PULLED):
         for name, seg in sorted(display_services(path).items()):
             assert re.search(r"(?m)^    healthcheck:\s*$", seg), (
                 f"{path.name}: `{name}` has no healthcheck, so nothing notices when the screen dies "
                 f"while the browser service keeps answering.")
-            assert f"connect({port}" in seg, (
-                f"{path.name}: `{name}`'s healthcheck does not open port {port}, which is the port "
-                f"vnc-entrypoint.sh serves. Then the check passes on a container whose X server or "
-                f"VNC server is gone — exactly the state where the live view shows black.")
+            assert f"connect('{sock}'" in seg, (
+                f"{path.name}: `{name}`'s healthcheck does not connect to {sock}, which is the socket "
+                f"vnc-entrypoint.sh serves. Then the check passes on a container whose X server or VNC "
+                f"server is gone — exactly the state where the live view shows black.")
+            # ⚠ CONNECT, not stat. A stale socket FILE outlives the process that created it, so
+            # "the path exists" would report health for a dead server — the difference between a check
+            # about the world and a check about a directory entry.
+            assert "existsSync" not in seg and "statSync" not in seg, (
+                f"{path.name}: `{name}`'s healthcheck tests for the socket's EXISTENCE rather than "
+                f"connecting to it; a stale socket file would then read as a healthy screen.")
 
 
-def test_vnc_is_never_started_without_a_password():
-    """The property the whole secret half exists for, asserted on the files that could break it."""
+def test_the_vnc_server_has_no_tcp_listener_at_all():
+    """`-rfbport 0` is what turns "a socket as well" into "a socket INSTEAD".
+
+    Measured 2026-08-18: with `-unixsock` alone x11vnc still opens 5900, so the socket was an addition
+    and the TCP surface remained. With `-rfbport 0` /proc/net/tcp is empty. This is the flag that makes
+    the whole transport claim true, so it is asserted rather than trusted.
+    """
+    ep = ENTRYPOINT.read_text()
+    joined = re.sub(r"\\\n\s*", " ", ep)
+    for line in joined.splitlines():
+        code = line.split("#", 1)[0]
+        if "x11vnc" in code and "-unixsock" in code:
+            assert "-rfbport 0" in code, (
+                f"x11vnc serves a unix socket but does not disable the TCP listener: {code.strip()[:110]}. "
+                f"Measured: without `-rfbport 0` it also opens 5900, and the port is reachable from the "
+                f"host at the container's bridge IP — so 'not published' would not mean 'not reachable'.")
+            return
+    raise AssertionError("no x11vnc invocation with -unixsock found — the transport is not what this file gates")
+
+
+def test_the_socket_is_narrowed_and_no_password_scheme_creeps_back():
+    """Access control is the socket's MODE, so the chmod is the security-critical line of the file.
+
+    And the old scheme must not creep back: `-passwdfile`/`-rfbauth` would re-introduce VNC
+    Authentication, i.e. DES over eight bytes of a password — the thing this transport was rebuilt to
+    remove after CodeQL flagged it and the owner ruled that weak ciphers do not ship.
+    """
     ep = ENTRYPOINT.read_text()
 
-    # `-nopw` in any file that could start a server would make the password optional in fact while
-    # every document still promised it.
+    assert re.search(r'chmod 600 "\$SENTINEL_VNC_SOCK"', ep), (
+        "vnc-entrypoint.sh does not chmod 600 the socket. Its permissions ARE the authentication — "
+        "measured: a foreign uid gets EACCES at 0600 — so an unnarrowed socket is an unguarded desktop.")
+
+    # The old password scheme must not return through any shipped file.
     #
     # ⚠ COMMENTS ARE STRIPPED FIRST, and that is not a nicety — it is the second time in this PR that
     # a substring check fired on the PROSE EXPLAINING THE RULE. vnc-entrypoint.sh says "there is no
@@ -169,58 +203,26 @@ def test_vnc_is_never_started_without_a_password():
     # carved into it, and the exception is how it stops applying to the case it was written for.
     for path in (ENTRYPOINT, BUILT, PULLED, REPO / "Dockerfile"):
         code = "\n".join(ln.split("#", 1)[0] for ln in path.read_text().splitlines())
-        assert "-nopw" not in code, (
-            f"{path.name} contains `-nopw` outside a comment. A VNC server without a password is a "
-            f"desktop that accepts input from whoever reaches the port; the profile promises the "
-            f"opposite.")
+        for flag in ("-passwdfile", "-rfbauth"):
+            assert flag not in code, (
+                f"{path.name} passes `{flag}` outside a comment, which turns VNC Authentication back "
+                f"on — DES over the first eight bytes of a password, over an unencrypted channel. This "
+                f"transport authenticates with the socket's 0600 permissions instead, and ships no "
+                f"weak cipher.")
 
     assert re.search(r"(?m)^set -eu?\b", ep), (
-        "vnc-entrypoint.sh does not `set -e`, so a failing password step would be a printed warning "
-        "and the server would start anyway — which is the difference between 'impossible by "
-        "construction' and 'unlikely'.")
+        "vnc-entrypoint.sh does not `set -e`, so a failing step would be a printed warning and the "
+        "server would start anyway — the difference between 'impossible by construction' and "
+        "'unlikely'.")
 
-    # The password command must come BEFORE the server. Compared by position, because the order is the
-    # mechanism: `set -e` only protects what runs after the thing that can fail.
-    pw_at = ep.find("agentctl vnc-password")
-    x11_at = ep.find("x11vnc -display")
-    assert pw_at != -1, "vnc-entrypoint.sh never calls `agentctl vnc-password`"
-    assert x11_at != -1, "vnc-entrypoint.sh never starts x11vnc"
-    assert pw_at < x11_at, (
-        "vnc-entrypoint.sh starts x11vnc BEFORE obtaining the password. `set -e` cannot stop a server "
-        "that has already started.")
-
-    # Every x11vnc invocation that serves a port must present a password file.
-    #
-    # ⚠ Line continuations are joined FIRST. The real invocation spans three lines, with `-rfbport` on
-    # the first and `-passwdfile` on the second — a line-at-a-time scan sees a server started with a
-    # port and no credential and calls the correct code broken. That is the third false positive this
-    # gate produced while being written, and all three came from reading TEXT where the question is
-    # about STRUCTURE.
-    joined = re.sub(r"\\\n\s*", " ", ep)
-    for line in joined.splitlines():
-        code = line.split("#", 1)[0]
-        if "x11vnc" in code and "-rfbport" in code:
-            assert "-passwdfile" in code or "-rfbauth" in code, (
-                f"an x11vnc invocation serves a port with no credential file: {code.strip()[:110]}")
-
-
-def test_the_password_working_copy_never_lands_on_the_host_mount():
-    """The plaintext x11vnc reads must not be written into ./state, which is a host bind mount.
-
-    state/vnc.password is the operator's copy and is meant to be there. The working copy the entrypoint
-    hands to x11vnc is a SECOND copy, and a second copy of a secret on the host is one nobody chose to
-    make — it would also outlive the container that needed it.
-    """
-    ep = ENTRYPOINT.read_text()
-    m = re.search(r"(?m)^RFB_PASS_FILE=(\S+)", ep)
-    assert m, "vnc-entrypoint.sh no longer names its working password file in a readable shape"
-    target = m.group(1)
-    assert not target.startswith("/app/state"), (
-        f"the working password copy is written to {target}, which is the ./state bind mount — the "
-        f"secret would land on the host a second time and survive the container.")
-    assert re.search(rf'chmod 600 "?\$\{{?RFB_PASS_FILE', ep), (
-        "the working password copy is not chmod 600 — umask alone does not protect a file that "
-        "already existed.")
+    # The chmod must come BEFORE the container is considered up. Compared by position, because the
+    # order is the mechanism: a socket served for even a second at 0755 is a socket anyone could have
+    # connected to.
+    chmod_at = ep.find('chmod 600 "$SENTINEL_VNC_SOCK"')
+    exec_at = ep.find('exec "$@"')
+    assert chmod_at != -1 and exec_at != -1 and chmod_at < exec_at, (
+        "the socket is narrowed after the entrypoint hands over to the browser service, so there is a "
+        "window in which it is world-reachable.")
 
 
 def test_the_x_server_has_no_network_socket():

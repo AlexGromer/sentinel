@@ -76,8 +76,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  agentctl sweep-downloaded [--dry-run] --yes # delete run dirs a human has downloaded (ADR-103); explicit")
 	fmt.Fprintln(os.Stderr, "  agentctl purge-service --yes [--older-than 720h]")
 	fmt.Fprintln(os.Stderr, "                                             # delete service-journal records (HEALTH-005); writes down that it did")
-	fmt.Fprintln(os.Stderr, "  agentctl vnc-password [--print]             # ensure state/vnc.password exists (0600); --print emits the value")
-	fmt.Fprintln(os.Stderr, "                                             # LIVE-VNC: SENTINEL_VNC_PASSWORD wins; exit 2 if neither path yields one")
 	fmt.Fprintln(os.Stderr, "  agentctl baseline update --plan <plan.json> [--target <URL>]")
 	fmt.Fprintln(os.Stderr, "  agentctl locators clear-quarantine")
 	fmt.Fprintln(os.Stderr, "  agentctl version")
@@ -356,22 +354,6 @@ func filteredEnv() []string {
 	if os.Getenv("SENTINEL_ENV_ALLOWLIST") == "0" { // opt-out escape hatch — full host-env passthrough
 		return os.Environ()
 	}
-	// DENIED is checked FIRST — before `exact`, before the prefixes and before SENTINEL_ENV_ALLOW.
-	// Order is the whole mechanism: `SENTINEL_` is an allow-PREFIX, so without this the VNC password
-	// exported in an operator's shell would be handed to the brain, the executor and Chromium — three
-	// processes that have no use for it — and would sit in /proc/<pid>/environ, readable by any
-	// process of the same uid. The consumer of that secret is x11vnc inside browser-vnc, reached
-	// through a file, never through an inherited environment.
-	//
-	// Same correction shape as #25, which replaced the broad NODE_/GIT_ prefixes after they leaked
-	// NODE_AUTH_TOKEN and GIT_ASKPASS: when a family is right for everything except a credential,
-	// name the credential rather than narrowing the family.
-	//
-	// ⚠ SENTINEL_ENV_ALLOWLIST=0 (full passthrough, the documented escape hatch at the top of this
-	// function) still bypasses this, as it bypasses everything — that is what it is for.
-	denied := map[string]bool{
-		"SENTINEL_VNC_PASSWORD": true,
-	}
 	exact := map[string]bool{
 		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "PWD": true,
 		"LANG": true, "LC_ALL": true, "TERM": true, "TMPDIR": true, "TZ": true,
@@ -402,9 +384,6 @@ func filteredEnv() []string {
 		k := kv
 		if i := strings.IndexByte(kv, '='); i >= 0 {
 			k = kv[:i]
-		}
-		if denied[k] {
-			continue
 		}
 		if exact[k] {
 			out = append(out, kv)
@@ -1013,8 +992,6 @@ func main() {
 		code = cmdPurgeService(repo, os.Args[2:])
 	case "sweep-downloaded":
 		code = cmdSweepDownloaded(repo, os.Args[2:])
-	case "vnc-password":
-		code = cmdVNCPassword(repo, os.Args[2:])
 	default:
 		// ADR-107: the store/config half of the product, projected onto the CLI as thin clients over the
 		// routes control-api already serves (api.go). Matched LAST so a locally-implemented subcommand

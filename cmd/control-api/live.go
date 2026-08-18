@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -87,6 +88,10 @@ func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"available": false,
 			"reason":    "no browser service configured (CONTROL_API_CDP_LIVE is unset)",
+			// LIVE-VNC (ADR-127): the screen is a SEPARATE deployment decision from the screencast —
+			// one deployment can have the vnc profile and no CDP live port, or the reverse — so it
+			// answers for itself rather than inheriting this branch's verdict.
+			"screen": s.screenState(),
 		})
 		return
 	}
@@ -113,11 +118,15 @@ func (s *server) handleLiveStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
 	// The upstream document, wrapped with `available` so the caller never has to infer availability
-	// from the shape of what came back.
-	fmt.Fprintf(w, `{"available":true,"upstream":%s}`, strings.TrimSpace(string(body)))
+	// from the shape of what came back — plus `screen`, because the hub asks one question ("what can I
+	// watch right now") and a second status document would be the second place that builds one answer.
+	// liveTargetURL exists in this file precisely because two such places drifted apart invisibly.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"available": true,
+		"upstream":  json.RawMessage(strings.TrimSpace(string(body))),
+		"screen":    s.screenState(),
+	})
 }
 
 func (s *server) handleLiveFrame(w http.ResponseWriter, r *http.Request) {

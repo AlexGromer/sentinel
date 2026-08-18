@@ -1963,13 +1963,37 @@
       "en": "The machine token came from {source}{detail}",
       "emitter": "control-api"
     },
-    "service.vnc_password_source": {
+    "service.screen_opened": {
       "lvl": "info",
       "cat": "service",
       "phase": "report",
-      "ru": "Пароль VNC получен, источник — {source}, файл {path}{detail}",
-      "en": "The VNC password came from {source}, file {path}{detail}",
-      "emitter": "agentctl"
+      "ru": "Экран {addr} открыт для {actor}, режим {mode}",
+      "en": "Screen {addr} opened for {actor}, mode {mode}",
+      "emitter": "control-api"
+    },
+    "service.screen_closed": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Экран {addr} закрыт: {reason}, длительность {dur_s} с, передано {bytes} Б",
+      "en": "Screen {addr} closed: {reason}, {dur_s} s, {bytes} B relayed",
+      "emitter": "control-api"
+    },
+    "service.screen_refused": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Экран {addr} НЕ открыт для {actor}: {reason}",
+      "en": "Screen {addr} NOT opened for {actor}: {reason}",
+      "emitter": "control-api"
+    },
+    "service.screen_control_taken": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "{actor} взял мышь и клавиатуру на экране {addr} — с этого момента страницу ведёт человек, а не прогон",
+      "en": "{actor} took the mouse and keyboard on screen {addr} — from here the page is driven by a person, not by the run",
+      "emitter": "control-api"
     },
     "service.store_unreachable": {
       "lvl": "warn",

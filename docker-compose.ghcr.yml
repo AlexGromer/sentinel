@@ -309,12 +309,13 @@ services:
       # Without this the profile is a black screen with green probes — see the built stack's comment.
       PW_HEADED: "1"
       SENTINEL_SVC_NAME: browser-vnc
-      SENTINEL_VNC_PASSWORD: ${SENTINEL_VNC_PASSWORD:-}
-    # ⚠ NO `ports:`. CDP is unauthenticated; RFB carries a password that the protocol truncates to
-    # eight bytes. Reachability is the control, and the hub reaches the screen through control-api's
-    # relay behind a bearer token.
+      # No password: RFB is on a 0600 unix socket with no TCP listener — see docker-compose.yml.
+      SENTINEL_VNC_SOCK: /app/state/vnc.sock
+    # ⚠ NO `ports:`. CDP is unauthenticated and reachability is its only control; RFB has no TCP port
+    # at all now (unix socket, 0600). The hub reaches the screen through control-api's relay behind a
+    # bearer token.
     healthcheck:
-      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect(5900,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "const h=require('http'),n=require('net');h.get('http://127.0.0.1:9224/live/status',r=>{if(r.statusCode!==200)process.exit(1);const s=n.connect('/app/state/vnc.sock',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))}).on('error',()=>process.exit(1))"]
       interval: 3s
       timeout: 5s
       retries: 20
