@@ -28,6 +28,7 @@ import {
   DECOR_TYPE_DELAY_MS, type Point,
 } from './decorate.js';
 import { makeVideoDir, dropVideoDir } from './record.js';
+import { shouldTrackNewPage, shouldClosePagesOnTeardown } from './ownership.js';
 
 const log = (...a: unknown[]): void => console.error('[pw-executor]', ...a);
 
@@ -367,6 +368,8 @@ let context: BrowserContext | null = null;
 let page: Page | null = null;
 // M9.4 (A6): every page in the context (initial + popups/new tabs). `page` is the ACTIVE one;
 // browser.switchTab just re-points `page`, so all existing tools operate on the active tab unchanged.
+// ⚠ ADR-128 narrowed what gets in here: in CDP-attach mode a tab the HUMAN opened during the run is
+// not the run's, and is neither switchable nor captured from.
 let pages: Page[] = [];
 
 // ADR-108d: the live VIDEO mode — a CDP screencast, kept in memory and never on disk.
@@ -436,6 +439,43 @@ async function resolveCdpEndpoint(endpoint: string): Promise<string> {
   const rewritten = withCdpHost(endpoint, addr);
   log(`CDP endpoint ${endpoint} -> ${rewritten} (Chrome rejects a DNS-name Host header)`);
   return rewritten;
+}
+
+/** Take a page into the run: bound timeout, tracked for `browser.tabs`, captured from (ADR-067). */
+function trackPage(p: Page): void {
+  if (pages.includes(p)) return;
+  p.setDefaultTimeout(5000);
+  pages.push(p);
+  attachAppCapture(p);
+  log('new browser tab/page tracked: index', pages.length - 1);
+}
+
+/**
+ * A page appeared in a context we ADOPTED — decide whether it is this run's (ADR-128).
+ *
+ * `opener()` is the only thing that can tell a popup our page raised from a tab the human opened
+ * beside us: both arrive on the same `page` event, in the same context, in the same instant. It is
+ * read from state Playwright already has (the target's opener id comes with the attach), not from a
+ * round trip — but it is still a promise, which is why this path is async and the launch path is not.
+ */
+async function trackAdoptedPage(p: Page): Promise<void> {
+  if (pages.includes(p)) return;
+  let openerIsOurs = false;
+  try {
+    const o = await p.opener();
+    openerIsOurs = !!o && pages.includes(o);
+  } catch {
+    // A page that closed before we could ask is not ours to adopt on a guess. Fail CLOSED here, and
+    // that direction is deliberate: mistakenly adopting the human's tab copies their console into
+    // our artifacts, while mistakenly skipping a popup costs one untracked tab and says so below.
+    openerIsOurs = false;
+  }
+  if (!shouldTrackNewPage({ attachedOverCDP, openerIsOurs })) {
+    log('a page appeared in the adopted browser that this run did not open — leaving it to its owner ' +
+        '(ADR-128); it is not switchable and nothing is captured from it:', p.url());
+    return;
+  }
+  trackPage(p);
 }
 
 async function ensureBrowser(): Promise<void> {
@@ -585,21 +625,33 @@ async function ensureBrowser(): Promise<void> {
   } else {
     log('tracing DISABLED (PW_NO_TRACE=1)');
   }
-  // M9.4 (A6): the active page is the first EXISTING page (CDP: the user's open tab; launch: a fresh
-  // page we create), and we track every page in the context (initial + popups/new tabs).
-  const existing = context.pages();
-  page = existing.length ? existing[0] : await context.newPage();
+  // ADR-128 (was M9.4 A6): the run OPENS ITS OWN PAGE, always — in launch mode inside the context we
+  // just created, in CDP-attach mode inside the context we adopted.
+  //
+  // WHAT THIS CHANGES AND WHY IT IS A DECISION, NOT A FIX. ADR-037 promised to reuse the user's
+  // session AND their open tab; the tab half is withdrawn here, deliberately (Alex, 2026-08-16). The
+  // session is untouched — same context, same cookies, same login — but the page is ours. Measured
+  // reason: `pages()[0]` made two concurrent runs drive ONE tab and announce ONE `targetId` (both
+  // `84DC6185`, measured live), so the live view could attribute the picture to neither and had to
+  // refuse both (ADR-121). A label cannot separate what the browser did not separate. It also fixes
+  // a leak nobody had asked about: the NEXT run inherited the previous run's tab, with its URL and
+  // its cookies, and started work on somebody else's page.
+  //
+  // In launch mode this line is not a change at all: `browser.newContext()` returns a context with
+  // no pages, so `existing.length` was always 0 there and the old expression already created one.
+  // The determinism path is therefore byte-for-byte what it was — which matters, because every
+  // golden ever captured was captured through it.
+  page = await context.newPage();
   page.setDefaultTimeout(5000); // bound browser.expect's pollUntil inner waits to the intended 5s budget
-  pages = existing.length ? [...existing] : [page];
-  pages.forEach(attachAppCapture); // ADR-067: the site's own console/errors/failed requests
+  pages = [page];
+  attachAppCapture(page); // ADR-067: the site's own console/errors/failed requests
   // The 'page' event fires only for pages created AFTER this handler is attached.
   context.on('page', (p) => {
-    if (!pages.includes(p)) {
-      p.setDefaultTimeout(5000);
-      pages.push(p);
-      attachAppCapture(p); // ADR-067
-      log('new browser tab/page tracked: index', pages.length - 1);
-    }
+    // Launch mode keeps the SYNCHRONOUS path it has always had: our context, so every page in it is
+    // ours by construction, and `attachAppCapture` must not be deferred by even a microtask — a
+    // popup can log to the console in the same tick it is created.
+    if (!attachedOverCDP) { trackPage(p); return; }
+    void trackAdoptedPage(p);
   });
 
   // LIVE-PER-RUN: tell the browser service WHICH page is this run's, so the live view can be asked
@@ -1439,8 +1491,40 @@ const TOOL_METHODS = [
 ];
 
 // --- Transport 1: newline JSON-RPC 2.0 (default) ----------------------------
+/**
+ * Teardown on a signal — ADR-128.
+ *
+ * ⚠ THE JSON-RPC TRANSPORT HAD NO SIGNAL HANDLER AT ALL, and that was harmless only while the run
+ * owned nothing: in launch mode Playwright kills the browser it started when this process dies, and
+ * in CDP-attach mode there was nothing of ours to clean up. Now there is. A run killed mid-flight —
+ * budget stop (ADR-021), `agentctl` cancel, `docker compose down` — reaches the browser service the
+ * same way a finished one does, so the tab has to go the same way too, or "no leak" holds only for
+ * runs that end politely.
+ *
+ * Bounded on purpose: a browser that will not answer must never be the reason a killed process
+ * refuses to die. The timer is `unref`'d so it is never itself what keeps the process alive.
+ */
+function installSignalTeardown(): void {
+  const bail = (sig: string): void => {
+    log(`${sig} — tearing down`);
+    const t = setTimeout(() => process.exit(0), 2_000);
+    t.unref?.();
+    const finish = (): void => process.exit(0);
+    const mine = pages.filter((p) => !p.isClosed());
+    if (shouldClosePagesOnTeardown({ attachedOverCDP, havePages: mine.length > 0, contextClosed })) {
+      void Promise.all(mine.map((p) => p.close().catch(() => {}))).finally(finish);
+      return;
+    }
+    // M9.6: never close the user's CDP-attached browser — just drop the connection by exiting.
+    if (!attachedOverCDP) { void browser?.close().finally(finish); return; }
+    finish();
+  };
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) process.on(sig, () => bail(sig));
+}
+
 async function mainJsonRpc(): Promise<void> {
   await setupTracing();
+  installSignalTeardown();
   const rl = readline.createInterface({ input: process.stdin });
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -1463,6 +1547,17 @@ async function mainJsonRpc(): Promise<void> {
   }
   try {
     if (context && tracingStarted && !tracingStopped && !contextClosed) await context.tracing.stop();
+    // ADR-128: we opened these pages, so we close them — and ONLY them. The browser and the context
+    // stay exactly as they were (ADR-037 is unchanged in that half). Leaving them would not be
+    // politeness: the browser service outlives every run, so abandoned tabs grow without bound, and
+    // the newest of them would keep answering unnamed live requests on behalf of a finished run.
+    // AFTER the trace stop, because stopping the trace reads from the pages.
+    const mine = pages.filter((p) => !p.isClosed());
+    if (shouldClosePagesOnTeardown({ attachedOverCDP, havePages: mine.length > 0, contextClosed })) {
+      for (const p of mine) await p.close().catch(() => {});
+      log(`closed the ${mine.length} page(s) this run opened in the adopted browser (ADR-128); the ` +
+          'browser, the context and every tab that was already there are untouched');
+    }
     if (!attachedOverCDP) await browser?.close(); // M9.6: never close the user's CDP-attached browser
   } catch (e) {
     log('cleanup error', e);
@@ -1526,11 +1621,10 @@ async function mainMcp(): Promise<void> {
       },
     );
   }
-  process.on('SIGTERM', () => {
-    // M9.6: in CDP-attach we don't own the browser — just exit (drops the CDP connection), leave it open.
-    if (attachedOverCDP) { process.exit(0); return; }
-    void browser?.close().finally(() => process.exit(0));
-  });
+  // One teardown for both transports (ADR-128). It used to be written out here and nowhere else,
+  // which is why the transport that actually ships had none — two statements of one rule, with the
+  // second one missing, is the same shape as the two live URLs that drifted in ADR-121.
+  installSignalTeardown();
   await server.connect(new StdioServerTransport());
   log('MCP server connected (stdio)');
 }

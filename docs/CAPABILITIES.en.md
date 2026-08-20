@@ -45,7 +45,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 
 | Capability | How to reach it |
 |---|---|
-| **Attach to your own Chrome (CDP) ⭐** | PW_CDP_ENDPOINT=http://localhost:9222 — the tool drives YOUR already-open Chrome (ADR-037). |
+| **Attach to your own Chrome (CDP) ⭐** | PW_CDP_ENDPOINT=http://localhost:9222 — the tool works inside YOUR Chrome and under your login: it reuses your session but opens ITS OWN tab and closes it afterwards; your tabs are neither read nor driven (ADR-037, amended by ADR-128). |
 | **Take over a live run by hand ⭐** | GET /v1/stream (WS) — take over a running run, drive by hand, hand control back. |
 | **Live video scoped to a run** | GET /v1/live/status\|frame.jpg\|mjpeg?run_id=<id>, agentctl live status\|frame\|stream --run-id <id> — a named run gets its own page or a reasoned refusal, never somebody else's picture; without run_id — the previous behaviour, honestly marked scoped:false (ADR-121). |
 | **Choosing a run's observation mode** | GET /v1/config-schema (modes off/frames/stream/human/record, the default and each mode's cost) + POST /v1/runs (observe) + agentctl run --observe <mode> + the same choice in the hub's run form. All five modes are PERFORMED (human — ADR-120, record — ADR-125), the not_yet list is empty. Two refusals remain and both are about a COMBINATION: a decorated mode does not mix with a golden capture, and record is impossible over CDP-attach. |

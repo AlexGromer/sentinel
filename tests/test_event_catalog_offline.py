@@ -78,7 +78,7 @@ LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
 # catalogue gate performs, exactly the blind spot the control-api widening had already fixed once.
 # A DIRECTORY, therefore, for the same reason and by the same rule: a file added tomorrow is scanned
 # because of where it lives, not because somebody remembered to add a line here.
-EMITTER_FLOORS = {"pw-executor": 9, "control-api": 18, "agentctl": 1}   # control-api 14→18: four service.screen_* codes (measured 19).
+EMITTER_FLOORS = {"pw-executor": 10, "control-api": 18, "agentctl": 1}  # pw-executor 9→10: service.live_claim_conflict (ADR-128). control-api 14→18: four service.screen_* codes (measured 19).
 # ⚠ agentctl went 1→2 and BACK to 1 within the same arc, which is the honest shape of a ratchet: the
 # VNC password (and its `service.vnc_password_source` code) existed only to feed VNC Authentication —
 # DES over eight bytes — and the transport moved to a 0600 unix socket where the kernel decides who
@@ -408,6 +408,17 @@ def main() -> int:
         declared = dict(re.findall(r"'([\w.]+)':\s*'((?:[^'\\]|\\.)*)'", block.group(1)))
         for code, entry in foreign_entries.items():
             if entry["emitter"] != "pw-executor":
+                continue
+            # ⚠ APP_MESSAGES is the APPLICATION channel's table (ADR-067) — the site's own console,
+            # errors and failed requests, rendered by attachAppCapture in server.ts. The browser
+            # service writes a different channel through a different table: sentence BUILDERS in
+            # svcjournal.ts, whose agreement with this catalogue is checked by RUNNING them
+            # (tests/test_browser_journal_offline.py) rather than by comparing two literals. Before
+            # ADR-128 every pw-executor entry happened to be an `app.` one, so the two questions
+            # looked like one; `service.live_claim_conflict` is the first that is not, and requiring
+            # it in APP_MESSAGES would have meant declaring a service sentence in the application
+            # table purely to satisfy a check.
+            if entry.get("cat") != "app":
                 continue
             if code not in declared:
                 fail(f"{code}: APP_MESSAGES has no template, so the emitter cannot render it")

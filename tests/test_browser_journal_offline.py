@@ -96,6 +96,11 @@ def main() -> int:
             "j.journal('service.started','info',"
             "  j.startedMsg('v9.9.9', j.supervisor(), 4242, ' — CDP 0.0.0.0:9223, live 0.0.0.0:9224'));"
             "j.journal('service.stopped','info', j.stoppedMsg('signal SIGTERM'));"
+            # ADR-128. Third builder, same contract: a sentence that drifts from its template renders
+            # as raw English for a Russian reader, and this one is emitted exactly when somebody is
+            # already confused about why the live view refuses their runs.
+            "j.journal('service.live_claim_conflict','warn',"
+            "  j.claimConflictMsg('run-alpha, run-beta','84DC6185CAFEBABE'));"
             "for (let i=0;i<200;i++) j.journal('service.started','info', j.startedMsg('v','manual',1,''));"
             % DIST
         )
@@ -127,8 +132,8 @@ def main() -> int:
                  "and a second one renaming the file discards the generation the first just made")
 
         records = [json.loads(l) for l in open(path, encoding="utf-8").read().splitlines() if l.strip()]
-        if len(records) != 202:
-            fail(f"{len(records)} records on disk, want 202 — lines are being lost or merged")
+        if len(records) != 203:
+            fail(f"{len(records)} records on disk, want 203 — lines are being lost or merged")
 
         first = records[0]
         for field in ("seq", "ts", "lvl", "cat", "code", "msg", "svc"):
@@ -145,7 +150,7 @@ def main() -> int:
                  f"`after` cursor, so a zero would be invisible on that path")
 
         # THE PROPERTY THAT BROKE IN PR-B, now checked on the Node side: message vs catalogue template.
-        for rec in records[:2]:
+        for rec in records[:3]:
             entry = catalogue["events"].get(rec["code"])
             if entry is None:
                 fail(f"{rec['code']} is emitted by the browser service and is not catalogued")
@@ -188,7 +193,11 @@ def main() -> int:
     # docker step of the verification matrix, where the record appears in the journal on a live stack;
     # this is what makes a silent removal fail in CI between those runs.
     src = open(os.path.join(PW, "src", "cdp-service.ts"), encoding="utf-8").read()
-    for code, when in (("service.started", "when it comes up"), ("service.stopped", "when it is signalled")):
+    for code, when in (("service.started", "when it comes up"),
+                       ("service.stopped", "when it is signalled"),
+                       # ADR-128: the branch that should now be unreachable is the one whose firing
+                       # matters most, so its call site is held to the same rule as the other two.
+                       ("service.live_claim_conflict", "when two runs claim one page")):
         if f"journal('{code}'" not in src:
             fail(f"cdp-service.ts does not journal {code} {when} — the writer exists and the service "
                  f"does not call it, which is indistinguishable from having no writer at all")
@@ -206,7 +215,7 @@ def main() -> int:
     if failures:
         print_failures()
         return 1
-    print("browser journal: OK (202 records in one file, 0640/0750, svc=browser, seq from 1, "
+    print("browser journal: OK (203 records in one file, 0640/0750, svc=browser, seq from 1, "
           "messages match their catalogue templates, unwritable path survived, and cdp-service calls it)")
     return 0
 

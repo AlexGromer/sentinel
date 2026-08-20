@@ -86,6 +86,22 @@ export function stoppedMsg(reason: string): string {
   return `Service browser stopped: ${reason}`;
 }
 
+/**
+ * The `service.live_claim_conflict` sentence — two runs declaring ONE page (ADR-128).
+ *
+ * WHY A RARE EVENT GETS A CODE RATHER THAN A LOG LINE. Until ADR-128 this was the topology: in
+ * CDP-attach mode every run adopted `pages()[0]`, so a second concurrent run announced the first
+ * one's target by construction (measured live: both `84DC6185`). A run now opens its own page, which
+ * makes the collision UNREACHABLE in a deployment whose parts agree — and that is exactly what turns
+ * it from noise into a signal. If it fires now, the executor driving this service is older than
+ * ADR-128, and the symptom a person will actually meet is "the live view refuses both of my runs"
+ * with the cause on stderr of a container nobody is tailing. A code puts it in the deployment's own
+ * record, where the hub, the CLI and the API can all read it.
+ */
+export function claimConflictMsg(runs: string, target: string): string {
+  return `Runs ${runs} claimed one browser page ${target} — the live view cannot say which of them it shows`;
+}
+
 /** Append one record. Never throws; never blocks on anything but the write itself. */
 export function journal(code: string, lvl: string, msg: string): void {
   const dir = path.join(stateDir(), 'logs');

@@ -1995,6 +1995,14 @@
       "en": "{actor} took the mouse and keyboard on screen {addr} — from here the page is driven by a person, not by the run",
       "emitter": "control-api"
     },
+    "service.live_claim_conflict": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Прогоны {runs} заявили одну страницу браузера {target} — живой вид не может сказать, чей это кадр",
+      "en": "Runs {runs} claimed one browser page {target} — the live view cannot say which of them it shows",
+      "emitter": "pw-executor"
+    },
     "service.store_unreachable": {
       "lvl": "warn",
       "cat": "service",
