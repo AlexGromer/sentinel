@@ -44,7 +44,7 @@ The same thing under different names is folded explicitly: `store` = `store-gate
 | **agentctl** (the run's executable) | ALL runs | ⚠ **the deployment stays silent**: `POST /v1/runs` is accepted with 202, the run fails with `fork/exec …: no such file or directory`, and the run record carries `state: failed` with `exit_code: 0` | the UI, the journal, the list — all "healthy" | ❌ **`status: ready`** — there is NO probe for its own executable → `[READYZ-BLIND-TO-AGENTCTL]` | ❌ only `service.api_call POST /v1/runs → 202` |
 | **configuration** (`config`) | the deployment's saved settings | the Health view shows `FAILED` with the reason `no config stored; run the setup wizard` | everything else; a run starts with the parameters from its request | ✅ `config: error`/`skipped` with a reason | — |
 | **browser-vnc** (`vnc`) | the "Screen" mode, the real cursor, taking the mouse | the Screen tab prints the reason and the command: "the screen is unavailable in this deployment: no VNC screen configured (CONTROL_API_VNC_SOCK is unset)" + `docker compose --profile vnc up -d browser-vnc` | every other live mode; the "Video" tab shows the headless browser | ✅ `vnc: skipped` with a reason | — |
-| **webui** | serving the pages on 8088 | the page does not open; ⚠ **not measured** — I did not break it | control-api and all its routes; pages are also served by control-api itself when `CONTROL_API_SERVE_UI=1` | ❌ no probe | — |
+| **webui** | serving the hub's pages on 8088 | ⚠ **the product says nothing**: the browser shows a connection error and that is all — no reason, no hint. Measured: before stopping it `webui:8088` → **200** with the hub markup, after → `ENOTFOUND` | control-api and all its routes (`/healthz` 200, `/readyz` unchanged), `agentctl` in full; control-api serves the pages itself when `CONTROL_API_SERVE_UI=1` | no probe — and that is a **declared decision**, not an omission: `componentsWithoutProbe` (`readyz.go:82`) gives three reasons — in modes 1 and 3 there is no webui process at all (ADR-064), in mode 2 it is a static file server with no state to be unready about, and a browser reaching it does not go through this API | — |
 | **pw-executor** (inside a run) | browser steps | a step error classified as `tool`, the run stops | control-api and the next run | ❌ no probe of its own: it lives inside the run's process, not as a service | writes `service.started`/`stopped` on behalf of the browser service |
 | **control-api** | HTTP control, the UI, spawning runs | nothing answers | `agentctl` from a terminal works in full | — (it is the one that answers) | ✅ `service.started`/`service.stopped` |
 
@@ -83,7 +83,6 @@ yield seven). In replay a frame is captured only AT A FAILURE (`brain/replay.py:
 - **A live target of 50+ steps has not been found.** Point 9 of the campaign is open work. The
   `testdata/site-spa` fixture (80 states, the crawl stalls at 40 steps, coverage 0.5067) does not
   replace it: `file://` has no network latency.
-- **The death of `webui` was not measured** — the only row without a measurement, and it is marked.
 - **Pressing every button was not completed:** of 85 controls 8 are reachable immediately, 53 sit in
   collapsed panels, and 3 were skipped as destructive (`Sign out` · `new conversation` · `Clear`).
   → `[SMOKE-COUNTS-BUTTONS-BUT-DOES-NOT-PRESS]`.
