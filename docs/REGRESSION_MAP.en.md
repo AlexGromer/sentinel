@@ -103,7 +103,7 @@ code in CI are out of scope here — that is `docs/TESTING.md`.
 | exploration loops on an element that will not act | **yes** (ADR-070) | a per-element retry budget in `brain/graph.py`; events `plan.element_blacklisted`, `plan.unactionable_elements` | unchanged | logs + the reason it stopped | — |
 | the token budget is exhausted | **yes** | `brain/runcontrol.py` → `plan.orchestrator_abort` | unchanged | logs + token metrics | — |
 | the store is not running | **yes** (ADR-069) | five list endpoints carry `store:false` + a `store_reason` that names the remedy | — | a banner in the UI beside the data | — |
-| degradation caused by a local model (14B/7B structure worse than a cloud one) | **no** | — | — | — | `RISK-002`, `GAP-VERIFY-*` |
+| degradation caused by a local model (14B/7B structure worse than a cloud one) | **no** | — | — | — | `GAP-RISK-002`, `GAP-VERIFY-*` |
 
 **The section's key weakness:** "silent degradation" is detected but stays in the logs. A run on the
 heuristic instead of the LLM is externally indistinguishable from a run on the LLM.
@@ -137,7 +137,7 @@ The thing the product exists for.
 |---|---|---|---|---|---|
 | a step did not execute | **yes** | `brain/replay.py` | **1** | verdict + step breakdown | — |
 | the page's accessibility tree changed | **yes, authoritatively** | `brain/replay.py::_a11y_hash` — a hash of the ARIA snapshot; compared on **first** landing on a page, symmetrically in `baseline` and `replay`, so a later click cannot shift the golden | **2** | verdict + `regressions[]` | — |
-| the page screenshot changed | **yes, advisory** | a screenshot hash; by default it does **not** affect the exit code — cross-process render instability would otherwise produce false failures | unchanged (default) | `regressions[]` | `RISK-009` |
+| the page screenshot changed | **yes, advisory** | a screenshot hash; by default it does **not** affect the exit code — cross-process render instability would otherwise produce false failures | unchanged (default) | `regressions[]` | `GAP-RISK-009` |
 | the application threw a JS exception | **yes, and into the verdict (ADR-072)** | `app.js_error`, emitted by `pw-executor/src/server.ts::attachAppCapture` → `p.on('pageerror')` (the human-readable text of a code lives in `server.ts::APP_MESSAGES`); the per-code tally comes from `browser.appFaults` and the brain files it under `app_faults` | `0` by default; `1` under `SENTINEL_FAIL_ON_APP_ERRORS=N` | the `pass_with_app_faults` verdict + `app_faults` in the report + `<system-err>` on the suite in `junit.xml` | — |
 | a console error/warning | same | `app.console_error` / `app.console_warn`, `server.ts::attachAppCapture` → `p.on('console')` | same (⚠ warnings are NOT in `errors` — gating on them would make the feature unusable) | same | — |
 | an application request failed | same | `app.request_failed`, `server.ts::attachAppCapture` → `p.on('requestfailed')` | same | same | — |
@@ -191,7 +191,7 @@ touch the backend directly.
 drift. Without a "structural versus volatile" split, extending checks to data would produce false
 `exit 2`.
 
-**Byte-stability of screenshots** (`RISK-009`) is unproven across separate browser processes — which
+**Byte-stability of screenshots** (`GAP-RISK-009`) is unproven across separate browser processes — which
 is why visual regression remains advisory.
 
 **Cross-browser.** ADR-036: Chromium-only by design. `connectOverCDP` exists for Chromium only, and
