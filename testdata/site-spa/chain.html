@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sentinel SPA fixture — checkout chain</title>
+  <link rel="stylesheet" href="app.css">
+  <!--
+    ENTRY POINT 3 of 3 — the checkout chain on its own, no section rail.
+    Run against this file to reproduce M4: a branch point, one branch taken, and
+    no way back to the other one — no back verb, no frontier entry, no candidate.
+    The run stops with budget left over and says nothing about what it missed.
+  -->
+</head>
+<body data-start="#/checkout/pick" data-rail="off">
+  <header class="app-head" id="app-head"></header>
+  <div id="app-rail"></div>
+  <main id="view" aria-label="application"></main>
+  <footer class="derived">
+    <p>Derived inventory: <span id="derived-counts">(script did not run)</span></p>
+    <p>
+      Frontier decoy: <a href="chain.html">Start over</a> — a genuine "go home" link on the page the
+      walk is standing on. It is dropped twice over: this path is already in
+      <code>visited_paths</code>, and it equals the current path. Returning to the branch point is
+      not blocked by the missing back verb alone.
+    </p>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sentinel SPA fixture — order catalogue</title>
+  <link rel="stylesheet" href="app.css">
+  <!--
+    ENTRY POINT 2 of 3 — the order catalogue on its own, no section rail.
+    Run against this file to reproduce M2 (twelve cards, one identity) and
+    M6 (the run declares itself CONVERGED having opened one card of twelve).
+
+    The rail is off here for a measurement reason, not a cosmetic one: with the
+    rail present the walk sweeps eight sections before it ever touches a card, and
+    the run ends on the step budget instead of on convergence. One terminal reason
+    per run — so the reasons get one entry point each.
+  -->
+</head>
+<body data-start="#/orders" data-rail="off">
+  <header class="app-head" id="app-head"></header>
+  <div id="app-rail"></div>
+  <main id="view" aria-label="application"></main>
+  <footer class="derived">
+    <p>Derived inventory: <span id="derived-counts">(script did not run)</span></p>
+    <p>
+      Frontier decoy: <a href="#/order/7">order ORD-1007 by fragment</a> — a REAL anchor to a real
+      card route. It still never enters the frontier: the fragment is stripped before comparison,
+      so it normalizes to this very page. A card is not addressable by anything the crawler keeps.
+    </p>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
