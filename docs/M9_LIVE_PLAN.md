@@ -38,8 +38,8 @@
 | Проверка | Команда/действие | Подтверждает |
 |---|---|---|
 | explore/author | `bin/agentctl run --goal "…" --target file://$PWD/testdata/fixtures/l3.html` | M9.1/M9.2 — real-LLM grounded-план, не галлюцинирует селектор |
-| replay + heal | прогнать → дрейфануть DOM (site→site-v2) → `run --replay --plan runs/<id>/plan.json` | M2/M3 — self-heal L1–L6 вживую + confidence-gate (**RISK-002!**) |
-| determinism | 2× golden в отдельных процессах → сравнить байты | RISK-009 — byte-stability скриншотов |
+| replay + heal | прогнать → дрейфануть DOM (site→site-v2) → `run --replay --plan runs/<id>/plan.json` | M2/M3 — self-heal L1–L6 вживую + confidence-gate (**GAP-RISK-002!**) |
+| determinism | 2× golden в отдельных процессах → сравнить байты | GAP-RISK-009 — byte-stability скриншотов |
 | budget-kill | низкий бюджет → degradation planner→heuristic | M8 — real budget-ceiling |
 | co-pilot UI | поднять control-api → открыть `docs/index.html` → Tests→Live на run_id | M14 — AG-UI-timeline chips, hitl-баннер, promote scenario→test |
 | auto-HITL | `SENTINEL_AUTO_HITL_THRESHOLD=2` + спровоцировать heal-неудачи | M14 — авто-эскалация (graph-modes **и** replay: сигнал `hitl_needed`, #87) |
@@ -60,9 +60,29 @@
 > Минимальный вариант без скрипта (только если он почему-то не запускается): скопируй `runs/<id>/*.json` + `LIVE_NOTES.md`, **без** `trace.zip`, `checkpoint.db` и `storage_state*.json`, и пробеги глазами на предмет введённых в формы значений.
 
 ## D. Exit-критерии M9-LIVE
+
+> **Веха ОТКРЫТА, и отметки ниже это отражают** (сверено 2026-08-21, `[DOCS-REGISTERS]`). Статус вехи целиком держит
+> одна запись — `[M9-LIVE]` в `BACKLOG.md`; она же перечисляет пять проверок, не делавшихся ни разу, и предусловие
+> каждой (ключ облачного провайдера · настоящий MCP-хост · монопольный стенд под длинную кампанию). Пустой `[ ]` здесь
+> значит «не сделано», а не «забыли обновить»: у каждого пункта ниже записано, чем это подтверждается. Где
+> подтверждения нет — так и написано; догадка в реестре опаснее открытого пункта.
+
 - [ ] Real-LLM explore/author проходит на L1–L6 (grounded, exit 0, `planner: llm` в транскрипте — не heuristic).
+      **Статус неизвестен.** Живой прогон по L1–L6 на локальной модели БЫЛ (`[M9-LIVE-CAL]`): L1/L4 прошли,
+      L2/L3/L5/L6 дали exit 1, обе причины закрыты веткой `fix/m9live-llm-planner-robustness` (`abf6c15`, 2026-07-23).
+      Повторного — уже зелёного — прогона в репозитории не записано: `runs/` не под гитом, `LIVE_NOTES.md` в дереве нет.
 - [ ] Live heal чинит дрейф с корректным confidence-gate (не ложный auto-heal).
-- [ ] Golden byte-stable дважды (RISK-009 flip).
+      **Статус неизвестен** — записи о таком прогоне в репозитории нет. Смежное: `GAP-RISK-002` открыт (порогов никто не
+      калибровал), `[PROD-HEAL-VERDICT]` частичный.
+- [ ] Golden byte-stable дважды (GAP-RISK-009 flip).
+      **ОТКРЫТ, подтверждено.** `[M9-LIVE]` п.(4): доказательство не снималось, нужен монопольный стенд; без него флип
+      дефолта делать нельзя, и `SENTINEL_VISUAL_AUTHORITATIVE` остаётся opt-in. Замер может ОПРОВЕРГНУТЬ саму идею —
+      это будет результат кампании, а не её провал.
 - [ ] Budget-kill срабатывает с graceful degradation.
+      **Статус неизвестен** — записи о живой проверке нет; offline-ветка покрыта, живая не подтверждена ничем.
 - [ ] Co-pilot UI: live AG-UI-timeline + promote + auto-HITL наблюдаемы.
-- [ ] Собраны реальные числа для RISK-002 (confidence) + RISK-003 (cost/латентность).
+      **Статус неизвестен** — `ui-smoke` в CI снимает интерфейс на реальном развёртывании, но это не те три вещи;
+      подтверждения по ним нет.
+- [ ] Собраны реальные числа для GAP-RISK-002 (confidence) + GAP-RISK-003 (cost/латентность).
+      **ОТКРЫТ, подтверждено.** `[RISK-002]` и `[RISK-003]` в `BACKLOG.md` открыты; вторая половина расщеплена замером
+      2026-08-16 — мишени в 50+ страниц в дереве НЕТ, поэтому число не с чего снимать до `[PROD-FIXTURE-SPA]`.

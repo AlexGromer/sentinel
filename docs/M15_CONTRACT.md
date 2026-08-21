@@ -20,7 +20,7 @@ M15 = **подключить** (extract → ingest → HTTP) + **отрисов�
 | steps · healed · failed · regressions | `heal-report.json` (replay/baseline) |
 | coverage | `plan.json` `coverage_achieved` (authoring; у replay нет — per-mode) |
 | duration_ms | `FinishedAt − StartedAt` (RFC3339, секундная точность) |
-| **token-cost ($)** | **→ M15.1** (нужна brain-эмиссия токен-тоталов + price-таблица; валидация live = RISK-003) |
+| **token-cost ($)** | **→ M15.1** (нужна brain-эмиссия токен-тоталов + price-таблица; валидация live = GAP-RISK-003) |
 
 `persistResult(rec)` в finish-горутине (`cmd/control-api/main.go`, рядом с `persistScenario`): fail-open
 (битый/отсутствующий артефакт не рушит прогон/горутину) → `saveResult` (ResultRecord) + `ingestMetrics`
@@ -63,7 +63,7 @@ ADR-045 (adapters/SPI) → ADR-056 (module-registry).
 
 ## 7. Отложено
 
-- token-cost ($) — **✅ доставлено в M15.1**: brain эмитит per-run токен-тоталы (`budget.summary()`) в `plan.json`/`heal-report.json`; control-API ингестит `tokens_total/prompt/completion`+`cost_usd` (best-effort: локальные модели → $0, счётчики точны); SPA — тренд-спарклайны Tokens+Cost. Снимает RISK-003.
+- token-cost ($) — **✅ доставлено в M15.1**: brain эмитит per-run токен-тоталы (`budget.summary()`) в `plan.json`/`heal-report.json`; control-API ингестит `tokens_total/prompt/completion`+`cost_usd` (best-effort: локальные модели → $0, счётчики точны); SPA — тренд-спарклайны Tokens+Cost. **Разблокирует ЗАМЕР по `GAP-RISK-003`** — сам риск ОТКРЫТ. ⚠ Здесь стояло «Снимает GAP-RISK-003»; поправлено 2026-08-21 (`[DOCS-REGISTERS]`): M15.1 дал ЭМИССИЮ токен-чисел, а замер стоимости на 50+-страничном SPA не сделан — мишени такого размера в дереве нет (`[PROD-FIXTURE-SPA]`). Статус — в `GAPS.md`.
 - Sub-second duration (сейчас RFC3339 секундная точность → duration кратна 1000 мс).
 - `QueryMetrics` окно-по-времени в UI (RPC есть; UI использует `Trends`).
 

@@ -55,7 +55,7 @@ service RunControl {
 message RunEvent { string run_id; string node; int64 prompt_tokens; int64 completion_tokens; string status; }
 message Control  { bool abort; string reason; }
 ```
-Стабы: Python (`grpc_tools.protoc`, offline) + Go (plugin, user-run); **proto-hash assert** (GAP-RISK-008).
+Стабы: Python (`grpc_tools.protoc`, offline) + Go (plugin, user-run); **proto-hash assert** (GAP-RISK-008). ⚠ **Поправка 2026-08-21 (`[DOCS-REGISTERS]`): assert обещан контрактом и не исполняется.** Гейт воспроизводимости написан (ADR-109 `internal/store/pb/regen_test.go`, ADR-126 `internal/orchestrator/pb/regen_test.go`), но в CI молча скипается; `GAP-RISK-008` открыт, единица работы — `[PROTO-STUB-GATE]`.
 brain — gRPC-client к orchestrator (gated на `ORCH_ADDR`; не задан → standalone, budget только Python-side).
 
 ## (3b) Go компоненты (user-run build)

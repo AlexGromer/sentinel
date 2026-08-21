@@ -46,7 +46,7 @@ A precise per-config estimate is in the calculator `docs/calculators/vram.html`,
 
 ### Finding the minimum model on M9-LIVE
 
-1. Run the baseline set, capture the RISK-002 metrics (confidence and the unmatched rate on local models).
+1. Run the baseline set, capture the GAP-RISK-002 metrics (confidence and the unmatched rate on local models).
 2. Repeat the same test with planner `qwen3:8b` (parameter `LLM_MODEL_PLANNER=qwen3:8b`). If grounding and JSON validity hold, `qwen3:8b` becomes the recommended minimum.
 3. Use models at the VRAM ceiling (14B in Q5 or Q6, vision 15B, 32B on a larger GPU) only if the data shows that 14B does not cope. That is a decision by data, not up front.
 
@@ -189,7 +189,7 @@ What it checks: an end-to-end scenario over 3 pages with a sessionStorage handof
 Expected result: on the timeline the plan goes through `l4.html`, then `l4-dashboard.html`, then `l4-billing.html`, the modal confirmation is clicked; verdict 0. Conclusion: the tool drives a multi-step business scenario with navigation between pages.
 
 ### L5: tabs and shadow DOM
-What it checks: ARIA tabs, async content injection (after 600 ms), and elements in the shadow DOM (RISK-005).
+What it checks: ARIA tabs, async content injection (after 600 ms), and elements in the shadow DOM (GAP-RISK-005).
 - Target: `file:///app/testdata/fixtures/l5.html`
 - Goal: `switch to the tab with dynamic content, wait for the elements to load, then open the color picker`
 - Mode: `goal`
@@ -208,7 +208,7 @@ Expected result: the new tabs are reflected in `browser.tabs`, switching between
 1. Run the L2 run through the UI (as above) - a plan appears in Tests history.
 2. Replay the same plan against a changed version of the page: in Tests pick the run and click Re-run (that is replay), or set the target to a changed copy of the fixture (with a renamed id or a different element order).
 
-Expected result: if a locator broke, the run record (`heal-report.json`) shows the L1-L6 strategy and confidence; on a successful recovery the verdict is 0. Conclusion: the deterministic heal fixes a broken locator, the confidence gate fires (data for RISK-002).
+Expected result: if a locator broke, the run record (`heal-report.json`) shows the L1-L6 strategy and confidence; on a successful recovery the verdict is 0. Conclusion: the deterministic heal fixes a broken locator, the confidence gate fires (data for GAP-RISK-002).
 
 ## Phase 2: run against real public sites
 
@@ -274,7 +274,7 @@ Open the file `.\runs\<id>\llm-transcript.jsonl` (for a run from the UI - `.\run
 ```powershell
 Select-String -Path .\runs\*\llm-transcript.jsonl -Pattern '"planner"' | Select-Object -First 3
 ```
-On local models 14B and 7B the FLAG and unmatched rate is higher than on cloud Opus and Sonnet: the thresholds AUTO 0.85 and FLAG 0.60 were tuned on cloud models. This is expected data for calibrating RISK-002 and RISK-003, not an error. For each run record in the file `runs\LIVE_NOTES.md`: the id, the model, the target, the expected and actual result, the exit code, the noticed deviations.
+On local models 14B and 7B the FLAG and unmatched rate is higher than on cloud Opus and Sonnet: the thresholds AUTO 0.85 and FLAG 0.60 were tuned on cloud models. This is expected data for calibrating GAP-RISK-002 and GAP-RISK-003, not an error. For each run record in the file `runs\LIVE_NOTES.md`: the id, the model, the target, the expected and actual result, the exit code, the noticed deviations.
 
 ## Collecting and transferring artifacts
 
@@ -348,11 +348,15 @@ The Python virtual environment must be at the repo root (`UV_PROJECT_ENVIRONMENT
 
 ## M9-LIVE acceptance criteria
 
+> This is a **worksheet for whoever runs the set**, not a status register: the boxes are ticked by the person running it.
+> The milestone's status lives in one record — `[M9-LIVE]` in `BACKLOG.md` (OPEN as of 2026-08-21); the item-by-item
+> breakdown with its evidence is `docs/M9_LIVE_PLAN.md` §D. An empty `[ ]` here does NOT mean «not done in the project».
+
 - [ ] Phase 1: explore and author via the web UI pass on l1-l6 (grounded, verdict 0, the `planner` field equals `llm`).
 - [ ] Phase 2: login, checkout, and the widget scenario pass via the web UI on at least three real sites.
 - [ ] a run is configured and observed in the UI: connection to control-api, the live timeline, the run in Tests history.
 - [ ] heal fixes the divergence with a correct confidence gate, without a false auto-heal.
 - [ ] chat in `/chat/`: the second turn yields a RESUME of the same conversation-id, the conversation is saved in `state\conversations.db`.
-- [ ] the golden is byte-stable twice (RISK-009).
+- [ ] the golden is byte-stable twice (GAP-RISK-009).
 - [ ] the budget limit fires with correct degradation.
-- [ ] real values for RISK-002 (confidence) and RISK-003 (cost and latency) are collected.
+- [ ] real values for GAP-RISK-002 (confidence) and GAP-RISK-003 (cost and latency) are collected.
