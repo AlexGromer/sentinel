@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sentinel SPA fixture — Acme Operations</title>
+  <link rel="stylesheet" href="app.css">
+  <!--
+    ENTRY POINT 1 of 3 — the whole application, rail included.
+    Run against this file to reproduce M1 (empty navigation frontier) and
+    M3 (a flat step budget that the site does not fit into).
+
+    There is not one navigational <a href> on this page. The three anchors in the
+    footer are DECOYS with a job: each is a link a reasonable author would expect
+    to feed the crawler's frontier, and each is dropped by a different clause of
+    the frontier rule. They are labelled, so a reader can check the claim.
+  -->
+</head>
+<body data-start="#/home" data-rail="on">
+  <header class="app-head" id="app-head"></header>
+  <div id="app-rail"></div>
+  <main id="view" aria-label="application"></main>
+  <footer class="derived">
+    <p>Derived inventory: <span id="derived-counts">(script did not run)</span></p>
+    <p>
+      Frontier decoys (none of these ever enters the navigation frontier):
+      <a href="#/orders">Orders by fragment</a> — the fragment is stripped, so this normalizes to
+      the page's own path and the rule's <code>nu != path</code> clause drops it ·
+      <a href="index.html">Home</a> — normalizes to the current path, which is already in
+      <code>visited_paths</code> ·
+      <a href="../site/index.html">the neighbouring fixture</a> — same <code>file://</code> origin,
+      but outside <code>base_origin</code>, which is a DIRECTORY prefix and not an origin.
+    </p>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

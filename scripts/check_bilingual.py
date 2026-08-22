@@ -53,6 +53,7 @@ SINGLE_LANGUAGE: set[str] = {
     # Test fixtures — README embedded inside testdata/; documents the HTML
     # fixture structure for developers only, not end-user documentation.
     "testdata/fixtures/README.md",
+    "testdata/site-spa/README.md",   # same reason: fixture-internal notes for developers
 }
 
 # POLICY exclusions — directories whose docs are deliberately single-language. This list states a

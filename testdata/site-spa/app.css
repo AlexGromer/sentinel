@@ -1,0 +1,79 @@
+/* Sentinel SPA fixture — shared stylesheet (no CDN, no webfont, file:// safe). */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, sans-serif;
+  background: #f8f9fa;
+  color: #212529;
+  padding: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+header.app-head { margin-bottom: 1rem; }
+h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+p.subtitle { color: #6c757d; font-size: 0.85rem; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+
+nav[aria-label="sections"] {
+  display: flex; flex-wrap: wrap; gap: 0.5rem;
+  background: #fff; padding: 0.6rem 0.75rem;
+  border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  margin-bottom: 1.25rem;
+}
+nav[aria-label="sections"] button {
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+  border: 1px solid #ced4da; background: #fff; color: #0d6efd;
+  border-radius: 6px; padding: 0.35rem 0.7rem;
+}
+nav[aria-label="sections"] button[aria-current="page"] {
+  background: #0d6efd; border-color: #0d6efd; color: #fff;
+}
+
+main {
+  background: #fff; border-radius: 10px; padding: 1.25rem;
+  box-shadow: 0 2px 12px rgba(0,0,0,.08); min-height: 12rem;
+}
+main h2 { font-size: 1.1rem; margin-bottom: 0.4rem; }
+main p.route { color: #6c757d; font-size: 0.8rem; margin-bottom: 1rem; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.controls button {
+  font: inherit; font-size: 0.9rem; cursor: pointer;
+  border: 1px solid #0d6efd; background: #0d6efd; color: #fff;
+  border-radius: 6px; padding: 0.45rem 0.9rem;
+}
+.controls button.secondary { background: #fff; color: #0d6efd; }
+
+ul.cards { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 1rem; }
+ul.cards li { border: 1px solid #dee2e6; border-radius: 8px; padding: 0.75rem; }
+ul.cards h3 { font-size: 0.95rem; margin-bottom: 0.2rem; }
+ul.cards p { font-size: 0.8rem; color: #6c757d; margin-bottom: 0.6rem; }
+ul.cards button {
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+  border: 1px solid #0d6efd; background: #fff; color: #0d6efd;
+  border-radius: 6px; padding: 0.3rem 0.8rem;
+}
+
+[role="tablist"] { display: flex; gap: 0.25rem; border-bottom: 2px solid #dee2e6; margin-top: 1rem; }
+[role="tab"] {
+  font: inherit; font-size: 0.85rem; cursor: pointer;
+  border: none; background: none; color: #6c757d;
+  border-bottom: 2px solid transparent; padding: 0.5rem 0.9rem;
+}
+[role="tab"][aria-selected="true"] { color: #0d6efd; border-bottom-color: #0d6efd; }
+[role="tabpanel"] { padding: 0.9rem 0.2rem; font-size: 0.9rem; }
+
+/* A modal state renders the page underneath as INERT TEXT, on purpose — see README §"Модальные
+   состояния". A live overlay would test Playwright actionability, not crawl convergence. */
+.inert-under { color: #adb5bd; font-size: 0.85rem; border-bottom: 1px dashed #dee2e6; padding-bottom: 0.75rem; margin-bottom: 0.75rem; }
+[role="dialog"] { border: 1px solid #adb5bd; border-radius: 10px; padding: 1rem; background: #f1f3f5; }
+[role="dialog"] h2 { font-size: 1rem; }
+
+form.settings { margin-top: 1rem; display: grid; gap: 0.5rem; max-width: 22rem; font-size: 0.9rem; }
+form.settings label { display: block; font-size: 0.8rem; color: #495057; }
+form.settings input, form.settings select { font: inherit; padding: 0.3rem 0.5rem; border: 1px solid #ced4da; border-radius: 6px; width: 100%; }
+
+footer.derived {
+  margin-top: 1.25rem; font-size: 0.75rem; color: #6c757d;
+  border-top: 1px solid #dee2e6; padding-top: 0.6rem;
+}
+footer.derived a { color: #868e96; }
