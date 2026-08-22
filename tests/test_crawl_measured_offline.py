@@ -84,34 +84,38 @@ FLOOR_TRANSITIONS_PER_BUDGET = 3
 # that a `runs/` cleanup can take away. `reason` is the terminal transcript record's reason, and
 # `None` means the run wrote NO terminal record at all (see the budget test).
 def _portable_hash(steps: "list") -> str:
-    """`canonical_plan_hash`, но НЕ зависящий от места чекаута.
+    """`canonical_plan_hash` без того, что кодирует КАТАЛОГ ЧЕКАУТА.
 
-    ⚠ ЗАЧЕМ. `canonical_plan_hash` хеширует ВСЕ поля всех шагов (`brain/state.py:96`), а шаг №1 —
-    это `navigate` на `file://<абсолютный путь>/testdata/site-spa/…`. Значит сырой хеш кодирует
-    каталог, в котором лежит репозиторий. Замерено: фикстура переехала из рабочего дерева агента в
-    репозиторий — все семь наблюдаемых чисел совпали (40 шагов, coverage 0.5067, seen 75,
-    exercised 39, navigations 0, pages 1, reason None), а хеш разошёлся. В CI, где чекаут лежит по
-    `/home/runner/work/…`, этот гейт покраснел бы у КАЖДОГО прогона, и краснел бы не по делу.
+    ⚠ ЗАЧЕМ, И ПОЧЕМУ ОДНОЙ ЗАМЕНЫ ПУТИ МАЛО. Сырой `canonical_plan_hash` хеширует все поля всех
+    шагов (`brain/state.py`), а путь до фикстуры сидит в них ДВАЖДЫ:
+      1. в `intent`/`locator` первого шага — это `navigate` на `file://<абсолютный путь>`;
+      2. в `semantic_id` КАЖДОГО шага — `sha1(f"{path}|{role}|{name}")[:12]` (`state.py`).
+    Первое чинится подстановкой, второе — нет: это уже посчитанный хеш, и заменить в нём текст
+    нельзя. Замерено дважды: при переезде фикстуры из рабочего дерева в репозиторий и затем в CI,
+    где чекаут лежит по `/home/runner/work/...`. Оба раза совпали ВСЕ семь наблюдаемых чисел
+    (40 · 0.5067 · seen 75 · exercised 39 · navigate 0 · pages 1 · reason None) и разошёлся только
+    хеш. То есть гейт в этом виде не мог пройти в CI НИКОГДА.
 
-    Выбрасывать хеш нельзя — он и есть та проверка, которая доказывает, что offline-реплика
-    воспроизводит настоящий Chromium пошагово. Поэтому путь репозитория заменяется меткой ДО
-    хеширования, с обеих сторон сравнения: утверждение сохраняется целиком, а переносимость
-    появляется.
+    Поэтому `semantic_id` из сравнения убран, а путь заменён меткой. Утверждение при этом не
+    слабеет: `semantic_id` — чистая функция от `(path, role, name)`, и все три сравниваются и так —
+    путь нормализованным URL первого шага, роль и имя локатором. Проверено мутацией: переименование
+    раздела, который реально в шагах, гейт по-прежнему роняет.
     """
-    payload = json.dumps(steps, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    stripped = [{k: v for k, v in step.items() if k != "semantic_id"} for step in steps]
+    payload = json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.replace(_REPO, "<REPO>").encode()).hexdigest()
 
 
 LIVE = {
     "index.html": {"steps": 40, "coverage": 0.5067, "seen": 75, "exercised": 39, "navigations": 0,
                    "pages": 1, "reason": None,
-                   "plan_hash_portable": "53d6d44ad541007c3d6fa61f1a79654ad60b7ead3ec783978e0c778138351556"},
+                   "plan_hash_portable": "b31100e8ddafb0ed79b221373202f609f379a69cb229b1dcf69f745b0ceaffec"},
     "cards.html": {"steps": 7, "coverage": 1.0, "seen": 6, "exercised": 6, "navigations": 0,
                    "pages": 1, "reason": "converged",
-                   "plan_hash_portable": "2e1869689ddd3c2de74cf775b5fae4662bad92c66d9b1ed2760f0317829ff28f"},
+                   "plan_hash_portable": "7e8c661809ffb2e2e0cef23db202a5141e5e7bb061ed01bc1e7631f986b9d2c4"},
     "chain.html": {"steps": 5, "coverage": 0.6667, "seen": 6, "exercised": 4, "navigations": 0,
                    "pages": 1, "reason": "no_candidates",
-                   "plan_hash_portable": "75311e97b10a33c727eaf1d0801b35645a7c9c0814b5883ac565022245bd31ac"},
+                   "plan_hash_portable": "5678a80ec872165479226f000d028bbc90432fa9c46ea0905644bdb45ac63f1e"},
 }
 # The same target with the budget lifted (MAX_STEPS=200), measured live the same day: the walk goes
 # further and dies of something else. This is what makes M3 a statement about the BUDGET.
