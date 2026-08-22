@@ -45,7 +45,21 @@ type apiVerb struct {
 // apiVerbs is the CLI half of the one configuration/data model. Ordered as a person would look for
 // things, not as the mux registers them.
 var apiVerbs = []apiVerb{
-	{Verb: "health", Method: "GET", Path: "/readyz", Help: "readiness: store, LLM endpoint, config"},
+	// The Help does NOT enumerate the probes, and that is the point. It read "readiness: store, LLM
+	// endpoint, config" — true of the three checks /readyz had when this verb was written, and wrong
+	// by the time anyone read it. Measured 2026-08-22: cmd/control-api/readyz.go fills SIX entries in
+	// `checks` — store, config, llm, browser, orchestrator, vnc (readyz.go:374-408). A hand-copied
+	// list of another process's components is stale from the moment it is typed, and stale in the
+	// direction that hurts: it names FEWER components than the deployment has, so a person reads it
+	// and concludes the one they care about is not covered.
+	//
+	// The phrasing says whose list it is instead. handleReadyz (readyz.go:479) returns
+	// `{status, version, checks, probed_at}` and the SET of keys in `checks` is decided there, so the
+	// only correct thing to say here is that the answer carries the deployment's components — not
+	// which ones. (Components with no probe at all are declared in readyz.go's
+	// `componentsWithoutProbe` and are NOT in the response today; do not promise them here until they
+	// are.)
+	{Verb: "health", Method: "GET", Path: "/readyz", Help: "readiness: this deployment's components and each one's verdict, as the server reports them"},
 	{Verb: "health live", Method: "GET", Path: "/healthz", Help: "liveness only (no dependency probes)"},
 	// QA-REPORT-SERVICE (ADR-119). A Stream verb: the body is Prometheus text, so it is copied through
 	// untouched and redirected to a file — `agentctl metrics > scrape.prom`. The machine token this CLI
@@ -86,8 +100,19 @@ var apiVerbs = []apiVerb{
 	// token is what a CI job and a remote operator already hold.
 	{Verb: "service-log", Method: "GET", Path: "/v1/service-log",
 		Query: []string{"lvl", "code", "svc", "actor", "q", "limit"},
-		Help:  "the service journal: sign-ins, account/config changes, refusals, service start/stop (newest last)"},
-	{Verb: "events-catalog", Method: "GET", Path: "/v1/events-catalog", Help: "every event the brain can emit, with its bilingual phrasing"},
+		// Non-enumerating for the same measured reason as `health` above, and the drift here is larger:
+		// this Help named four kinds of record, and brain/events.json declares TWENTY `service.*` codes
+		// (measured 2026-08-22). The four it named are the ones that existed when it was written; the
+		// ones it does not name are `component_changed` — a component of the deployment changing
+		// health, the single most operationally interesting line in the file — and the whole
+		// `screen_*` family from LIVE-VNC. A person filtering by what the help lists never sees them.
+		Help: "the service journal: what happened to the DEPLOYMENT rather than to a target, newest " +
+			"last (--code/--svc/--actor narrow it; `agentctl events-catalog` lists every code)"},
+	// "the brain" was true when the catalogue only held the brain's events. Measured 2026-08-22:
+	// brain/events.json declares 168 codes, and 20 of them are `service.*` — emitted by control-api
+	// (journalEvent) and by pw-executor, not by the brain at all. A help that names the wrong producer
+	// sends a person looking for a code in the wrong process's logs.
+	{Verb: "events-catalog", Method: "GET", Path: "/v1/events-catalog", Help: "every event code this product can emit, whichever process emits it, with its bilingual phrasing"},
 
 	{Verb: "scenarios list", Method: "GET", Path: "/v1/scenarios", Query: []string{"limit", "offset"}, Help: "saved scenarios"},
 	{Verb: "scenarios show", Method: "GET", Path: "/v1/scenarios/{id}", Arg: "scenario_id", Help: "one scenario"},
