@@ -928,12 +928,34 @@ func (s *server) spawnRun(req runRequest) *run {
 			// subscribers and close the log files, or the UI waits forever on a run that will never speak.
 			s.mu.Lock()
 			rec.State, rec.Error = "failed", err.Error()
+			// [READYZ-BLIND-TO-AGENTCTL] / W6: THE EXIT CODE IS SET HERE, not left at Go's zero value.
+			// 0 is the one number in this field that means "finished cleanly", and the record carried it
+			// while the state beside it said `failed`: GET /v1/runs/{id} answered `state: failed,
+			// exit_code: 0`. The run.finished frame five lines below has emitted -1 for this case since
+			// ADR-089 — the STRUCT simply never agreed with the frame, so a client that polled and a
+			// client that listened were told different things about one run.
+			rec.ExitCode = -1
 			rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 			// HEALTH-004: a run that could not be spawned is OURS. Set before upsertRun so the stored
 			// row and the frame below say the same thing about the same run.
 			rec.FaultDomain = faultDomain("failed", -1, "")
 			finishedAt := rec.FinishedAt
+			owner := rec.Owner
 			s.mu.Unlock()
+			// HEALTH-005 / [READYZ-BLIND-TO-AGENTCTL]: measured, the service journal held exactly ONE
+			// line about this — `service.api_call POST /v1/runs → 202`, the line that makes the
+			// deployment look like it worked. The failure belongs to the SERVICE, not to this run: it is
+			// the same failure probeAgentctl now predicts, and it is identical for every run this process
+			// will ever accept. Recording it only in the run's own stream would hide it where nobody
+			// looks, because a run that produced no output is a run nobody opens.
+			//
+			// journalSubject rather than journalEvent, and the subject is the run's OWNER: an ownerless
+			// service event is admin-only (svcjournal_read.go), so a non-admin account whose run just
+			// died would have been unable to read the one record explaining why. `nil` for the request —
+			// this goroutine outlives it, and the caller is already named by the owner.
+			s.journalSubject(codeRunSpawnFailed, "warn", map[string]string{
+				"run_id": rec.ID, "path": s.agentctl, "reason": err.Error(),
+			}, nil, owner)
 			if s.store != nil {
 				s.store.upsertRun(rec)
 			}
@@ -967,7 +989,10 @@ func (s *server) spawnRun(req runRequest) *run {
 			if ee, ok := err.(*exec.ExitError); ok {
 				rec.State, rec.ExitCode = "done", ee.ExitCode() // structured exit (0/1/2/3) is a valid outcome
 			} else {
-				rec.State, rec.Error = "failed", err.Error() // could not spawn (agentctl missing, etc.)
+				// -1 for the same reason as the failed spawn above: `failed` beside `exit_code: 0` reads
+				// as a clean exit. exitForEvent below already compensated for the FRAME; the struct that
+				// GET /v1/runs/{id} serialises did not.
+				rec.State, rec.ExitCode, rec.Error = "failed", -1, err.Error()
 			}
 		}
 		// Snapshot the terminal state for the AG-UI event under the lock; append outside it (below).
@@ -1025,6 +1050,12 @@ func (s *server) spawnRun(req runRequest) *run {
 	}()
 	return rec
 }
+
+// codeRunSpawnFailed is catalogued in brain/events.json (emitter: control-api). A named constant
+// rather than an inline string for the same reason as codeReportFailed below:
+// tests/test_event_catalog_offline.py finds codes by regexing quoted literals out of cmd/control-api,
+// and a code spliced into a longer expression is invisible to it.
+const codeRunSpawnFailed = "service.run_spawn_failed"
 
 // codeReportFailed is catalogued in brain/events.json (emitter: control-api).
 const codeReportFailed = "test.report_failed"

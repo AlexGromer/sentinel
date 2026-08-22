@@ -24,9 +24,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	eventcatalog "github.com/AlexGromer/sentinel/brain"
 	"github.com/AlexGromer/sentinel/internal/svclog"
@@ -161,6 +163,39 @@ func TestEveryServiceMessageMatchesItsCatalogueTemplate(t *testing.T) {
 	}
 	call(http.MethodDelete, "/v1/users/"+made.UserID, "", s.token)
 
+	// W6: a run whose spawn CANNOT happen. Driven here rather than trusted, because the wording of a
+	// code nobody produces in this test is unchecked, and that is exactly how six codes came to
+	// disagree with the catalogue in the first place.
+	//
+	// ⚠ LAST, AND THE PATH IS NEVER RESTORED. The first version broke s.agentctl, drove the call and
+	// put the real path back — and `go test -race` caught it at once: the restore raced the spawn
+	// goroutine, which reads s.agentctl to name the executable in the record. In the product the field
+	// is written once in main() before the listener starts and never again, so there is nothing to fix
+	// there; in a test that mutates it, the only safe mutation is one nothing takes back.
+	//
+	// ⚠ And the wait is on the run's STATE, not on a sleep: a sleep long enough to be reliable is also
+	// long enough to hide the case where the record is never written at all.
+	s.agentctl = filepath.Join(s.repo, "bin", "gone")
+	spawnRec := httptest.NewRecorder()
+	spawnReq := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(`{"target":"file:///x.html"}`))
+	spawnReq.Header.Set("Authorization", "Bearer "+s.token)
+	mux.ServeHTTP(spawnRec, spawnReq)
+	var spawned struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(spawnRec.Body.Bytes(), &spawned); err != nil || spawned.RunID == "" {
+		t.Fatalf("could not create the run whose spawn must fail: %s", spawnRec.Body.String())
+	}
+	for i := 0; i < 300; i++ {
+		s.mu.RLock()
+		st := s.runs[spawned.RunID].State
+		s.mu.RUnlock()
+		if st != "running" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// --- and the four that only main() emits, through the functions main() calls -----------------
 	direct := map[string]string{
 		"service.started":           startedMsg("dev", "manual", 4242, " — addr: 127.0.0.1:8090"),
@@ -194,6 +229,7 @@ func TestEveryServiceMessageMatchesItsCatalogueTemplate(t *testing.T) {
 		"service.logout", "service.account_created", "service.config_changed", "service.foreign_row",
 		"service.account_deleted",
 		"service.started", "service.stopped", "service.token_source", "service.store_unreachable",
+		"service.run_spawn_failed",
 	}
 	var missing []string
 	for _, c := range want {

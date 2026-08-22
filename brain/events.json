@@ -1875,6 +1875,14 @@
       "en": "Service {svc} stopped: {reason}",
       "emitter": "control-api"
     },
+    "service.run_spawn_failed": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Прогон {run_id} НЕ ЗАПУСТИЛСЯ: не удалось выполнить {path} — {reason}. Запрос был принят с кодом 202, но процесса не возникло; это НАША поломка, а не находка в приложении",
+      "en": "Run {run_id} NEVER STARTED: could not execute {path} — {reason}. The request was accepted with 202, but no process ever came into being; this is OUR breakage, not a finding about the application",
+      "emitter": "control-api"
+    },
     "service.api_call": {
       "lvl": "debug",
       "cat": "service",
