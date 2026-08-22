@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -601,5 +602,237 @@ func TestTheProberReportsTransitionsAndSaysNothingOnATickThatChangedNothing(t *t
 	}
 	if got[0].lvl != "info" {
 		t.Fatalf("a component recovering must be info, got %q", got[0].lvl)
+	}
+}
+
+// --- W6 / ADR-129: the run executable, and the components nobody probes -------------------------
+
+// readyFull decodes /readyz into (httpStatus, overallStatus, checks, unprobed). The second map is the
+// half W6 added; readyBody above stays as it was, because most tests have no business knowing about it
+// and a helper that forces every caller to destructure four values makes them worse.
+func readyFull(t *testing.T, s *server, token string) (int, string, map[string]readyCheck, map[string]readyCheck) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	s.mux().ServeHTTP(rec, req)
+	var body struct {
+		Status   string                `json:"status"`
+		Checks   map[string]readyCheck `json:"checks"`
+		Unprobed map[string]readyCheck `json:"unprobed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("/readyz body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	return rec.Code, body.Status, body.Checks, body.Unprobed
+}
+
+// The defect, stated as a test: on 2026-08-21 this exact deployment answered `ready`.
+func TestAMissingRunExecutableIsAnErrorAndNeverASkip(t *testing.T) {
+	s := newTestServer()
+	s.agentctl = filepath.Join(s.repo, "bin", "gone")
+	c := s.probeAgentctl()
+	if c.Status != "error" {
+		t.Fatalf("a missing run executable must be an error, got %q (%s)", c.Status, c.Detail)
+	}
+	// Stated separately from the line above, because `skipped` is the ONE wrong answer that would look
+	// reasonable next to probeBrowser and probeVNC — and it does not affect readiness, so the whole
+	// deployment would go on calling itself ready over a stack that fails every run it accepts.
+	if c.Status == "skipped" {
+		t.Fatal("skipped would leave `status: ready` standing over a deployment that cannot run anything")
+	}
+	if c.Detail == "" || c.DetailRU == "" {
+		t.Fatalf("both language halves are required for a fixed reason: %+v", c)
+	}
+}
+
+func TestTheRunExecutableErrorNamesThePathItTried(t *testing.T) {
+	s := newTestServer()
+	s.agentctl = filepath.Join(s.repo, "bin", "gone")
+	c := s.probeAgentctl()
+	// The path, not just the variable name: "CONTROL_API_AGENTCTL is wrong" tells an operator nothing
+	// they can act on, and the whole value of a health view is that the next step is in the answer.
+	if !strings.Contains(c.Detail, s.agentctl) || !strings.Contains(c.DetailRU, s.agentctl) {
+		t.Fatalf("neither half names the path it tried (%s): %+v", s.agentctl, c)
+	}
+}
+
+func TestARunExecutableThatIsADirectoryIsAnErrorThatSaysDirectory(t *testing.T) {
+	s := newTestServer()
+	dir := filepath.Join(s.repo, "bin", "adirectory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.agentctl = dir
+	c := s.probeAgentctl()
+	// Bought by a mutation: a probe written as bare os.Stat succeeds on a directory and reports `ok`,
+	// and the spawn then fails with `permission denied` that names no cause.
+	if c.Status != "error" || !strings.Contains(c.Detail, "directory") {
+		t.Fatalf("a directory must be refused as such: %+v", c)
+	}
+}
+
+func TestARunExecutableWithoutTheExecuteBitIsRefusedBeforeAnyRunIsAccepted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bit — executability is decided by PATHEXT, which is exactly what " +
+			"exec.LookPath asks there. The state this test constructs cannot exist on that platform, and " +
+			"a chmod that silently no-ops would make the test green for the wrong reason")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: the kernel lets uid 0 execute a file with no execute bit for any user, " +
+			"so this case cannot be constructed. Recorded rather than silently passing — a green tick " +
+			"here under root would be the exact false negative syscall.Access(X_OK) was rejected for")
+	}
+	s := newTestServer()
+	p := filepath.Join(s.repo, "bin", "unarmed")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o644); err != nil { // again, against a umask that could differ from the mode above
+		t.Fatal(err)
+	}
+	s.agentctl = p
+	c := s.probeAgentctl()
+	if c.Status != "error" {
+		t.Fatalf("a file with no execute bit must be refused: %+v", c)
+	}
+	// The MODE is in the text, because "cannot be executed" and "-rw-r--r--" are one sentence apart
+	// from "chmod +x it" and several minutes apart without it.
+	if !strings.Contains(c.Detail, "-rw-r--r--") {
+		t.Fatalf("the reason does not name the mode it found: %q", c.Detail)
+	}
+}
+
+func TestAPresentAndExecutableRunExecutableIsOkWithNothingToReport(t *testing.T) {
+	s := newTestServer() // the fixture writes a real 0755 stub at <repo>/bin/agentctl
+	c := s.probeAgentctl()
+	if c.Status != "ok" {
+		t.Fatalf("the fixture's real executable must probe ok: %+v", c)
+	}
+	// Success is SILENT here, like every other probe in this file. A detail on the ok path would put a
+	// path into the anonymous-caller answer for no gain, and it would read as a caveat where there is none.
+	if c.Detail != "" || c.DetailRU != "" {
+		t.Fatalf("an ok probe must have nothing to report: %+v", c)
+	}
+}
+
+func TestAnEmptyRunExecutablePathIsAnErrorBecauseMainCanNeverProduceOne(t *testing.T) {
+	s := newTestServer()
+	s.agentctl = ""
+	c := s.probeAgentctl()
+	// envOr gives a non-empty default unconditionally, so an empty path is not "unconfigured" — it is a
+	// caller that built a server without one. Reporting it is how that bug becomes visible instead of
+	// arriving later as a run that dies with an empty argv[0].
+	if c.Status != "error" {
+		t.Fatalf("an empty path must be an error, not a skip: %+v", c)
+	}
+}
+
+// The end-to-end shape of the defect: this is the assertion that would have been red on 2026-08-21.
+func TestReadyzIsNotReadyWhenTheRunExecutableIsMissing(t *testing.T) {
+	s := newTestServer()
+	s.agentctl = filepath.Join(s.repo, "bin", "gone")
+	code, status, checks, _ := readyFull(t, s, "secret-tok")
+	if code != http.StatusServiceUnavailable || status != "not_ready" {
+		t.Fatalf("a deployment that cannot spawn a run must not answer ready: HTTP %d %q %+v", code, status, checks)
+	}
+	if checks["agentctl"].Status != "error" {
+		t.Fatalf("agentctl is missing from checks, or is not an error: %+v", checks["agentctl"])
+	}
+}
+
+// Every recorded exemption is SERVED, not merely declared. Walked over the declaration itself rather
+// than over a list written here: a list would be a third statement of the same fact, and the one this
+// gate is meant to catch is the exemption nobody remembered to publish.
+func TestEveryComponentDeclaredWithoutAProbeIsNamedInTheReadyzBody(t *testing.T) {
+	if len(componentsWithoutProbe) == 0 {
+		t.Fatal("componentsWithoutProbe is empty, so every assertion below would pass over nothing")
+	}
+	s := newTestServer()
+	_, _, checks, unprobed := readyFull(t, s, "secret-tok")
+	for name, note := range componentsWithoutProbe {
+		c, ok := unprobed[name]
+		if !ok {
+			t.Errorf("%q is declared without a probe and does not appear in the /readyz body — the "+
+				"declaration is back to being read by gates and by nobody else", name)
+			continue
+		}
+		if c.Status != "unprobed" {
+			t.Errorf("%q carries status %q, want unprobed", name, c.Status)
+		}
+		if c.Detail != note.EN || c.DetailRU != note.RU {
+			t.Errorf("%q is served with a reason that is not the recorded one: %+v", name, c)
+		}
+		if strings.TrimSpace(c.DetailRU) == "" {
+			t.Errorf("%q has no Russian half — a Russian reader gets an English paragraph", name)
+		}
+	}
+	// The two maps are DISJOINT. This is the shape in which the feature would have defeated its own
+	// gate: had the exemptions been written into `checks` instead, the offline gate that derives the
+	// probe set by regexing checks["<name>"] would have read every unprobed service as probed.
+	for name := range unprobed {
+		if _, both := checks[name]; both {
+			t.Errorf("%q is both probed and declared unprobed — one of the two is a lie, and the "+
+				"declaration is the half that makes the other invisible to the offline gate", name)
+		}
+	}
+}
+
+func TestAnAnonymousCallerLearnsWhichComponentsAreUnprobedButNotWhy(t *testing.T) {
+	s := newTestServer()
+	_, _, _, anon := readyFull(t, s, "")
+	if len(anon) != len(componentsWithoutProbe) {
+		t.Fatalf("an anonymous caller sees %d unprobed component(s), want %d — the NAMES are published, "+
+			"because a map of empty strings reads as a failed render rather than a withheld one",
+			len(anon), len(componentsWithoutProbe))
+	}
+	for name, c := range anon {
+		if c.Detail != "" || c.DetailRU != "" {
+			t.Errorf("anonymous caller received a reason for %q: %q / %q — a reason translated into "+
+				"Russian is exactly as much topology as the English one", name, c.Detail, c.DetailRU)
+		}
+	}
+	_, _, _, authed := readyFull(t, s, "secret-tok")
+	for name, c := range authed {
+		if c.Detail == "" {
+			t.Errorf("an authenticated caller must learn why %q is unprobed, and got nothing", name)
+		}
+	}
+}
+
+// [HEALTH-REASON-EN]: every FIXED reason carries its Russian half. Walked over the probes in their
+// unconfigured state — the state a default `docker compose up` actually produces — rather than over a
+// list of strings, so a probe added tomorrow with an English-only skip is caught by construction.
+func TestEveryFixedReasonCarriesItsRussianHalf(t *testing.T) {
+	s := newTestServer()
+	t.Setenv("CONTROL_API_CDP_LIVE", "")
+	t.Setenv("CONTROL_API_VNC_LIVE", "")
+	t.Setenv("CONTROL_API_ORCH_ADDR", "")
+	checks, _ := s.probeAll()
+	fixed := 0
+	for name, c := range checks {
+		// The boundary is PROVENANCE, not importance (see readyCheck.DetailRU): a `skipped` reason is
+		// always ours and always about deployment shape, which is what a person reads to decide whether
+		// "not up" is normal here. An `error` may carry err.Error(), and half-translating a sentence is
+		// worse than leaving it whole.
+		if c.Status != "skipped" {
+			continue
+		}
+		fixed++
+		if strings.TrimSpace(c.Detail) == "" || strings.TrimSpace(c.DetailRU) == "" {
+			t.Errorf("skipped check %q has an untranslated or empty reason: %+v", name, c)
+		}
+		if c.Detail == c.DetailRU {
+			t.Errorf("skipped check %q carries the same string twice — that is an English reason with a "+
+				"Russian field name, which reads as translated and is not: %q", name, c.Detail)
+		}
+	}
+	// Anti-vacuity, and the number is the one measured on a default standalone server: store, config,
+	// llm, browser, orchestrator, vnc. A floor only ever goes UP.
+	if fixed < 6 {
+		t.Fatalf("only %d skipped reason(s) were exercised; the walk stopped finding them and this test "+
+			"now passes over almost nothing", fixed)
 	}
 }

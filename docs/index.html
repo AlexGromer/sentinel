@@ -307,6 +307,24 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   .hztab th,.hztab td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
   .hztab th{font-weight:600;opacity:.75}
   .hz-ok{color:#5fd38d}.hz-error{color:#ff6b6b;font-weight:600}.hz-skipped{opacity:.6}.hz-unknown{opacity:.6}
+  /* W6: «пробы нет» — четвёртое состояние, и оно отличается ФОРМОЙ, а не только цветом: «не поднят»
+     приглушён, «пробы нет» янтарный. Одинаковый цвет на два состояния воспроизвёл бы двусмысленность,
+     ради снятия которой вид и заводился. */
+  .hz-unprobed{color:var(--warn)}
+  /* Разделитель группы — строка ТАБЛИЦЫ, а не вторая <table>: две таблицы разъезжаются по ширине
+     колонок, и читатель перестаёт видеть, что перед ним один регистр компонентов. */
+  .hztab tr.hzgrp td{padding:.9rem .6rem .25rem;border-bottom:0;color:var(--mut);font-size:.78rem}
+  .hzsum{margin:.1rem 0 .7rem;font-size:.88rem}
+  /* ⚠ НАЙДЕНО КАДРОМ, а не гейтом. Служебная заметка в колонке «Причина» («причин нет») рисовалась
+     классом .lgcustom, у которого color:var(--warn) — тем же янтарным, каким W6 стала рисовать
+     «пробы нет». То есть слово, означающее «всё хорошо», стояло тревожным цветом РЯДОМ с зелёным
+     «поднят», и тем же цветом, что новое состояние. Заметка — приглушённая, а не тревожная. */
+  .hznote{font-size:.74rem;color:var(--mut)}
+  /* Легенда. Своё имя класса: `legend` в этом файле уже занято другим видом. */
+  dl.hzkey{display:grid;grid-template-columns:auto 1fr;gap:.15rem .7rem;margin:.3rem 0 .7rem;font-size:.76rem}
+  dl.hzkey dt{white-space:nowrap;font-weight:600}
+  dl.hzkey dd{margin:0;color:var(--mut)}
+  @media(max-width:560px){dl.hzkey{grid-template-columns:1fr}dl.hzkey dd{margin-bottom:.35rem}}
 </style>
 </head>
 <body class="lang-ru">
@@ -1413,15 +1431,42 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
          which is the whole point of the preventive prober (ADR-118). -->
     <div class="subpanel" data-view="health">
       <p class="hint">
-        <span data-lang="ru">Состояние компонентов развёртывания по данным <code>/readyz</code>. Проверка идёт
-          и по требованию, и сама — фоновая проба обновляет ответ каждые 15 секунд, поэтому компонент, отвалившийся
-          в 14:00, известен раньше, чем о нём спросят. «Пропущен» — не поломка: этого компонента в развёртывании
-          просто нет.</span>
-        <span data-lang="en">The state of this deployment's components, from <code>/readyz</code>. Checked both on
-          demand and on its own — a background probe refreshes the answer every 15 seconds, so a component that
-          died at 14:00 is known before anybody asks. «Skipped» is not a fault: that component is simply not part
-          of this deployment.</span>
+        <span data-lang="ru">Состав этого развёртывания по данным <code>/readyz</code>: что поднято, чего нет,
+          что отказало — и что не проверяется никем. Проверка идёт и по требованию, и сама — фоновая проба
+          обновляет ответ каждые 15 секунд, поэтому компонент, отвалившийся в 14:00, известен раньше, чем о нём
+          спросят.</span>
+        <span data-lang="en">What this deployment is made of, from <code>/readyz</code>: what is up, what is
+          absent, what has failed — and what nothing watches at all. Checked both on demand and on its own — a
+          background probe refreshes the answer every 15 seconds, so a component that died at 14:00 is known
+          before anybody asks.</span>
       </p>
+
+      <!-- W6. Легенда — СТАТИЧЕСКАЯ разметка и живёт СНАРУЖИ #hz-list намеренно, по трём причинам:
+           (1) четыре слова легко перепутать, и ключ к ним обязан пережить каждый ре-рендер, а
+               hzRender() затирает #hz-list целиком;
+           (2) объяснение оси — не данные, и рисовать его из ответа значит терять его при отказе;
+           (3) на статичной витрине (GitHub Pages, ADR-110) спрашивать некого, и это единственное,
+               что может объяснить ось, не сделав НИ ОДНОГО запроса. -->
+      <dl class="hzkey">
+        <dt class="hz-ok"><span data-lang="ru">поднят</span><span data-lang="en">up</span></dt>
+        <dd><span data-lang="ru">проба дошла и получила ответ</span><span data-lang="en">the probe reached it and got an answer</span></dd>
+        <dt class="hz-skipped"><span data-lang="ru">не поднят</span><span data-lang="en">not up</span></dt>
+        <dd><span data-lang="ru">компонента в этом развёртывании нет или он ещё не настроен. Это не поломка:
+          развёртывание без модели, без хранилища и без браузера — законное и рабочее</span>
+          <span data-lang="en">the component is absent from this deployment, or not configured yet. Not a fault:
+          a deployment with no model, no store and no browser is legitimate and works</span></dd>
+        <dt class="hz-error"><span data-lang="ru">ОТКАЗ</span><span data-lang="en">FAILING</span></dt>
+        <dd><span data-lang="ru">компонент настроен и не отвечает. Почти никогда не намеренно</span>
+          <span data-lang="en">configured and not answering. Almost never intentional</span></dd>
+        <dt class="hz-unprobed"><span data-lang="ru">пробы нет</span><span data-lang="en">no probe</span></dt>
+        <dd><span data-lang="ru">компонент есть, но <code>/readyz</code> его не спрашивает — с причиной,
+          записанной в самом сервере. Про его здоровье эта страница не знает ничего и не притворяется,
+          что знает</span>
+          <span data-lang="en">the component exists, but <code>/readyz</code> does not ask it — with the reason
+          recorded in the server itself. This page knows nothing about its health and does not pretend
+          otherwise</span></dd>
+      </dl>
+
       <div class="ctl-row">
         <button type="button" class="btn" id="hz-refresh" data-needs-api disabled>&#8635;
           <span data-lang="ru">Проверить сейчас</span><span data-lang="en">Check now</span></button>
@@ -3191,16 +3236,73 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      server derives, so `store` going away left the rail green. The summary is the WORST status
      present, because a rail that averages tells you nothing you can act on. Detail per component
      lives in the `health` view; the rail's job is only "is anything wrong". */
-  var hzLast = null;   // the last /readyz answer, shared by the rail and the view
-  function hzWorst(checks){
-    var order = {error: 3, unknown: 2, skipped: 1, ok: 0}, worst = 'ok', n = 0;
-    for (var k in checks) {
+  var hzLast = null;    // сырой последний ответ /readyz — нужен ради probed_at
+  var hzItems = null;   // он же, нормализованный: массив {name,status,en,ru}
+
+  /* W6 «состав сервисов». /readyz перестал быть списком ПРОБ и стал РЕГИСТРОМ КОМПОНЕНТОВ: компонент,
+     который проба не трогает намеренно, приезжает вместе с записанной причиной под ключом `unprobed`
+     (componentsWithoutProbe, cmd/control-api/readyz.go).
+     ⚠ НОРМАЛИЗАЦИЯ НА ГРАНИЦЕ — ЗДЕСЬ И БОЛЬШЕ НИГДЕ. Рельс, таблица, сводка и подсказка работают с
+     одним массивом и не знают, в какой форме сервер это прислал. Альтернатива — два кодовых пути в
+     четырёх местах, из которых один почти никогда не выполняется и потому никогда не проверяется. */
+  var HZ_STATES = ['ok','error','skipped','unprobed'];
+  function hzNorm(j){
+    var out = [], seen = {}, k, c, st;
+    var checks = (j && j.checks) || {};
+    for (k in checks) {
       if (!Object.prototype.hasOwnProperty.call(checks, k)) continue;
+      c = checks[k] || {};
+      st = c.status || 'unknown';
+      if (HZ_STATES.indexOf(st) < 0) st = 'unknown';
+      out.push({name: k, status: st, en: c.detail || '', ru: c.detail_ru || ''});
+      seen[k] = 1;
+    }
+    var un = (j && j.unprobed) || null, nm, v;
+    if (un && typeof un === 'object') {
+      for (nm in un) {
+        /* Компонент, названный ОБОИМИ множествами, берётся из `checks`: измеренный статус старше
+           статической декларации. Сервер этого не допускает (два офлайн-гейта и Go-тест держат
+           множества непересекающимися), но «побеждает последний» тихо спрятал бы появившуюся пробу. */
+        if (!Object.prototype.hasOwnProperty.call(un, nm) || seen[nm]) continue;
+        v = un[nm] || {};
+        out.push({name: nm, status: 'unprobed',
+                  en: typeof v === 'string' ? v : (v.detail || ''),
+                  ru: (typeof v === 'object' && v.detail_ru) || ''});
+        seen[nm] = 1;
+      }
+    }
+    /* Проверенные сверху, беспробные блоком снизу. Вопрос читателя — «что-нибудь сломано?», а блок,
+       который сломаться не может, стоит после блока, который может. Внутри группы по алфавиту: у map
+       в Go порядка нет, JSON его тоже не обещает, а таблица, переставляющаяся раз в 30 секунд между
+       опросами, нечитаема. */
+    out.sort(function(a, b){
+      var ga = a.status === 'unprobed' ? 1 : 0, gb = b.status === 'unprobed' ? 1 : 0;
+      if (ga !== gb) return ga - gb;
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+    });
+    return out;
+  }
+
+  function hzTally(list){
+    var t = {total: list.length, ok:0, error:0, skipped:0, unprobed:0, unknown:0};
+    for (var i = 0; i < list.length; i++) t[list[i].status] = (t[list[i].status] || 0) + 1;
+    return t;
+  }
+
+  /* Худший статус ТОГО, ЧТО ИЗМЕРЕНО, а не всего, что перечислено.
+     ⚠ Беспробный компонент не «здоров» и не «болен» — про него нечего сообщить. Пустив его в это
+     сравнение, мы сдвинули бы точку рельса в тот день, когда СЕРВЕР начал говорить БОЛЬШЕ правды:
+     ухудшение здоровья, изготовленное улучшением отчётности, — худший сорт ложной тревоги, потому что
+     он наказывает за честность. Он едет рядом с вердиктом, отдельным числом. */
+  function hzWorst(list){
+    var order = {error: 3, unknown: 2, skipped: 1, ok: 0}, worst = 'ok', n = 0, un = 0;
+    for (var i = 0; i < list.length; i++) {
+      var st = list[i].status;
+      if (st === 'unprobed') { un++; continue; }
       n++;
-      var st = (checks[k] || {}).status || 'unknown';
       if ((order[st] || 0) > (order[worst] || 0)) worst = st;
     }
-    return {status: n ? worst : 'unknown', count: n};
+    return {status: n ? worst : 'unknown', count: n, unprobed: un};
   }
   async function railHealth(){
     var host = ge('rail-health'); if (!host) return;
@@ -3209,7 +3311,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var r = await fetch(capiBase() + '/readyz', {headers: authHdr()});
       var j = await r.json();
       hzLast = j;
-      var sum = hzWorst(j.checks || {});
+      hzItems = hzNorm(j);
+      var sum = hzWorst(hzItems);
       /* The page's dot classes are `.ok`/`.no` (see the stylesheet). Inventing `.on`/`.bad` would
          have left the dot permanently grey — a silent no-op. */
       dot.className = 'dot ' + (sum.status === 'ok' ? 'ok' : sum.status === 'skipped' ? '' : 'no');
@@ -3221,16 +3324,22 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                     : sum.status === 'skipped' ? bi('Здоровье —','Health —')
                     : bi('Здоровье ✕','Health ✕');
       var bad = [];
-      for (var k in (j.checks || {})) {
-        if (((j.checks[k] || {}).status) === 'error') bad.push(k);
-      }
+      for (var i = 0; i < hzItems.length; i++) if (hzItems[i].status === 'error') bad.push(hzItems[i].name);
+      /* ⚠ ЧИСЛО РЯДОМ СО СЛОВОМ «проверено» — ЭТО ЧИСЛО ПРОВЕРЕННЫХ. Компонент, который несут без
+         пробы, не «проверен»; посчитать его здесь значит сделать слово ложью. Беспробные названы
+         вторым числом и вторым словом.
+         ⚠ И РОВНО ОДИН вызов biPlain на всю строку: biPlain возвращает «ru / en», поэтому склейка
+         двух таких строк даёт «ru1 / en1ru2 / en2» — половины перепутаны местами. Русская и
+         английская собираются по отдельности и сводятся один раз. */
+      var unRu = sum.unprobed ? '; ещё ' + sum.unprobed + ' без пробы' : '';
+      var unEn = sum.unprobed ? '; ' + sum.unprobed + ' more carried without a probe' : '';
       host.title = bad.length
-        ? biPlain('не в порядке: ' + bad.join(', ') + ' — подробности во вкладке «Здоровье»',
-                  'not well: ' + bad.join(', ') + ' — details in the Health tab')
-        : biPlain(sum.count + ' компонент(ов) проверено, отказов нет',
-                  sum.count + ' component(s) checked, no failures');
+        ? biPlain('не в порядке: ' + bad.join(', ') + ' — подробности во вкладке «Здоровье»' + unRu,
+                  'not well: ' + bad.join(', ') + ' — details in the Health tab' + unEn)
+        : biPlain(sum.count + ' компонент(ов) проверено, отказов нет' + unRu,
+                  sum.count + ' component(s) checked, no failures' + unEn);
     } catch (e) {
-      hzLast = null;
+      hzLast = null; hzItems = null;
       dot.className = 'dot';
       txt.innerHTML = bi('Здоровье ?','Health ?');   /* same as above: bi() returns markup */
       host.title = biPlain('состояние неизвестно — control-API не ответил',
@@ -3244,26 +3353,84 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      worthless exactly when it matters. */
   function hzRender(){
     var host = ge('hz-list'); if (!host) return;
-    if (!hzLast || !hzLast.checks) return;               // leave the standing hint in place
-    var names = Object.keys(hzLast.checks).sort();
-    var rows = names.map(function(name){
-      var c = hzLast.checks[name] || {}, st = c.status || 'unknown';
-      var word = st === 'ok' ? bi('в порядке','ok')
-               : st === 'skipped' ? bi('пропущен','skipped')
-               : st === 'error' ? bi('ОТКАЗ','FAILING') : bi('неизвестно','unknown');
-      var why = c.detail ? esc(c.detail)
-              : st === 'ok' ? '<span class="lgcustom">' + bi('причин нет','nothing to report') + '</span>'
-              /* No detail on a non-ok status means an anonymous caller: /readyz strips it. Saying so
-                 beats an empty cell, which reads as a component that failed for no reason at all. */
-              : '<span class="lgcustom">' + bi('причина видна после подключения с токеном',
-                                               'the reason is shown once you connect with a token') + '</span>';
-      return '<tr><td><code>' + esc(name) + '</code></td><td class="hz-' + esc(st) + '">' + word +
-             '</td><td>' + why + '</td></tr>';
+    if (!hzItems || !hzItems.length) return;             // leave the standing hint in place
+    var t = hzTally(hzItems), grouped = false;
+    var rows = hzItems.map(function(c){
+      var st = c.status;
+      /* W6 ПЕРЕИМЕНОВАЛА ОСЬ. «Пропущен» — высказывание о ПРОБЕРЕ («пробу пропустили»), а читатель
+         спрашивает про КОМПОНЕНТ. Хуже: ровно этот смысл — «его никто не проверяет» — стал отдельным,
+         ПРОТИВОПОЛОЖНЫМ состоянием. Оставить «пропущен» рядом с «пробы нет» значило поставить два
+         русских слова, читающихся одинаково, для «компонента здесь нет» и «компонент есть, и никто
+         про него не спрашивает». */
+      var word = st === 'ok'       ? bi('поднят','up')
+               : st === 'skipped'  ? bi('не поднят','not up')
+               : st === 'error'    ? bi('ОТКАЗ','FAILING')
+               : st === 'unprobed' ? bi('пробы нет','no probe')
+               :                     bi('неизвестно','unknown');
+      /* Причина. `detail_ru` — перевод, сделанный сервером там, где текст ФИКСИРОВАН; `detail` —
+         дословный текст ошибки Go, переводить который нечестно (сноска под таблицей говорит об этом
+         один раз). Обе половины через esc(): это текст сервера в innerHTML-приёмнике. */
+      var why;
+      if (c.ru || c.en) {
+        why = bi(esc(c.ru || c.en), esc(c.en || c.ru));
+      } else if (st === 'ok') {
+        why = '<span class="hznote">' + bi('причин нет','nothing to report') + '</span>';
+      } else if (st === 'unprobed') {
+        /* Беспробный компонент БЕЗ причины — дефект СЕРВЕРА: componentsWithoutProbe существует именно
+           затем, чтобы отсутствие пробы было записанным решением, а не умолчанием. Пустая ячейка
+           сделала бы этот дефект невидимым, а анонимный вызов даёт здесь пустоту законно — поэтому
+           текст говорит про обе возможности сразу. */
+        why = '<span class="hznote">' + bi('причина не показана: либо вы не подключены с токеном, либо она не объявлена в сервере',
+                                           'no reason shown: either you are not connected with a token, or none is declared in the server') + '</span>';
+      } else {
+        /* No detail on a non-ok status means an anonymous caller: /readyz strips it. Saying so
+           beats an empty cell, which reads as a component that failed for no reason at all. */
+        why = '<span class="hznote">' + bi('причина видна после подключения с токеном',
+                                           'the reason is shown once you connect with a token') + '</span>';
+      }
+      var head = '';
+      if (st === 'unprobed' && !grouped) {
+        grouped = true;
+        head = '<tr class="hzgrp"><td colspan="3">' +
+          bi('Без пробы — в развёртывании есть, но <code>/readyz</code> их не спрашивает; причина записана в самом сервере.',
+             'Not probed — present in the deployment, but <code>/readyz</code> does not ask them; the reason is recorded in the server itself.') +
+          '</td></tr>';
+      }
+      /* Класс берётся из НОРМАЛИЗОВАННОГО статуса, а не из ответа сервера: класс, которого нет в
+         стилях, дал бы невидимую разницу — молчаливый no-op, ровно как выдуманное имя точки рельса. */
+      return head + '<tr><td><code>' + esc(c.name) + '</code></td>' +
+             '<td class="hz-' + st + '">' + word + '</td><td>' + why + '</td></tr>';
     }).join('');
-    host.innerHTML = '<table class="hztab"><thead><tr>' +
+    /* Одно предложение до таблицы: восемь строк правильных слов всё равно заставляют человека считать,
+       а «сколько чего» — первый вопрос. КАЖДОЕ слагаемое печатается даже нулём: исчезнувшее слагаемое
+       неотличимо от невычисленного, и сумма — то, что гейт сверяет со строками таблицы. */
+    var sumLine = '<div id="hz-sum" class="hzsum">' + bi(
+        '<b>' + t.total + '</b> компонент(ов): <b class="hz-ok">' + t.ok + '</b> поднято, ' +
+        '<b class="hz-skipped">' + t.skipped + '</b> не поднято, ' +
+        '<b class="hz-error">' + t.error + '</b> отказ, ' +
+        '<b class="hz-unprobed">' + t.unprobed + '</b> без пробы' +
+        (t.unknown ? ', <b class="hz-unknown">' + t.unknown + '</b> неизвестно' : ''),
+        '<b>' + t.total + '</b> component(s): <b class="hz-ok">' + t.ok + '</b> up, ' +
+        '<b class="hz-skipped">' + t.skipped + '</b> not up, ' +
+        '<b class="hz-error">' + t.error + '</b> failing, ' +
+        '<b class="hz-unprobed">' + t.unprobed + '</b> not probed' +
+        (t.unknown ? ', <b class="hz-unknown">' + t.unknown + '</b> unknown' : '')
+      ) + '</div>';
+    /* [HEALTH-REASON-EN]: фиксированные причины сервер отдаёт двумя половинами, но текст ошибки Go
+       переводу не подлежит — перевести обёртку и оставить хвост английским хуже, чем оставить целиком.
+       ⚠ СНОСКА ВЫВОДИТСЯ ИЗ СОДЕРЖИМОГО, а не печатается всегда. Найдено КАДРОМ: она стояла под
+       таблицей, в которой не было НИ ОДНОЙ непереведённой причины, и объясняла читателю то, чего он
+       не видит. Примечание, появляющееся безусловно, — это примечание, которое перестают читать. */
+    var untranslated = 0;
+    for (var i = 0; i < hzItems.length; i++) if (hzItems[i].en && !hzItems[i].ru) untranslated++;
+    var foot = untranslated ? '<p class="hint">' + bi(
+        'Часть причин выше (' + untranslated + ') — дословный текст ошибки от сервера, по-английски: это сообщение об ошибке, а не перевод.',
+        untranslated + ' of the reasons above are the server\'s verbatim error text, in English: that is the error message, not a translation.'
+      ) + '</p>' : '';
+    host.innerHTML = sumLine + '<table class="hztab"><thead><tr>' +
       '<th>' + bi('Компонент','Component') + '</th>' +
       '<th>' + bi('Состояние','State') + '</th>' +
-      '<th>' + bi('Причина','Reason') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      '<th>' + bi('Причина','Reason') + '</th></tr></thead><tbody>' + rows + '</tbody></table>' + foot;
     var when = ge('hz-when');
     if (when) {
       /* ⚠ innerHTML, not textContent. bi() RETURNS `<span data-lang>` markup — the language toggle
@@ -3271,7 +3438,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
          to the reader. Caught by a screenshot, and by nothing else: the DOM check for this line
          asked whether the words «измерено»/«measured» were PRESENT, and they were… inside the
          literal markup. Assert the FORM, not the containment. */
-      when.innerHTML = hzLast.probed_at
+      when.innerHTML = hzLast && hzLast.probed_at
         ? bi('измерено ','measured ') + esc(new Date(hzLast.probed_at).toLocaleString())
         : bi('время измерения не сообщено','no measurement time reported');
     }

@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,12 +77,37 @@ const (
 // The shape is `apiRoutesWithoutCLI`'s (cmd/agentctl/api.go), for the same reason it works there: an
 // exemption is a recorded decision, not an omission nobody noticed. Entries here are expected to
 // DISAPPEAR — the gate caps how many there may be, and that cap may only go down.
-var componentsWithoutProbe = map[string]string{
-	"control-api": "this process. Probing itself would answer the question /healthz already answers, " +
-		"and a readiness check that fails because the prober is down cannot be delivered anyway",
-	"webui": "in modes 1 and 3 there is no webui process at all (control-api serves the pages from its " +
-		"own port, ADR-064); in mode 2 it is a static file server with no state to be unready about, " +
-		"and a browser reaching it does not go through this API",
+//
+// ⚠ W6: THIS MAP IS NOW PUBLISHED, not merely declared. Until W6 it was read by two offline gates and
+// by nothing else, so the one surface a person actually opens could not tell "this component is fine"
+// from "nobody ever asks about this component". handleReadyz serves it under the top-level `unprobed`
+// key — see the comment there for why top-level and not another member of `checks`.
+//
+// The value carries BOTH language halves in ONE literal (componentNote). Two parallel maps would be
+// two statements of one fact with nothing comparing them, which is the shape this repository removes
+// on sight: the day somebody edits a reason, the translation beside it is impossible to miss and a
+// translation in another map is impossible to notice.
+type componentNote struct {
+	EN string // the recorded reason, English
+	RU string // the same reason for a Russian reader — see readyCheck.DetailRU for the boundary
+}
+
+var componentsWithoutProbe = map[string]componentNote{
+	"control-api": {
+		EN: "this process. Probing itself would answer the question /healthz already answers, " +
+			"and a readiness check that fails because the prober is down cannot be delivered anyway",
+		RU: "это сам отвечающий процесс. Проба самого себя ответила бы на вопрос, на который уже " +
+			"отвечает /healthz, а проверку готовности, упавшую из-за того, что упал пробер, всё " +
+			"равно некому доставить",
+	},
+	"webui": {
+		EN: "in modes 1 and 3 there is no webui process at all (control-api serves the pages from its " +
+			"own port, ADR-064); in mode 2 it is a static file server with no state to be unready about, " +
+			"and a browser reaching it does not go through this API",
+		RU: "в режимах 1 и 3 процесса webui нет вовсе — страницы отдаёт сам control-api со своего " +
+			"порта (ADR-064); в режиме 2 это статический файловый сервер, у которого нет состояния, " +
+			"чтобы быть неготовым, и браузер идёт к нему мимо этого API",
+	},
 }
 
 // probeBrowser closes the gap componentsWithoutProbe called a GAP rather than a decision: control-api
@@ -103,7 +129,9 @@ var componentsWithoutProbe = map[string]string{
 func (s *server) probeBrowser() readyCheck {
 	base := liveBase()
 	if base == "" {
-		return readyCheck{Status: "skipped", Detail: "CONTROL_API_CDP_LIVE unset (no browser service in this deployment)"}
+		return readyCheck{Status: "skipped",
+			Detail:   "CONTROL_API_CDP_LIVE unset (no browser service in this deployment)",
+			DetailRU: "CONTROL_API_CDP_LIVE не задан — браузерного сервиса в этом развёртывании нет"}
 	}
 	req, err := http.NewRequest(http.MethodGet, base+liveStatusPath, nil)
 	if err != nil {
@@ -116,7 +144,8 @@ func (s *server) probeBrowser() readyCheck {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return readyCheck{Status: "error",
-			Detail: "browser service " + base + " answered " + strconv.Itoa(resp.StatusCode)}
+			Detail:   "browser service " + base + " answered " + strconv.Itoa(resp.StatusCode),
+			DetailRU: "браузерный сервис " + base + " ответил " + strconv.Itoa(resp.StatusCode)}
 	}
 	return readyCheck{Status: "ok"}
 }
@@ -142,8 +171,17 @@ func (s *server) probeBrowser() readyCheck {
 func (s *server) probeVNC() readyCheck {
 	base := strings.TrimRight(os.Getenv("CONTROL_API_VNC_LIVE"), "/")
 	if base == "" {
+		// ⚠ THE REASON DOES NOT CLAIM THE PROFILE IS DOWN, because this probe cannot know that and it
+		// was measured saying so falsely: `docker compose --profile vnc up -d` brings browser-vnc up
+		// HEALTHY, and /readyz still answered «the vnc profile is not running in this deployment» —
+		// no compose file sets CONTROL_API_VNC_LIVE for control-api, so an unset address means either
+		// "not asked for" or "asked for and not wired". A health view whose whole subject is «what is
+		// up» must not assert the one of the two it cannot distinguish. [VNC-UP-BUT-UNWIRED].
 		return readyCheck{Status: "skipped",
-			Detail: "CONTROL_API_VNC_LIVE unset (the `vnc` compose profile is not running in this deployment)"}
+			Detail: "CONTROL_API_VNC_LIVE unset, so the screen is not observed — either the `vnc` compose " +
+				"profile was not started, or it is running and its address was never passed to this service",
+			DetailRU: "CONTROL_API_VNC_LIVE не задан, поэтому экран не наблюдается — либо профиль compose " +
+				"`vnc` не поднимали, либо он поднят, а его адрес этому сервису не передали"}
 	}
 	req, err := http.NewRequest(http.MethodGet, base+liveStatusPath, nil)
 	if err != nil {
@@ -156,7 +194,8 @@ func (s *server) probeVNC() readyCheck {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return readyCheck{Status: "error",
-			Detail: "vnc browser service " + base + " answered " + strconv.Itoa(resp.StatusCode)}
+			Detail:   "vnc browser service " + base + " answered " + strconv.Itoa(resp.StatusCode),
+			DetailRU: "браузерный сервис vnc " + base + " ответил " + strconv.Itoa(resp.StatusCode)}
 	}
 	return readyCheck{Status: "ok"}
 }
@@ -181,7 +220,11 @@ func (s *server) probeVNC() readyCheck {
 // runs that never existed.
 func (s *server) probeOrchestrator() readyCheck {
 	if s.orchAddr == "" {
-		return readyCheck{Status: "skipped", Detail: "CONTROL_API_ORCH_ADDR unset (no orchestrator in this deployment: no budget ceiling, no takeover, no map gate)"}
+		return readyCheck{Status: "skipped",
+			Detail: "CONTROL_API_ORCH_ADDR unset (no orchestrator in this deployment: no budget ceiling, " +
+				"no takeover, no map gate)",
+			DetailRU: "CONTROL_API_ORCH_ADDR не задан — оркестратора в этом развёртывании нет: без него " +
+				"не работают жёсткий потолок бюджета, перехват прогона и гейт карты"}
 	}
 	cl, done, err := s.orchClient()
 	if err != nil {
@@ -196,9 +239,111 @@ func (s *server) probeOrchestrator() readyCheck {
 	return readyCheck{Status: "ok"}
 }
 
+// probeAgentctl closes [READYZ-BLIND-TO-AGENTCTL]: the deployment called itself `ready` while the one
+// thing it exists to do was already impossible.
+//
+// MEASURED, not anticipated (2026-08-21, W5). control-api was started with
+// CONTROL_API_AGENTCTL=/no/such/binary. It printed its ordinary start line — which NAMES that path and
+// does not complain (main.go) — answered /readyz with `status: ready` and all six checks skipped or ok,
+// and accepted POST /v1/runs with 202. The run then died inside a goroutine with
+// `fork/exec ...: no such file or directory`. Every surface a person looks at said the deployment was
+// healthy, and every run it accepted was doomed before it was accepted.
+//
+// ⚠ THIS PROBE NEVER ANSWERS `skipped`, and that is the one place it departs from probeBrowser,
+// probeOrchestrator and probeVNC. Those three skip an unset address because a deployment WITHOUT a
+// browser, an orchestrator or the vnc profile is a supported, working deployment. There is no such
+// deployment here: spawning agentctl is the whole reason this process exists (ADR-032), every
+// run-creating route is a promise to perform it, and a control-api that cannot is not a smaller
+// deployment — it is a broken one that will 202 every run and fail every run. `skipped` does not affect
+// readiness (see probeAll), so answering it would leave `status: ready` standing over exactly the stack
+// this probe exists to condemn. There is also nothing to be UNCONFIGURED about: the path carries a
+// non-empty default (envOr, main.go), so "not configured" is not a state main() can produce; an empty
+// path means a caller built a server without one, which is a programming error and is reported, not
+// hidden behind a skip.
+//
+// ⚠ IT ASKS exec.LookPath, WHICH IS THE QUESTION THE SPAWN ITSELF ASKS — not os.Stat plus a
+// hand-rolled mode&0111, which is what the defect report proposed. Three reasons, none of them taste:
+//
+//  1. LookPath IS what exec.Command resolves with. A second implementation of "can this be executed"
+//     is how two surfaces come to disagree about one fact: this probe could answer `ok` for a path the
+//     spawn will refuse, which is the failure it was written to prevent, wearing a green tick.
+//  2. Windows has no execute bit at all — executability is decided by PATHEXT, and bin\agentctl really
+//     does spawn as agentctl.exe there. A mode&0111 probe would report a permanent, FALSE `error` on
+//     every Windows deployment, and a health view that cries wolf is a health view people switch off.
+//     This repository has already been burned once by a POSIX assumption reaching the Windows build.
+//  3. syscall.Access(X_OK) answers for the CALLING uid, so a service running as root reads a 0644 file
+//     as executable — green over precisely the deployment that is broken for everybody else. LookPath
+//     reads the mode bits and answers the same under uid 0.
+//
+// os.Stat is still called, but only AFTER LookPath has decided, and only to say WHICH failure it is:
+// `exec: "...": permission denied` does not tell an operator whether the file is absent, is a
+// directory, or merely lost its execute bit, and those are three different one-line fixes.
+//
+// ⚠ IT EXECUTES NOTHING — not `agentctl --version`, not `--help`. runReadinessProber fires every
+// readyProbeInterval, so a probe that forks is a process factory; worse, a binary that hangs would hang
+// /readyz with it, which is the exact trap probeBrowser records for liveClient. Existence, kind and
+// executability are what a spawn needs, and they are the whole of what this claims to know.
+func (s *server) probeAgentctl() readyCheck {
+	p := strings.TrimSpace(s.agentctl)
+	if p == "" {
+		return readyCheck{Status: "error",
+			Detail: "no run executable is configured (CONTROL_API_AGENTCTL is empty) — every run this " +
+				"service accepts would die at fork/exec before a browser is ever opened",
+			DetailRU: "исполняемый файл прогона не задан (CONTROL_API_AGENTCTL пуст) — каждый принятый " +
+				"этим сервисом прогон умрёт на fork/exec, не успев открыть браузер"}
+	}
+	if _, err := exec.LookPath(p); err == nil {
+		return readyCheck{Status: "ok"}
+	}
+	info, serr := os.Stat(p)
+	switch {
+	case serr != nil:
+		return readyCheck{Status: "error",
+			Detail: "run executable " + p + " does not exist (CONTROL_API_AGENTCTL) — runs would still " +
+				"be accepted with 202 and then die at fork/exec",
+			DetailRU: "исполняемого файла прогона " + p + " не существует (CONTROL_API_AGENTCTL) — " +
+				"прогоны всё равно будут приняты с кодом 202 и умрут на fork/exec"}
+	case info.IsDir():
+		return readyCheck{Status: "error",
+			Detail:   "run executable " + p + " is a directory, not a program (CONTROL_API_AGENTCTL)",
+			DetailRU: "по пути исполняемого файла прогона " + p + " лежит каталог, а не программа (CONTROL_API_AGENTCTL)"}
+	default:
+		return readyCheck{Status: "error",
+			Detail: "run executable " + p + " exists but cannot be executed — mode " +
+				info.Mode().Perm().String() + "; `chmod +x` it, or point CONTROL_API_AGENTCTL at the " +
+				"real binary (on Windows the name needs a PATHEXT extension, e.g. .exe)",
+			DetailRU: "исполняемый файл прогона " + p + " существует, но запустить его нельзя — права " +
+				info.Mode().Perm().String() + "; сделайте `chmod +x` или укажите в CONTROL_API_AGENTCTL " +
+				"настоящий бинарь (в Windows имени нужно расширение из PATHEXT, например .exe)"}
+	}
+}
+
 type readyCheck struct {
-	Status string `json:"status"`           // ok | skipped | error
+	Status string `json:"status"`           // ok | skipped | error | unprobed
 	Detail string `json:"detail,omitempty"` // authenticated callers only
+	// DetailRU is the Russian half of a FIXED reason, and it exists only where the whole English text
+	// is ours ([HEALTH-REASON-EN], W6). The boundary is not importance, it is PROVENANCE:
+	//
+	//   translated — every `skipped` reason and every componentsWithoutProbe entry. These are prose
+	//   about deployment SHAPE, written by us, unchanging, and they are what a person reads to decide
+	//   whether "not up" is normal here. Measured before this existed: the Health view showed a Russian
+	//   reader six English sentences, and W6 was about to add a 250-character English paragraph to it.
+	//
+	//   NOT translated — anything carrying err.Error(). Translating the wrapper and leaving a Go error
+	//   string as the tail produces two languages inside ONE sentence, which is worse than either. The
+	//   view says so once, in a footnote, instead of leaving the reader to guess why part of a column is
+	//   not in their language.
+	//
+	// ⚠ THE BOUNDARY IS PROVENANCE, NOT STATUS, and the first cut of this got the axis wrong: it
+	// translated every `skipped` reason and left every `error` one alone. A SCREENSHOT found it —
+	// `config: ОТКАЗ / no config stored; run the setup wizard` was the single English line in an
+	// otherwise Russian table, and it is an authored sentence with no error anywhere in it.
+	// tests/test_readyz_reasons_translated_offline.py now DERIVES the set that must be translated out of
+	// this file, so the axis cannot quietly drift back.
+	//
+	// ⚠ It is blanked for an anonymous caller exactly like Detail. Forgetting the second field is the
+	// obvious way to reopen the oracle this file closed — handleReadyz clears both in one place.
+	DetailRU string `json:"detail_ru,omitempty"` // authenticated callers only; fixed reasons only
 }
 
 // readyState memoizes the last probe. The mutex is held ONLY to read/publish the memo and to claim the
@@ -371,24 +516,34 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 		// broken. The service tier treats `rec == nil` as an error for the opposite reason — pointing at
 		// a gateway is an explicit declaration that a stored config is expected.
 		if s.storeAddr != "" {
-			checks["store"] = readyCheck{Status: "error", Detail: "store-gateway " + s.storeAddr + " did not answer at startup"}
-			checks["config"] = readyCheck{Status: "error", Detail: storeUnavailableMsg}
+			checks["store"] = readyCheck{Status: "error",
+				Detail:   "store-gateway " + s.storeAddr + " did not answer at startup",
+				DetailRU: "хранилище store-gateway " + s.storeAddr + " не ответило при старте"}
+			checks["config"] = readyCheck{Status: "error", Detail: storeUnavailableMsg, DetailRU: storeUnavailableMsgRU}
 		} else {
-			checks["store"] = readyCheck{Status: "skipped", Detail: "CONTROL_API_STORE_ADDR unset (standalone tier)"}
+			checks["store"] = readyCheck{Status: "skipped",
+				Detail:   "CONTROL_API_STORE_ADDR unset (standalone tier)",
+				DetailRU: "CONTROL_API_STORE_ADDR не задан — автономный режим без хранилища"}
 			doc, ok, ferr := s.readConfigFile()
 			switch {
 			case ferr != nil:
 				checks["config"] = readyCheck{Status: "error", Detail: ferr.Error()}
 			case !ok:
-				checks["config"] = readyCheck{Status: "skipped", Detail: "standalone tier: no config saved yet (the setup wizard writes " + s.configFilePath() + ")"}
+				checks["config"] = readyCheck{Status: "skipped",
+					Detail:   "standalone tier: no config saved yet (the setup wizard writes " + s.configFilePath() + ")",
+					DetailRU: "автономный режим: настройки ещё не сохранялись (мастер настройки пишет их в " + s.configFilePath() + ")"}
 			default:
-				checks["config"] = readyCheck{Status: "ok", Detail: "standalone tier: " + s.configFilePath()}
+				checks["config"] = readyCheck{Status: "ok",
+					Detail:   "standalone tier: " + s.configFilePath(),
+					DetailRU: "автономный режим: " + s.configFilePath()}
 				_ = json.Unmarshal(doc.ValueJson, &cfg) // best-effort: only used to find a base_url
 			}
 		}
 	} else if err := s.store.ping(); err != nil {
 		checks["store"] = readyCheck{Status: "error", Detail: err.Error()}
-		checks["config"] = readyCheck{Status: "error", Detail: "store-gateway unreachable"}
+		checks["config"] = readyCheck{Status: "error",
+			Detail:   "store-gateway unreachable",
+			DetailRU: "хранилище store-gateway недоступно"}
 	} else {
 		checks["store"] = readyCheck{Status: "ok"}
 		rec, err := s.store.getConfig(setupConfigKey, "", readyProbeTimeout)
@@ -396,7 +551,9 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 		case err != nil: // gateway hiccup, NOT "no config" — do not tell the operator to re-run the wizard
 			checks["config"] = readyCheck{Status: "error", Detail: "store-gateway GetConfig failed: " + err.Error()}
 		case rec == nil:
-			checks["config"] = readyCheck{Status: "error", Detail: "no config stored; run the setup wizard"}
+			checks["config"] = readyCheck{Status: "error",
+				Detail:   "no config stored; run the setup wizard",
+				DetailRU: "сохранённой конфигурации нет; пройдите мастер настройки"}
 		default:
 			checks["config"] = readyCheck{Status: "ok"}
 			_ = json.Unmarshal([]byte(rec.ValueJson), &cfg) // best-effort: only used to find a base_url
@@ -406,6 +563,11 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 	checks["browser"] = s.probeBrowser()
 	checks["orchestrator"] = s.probeOrchestrator() // ADR-126
 	checks["vnc"] = s.probeVNC()                   // LIVE-VNC / ADR-127
+	// ⚠ A LITERAL KEY, not a variable and not a loop: tests/test_readyz_covers_the_stack_offline.py and
+	// tests/test_degradation_map_offline.py both derive the component set by regexing `checks["<name>"]`
+	// out of this file. A key assembled at runtime is invisible to both, and "invisible to the gate" is
+	// how a component arrives unprobed and unnoticed in the first place.
+	checks["agentctl"] = s.probeAgentctl() // [READYZ-BLIND-TO-AGENTCTL] / ADR-129 — local, no I/O
 
 	ready := true
 	for _, c := range checks {
@@ -434,7 +596,11 @@ func (s *server) effectiveLLMBase(cfg map[string]any) string {
 func (s *server) probeLLM(base string) readyCheck {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {
-		return readyCheck{Status: "skipped", Detail: "no LLM_BASE_URL and no llm.base_url in the config (anthropic native, or offline heuristic)"}
+		return readyCheck{Status: "skipped",
+			Detail: "no LLM_BASE_URL and no llm.base_url in the config (anthropic native, or offline " +
+				"heuristic)",
+			DetailRU: "ни LLM_BASE_URL, ни llm.base_url в конфигурации не заданы (родной Anthropic или " +
+				"офлайновая эвристика)"}
 	}
 	// Shared shape check (validateLLMBase, llmenv.go / ADR-063): absolute http(s), no embedded
 	// credential (which probing would send outbound), no link-local cloud-metadata target. Only a LITERAL
@@ -449,7 +615,9 @@ func (s *server) probeLLM(base string) readyCheck {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10)) // drain a little so the conn can be reused
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return readyCheck{Status: "error", Detail: fmt.Sprintf("GET %s/models -> HTTP %d", base, resp.StatusCode)}
+		return readyCheck{Status: "error",
+			Detail:   fmt.Sprintf("GET %s/models -> HTTP %d", base, resp.StatusCode),
+			DetailRU: fmt.Sprintf("GET %s/models ответил HTTP %d", base, resp.StatusCode)}
 	}
 	return readyCheck{Status: "ok"}
 }
@@ -461,7 +629,9 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	out := make(map[string]readyCheck, len(checks))
 	for name, c := range checks {
 		if !authed {
-			c.Detail = "" // an anonymous caller learns the verdict, never the topology
+			// BOTH halves, in one place. An anonymous caller learns the verdict, never the topology —
+			// and a reason translated into Russian is exactly as much topology as the English one.
+			c.Detail, c.DetailRU = "", ""
 		}
 		out[name] = c
 	}
@@ -477,6 +647,37 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	at := s.ready.at
 	s.ready.mu.Unlock()
 	body := map[string]any{"status": verdict, "version": version, "checks": out}
+	// W6 / ADR-129: WHAT IS NOT PROBED IS PART OF THE ANSWER. componentsWithoutProbe has existed since
+	// HEALTH-006, read by two offline gates and by nobody else — so the one surface a person actually
+	// opens could not tell "this component is fine" from "nobody ever asks about this component".
+	// Absence has no representation to look at (docs/DEVELOPMENT.md §0, principle 5); this key IS the
+	// representation.
+	//
+	// ⚠ A TOP-LEVEL KEY, NOT ANOTHER MEMBER OF `checks`, and the reason is a gate rather than taste.
+	// tests/test_readyz_covers_the_stack_offline.py derives the probe set by regexing `checks["<name>"]`
+	// out of readyz.go. Writing the exemptions into `checks` would make every unprobed service read as
+	// PROBED to the one gate whose entire job is to notice that it is not — the feature would defeat the
+	// check it exists to serve. It also stays OUT of the readiness aggregate and out of the memo: these
+	// are compile-time constants, so there is nothing to measure, nothing to cache, and nothing that
+	// could ever transition (runReadinessProber journals transitions, and a value that cannot transition
+	// has no business in that map).
+	//
+	// The VALUE is a readyCheck like any other, so the anonymous rule above applies unchanged and a
+	// reader's table renders both maps with one function. The NAMES are published even to an anonymous
+	// caller, because `checks` already publishes component names and a map of empty strings would read
+	// as a failed render rather than as a withheld one — omitempty drops the field instead.
+	//
+	// ALWAYS present, even when empty: a missing key and an empty object are indistinguishable from an
+	// older server, and "I cannot tell whether anything is unprobed" is the state this closes.
+	unprobed := make(map[string]readyCheck, len(componentsWithoutProbe))
+	for name, note := range componentsWithoutProbe {
+		c := readyCheck{Status: "unprobed", Detail: note.EN, DetailRU: note.RU}
+		if !authed {
+			c.Detail, c.DetailRU = "", ""
+		}
+		unprobed[name] = c
+	}
+	body["unprobed"] = unprobed
 	if !at.IsZero() {
 		body["probed_at"] = at.UTC().Format(time.RFC3339)
 	}

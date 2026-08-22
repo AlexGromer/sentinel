@@ -144,3 +144,11 @@ func (s *server) writeConfigFile(body string) error {
 const storeUnavailableMsg = "a store-gateway is configured (CONTROL_API_STORE_ADDR) but did not answer at " +
 	"startup, so config cannot be read or written; start it and restart the control-API — this deployment " +
 	"deliberately does not fall back to a file, because the gateway would win again on the next read"
+
+// storeUnavailableMsgRU is the same sentence for a Russian reader. It lives HERE, one line below its
+// English half, for the reason componentNote gives: a translation kept anywhere else drifts the first
+// time somebody edits one of the two, and nothing compares them. [HEALTH-REASON-EN] / W6.
+const storeUnavailableMsgRU = "хранилище store-gateway объявлено (CONTROL_API_STORE_ADDR), но не ответило " +
+	"при старте, поэтому конфигурацию нельзя ни прочитать, ни записать; запустите его и перезапустите " +
+	"control-API — это развёртывание намеренно не откатывается на файл, потому что при следующем чтении " +
+	"снова победит шлюз"

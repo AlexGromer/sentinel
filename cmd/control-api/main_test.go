@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AlexGromer/sentinel/internal/svclog"
 )
 
 // testRepoRoot holds one throwaway directory per newTestServer(), all under a single parent removed at
@@ -45,9 +47,32 @@ func newTestServer() *server {
 	if err != nil {
 		panic(err) // TestMain guarantees the parent exists; nothing useful can run without a repo
 	}
+	// ⚠ A REAL, EXECUTABLE STUB AT THE PRODUCTION PATH, not the "/nonexistent/agentctl" this fixture
+	// carried until W6. Once /readyz probes the run executable (ADR-129, probeAgentctl), a fixture
+	// pointing at nothing makes EVERY server in this package permanently not-ready, and four tests go
+	// red at once — among them TestReadyzStandaloneIsReady, the property that a default standalone
+	// deployment IS ready. Deleting a property to preserve a fixture is the wrong way round: the fixture
+	// was the thing that had never been chosen, only inherited.
+	//
+	// <repo>/bin/agentctl mirrors what main() defaults to (envOr, main.go), so the fixture measures the
+	// real layout rather than a convenient one. The body is `exit 0` and is NEVER RUN — nothing using
+	// this fixture spawns a run; tests that do build their own server through newRunServerWithScript.
+	// It exists to be FOUND by exec.LookPath, not executed.
+	//
+	// A test that WANTS a broken run executable now says so at its own call site (s.agentctl = ...),
+	// which is where that intent belongs. POSIX-only, like newRunServerWithScript's `#!/bin/sh` above:
+	// this package's fixtures already assume a shell.
+	bin := filepath.Join(d, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		panic(err)
+	}
+	ctl := filepath.Join(bin, "agentctl")
+	if err := os.WriteFile(ctl, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		panic(err)
+	}
 	return &server{
 		repo:      d,
-		agentctl:  "/nonexistent/agentctl",
+		agentctl:  ctl,
 		token:     "secret-tok",
 		corsAllow: map[string]bool{"https://alexgromer.github.io": true},
 		runs:      map[string]*run{},
@@ -1194,5 +1219,73 @@ func TestBinaryArtifactsAnnounceTheirRealType(t *testing.T) {
 	s.mux().ServeHTTP(rec, req)
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("plan.json: Content-Type %q, want application/json — structured text must stay text", got)
+	}
+}
+
+// --- W6 / [READYZ-BLIND-TO-AGENTCTL]: the spawn that never happened -----------------------------
+
+// brokenSpawnServer is a run server whose agentctl path leads nowhere, journal open at the DEFAULT
+// level. The default is deliberate: a record demoted to `debug` would vanish from an ordinary
+// deployment, and a fixture opened at `debug` would keep passing over that.
+func brokenSpawnServer(t *testing.T) *server {
+	t.Helper()
+	s := journalServer(t, svclog.DefaultLevel)
+	s.agentctl = filepath.Join(s.repo, "bin", "gone")
+	return s
+}
+
+func TestAFailedSpawnReportsExitMinusOneRatherThanACleanZero(t *testing.T) {
+	s := brokenSpawnServer(t)
+	id := postRunAndWait(t, s, `{"target":"file:///x.html"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+id, nil)
+	req.Header.Set("Authorization", "Bearer secret-tok")
+	s.mux().ServeHTTP(rec, req)
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("run body: %v (%s)", err, rec.Body.String())
+	}
+	if got["state"] != "failed" {
+		t.Fatalf("a run whose spawn failed must be `failed`: %+v", got)
+	}
+	// 0 is the ONE number in this field that means "finished cleanly". The record carried it while the
+	// state beside it said `failed`, so a client polling this route and a client listening to the SSE
+	// stream — which has emitted -1 since ADR-089 — were told different things about one run.
+	if code, _ := got["exit_code"].(float64); code != -1 {
+		t.Fatalf("exit_code = %v beside state=failed, which reads as a clean exit: %+v", got["exit_code"], got)
+	}
+}
+
+func TestASpawnThatNeverHappenedIsRecordedInTheServiceJournalAtWarn(t *testing.T) {
+	s := brokenSpawnServer(t)
+	id := postRunAndWait(t, s, `{"target":"file:///x.html"}`)
+	var found *svclog.Record
+	records := readJournal(t, s.repo)
+	for i := range records {
+		if records[i].Code == codeRunSpawnFailed {
+			found = &records[i]
+			break
+		}
+	}
+	if found == nil {
+		// Measured before this existed: the journal held exactly ONE line about this run —
+		// `service.api_call POST /v1/runs → 202`, the line that makes the deployment look like it worked.
+		t.Fatal("nothing in the service journal says the spawn failed; the only record of this run is the " +
+			"202 that made it look accepted")
+	}
+	if found.Lvl != "warn" {
+		t.Fatalf("a spawn that never happened is a record somebody comes looking for: lvl=%q", found.Lvl)
+	}
+	// The run and the path, because "a spawn failed" without either is a record that cannot be acted on.
+	if !strings.Contains(found.Msg, id) || !strings.Contains(found.Msg, s.agentctl) {
+		t.Fatalf("the record names neither the run nor the executable it tried: %q", found.Msg)
+	}
+	// The OWNER, not nobody: an ownerless service event is admin-only (svcjournal_read.go), so a
+	// non-admin account whose run just died could not read the one record explaining why.
+	s.mu.RLock()
+	owner := s.runs[id].Owner
+	s.mu.RUnlock()
+	if found.Owner != owner {
+		t.Fatalf("record owner %q != run owner %q", found.Owner, owner)
 	}
 }

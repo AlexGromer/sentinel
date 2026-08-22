@@ -1094,16 +1094,33 @@ try {
     // "read checks.llm only" behaviour leaves a count of 1, which satisfies «at least one component»
     // perfectly. The summary is over a DERIVED set, so the only honest assertion is that it saw the
     // WHOLE set — anything less is the hand-picked-component defect wearing a number.
+    // ⚠ W6 RE-AIMED THIS AGAIN, and again did not weaken it. /readyz stopped being a list of PROBES
+    // and became a register of COMPONENTS: some are carried WITHOUT a probe, with a recorded reason
+    // (componentsWithoutProbe, served under the top-level `unprobed` key). A component nobody probed
+    // is not "checked" — counting it beside the word «проверено» would make the word a lie — so TWO
+    // numbers are compared against TWO sets. One number against the union would be precisely the
+    // exception this gate was written to refuse.
     const served = await page.evaluate(async (base) => {
       const r = await fetch(base + '/readyz');
       const j = await r.json();
-      return Object.keys(j.checks || {}).length;
+      return {
+        probed: Object.keys(j.checks || {}).length,
+        unprobed: Object.keys(j.unprobed || {}).length,
+        all: [...Object.keys(j.checks || {}), ...Object.keys(j.unprobed || {})].sort(),
+      };
     }, `http://127.0.0.1:${PORT}`);
-    ok(served >= 3, `/readyz reported only ${served} component(s); the comparison below would be vacuous`);
+    ok(served.probed >= 3, `/readyz probed only ${served.probed} component(s); the comparison below would be vacuous`);
+    ok(served.unprobed >= 1,
+      '/readyz named NO unprobed component: componentsWithoutProbe is empty or never reached the body, ' +
+      'and the second half of this check would be asserting over nothing');
     const claimed = Number((/(\d+) (?:компонент|component)/.exec(title || '') || [])[1] || 0);
-    ok(claimed === served,
-      `the rail summarised ${claimed} component(s) while /readyz reports ${served} — a hand-picked ` +
-      `subset is exactly the defect this indicator was widened to remove: ${title}`);
+    ok(claimed === served.probed,
+      `the rail summarised ${claimed} checked component(s) while /readyz probed ${served.probed} — a ` +
+      `hand-picked subset is exactly the defect this indicator was widened to remove: ${title}`);
+    const claimedUn = Number((/(\d+) (?:без пробы|more carried without a probe)/.exec(title || '') || [])[1] || 0);
+    ok(claimedUn === served.unprobed,
+      `the rail counted ${claimedUn} unprobed component(s) against ${served.unprobed} from the server — ` +
+      `a component nobody watches vanished from the tooltip silently: ${title}`);
     const cls = await host.locator('.dot').getAttribute('class');
     ok(!/\bno\b/.test(cls || ''),
       `"not configured" must NOT render as the red/error dot: ${cls}`);
@@ -1131,7 +1148,11 @@ try {
     await page.waitForSelector('[data-view="health"]', { state: 'visible', timeout: 10000 });
     // The rows are written by railHealth() when it lands; wait for the table rather than a sleep.
     await page.waitForSelector('#hz-list table.hztab tbody tr', { timeout: 15000 });
-    const names = await page.$$eval('#hz-list tbody tr td:first-child', (tds) =>
+    // ⚠ `tr:not(.hzgrp)`: W6 put a group-header row inside the same table, and its single
+    // <td colspan="3"> is a first-child td too. Without the exclusion the header's explanatory
+    // sentence would be read as a component NAME, and the blank-reason assertion below would then be
+    // examining a cell that does not exist.
+    const names = await page.$$eval('#hz-list tbody tr:not(.hzgrp) td:first-child', (tds) =>
       tds.map((t) => t.innerText.trim()));
     // The set is DERIVED server-side; the floor is what catches a render that walked an empty object
     // and produced a table that looks complete because it looks like a table.
@@ -1140,7 +1161,7 @@ try {
       `the view must list what /readyz reports, got: ${names.join(', ')}`);
     // Every row says something in the reason column — an empty cell reads as a component that failed
     // for no reason at all, which is the class UX-PR-8 closed for the pane next door.
-    const reasons = await page.$$eval('#hz-list tbody tr td:last-child', (tds) =>
+    const reasons = await page.$$eval('#hz-list tbody tr:not(.hzgrp) td:last-child', (tds) =>
       tds.map((t) => t.innerText.trim()));
     ok(reasons.every((r) => r.length > 0), `a component was listed with a blank reason: ${JSON.stringify(reasons)}`);
     // And the measurement time, which is the whole point of a probe that runs on its own.
@@ -1158,6 +1179,126 @@ try {
     // The standing hint must be GONE once real rows exist — the mistake the run-flow pane made.
     ok(await page.locator('#hz-idle').count() === 0,
       'the "not checked yet" hint is still in the DOM beside real rows, claiming the opposite of what is shown');
+  });
+
+
+  // ------------------------------------------------------------------ W6 «состав сервисов» (ADR-129)
+  // The view stopped being a list of probe results and became the answer to «what is this deployment
+  // made of, what is up, and what is nobody watching». Three properties, because each goes missing its
+  // own way: the SET can silently shrink to what happens to be probed; the SUMMARY can disagree with the
+  // rows beneath it; and the fourth state can arrive wearing the third one's word.
+
+  // The perennial defect in miniature: a view that renders the subset it happens to receive looks
+  // complete, because it looks like a table. So the set is compared for EQUALITY against the live
+  // answer — including the components carried without a probe, which are exactly the ones a subset
+  // would drop.
+  await check('the health view lists every component the server knows about, probed or not', async () => {
+    await page.evaluate(() => { location.hash = '#v=health'; });
+    await page.waitForSelector('#hz-list table.hztab tbody tr', { timeout: 15000 });
+    const served = await page.evaluate(async (base) => {
+      const r = await fetch(base + '/readyz');
+      const j = await r.json();
+      return {
+        probed: Object.keys(j.checks || {}).length,
+        unprobed: Object.keys(j.unprobed || {}).length,
+        all: [...Object.keys(j.checks || {}), ...Object.keys(j.unprobed || {})].sort(),
+      };
+    }, `http://127.0.0.1:${PORT}`);
+    ok(served.all.length >= 4, `/readyz named ${served.all.length} component(s); equality below would be cheap`);
+    ok(served.unprobed >= 1, '/readyz named no unprobed component — the half this check exists for is empty');
+    ok(served.probed >= 3, `/readyz probed only ${served.probed} component(s)`);
+    const shown = (await page.$$eval('#hz-list tbody tr:not(.hzgrp) td:first-child', (tds) =>
+      tds.map((t) => t.innerText.trim()))).sort();
+    ok(JSON.stringify(shown) === JSON.stringify(served.all),
+      `the view shows [${shown.join(', ')}] while the server names [${served.all.join(', ')}] — a ` +
+      `component the deployment carries and the page omits is one nobody will ever ask about`);
+  });
+
+  // The summary is the first thing read and the easiest thing to get wrong: it is computed from the
+  // same array the rows are, so a sum that does not equal the rows means the render walked one thing
+  // and counted another.
+  await check('the summary line adds up, and adds up to what the table shows', async () => {
+    await page.waitForSelector('#hz-sum', { timeout: 15000 });
+    const sumText = (await page.locator('#hz-sum').innerText()).trim();
+    // The FORM, not the containment — bi() with nested <b> is the first place in this file where a
+    // bi() call carries markup INSIDE markup, and printing that at the reader is the defect the
+    // measurement line already committed once.
+    ok(!/<span|data-lang|&lt;span|<b>/.test(sumText),
+      `the summary is printing markup at the reader instead of rendering it: ${sumText}`);
+    const nums = (sumText.match(/\d+/g) || []).map(Number);
+    ok(nums.length >= 5, `the summary names ${nums.length} number(s); every term must print, even a zero: ${sumText}`);
+    const [total, ...terms] = nums;
+    const sum = terms.reduce((a, b) => a + b, 0);
+    ok(sum === total,
+      `the summary says ${total} component(s) and its terms add to ${sum}: ${sumText}`);
+    const rows = await page.locator('#hz-list tbody tr:not(.hzgrp)').count();
+    ok(rows === total,
+      `the summary claims ${total} component(s) and the table has ${rows} row(s) — the two are computed ` +
+      `from one array, so a disagreement means the render counted something it did not draw`);
+    const servedAll = await page.evaluate(async (base) => {
+      const j = await (await fetch(base + '/readyz')).json();
+      return Object.keys(j.checks || {}).length + Object.keys(j.unprobed || {}).length;
+    }, `http://127.0.0.1:${PORT}`);
+    ok(total === servedAll, `the summary counts ${total}, the server names ${servedAll}`);
+  });
+
+  // «Не поднят» and «пробы нет» are opposite statements — "this component is absent" against "this
+  // component is here and nobody asks about it". One word for both would rebuild, at the level of a
+  // word, exactly the ambiguity the rail's dot was widened to remove.
+  await check('an unprobed component is named differently and carries a recorded reason', async () => {
+    const words = await page.evaluate(() => {
+      const pick = (cls) => [...document.querySelectorAll('#hz-list tbody td.' + cls)]
+        .map((td) => td.innerText.trim());
+      return { skipped: pick('hz-skipped'), unprobed: pick('hz-unprobed') };
+    });
+    ok(words.unprobed.length >= 1, 'no row was rendered in the unprobed state; this check would be vacuous');
+    const overlap = words.unprobed.filter((w) => words.skipped.includes(w));
+    ok(overlap.length === 0,
+      `«${overlap.join(', ')}» is used for BOTH «not up» and «no probe» — two opposite states sharing ` +
+      `one word is the ambiguity this view exists to remove`);
+    // A reason of two words is an omission with the shape of a reason — the same bar componentsWithoutProbe
+    // itself is held to (tests/test_pr_acceptance_offline.py).
+    const why = await page.$$eval('#hz-list tbody tr', (trs) =>
+      trs.filter((tr) => tr.querySelector('td.hz-unprobed'))
+         .map((tr) => tr.querySelector('td:last-child').innerText.trim()));
+    ok(why.every((w) => w.length >= 30),
+      `an unprobed component was listed with a reason too short to be one: ${JSON.stringify(why)}`);
+    // The group header exists, exactly once, and stands BEFORE the first unprobed row — otherwise the
+    // grouping fell apart and the reader sees two indistinguishable halves in a row.
+    const layout = await page.evaluate(() => {
+      const trs = [...document.querySelectorAll('#hz-list tbody tr')];
+      return {
+        headers: trs.filter((tr) => tr.classList.contains('hzgrp')).length,
+        headerAt: trs.findIndex((tr) => tr.classList.contains('hzgrp')),
+        firstUnprobedAt: trs.findIndex((tr) => tr.querySelector('td.hz-unprobed')),
+      };
+    });
+    ok(layout.headers === 1, `the unprobed group has ${layout.headers} header row(s), want exactly 1`);
+    ok(layout.headerAt >= 0 && layout.headerAt < layout.firstUnprobedAt,
+      `the group header is at row ${layout.headerAt} and the first unprobed row at ${layout.firstUnprobedAt}`);
+    // And every hz-* class in the DOM is DEFINED. An invented class is a silent no-op: «no probe»
+    // would render in the same colour as «not up», which is the distinction being made.
+    const bad = await page.evaluate(() => {
+      const defined = new Set();
+      for (const sheet of document.styleSheets) {
+        let rules; try { rules = sheet.cssRules; } catch { continue; }
+        for (const r of rules) {
+          if (!r.selectorText) continue;
+          for (const m of r.selectorText.matchAll(/\.(hz-[a-z]+)/g)) defined.add(m[1]);
+        }
+      }
+      const used = new Set();
+      for (const el of document.querySelectorAll('#hz-list [class*="hz-"], .hzkey [class*="hz-"]')) {
+        for (const c of el.classList) if (c.startsWith('hz-')) used.add(c);
+      }
+      return [...used].filter((c) => !defined.has(c));
+    });
+    ok(bad.length === 0, `these state classes are used but defined nowhere in the stylesheet: ${bad.join(', ')}`);
+    // The legend explains the axis and must survive a re-render, so it lives OUTSIDE #hz-list. If it
+    // ever moves inside, the first refresh erases it and the reader loses the key to four words.
+    ok(await page.locator('[data-view="health"] dl.hzkey').count() === 1, 'the state legend is missing');
+    ok(await page.locator('#hz-list dl.hzkey').count() === 0,
+      'the legend moved inside #hz-list, where hzRender() overwrites it on the next poll');
   });
 
   /* ------------------------------------------------- ADR-076: verdict states an exit code cannot carry
