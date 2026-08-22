@@ -61,6 +61,15 @@ def template_re(tpl: str) -> "re.Pattern[str]":
     return re.compile("".join(out))
 
 
+def template_fields(tpl: str) -> "list[str]":
+    """The {field} names in order, so a group can be found by NAME rather than by a counted index.
+
+    An index would have to be re-counted every time a template gains a field, and the check below is
+    worth exactly as much as its pointing at the right group.
+    """
+    return re.findall(r"\{([a-z_]+)\}", tpl)
+
+
 def ensure_built() -> bool:
     """Rebuild when dist is missing or older than the source.
 
@@ -160,6 +169,63 @@ def main() -> int:
                      f"disagree, so the hub cannot render this row in Russian and will silently show "
                      f"the English\n      message:  {rec['msg']!r}\n      template: {entry['en']!r}")
 
+    # [JOURNAL-SVC-NAME-HARDCODED] — THE NAME IN THE TEXT IS THE NAME IN THE FIELD.
+    #
+    # Everything above ran as the DEFAULT service, and that is why this gate was green over a defect
+    # for the whole life of the `vnc` profile: `startedMsg`/`stoppedMsg` returned the literal
+    # "Service browser started: …" while the record carried svc:"browser-vnc". Measured on a live
+    # stack (docker, 2026-08-18):
+    #   {"code":"service.started","msg":"Service browser started: version dev, …","svc":"browser-vnc"}
+    # The template check above cannot see it — the template is `Service {svc} started: …` and {svc}
+    # accepts ANY value, so a message naming the WRONG service matches as perfectly as one naming the
+    # right one. Nor can any check run under the default name: there the removed literal and the
+    # correct answer are the same string.
+    #
+    # ⚠ This is deliberately NOT the same check as pw-executor/src/svcjournal.test.ts, which asserts
+    # the same property against a regex written inside that test. This one takes the shape from
+    # brain/events.json — the catalogue the hub actually renders with — so it also fails if the
+    # TEMPLATE moves out from under the sentence, which the unit test cannot see. Both halves of that
+    # claim are measured, not asserted: restoring the literal fails the unit test 5 of 8 and fails
+    # this pass on BOTH records; editing the catalogue's English template while leaving the code
+    # alone fails this gate twice and leaves the unit test green 8 of 8.
+    with tempfile.TemporaryDirectory() as state:
+        script = (
+            "const j = require(%r);"
+            "j.journal('service.started','info',"
+            "  j.startedMsg('v9.9.9', j.supervisor(), 4242, ' — CDP 0.0.0.0:9223'));"
+            "j.journal('service.stopped','info', j.stoppedMsg('signal SIGTERM'));"
+            % DIST
+        )
+        # The name of the SECOND service on this binary (docker-compose.yml: browser-vnc), i.e. a name
+        # this test process is not running under.
+        env = dict(os.environ, SENTINEL_STATE_DIR=state, SENTINEL_SVC_NAME="browser-vnc")
+        r = subprocess.run(["node", "-e", script], capture_output=True, text=True, env=env, timeout=120)
+        path = os.path.join(state, "logs", "service.jsonl")
+        if r.returncode != 0 or not os.path.exists(path):
+            fail(f"the writer failed under SENTINEL_SVC_NAME: rc={r.returncode} {r.stderr[-300:]}")
+        else:
+            for line in open(path, encoding="utf-8").read().splitlines():
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                if rec.get("svc") != "browser-vnc":
+                    fail(f"svc is {rec.get('svc')!r} under SENTINEL_SVC_NAME=browser-vnc — the field "
+                         f"that says which service wrote a line does not follow the service")
+                entry = catalogue["events"].get(rec["code"])
+                if entry is None:
+                    continue
+                fields = template_fields(entry["en"])
+                m = template_re(entry["en"]).match(rec["msg"])
+                if m is None or "svc" not in fields:
+                    fail(f"{rec['code']}: cannot read the service name out of {rec['msg']!r} with "
+                         f"template {entry['en']!r}")
+                    continue
+                said = m.group(fields.index("svc") + 1)
+                if said != rec["svc"]:
+                    fail(f"{rec['code']}: the journal's field says svc={rec['svc']!r} and the sentence "
+                         f"a person reads in the hub says {said!r} — two statements about one fact, "
+                         f"and the one the reader sees is the wrong one\n      message: {rec['msg']!r}")
+
     # It must not throw when the journal cannot be written — a service that refuses to start over its
     # own log file turns a logging problem into an outage.
     #
@@ -216,7 +282,8 @@ def main() -> int:
         print_failures()
         return 1
     print("browser journal: OK (203 records in one file, 0640/0750, svc=browser, seq from 1, "
-          "messages match their catalogue templates, unwritable path survived, and cdp-service calls it)")
+          "messages match their catalogue templates, the sentence names the same service as the `svc` "
+          "field under browser-vnc, unwritable path survived, and cdp-service calls it)")
     return 0
 
 

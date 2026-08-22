@@ -1,11 +1,13 @@
 // Command agentctl is the Sentinel control-plane CLI.
 //
-// Subcommands:
-//
-//	agentctl run --target <URL> [--planner h|llm] [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]
-//	agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn, ADR-048)
-//	agentctl baseline update --plan <plan.json> [--target <URL>]   (the only golden-baseline mutation path)
-//	agentctl locators clear-quarantine
+// The subcommands are NOT listed here. They were, and the copy went stale the way a second list
+// always does: it still said `--planner h|llm` long after `goal` joined, and it named THREE of the
+// thirteen subcommands the dispatcher accepts — in four lines, because `run` appeared twice, which is
+// how a count of lines gets mistaken for a count of things — while saying nothing of the 34
+// control-api verbs (api.go).
+// usage() below is the single answer to "what can this thing do" — it is what `agentctl` with no
+// arguments prints, main_test.go holds it against the dispatcher, and usage_flags_test.go holds it
+// against the real run flag set. A duplicate here is checked by nothing, which is why it rotted.
 //
 // It spawns the Python brain (venv) via subprocess + env (no gRPC yet; M2b) and propagates the
 // brain's structured exit code (0 pass / 1 step-fail / 2 golden regression / 3 integrity: plan_hash or golden HMAC).
@@ -53,6 +55,23 @@ func newToken() string {
 	return hex.EncodeToString(b)
 }
 
+// runFlagsNotInUsage names the `agentctl run` flags the synopsis deliberately does not print, each
+// with the reason. usage_flags_test.go reads this map, so an omission is a recorded decision rather
+// than the thing that happened to `--observe`: a flag added to the program and not to the help, which
+// nobody could see was missing because nothing compared the two lists.
+//
+// The shape is `apiRoutesWithoutCLI`'s (api.go) and `componentsWithoutProbe`'s (cmd/control-api/
+// readyz.go), for the same reason it works there — and like those, the gate CAPS the size of this map
+// and the cap may only go down. An exemption list that is allowed to grow is a synopsis that is
+// allowed to shrink.
+var runFlagsNotInUsage = map[string]string{
+	"explore": "an alias for the DEFAULT mode, accepted so `--explore` does not error; printing it " +
+		"would advertise a second spelling of doing nothing",
+	"owner": "control-api sets it when it spawns this binary (ADR-109) — the flag's own help says " +
+		"`rarely useful by hand`, and a person typing an account id here changes only who a row is " +
+		"stamped with, never what the run does",
+}
+
 // usage lists EVERY subcommand. ADR-088: it used to list four of seven, and the three it omitted were
 // the ones a user most needs — `report` is the sole producer of report.html, report.json, metrics.prom
 // and junit.xml, and `export-spec` is the migration path to @playwright/test that competitors sell as a
@@ -60,10 +79,12 @@ func newToken() string {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> [--planner heuristic|llm|goal] [--goal <g>|--describe <d>]")
+	fmt.Fprintln(os.Stderr, "               [--observe off|frames|stream|human|record]   # what this run lets you see")
 	fmt.Fprintln(os.Stderr, "               [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
 	fmt.Fprintln(os.Stderr, "               [--run-config <run.yaml>] [--scenario <name>] [--coverage-target <0..1>]")
 	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--artifact-dir <dir>]        (all flags: agentctl run --help)")
-	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--goal <g>|--describe <d>]   (M9.10 multi-turn)")
+	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--message <text>] [--goal <g>|--describe <d>]")
+	fmt.Fprintln(os.Stderr, "                                             # (M9.10 multi-turn) --message is this turn; --goal/--describe pin the objective")
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
 	fmt.Fprintln(os.Stderr, "  agentctl export-spec --plan <plan.json> [-o <file>]   # a frozen plan -> @playwright/test .spec.ts")
 	fmt.Fprintln(os.Stderr, "  agentctl export-git --spec <f> --to-git <repo> [--push]  # land authored specs in a repository")
@@ -501,38 +522,93 @@ func runWithStore(repo, runID string, extra []string) int {
 	return spawnBrain(repo, runID, extra)
 }
 
-func cmdRun(repo string, args []string) int {
+// runFlags holds the pointers `agentctl run` parses its flags into. The type exists for one reason,
+// and it is not tidiness: with the declarations inside cmdRun, the only way for a gate to ask WHICH
+// flags the command accepts was to grep this file for `fs.String(` — a question about the shape of
+// the source, which every mutation walks straight through, and which is blind to `fs.Var` flags
+// (`--spec` on export-git is one) by construction. Split out, a test builds the REAL flag set and
+// walks it with VisitAll, so "the synopsis names every flag" is a question about the program.
+//
+// USAGE-OMITS-OBSERVE-AXIS, measured 2026-08-21: usage() named SEVENTEEN of `run`'s twenty-one
+// declared flags and omitted
+// `--observe` among the four — an entire observation axis, offered by the hub, absent from the
+// terminal's own help. ⚠ «thirteen» stood here first and was WRONG: it counted the parenthesised
+// groups of the synopsis, which are layout slots, not flags. Re-measured by intersecting the `fs.*`
+// declarations of runCmd with the text usage() prints: 21 declared, 17 named, 4 missing —
+// `--observe`, `--message`, `--explore`, `--owner`. The first two are now named; the last two are
+// not, and that is recorded rather than left to be rediscovered (see the gate's exemptions).
+// A hand-written synopsis that nobody diffs against the declarations omits precisely what was added
+// last, which is precisely what a person has not heard of yet.
+type runFlags struct {
+	target         *string
+	artifactDir    *string
+	mode           *string
+	planner        *string
+	goal           *string
+	message        *string
+	owner          *string
+	describe       *string
+	scenario       *string
+	runConfig      *string
+	coverageTarget *string
+	maxSteps       *string
+	replay         *bool
+	planFile       *string
+	healLLM        *bool
+	observe        *string
+	autVersion     *string
+	ci             *bool
+	force          *bool
+	conversationID *string
+}
+
+// newRunFlagSet declares every flag `agentctl run` accepts, and returns the flag set beside the
+// pointers so a caller that only wants the SET (usage_flags_test.go) need not perform a run.
+func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	target := fs.String("target", "", "target URL (required)")
-	artifactDir := fs.String("artifact-dir", "", "artifact dir (default ./runs/<id>)")
-	mode := fs.String("mode", "explore", "run mode")
+	f := &runFlags{}
+	f.target = fs.String("target", "", "target URL (required)")
+	f.artifactDir = fs.String("artifact-dir", "", "artifact dir (default ./runs/<id>)")
+	f.mode = fs.String("mode", "explore", "run mode")
 	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
-	planner := fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
-	goal := fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
+	f.planner = fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
+	f.goal = fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
 	// ADR-108a: this turn's text, distinct from the objective. Before it existed, control-api sent
 	// every turn AS --goal, so a follow-up and a new objective were the same field and "one goal per
 	// conversation" could not be stated, let alone enforced.
-	message := fs.String("message", "", "chat turn text (use with --mode chat); the objective stays pinned to the conversation")
+	f.message = fs.String("message", "", "chat turn text (use with --mode chat); the objective stays pinned to the conversation")
 	// ADR-109: the local account this run belongs to, as control-api resolved it. Not a secret (a user
 	// id) and no more privileged than the direct database access a local user already has — but it is
 	// what lets the BRAIN stamp the chats projection it writes, which control-api never touches.
-	owner := fs.String("owner", "", "local account id that owns this run (set by control-api; rarely useful by hand)")
-	describe := fs.String("describe", "", "NL flow description -> describe-mode (M9.2b); mutually exclusive with --goal")
-	scenario := fs.String("scenario", "", "RunConfig scenario name to select (M9.2b)")
-	runConfig := fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets/auth/scenarios)")
-	coverageTarget := fs.String("coverage-target", "0.85", "coverage target in [0,1]")
-	maxSteps := fs.String("max-steps", "40", "max exploration steps (safety backstop)")
-	replay := fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
-	planFile := fs.String("plan", "", "path to plan.json (required with --replay)")
-	healLLM := fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
+	f.owner = fs.String("owner", "", "local account id that owns this run (set by control-api; rarely useful by hand)")
+	f.describe = fs.String("describe", "", "NL flow description -> describe-mode (M9.2b); mutually exclusive with --goal")
+	f.scenario = fs.String("scenario", "", "RunConfig scenario name to select (M9.2b)")
+	f.runConfig = fs.String("run-config", "", "path to a RunConfig YAML (mode/goal/planner/budgets/auth/scenarios)")
+	f.coverageTarget = fs.String("coverage-target", "0.85", "coverage target in [0,1]")
+	f.maxSteps = fs.String("max-steps", "40", "max exploration steps (safety backstop)")
+	f.replay = fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
+	f.planFile = fs.String("plan", "", "path to plan.json (required with --replay)")
+	f.healLLM = fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
 	// LIVE-MATRIX (ADR-120): the same choice the hub offers, under the same name. A capability the UI
 	// has and the terminal does not is the gap ADR-107 exists to close; an EMPTY value is left empty
 	// so the brain can tell "nothing was asked for" from "frames was asked for" and say which it used.
-	observe := fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
-	autVersion := fs.String("aut-version", "", "app-under-test version/sha (flake quarantine)")
-	ci := fs.Bool("ci", false, "CI mode (forbids --force-replay)")
-	force := fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
-	conversationID := fs.String("conversation-id", "", "M9.10 multi-turn conversation id (use with --mode chat); resumes the thread by conversation_id->thread_id (ADR-048)")
+	f.observe = fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
+	f.autVersion = fs.String("aut-version", "", "app-under-test version/sha (flake quarantine)")
+	f.ci = fs.Bool("ci", false, "CI mode (forbids --force-replay)")
+	f.force = fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
+	f.conversationID = fs.String("conversation-id", "", "M9.10 multi-turn conversation id (use with --mode chat); resumes the thread by conversation_id->thread_id (ADR-048)")
+	return fs, f
+}
+
+func cmdRun(repo string, args []string) int {
+	// Locals, rather than rf.* at every use site: the declarations moved out (see runFlags), the body
+	// did not, and a rename storm through a hundred lines would have hidden that in the diff.
+	fs, rf := newRunFlagSet()
+	target, artifactDir, mode, planner := rf.target, rf.artifactDir, rf.mode, rf.planner
+	goal, message, owner, describe := rf.goal, rf.message, rf.owner, rf.describe
+	scenario, runConfig, coverageTarget, maxSteps := rf.scenario, rf.runConfig, rf.coverageTarget, rf.maxSteps
+	replay, planFile, healLLM, observe := rf.replay, rf.planFile, rf.healLLM, rf.observe
+	autVersion, ci, force, conversationID := rf.autVersion, rf.ci, rf.force, rf.conversationID
 	_ = fs.Parse(args)
 
 	// M9.2a (ADR-027): record which flags the user actually set, so RunConfig precedence (flag > file)

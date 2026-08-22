@@ -68,6 +68,30 @@ export function supervisor(): string {
 }
 
 /**
+ * The name THIS process answers to in the deployment's record — the one place it is decided.
+ *
+ * WHY IT IS A FUNCTION AND NOT A LITERAL AT EACH USE. Two services run this same binary: `browser`
+ * (headless, the default stack) and `browser-vnc` (headed, behind the `vnc` profile, ADR-127). They
+ * append to the SAME journal file, so this value is the only thing that tells their lines apart.
+ * Until now it was read here for the `svc` FIELD and written as the literal `browser` in the message
+ * TEXT — two statements about one fact, and they disagreed the first time anybody measured them on a
+ * live stack: `{"code":"service.started","msg":"Service browser started: version dev, …",
+ * "svc":"browser-vnc"}` (docker, 2026-08-18). The field was right and the sentence was wrong, which
+ * is the worse way round: the hub's "Service journal" view shows people the TEXT, so two services
+ * read as one and the difference survives only in the machine representation.
+ *
+ * ⚠ WHY NO GATE SAW IT, and what that demands of the new ones. The catalogue template is
+ * `Service {svc} started: …` and `{svc}` accepts ANY value, so matching a message against its
+ * template — the check that exists precisely for this class — matched the WRONG name perfectly.
+ * A test that only renders this service's own default name is vacuous for the same reason: the
+ * literal and the correct answer are the same string. Hence svcjournal.test.ts drives a name this
+ * process is NOT running under, and asserts the sentence and the `svc` field agree.
+ */
+export function svcName(): string {
+  return process.env.SENTINEL_SVC_NAME || 'browser';
+}
+
+/**
  * The `service.started` sentence, built to match its catalogue template exactly.
  *
  * Exported, and built here rather than at the call site, for the reason PR-B measured the hard way:
@@ -76,14 +100,22 @@ export function supervisor(): string {
  * back to raw English — silently, one row at a time. Six Go codes were doing that. A message
  * assembled inline cannot be reached by a test; this one can, and tests/test_browser_journal_offline.py
  * runs THIS function and matches its output against brain/events.json.
+ *
+ * ⚠ `svc` is LAST and defaults to svcName() on purpose. The shipping call site passes nothing, so the
+ * name in the sentence and the name in the record's `svc` field come from ONE function call apiece to
+ * ONE function — they cannot drift without changing the line they both read, which is the whole point
+ * of the parameter. It is a parameter at all, rather than an unconditional svcName() inside, because
+ * a test that cannot say a name other than this process's own cannot tell a derived name from the
+ * hardcoded one it replaced.
  */
-export function startedMsg(version: string, sup: string, pid: number, detail: string): string {
-  return `Service browser started: version ${version}, brought up by ${sup}, pid ${pid}${detail}`;
+export function startedMsg(version: string, sup: string, pid: number, detail: string,
+                           svc: string = svcName()): string {
+  return `Service ${svc} started: version ${version}, brought up by ${sup}, pid ${pid}${detail}`;
 }
 
-/** The `service.stopped` sentence, same contract as startedMsg. */
-export function stoppedMsg(reason: string): string {
-  return `Service browser stopped: ${reason}`;
+/** The `service.stopped` sentence, same contract as startedMsg — including where `svc` comes from. */
+export function stoppedMsg(reason: string, svc: string = svcName()): string {
+  return `Service ${svc} stopped: ${reason}`;
 }
 
 /**
@@ -112,12 +144,11 @@ export function journal(code: string, lvl: string, msg: string): void {
     cat: 'service',
     code,
     msg,
-    // LIVE-VNC: TWO services now run this same binary — `browser` (headless, the default stack) and
-    // `browser-vnc` (headed, behind the `vnc` profile) — and they append to the SAME journal file.
-    // Without this they would both write svc:"browser", and the field that exists to answer "which
-    // service said this" would stop answering it. The default is unchanged, so the single-service
-    // deployment and every existing test see exactly what they saw before.
-    svc: process.env.SENTINEL_SVC_NAME || 'browser',
+    // LIVE-VNC: TWO services run this same binary and append to the SAME file, so this field is what
+    // answers "which service said this". It reads svcName() rather than the environment directly
+    // because the message builders above read the same function: the field and the sentence are one
+    // fact, and reading the variable twice is how they came to disagree (see svcName).
+    svc: svcName(),
   } satisfies JournalRecord) + '\n';
   try {
     // 0750/0640 match what the Go writer creates, so the file's permissions do not depend on which

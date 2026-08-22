@@ -7,9 +7,15 @@ Rules
 1. Every primary *.md (not ending .en.md) that is NOT in SINGLE_LANGUAGE must
    have a sibling <stem>.en.md in the same directory.
 2. Every *.en.md must have a sibling <stem>.md (no orphan English files).
-3. WARN-only (never fail): when the heading count differs between a paired
-   primary and its .en.md counterpart, print a WARN line but do not exit
-   non-zero.
+3. HARD FAIL: when the heading count differs between a paired primary and its
+   .en.md counterpart. This was WARN-only ("never fail") until 2026-08-22, and
+   the warning it printed had been true and ignored for months: ARCHITECTURE.md
+   carried 21 headings against ARCHITECTURE.en.md's 15 — the English half simply
+   stopped after §6, losing §7, §8 and the whole extensions section. A gate whose
+   output nobody has to act on is a comment. Measured before promoting it: of the
+   53 tracked pairs, that ONE was drifting, so this costs nothing to enforce.
+   Heading COUNT is the cheap half; order and level are compared for the
+   ARCHITECTURE pair by tests/test_bilingual_content_offline.py.
 
 Exit 0 + one-line "OK" summary when no violations are found.
 Exit 1 + grep-able "ERROR" lines when violations are found.
@@ -158,7 +164,6 @@ def main(argv: list[str]) -> int:
     all_md: set[Path] = primary_md | en_md
 
     errors: list[str] = []
-    warnings: list[str] = []
     verified_pairs: int = 0
 
     # ------------------------------------------------------------------
@@ -177,13 +182,15 @@ def main(argv: list[str]) -> int:
             )
         else:
             verified_pairs += 1
-            # WARN-only: heading drift between the pair.
+            # Heading drift between the pair — an ERROR since 2026-08-22 (see the module
+            # docstring, rule 3, for the measurement that bought the promotion).
             pc = _count_headings(p)
             ec = _count_headings(en_sibling)
             if pc != ec:
-                warnings.append(
-                    f"HEADING_DRIFT  {rel} ({pc} headings)"
+                errors.append(
+                    f"HEADING_DRIFT {rel} ({pc} headings)"
                     f"  vs  {en_sibling.relative_to(repo_root).as_posix()} ({ec} headings)"
+                    f"  ->  the two halves describe documents of different shape"
                 )
 
     # ------------------------------------------------------------------
@@ -203,16 +210,12 @@ def main(argv: list[str]) -> int:
     # ------------------------------------------------------------------
     # Output
     # ------------------------------------------------------------------
-    for w in warnings:
-        print(f"WARN  {w}")
-
     if errors:
         for e in errors:
             print(f"ERROR {e}")
         print(
             f"\nFAIL: {len(errors)} bilingual-parity error(s)."
             f"  pairs_ok={verified_pairs}  allowlisted={len(SINGLE_LANGUAGE)}"
-            f"  warnings={len(warnings)}"
         )
         return 1
 
@@ -229,7 +232,6 @@ def main(argv: list[str]) -> int:
     print(
         f"OK: bilingual parity verified."
         f"  pairs={verified_pairs}  allowlisted={len(SINGLE_LANGUAGE)}"
-        f"  warnings={len(warnings)}"
     )
     return 0
 
