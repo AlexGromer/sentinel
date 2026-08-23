@@ -107,8 +107,16 @@ const markView = (page, view) =>
         const n = occ.get(base) || 0;
         occ.set(base, n + 1);
         const key = base + '|' + n;
-        b.setAttribute('data-press-key', key);
-        labels.push({ key, tag: b.tagName.toLowerCase(), name: nm, id: b.id || '' });
+        // ⚠ В АТРИБУТ УХОДИТ ЧИСЛО, А КЛЮЧ ЖИВЁТ В ДАННЫХ. Первая редакция писала в атрибут сам
+        // ключ и потом собирала из него CSS-селектор, экранируя кавычки: `k.replace(/"/g, '\\"')`.
+        // CodeQL был прав, назвав это неполным экранированием — обратный слэш не экранировался, а
+        // имя контрола берётся из разметки и слэш в нём возможен. Правильный ответ не «доэкранировать»,
+        // а УБРАТЬ интерполяцию произвольного текста в селектор: числовой идентификатор безопасен в
+        // CSS по построению, а сопоставление по ключу делается сравнением строк, где экранирования
+        // не существует как понятия. Это второй раз, когда CodeQL ловит в этом репозитории хрупкость
+        // разбора строк; оба раза лечение — снять конструкцию, а не подпереть её.
+        b.setAttribute('data-press-id', String(labels.length));
+        labels.push({ pid: labels.length, key, tag: b.tagName.toLowerCase(), name: nm, id: b.id || '' });
       }
     }
     return labels;
@@ -193,14 +201,15 @@ for (const view of await views(page)) {
     await page.waitForTimeout(110);
     await openDetails(page, view);
     let fresh = await markView(page, view);
-    if (!fresh.some((f) => f.key === lab.key)) {
+    const now = fresh.find((f) => f.key === lab.key);
+    if (!now) {
       const why = declaredFor ? `не нажат — ОБЪЯВЛЕНО: ${NOT_PRESSED[declaredFor]}` : 'НЕ НАЖАТ — исчез после предыдущих нажатий';
       if (declaredFor) tally.declared += 1; else { tally.undeclared += 1; fail(`${view} / ${label}: исчез под обходом и не объявлен`); }
       rows.push({ view, control: label, tag: lab.tag, result: why, codes: [] });
       continue;
     }
 
-    const loc = page.locator(`[data-view="${view}"] [data-press-key=${JSON.stringify(lab.key)}]`).first();
+    const loc = page.locator(`[data-view="${view}"] [data-press-id="${now.pid}"]`).first();
     const before = journalLines();
     const errsBefore = broken.length;
     const netBefore = netLog.length;
@@ -215,14 +224,14 @@ for (const view of await views(page)) {
       // НАЖАТИЕМ — законным путём пользователя, — а не подменой состояния из скрипта: подмена
       // проверила бы отрисовку и пропустила бы саму вкладку, которая тоже контрол и тоже в перечне.
       if (!(await loc.isVisible().catch(() => false))) {
-        const sub = await page.evaluate(({ v, k }) => {
-          const el = document.querySelector(`[data-view="${v}"] [data-press-key="${k.replace(/"/g, '\\"')}"]`);
+        const sub = await page.evaluate(({ v, pid }) => {
+          const el = document.querySelector(`[data-view="${v}"] [data-press-id="${pid}"]`);
           for (let n = el; n && n !== document.body; n = n.parentElement) {
             const p = n.getAttribute && n.getAttribute('data-subpanel');
             if (p) return p;
           }
           return null;
-        }, { v: view, k: lab.key });
+        }, { v: view, pid: now.pid });
         if (sub) {
           await page.click(`.subtab-btn[data-sub="${sub}"]`, { timeout: 1200 }).catch(() => {});
           await page.waitForTimeout(180);
@@ -233,8 +242,8 @@ for (const view of await views(page)) {
         // ⚠ ИНСТРУМЕНТ ОБЯЗАН НАЗВАТЬ, ЧТО ИМЕННО ПРЯЧЕТ КОНТРОЛ. «Timeout 2000ms» — это симптом, и
         // под ним лежали РАЗНЫЕ вещи: постоянно скрытая секция, блок другого режима, просмотрщик
         // артефактов. Догадываться о механизме нельзя; надо спросить страницу.
-        const why = await page.evaluate(({ v, k }) => {
-          const el = document.querySelector(`[data-view="${v}"] [data-press-key="${k.replace(/"/g, '\\"')}"]`);
+        const why = await page.evaluate(({ v, pid }) => {
+          const el = document.querySelector(`[data-view="${v}"] [data-press-id="${pid}"]`);
           if (!el) return 'элемента нет в DOM';
           for (let n = el; n && n !== document.body; n = n.parentElement) {
             const cs = getComputedStyle(n);
@@ -245,7 +254,7 @@ for (const view of await views(page)) {
           }
           const r = el.getBoundingClientRect();
           return r.width === 0 || r.height === 0 ? `нулевой размер (${r.width}×${r.height})` : 'видим по стилям, но клик невозможен';
-        }, { v: view, k: lab.key });
+        }, { v: view, pid: now.pid });
         if (declaredFor) {
           tally.declared += 1;
           rows.push({ view, control: label, tag: lab.tag, result: `не нажат — ОБЪЯВЛЕНО (${why}): ${NOT_PRESSED[declaredFor]}`, codes: [] });
