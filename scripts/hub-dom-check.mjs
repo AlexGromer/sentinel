@@ -1301,6 +1301,84 @@ try {
       'the legend moved inside #hz-list, where hzRender() overwrites it on the next poll');
   });
 
+
+  // ---------------------------------------------- Ф4: кнопка не объявляет успех, которого не было
+  //
+  // ⚠ НАЙДЕНО ПРОТЫКИВАНИЕМ, НЕ ГЕЙТОМ. Копирующая кнопка звала `navigator.clipboard.writeText()` и
+  // синхронно, не дожидаясь промиса, писала «скопировано». Замерено в обычном контексте без выданного
+  // разрешения: ярлык «скопировано», в буфере NotAllowedError, отклонённый промис — в консоли. Три
+  // кнопки, три раза, весь CI зелёный.
+  //
+  // Случай не экзотический: `navigator.clipboard` отсутствует в НЕБЕЗОПАСНОМ контексте, то есть при
+  // обращении к хабу по http на не-localhost — режим 2 поставки. Поэтому проверяются ОБА отказа:
+  // API отверг и API нет вовсе. Третья ветка — успех — проверяется тем же обходом, иначе гейт был бы
+  // зелен над кнопкой, которая не копирует НИКОГДА и честно об этом сообщает.
+  //
+  // Перечень кнопок ВЫВОДИТСЯ из разметки (`[id^="b-cp-"]`), а не переписан сюда: рукописный список
+  // показал бы лишнюю запись и промолчал бы о недостающей — ровно то, ради чего в этом репозитории
+  // выводят перечни. Пол на число, потому что обход, переставший что-либо находить, пройдёт идеально.
+  await check('a copy button never claims a success that did not happen', async () => {
+    const page2 = await context.newPage();
+    const errs = [];
+    page2.on('pageerror', (e) => errs.push(String(e).slice(0, 120)));
+    page2.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 120)); });
+    await page2.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+    await page2.evaluate(() => { location.hash = '#v=run'; });
+    await page2.waitForSelector('[id^="b-cp-"]', { timeout: 10000 });
+    const ids = await page2.$$eval('[id^="b-cp-"]', (els) => els.map((e) => e.id));
+    ok(ids.length >= 3, `нашлось ${ids.length} копирующих кнопок — обход перестал их видеть и всё ниже вакуумно`);
+
+    // (1) API есть, но отвергает. Разрешение НЕ выдано этому контексту, значит отказ настоящий, а не
+    //     подстроенный: так и выглядит первый визит обычного человека.
+    for (const id of ids) {
+      const before = (await page2.locator(`#${id}`).innerText()).trim();
+      await page2.click(`#${id}`);
+      await page2.waitForTimeout(150);
+      const after = (await page2.locator(`#${id}`).innerText()).trim();
+      ok(after !== before, `#${id}: ярлык не изменился — кнопка не сказала о нажатии ничего`);
+      ok(!/скопировано|copied/i.test(after),
+        `#${id} объявил «${after}», а записать в буфер не смог — интерфейс сообщает об успехе, ` +
+        `которого не было (это и был дефект)`);
+      await page2.waitForTimeout(2600); // ярлык отказа держится дольше успеха; дождаться отката
+    }
+    ok(errs.length === 0,
+      `отказ буфера уехал в консоль необработанным (${errs.length}): ${errs.slice(0, 2).join(' | ')} — ` +
+      `промис без обработчика отказа это тот же дефект, только невидимый читателю`);
+
+    // (2) API нет вовсе — небезопасный контекст, режим 2 поставки.
+    const page3 = await context.newPage();
+    await page3.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', { get: () => undefined });
+    });
+    await page3.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+    await page3.evaluate(() => { location.hash = '#v=run'; });
+    await page3.waitForSelector(`#${ids[0]}`, { timeout: 10000 });
+    await page3.click(`#${ids[0]}`);
+    await page3.waitForTimeout(150);
+    const noApi = (await page3.locator(`#${ids[0]}`).innerText()).trim();
+    ok(!/скопировано|copied/i.test(noApi),
+      `без Clipboard API кнопка всё равно объявила «${noApi}» — а копировать ей было нечем`);
+    ok(noApi.length > 4, `без Clipboard API кнопка не сказала ничего внятного: «${noApi}»`);
+
+    // (3) И встречный случай: с выданным разрешением успех ДОЛЖЕН объявляться, иначе «никогда не
+    //     обещать успех» удовлетворяется кнопкой, которая не работает вовсе.
+    const okCtx = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+    const page4 = await okCtx.newPage();
+    await page4.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+    await page4.evaluate(() => { location.hash = '#v=run'; });
+    await page4.waitForSelector(`#${ids[0]}`, { timeout: 10000 });
+    await page4.click(`#${ids[0]}`);
+    await page4.waitForTimeout(250);
+    const good = (await page4.locator(`#${ids[0]}`).innerText()).trim();
+    ok(/скопировано|copied/i.test(good), `с выданным разрешением кнопка объявила «${good}», а не успех`);
+    const clip = await page4.evaluate(() => navigator.clipboard.readText().catch(() => ''));
+    ok(String(clip).length > 20,
+      `кнопка сказала «скопировано», а в буфере ${String(clip).length} символ(ов) — обещание снова ` +
+      `не подтверждено делом`);
+    await okCtx.close();
+    await page2.close(); await page3.close(); await page4.close();
+  });
+
   /* ------------------------------------------------- ADR-076: verdict states an exit code cannot carry
      brain distinguishes pass_with_drift / pass_with_app_faults / problem_drift / problem_app_faults
      (ADR-071/072); until now the badge read the exit code alone, so a pass that survived only on repairs
@@ -1410,6 +1488,18 @@ try {
       // say why — pressing them used to answer `400 from_run: no replayable plan`.
       ok(await vPage.locator('#b-rerun').isDisabled(), '🔁 is enabled on a run that left no plan');
       ok(await vPage.locator('#b-baseline').isDisabled(), '📌 is enabled on a run that left no plan');
+      // ⚠ ЖДЁМ СОСТОЯНИЯ, А НЕ ЧИТАЕМ СРАЗУ. Эта строка была флейком: 2 прогона из 4 давали пустой
+      // `#b-noplan` и роняли гейт текстом «the controls are greyed out with no reason given» при
+      // неизменном коде ([HUB-GATE-FLAKY-ON-VERDICT]). Соседние утверждения про `disabled` проходили
+      // всегда, потому что атрибут ставится раньше, чем заполняется пояснение, — и чтение попадало в
+      // окно между ними. Правдоподобная версия «мало паузы после pkill» была НЕВЕРНА: пауза тут ни
+      // при чём, дело в порядке отрисовки внутри страницы.
+      // Таймаут, а не бесконечное ожидание: если пояснения нет ПО-НАСТОЯЩЕМУ, гейт обязан покраснеть,
+      // и покраснеет — с той же фразой, но уже заслуженно.
+      await vPage.waitForFunction(() => {
+        const e = document.getElementById('b-noplan');
+        return e && e.textContent.trim().length > 0;
+      }, null, { timeout: 10000 }).catch(() => {});
       const why = await vPage.locator('#b-noplan').textContent();
       ok(why && why.trim().length > 0, 'the controls are greyed out with no reason given');
       ok(/плана|plan/.test(why), `the reason does not mention the missing plan: ${why}`);

@@ -45,6 +45,7 @@ manual half below reads as the **remainder** rather than as the whole list.
 | Static-showcase DOM gate — the hub with no control-API behind it (floor 5) | `build` | `Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)` |
 | Python offline suite: **every** `tests/test_*_offline.py`, discovered by glob, floor 25 | `build` | `Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)` |
 | End-to-end UI smoke against a real deployment | `build` | `End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)` |
+| EVERY control of the hub is pressed: pressed, or not pressed for a recorded reason; the walk fails on a control that is neither | `build` | `Press every control of the hub (Ф4 — the walk ui-smoke does not do)` |
 | Screenshots uploaded as an artifact (`always()` — a failure is exactly when they are worth having) | `build` | `Upload UI smoke screenshots` |
 | Deterministic per-fixture replay with a golden diff, asserting the exit code | `replay` | `Explore + freeze goldens + replay (assert exit code)` |
 | Explore over `testdata/site` producing `plan.json` | `explore` | `Explore testdata/site -> plan.json` |

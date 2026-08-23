@@ -2460,13 +2460,34 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('b-cmd').textContent=cmd.join('\n');
   }
 
-  /* copy helper */
+  /* copy helper.
+     ⚠ НАЙДЕНО ПРОТЫКИВАНИЕМ (Ф4, 2026-08-22), и найдено не гейтом: кнопка сообщала об успехе,
+     которого не было. Прежняя редакция звала writeText() и ТУТ ЖЕ, синхронно, писала «скопировано»,
+     не дожидаясь промиса и не имея .catch(). Замерено в обычном контексте браузера без выданного
+     разрешения: ярлык «скопировано», в буфере — `NotAllowedError`, а отклонённый промис уезжает
+     необработанным в консоль. Три кнопки, три раза.
+     Случай не экзотический: `navigator.clipboard` ОТСУТСТВУЕТ в небезопасном контексте, то есть
+     при обращении к хабу по http на не-localhost — а это ровно режим 2 поставки (webui на 8088,
+     оператор открывает его по адресу машины). Там прежняя ветка `if (navigator.clipboard)` просто
+     не выполнялась, и кнопка всё равно говорила «скопировано».
+     Теперь ярлык ставится ПО ИСХОДУ: успех — только после разрешённого промиса; отказ и отсутствие
+     API названы своими словами и с подсказкой, что делать руками. Задержка отказа длиннее успеха:
+     «скопировано» подтверждает ожидаемое, а сообщение об отказе надо успеть прочитать. */
   function cpEl(srcId, btn){
     var t=ge(srcId).textContent;
-    if (navigator.clipboard) navigator.clipboard.writeText(t);
     var o=btn.innerHTML;
-    btn.innerHTML=bi('скопировано','copied');
-    setTimeout(function(){ btn.innerHTML=o; },1000);
+    var say=function(ru,en,ms){ btn.innerHTML=bi(ru,en); setTimeout(function(){ btn.innerHTML=o; },ms); };
+    if (!navigator.clipboard) {
+      say('буфер недоступен — выделите текст и скопируйте вручную',
+          'clipboard unavailable — select the text and copy it by hand', 2500);
+      return;
+    }
+    navigator.clipboard.writeText(t).then(function(){
+      say('скопировано','copied',1000);
+    }, function(){
+      say('не удалось скопировать — выделите текст и скопируйте вручную',
+          'could not copy — select the text and copy it by hand', 2500);
+    });
   }
   ge('b-cp-yaml').addEventListener('click',function(){ cpEl('b-yaml',this); });
   ge('b-cp-env').addEventListener('click', function(){ cpEl('b-env',this); });

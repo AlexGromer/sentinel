@@ -251,8 +251,8 @@ jobs:
           if [ "$n" -ne "$t" ]; then
             echo "::error::$n of $t checks passed in scripts/hub-dom-check.mjs"; exit 1
           fi
-          if [ "$t" -lt 48 ]; then
-            echo "::error::only $t checks ran in scripts/hub-dom-check.mjs — expected at least 48"; exit 1
+          if [ "$t" -lt 49 ]; then
+            echo "::error::only $t checks ran in scripts/hub-dom-check.mjs — expected at least 49"; exit 1
           fi
 
       - name: Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)
@@ -340,6 +340,21 @@ jobs:
           node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token \
             --out "$PWD/ui-smoke" || {
               echo "::error::the UI smoke failed — see the screenshots artifact"; sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1; }
+
+      - name: Press every control of the hub (Ф4 — the walk ui-smoke does not do)
+        # ⚠ Отдельный шаг, а НЕ часть смоука, и стенд у них общий: смоук ОПИСЫВАЕТ и ФОТОГРАФИРУЕТ
+        # каждый контрол, а нажимает четыре. «Протыкать каждую кнопку» не было покрыто ничем — и в
+        # первый же день, когда протыкивание довели до конца, оно нашло дефект, мимо которого весь
+        # этот конвейер проходил зелёным: копирующая кнопка объявляла «скопировано», не дождавшись
+        # промиса и не имея обработчика отказа. Кадр показывал правильный ярлык, гейты молчали.
+        # Стенд, поднятый предыдущим шагом, ещё жив — второй раз его поднимать незачем.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          node scripts/ui-press.mjs --base http://127.0.0.1:8090 --token ui-smoke-token \
+            --out "$PWD/ui-press" || {
+              echo "::error::протыкивание нашло контрол, который не нажат и не объявлен, либо нажатие сломало страницу"
+              sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
 
       - name: Upload UI smoke screenshots
         # `always()`: a failing smoke is exactly when the pictures are worth having.
