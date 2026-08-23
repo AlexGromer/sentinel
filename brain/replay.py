@@ -26,7 +26,7 @@ from .healing import AUTO as _HEAL_AUTO
 from .healing import is_reground
 from .eventlog import log
 from .frames import capture_frame   # PROD-FAIL-MEDIA part A: the picture of a failed step
-from .state import normalize_url, canonical_plan_hash
+from .state import normalize_url, page_identity, canonical_plan_hash
 from .store import GoldenIntegrityError
 
 
@@ -365,7 +365,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 rec["fault"] = _fault_of(e)
         elif kind in LOCATOR_VERBS:  # click/fill/type/select: probe -> heal -> act(verb)
             primary = s.get("locator") or {}
-            page_path = normalize_url(ex.call("browser.currentUrl").get("url", ""))
+            page_path = page_identity(ex.call("browser.currentUrl").get("url", ""))
             count = ex.call("browser.probe", locator=primary).get("count", 0) if primary else 0
             if count == 1:
                 try:

@@ -23,7 +23,7 @@ from . import agui, runcontrol
 from .otel import span
 from .eventlog import log
 from .frames import capture_frame   # ADR-108d; shared with replay since PROD-FAIL-MEDIA part A
-from .state import RunState, normalize_url, semantic_id, canonical_plan_hash
+from .state import RunState, normalize_url, page_identity, semantic_id, canonical_plan_hash
 from . import strategies as S     # ADR-083: one vocabulary, shared with the recorder
 
 
@@ -368,7 +368,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
     def ground(state: RunState) -> dict:
         """Catalogue buttons (with healing alternatives), grow the frontier, recompute coverage."""
         pm = dict(state.get("page_model") or {})
-        path = normalize_url(pm.get("url", ""))
+        # ADR-132: идентичность страницы, а не адреса — маршрут SPA живёт во фрагменте.
+        path = page_identity(pm.get("url", ""))
         elements = _elements_from_interactives(ex.call("browser.interactives").get("elements", []), path)
         buttons = [e for e in elements if e["role"] in _CLICK_ROLES]  # coverage/candidates
         # ADR-092: measure how much of THIS page perception can even see, per page, before deciding
@@ -397,7 +398,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         visited = set(state.get("visited_paths", []))
         frontier = list(state.get("nav_frontier", []))
         for l in links:
-            nu = normalize_url(l.get("href", ""))
+            nu = page_identity(l.get("href", ""))
             if nu and nu.startswith(origin) and nu not in visited and nu not in frontier and nu != path:
                 frontier.append(nu)
         visited_paths = list(dict.fromkeys(list(state.get("visited_paths", [])) + [path]))
@@ -514,13 +515,20 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         _agui("tool.call", rid, name=p.get("action_type", ""), args_summary=_tool_args_summary(p))
         _agui("step.progress", rid, n=p.get("step_id", 0), total=state.get("max_steps", 40),
               desc=p.get("intent", ""))
+        moved = ""      # адрес после действия; заполняется только кликом, см. ниже
         try:
             at = p["action_type"]
             if at == "navigate":
                 from .replay import note_load_speed
                 note_load_speed(ex.call("browser.navigate", url=p["target"]), p["target"])
             elif at == "click":
-                ex.call("browser.click", locator=p["locator"])
+                # ⚠ ОТВЕТ КЛИКА НЕСЁТ АДРЕС, И ОН ВЫБРАСЫВАЛСЯ. `browser.click` возвращает `url`
+                # (pw-executor), а здесь результат не читался вовсе. На SPA это и есть навигация:
+                # приложение меняет маршрут, ничего не перезагружая, — и до следующего `perceive`
+                # состояние утверждало, что обход стоит там же, где стоял. Цена видна на последнем
+                # шаге: прогон, упёршийся в потолок на клике, терял найденный им маршрут целиком,
+                # потому что `ground` до него уже не доходил.
+                moved = page_identity((ex.call("browser.click", locator=p["locator"]) or {}).get("url") or "")
             elif at in ("fill", "type", "select"):
                 # M9.1 forward-compat: the explorer emits only click/navigate today; frozen/authored
                 # plans run through act reuse replay's verb dispatch (single source of truth).
@@ -562,8 +570,15 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "interactive_failed": failed,
                     "_last_ok": False, "current_step": p["step_id"]}
         exercised = list(state.get("interactive_exercised", []))
+        moved_to = {}
         if p["action_type"] == "click":
             exercised = list(dict.fromkeys(exercised + [p["semantic_id"]]))
+            # Клик, сменивший адрес, ПРИЗНАЁТСЯ навигацией: это дешевле и честнее, чем угадывать
+            # маршруты из разметки. В состояние идёт только то, что действительно известно, —
+            # текущий адрес; `visited_paths` и фронтир по-прежнему ведёт `ground`, у которого есть
+            # снимок страницы, а не один URL.
+            if moved and moved != page_identity(state.get("current_url", "")):
+                moved_to = {"current_url": moved}
         execs = list(state.get("executed_actions", [])) + [
             {"step_id": p["step_id"], "type": p["action_type"], "ok": True}]
         frame = capture_frame(ex, state.get("artifact_dir"), p.get("step_id"))
@@ -572,7 +587,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             # separate stream the UI would have to correlate by timestamp.
             _agui("step.frame", rid, n=p.get("step_id", 0), frame=frame, ok=True)
         return {"interactive_exercised": exercised, "executed_actions": execs,
-                "current_step": p["step_id"], "_last_ok": True}
+                "current_step": p["step_id"], "_last_ok": True, **moved_to}
 
     def verify(state: RunState) -> dict:
         """Explore-mode verify: trust act's result. Replay-mode healing lives in brain/replay.py.

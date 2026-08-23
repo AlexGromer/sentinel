@@ -52,7 +52,7 @@ from langgraph.checkpoint.memory import MemorySaver     # noqa: E402
 from brain import budget, graph as graph_mod            # noqa: E402
 from brain.graph import _CLICK_ROLES, build_graph       # noqa: E402
 from brain.planner import HeuristicPlanner              # noqa: E402
-from brain.state import normalize_url, semantic_id      # noqa: E402
+from brain.state import normalize_url, page_identity, semantic_id  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -107,19 +107,35 @@ def _portable_hash(steps: "list") -> str:
 
 
 LIVE = {
-    "index.html": {"steps": 40, "coverage": 0.5067, "seen": 75, "exercised": 39, "navigations": 0,
-                   "pages": 1, "reason": None,
-                   "plan_hash_portable": "b31100e8ddafb0ed79b221373202f609f379a69cb229b1dcf69f745b0ceaffec"},
-    "cards.html": {"steps": 7, "coverage": 1.0, "seen": 6, "exercised": 6, "navigations": 0,
-                   "pages": 1, "reason": "converged",
-                   "plan_hash_portable": "7e8c661809ffb2e2e0cef23db202a5141e5e7bb061ed01bc1e7631f986b9d2c4"},
-    "chain.html": {"steps": 5, "coverage": 0.6667, "seen": 6, "exercised": 4, "navigations": 0,
-                   "pages": 1, "reason": "no_candidates",
-                   "plan_hash_portable": "5678a80ec872165479226f000d028bbc90432fa9c46ea0905644bdb45ac63f1e"},
+    # ⚠ ПЕРЕЗАМЕРЕНО 2026-08-23 НА НАСТОЯЩЕМ CHROMIUM после ADR-132 (маршрут SPA участвует в
+    # идентичности страницы). Прежние числа были верны для кода, который схлопывал все восемьдесят
+    # состояний в один адрес; менять их «подгонкой» было бы ровно тем, что запрещает докстринг этого
+    # файла, поэтому три двери и подъём бюджета прогнаны заново через `bin/agentctl run --planner
+    # heuristic` и `plan.json`/`site-map.json` прочитаны как есть. Что видно в самих числах:
+    # index — карта сайта 1 → 12 страниц, `seen` 75 → 137, покрытие 0.5067 → 0.2701. Покрытие УПАЛО,
+    # и это правильный знак: прежняя половина считалась от шести десятков элементов одной «страницы»,
+    # а теперь знаменатель — то, что в приложении действительно есть.
+    "index.html": {"steps": 40, "coverage": 0.2701, "seen": 137, "exercised": 38, "navigations": 1,
+                   "pages": 12, "reason": None,
+                   "plan_hash_portable": "ce52bfe8b516243a988f218f7c3cdb79f17e1e75f1cf5c1fe02559dba9183c69"},
+    # cards — 40 шагов «сходимости» с покрытием 1.00 по шести элементам превратились в честные 12
+    # шагов, 11 элементов и настоящую сходимость: якорь `<a href="#/order/7">`, который фикстура
+    # держит приманкой, теперь ведёт в отдельное состояние, и обход по нему уходит ОДИН раз.
+    "cards.html": {"steps": 12, "coverage": 0.9091, "seen": 11, "exercised": 10, "navigations": 1,
+                   "pages": 3, "reason": "converged",
+                   "plan_hash_portable": "8992f9920c965c11fee8b21c651aa361a9790bef8242552db23ab261930f7ed4"},
+    # chain — было 5 шагов и «нет кандидатов» на одной странице; стало 40 шагов, 11 страниц и упор в
+    # потолок. Цепочка чекаута перестала быть тупиком из одного экрана.
+    "chain.html": {"steps": 40, "coverage": 0.9444, "seen": 18, "exercised": 17, "navigations": 22,
+                   "pages": 11, "reason": None,
+                   "plan_hash_portable": "96efd3d884ff3a45fe48d3ab6be903af6cad32610312be9ea95dfac450568b2c"},
 }
-# The same target with the budget lifted (MAX_STEPS=200), measured live the same day: the walk goes
-# further and dies of something else. This is what makes M3 a statement about the BUDGET.
-LIVE_INDEX_AT_200 = {"steps": 53, "coverage": 0.6341, "reason": "no_candidates"}
+# Та же цель с поднятым бюджетом (MAX_STEPS=200), замерено живьём в тот же день. Прежде подъём
+# бюджета УПИРАЛСЯ в «нет кандидатов» на 53-м шаге — приложение кончалось раньше бюджета. Теперь
+# кончается бюджет: 200 шагов, 20 страниц, 213 увиденных элементов. Это и есть то, что делает M3
+# утверждением О БЮДЖЕТЕ.
+LIVE_INDEX_AT_200 = {"steps": 200, "coverage": 0.4977, "reason": None,
+                     "plan_hash_portable": "27466639bed703a6e9b9c5e264a03d3b99b59de4569c40cc14b00c36183d6eb8"}
 
 # --- the DOM the fixture runs in ------------------------------------------------------------------
 # Small on purpose, and generic: it knows about elements, attributes, text and one delegated click
@@ -213,6 +229,13 @@ function boot(door) {
   }
   return {
     url: () => state.url,
+    // ⚠ ФРАГМЕНТ ПЕРЕЖИВАЕТ ЗАГРУЗКУ ДОКУМЕНТА, и до ADR-132 реплике не приходилось это знать:
+    // фрагмент отбрасывался ещё в brain, поэтому навигации по нему просто не бывало. Теперь
+    // `<a href="#/order/7">` в cards.html попадает во фронтир, обход по нему уходит, и браузер
+    // оставляет фрагмент в `location.href` — тогда как `boot()` строит адрес из ОДНОГО пути и
+    // фрагмент терял. Замер: с потерей фрагмента реплика давала 40 шагов, 2 страницы и 33 навигации
+    // по кругу, живой Chromium — 12 шагов, 3 страницы, сходимость.
+    setUrl: (u) => { state.url = u; },
     interactives: () => harvest().map(h => h.d),
     links: () => anchors.map(e => ({ href: e.getAttribute('href'), text: String(e.textContent).trim() })),
     click: (loc) => {
@@ -243,7 +266,7 @@ rl.on('line', (line) => {
   let res;
   try {
     const req = JSON.parse(line);
-    if (req.m === 'navigate') { doorPath = new URL(req.url).pathname; ctx = boot(doorPath); res = { url: ctx.url() }; }
+    if (req.m === 'navigate') { const u = new URL(req.url); doorPath = u.pathname; ctx = boot(doorPath); if (u.hash) ctx.setUrl(u.href); res = { url: ctx.url() }; }
     else if (req.m === 'url') res = { url: ctx.url() };
     else if (req.m === 'interactives') res = { elements: ctx.interactives() };
     else if (req.m === 'links') res = { links: ctx.links() };
@@ -362,8 +385,8 @@ def _walk(door: str, max_steps=None) -> dict:
         # Byte-identical to brain/__main__.py `_run_explore`, because the plan_hash comparison below
         # only means something if the run starts from the same state the real one did.
         init = {"step_id": 1, "intent": f"navigate to target {target}",
-                "semantic_id": semantic_id(normalize_url(target), "navigate", ""),
-                "action_type": "navigate", "target": normalize_url(target),
+                "semantic_id": semantic_id(page_identity(target), "navigate", ""),
+                "action_type": "navigate", "target": page_identity(target),
                 "locator": None, "alternatives": None, "is_milestone": True}
         st = {"run_id": "spa", "run_mode": "explore", "target_url": target,
               "base_origin": normalize_url(target).rsplit("/", 1)[0] + "/",
@@ -393,6 +416,7 @@ def _walk(door: str, max_steps=None) -> dict:
             "site_map": final.get("site_map", {}) or {},
             "frontier": list(final.get("nav_frontier", []) or []),
             "reason": (done[-1].get("reason") if done else None),
+            "completeness": final.get("completeness") or {},
             "terminal_records": len(done),
             "plan_hash": final.get("plan_hash", ""),
             "plan_hash_portable": _portable_hash(final.get("exploration_plan", [])),
@@ -444,37 +468,35 @@ def test_the_fixture_declares_more_application_than_one_budget_can_walk():
     assert len(cards) >= 10, f"only {len(cards)} card routes left; the dedup claim needs a dozen"
 
 
-def test_the_navigation_frontier_stays_empty_although_the_page_has_anchors():
-    """M1. The frontier is built from `a[href]` only, and this application navigates with
-    history.pushState behind <button>. The point is not that anchors are absent — the page HAS them,
-    and the executor reports them — it is that every one is dropped by the frontier rule, so 80
-    declared states collapse onto ONE entry in the site map.
+def test_the_frontier_takes_route_anchors_now_and_still_cannot_see_a_pushstate_route():
+    """M1, ПЕРЕПИСАН ПОД НОВОЕ СОСТОЯНИЕ (ADR-132), и прежнее утверждение записано здесь целиком,
+    потому что оно было верным.
 
-    ⚠ WHERE THIS IS MEASURED IS THE WHOLE CHECK, and it was got wrong first: "the walk never
-    navigated" is VACUOUS at the default budget. HeuristicPlanner takes every click before any
-    navigate, and this application always has another click, so the walk would never reach a frontier
-    entry even if one existed. MEASURED: turning a decoy into a real `<a href="chain.html">` leaves
-    navigations at 0 for all 40 steps and only shows up at 200. So the frontier LIST is asserted on
-    the default run (that is the rule's own output, budget or no budget) and the NAVIGATION COUNT on
-    the lifted-budget run, where every click is exhausted and a live entry would be taken."""
+    БЫЛО: «фронтир остаётся ПУСТ, хотя на странице есть якоря» — каждый `<a href="#/…">` отбрасывался
+    правилом `nu != path`, поскольку `normalize_url` стирал фрагмент и адрес ссылки совпадал с
+    адресом текущей страницы. Восемьдесят объявленных состояний схлопывались в ОДНУ запись карты.
+
+    СТАЛО: фрагмент участвует в идентичности, поэтому такой якорь ведёт в ДРУГОЕ состояние и во
+    фронтир попадает. Замерено на живом Chromium: карта сайта 1 → 12 страниц, `seen` 75 → 137.
+
+    ⚠ И ОГРАНИЧЕНИЕ, КОТОРОЕ НИКУДА НЕ ДЕЛОСЬ, — ради него фикстура и построена. Фронтир строится из
+    `a[href]`, а эта цель ходит `<button>` + `history.pushState`: маршрут, до которого нет якоря, во
+    фронтир не попадёт по-прежнему. Поэтому 12 страниц из 80, а не 80 из 80. Утверждать «SPA виден»
+    без этой второй половины значило бы обещать больше, чем сделано."""
     r = _walk("index.html")
-    lifted = _walk("index.html", max_steps=200)
     assert len(r["links"]) >= 3, (
-        f"the door stopped serving decoy anchors ({r['links']}) — then an empty frontier proves "
-        f"nothing about the RULE, only that the page has no links")
-    assert r["frontier"] == [], (
-        f"the frontier collected {r['frontier']} — one of the anchors the fixture guarantees is "
-        f"dropped now enters it")
-    assert (r["navigations"], lifted["navigations"]) == (0, 0), (
-        f"the walk navigated: {r['navigations']} at the default budget, {lifted['navigations']} at 200 "
-        f"steps with every click exhausted — a frontier entry appeared where the fixture guarantees none")
-    assert (r["pages"], lifted["pages"]) == (1, 1), (
-        f"site-map holds {r['pages']} / {lifted['pages']} pages; the whole application is one "
-        f"normalized path, and it stays one however long the walk runs")
+        f"the door stopped serving anchors ({r['links']}) — тогда утверждение о фронтире ничего "
+        f"не говорит о ПРАВИЛЕ, только о том, что ссылок нет")
+    assert r["navigations"] >= 1, (
+        f"обход не сделал ни одной навигации ({r['navigations']}) — якоря снова отбрасываются, и "
+        f"схлопывание, ради которого фикстура заведена, вернулось")
+    assert r["pages"] > 1, (
+        f"карта сайта держит {r['pages']} страниц(у) — приложение снова читается как один адрес")
     inv = r["inventory"]
-    assert inv["states"] - r["pages"] >= FLOOR_STATES - 1, (
-        f"only {inv['states'] - r['pages']} declared states stayed outside the map — the collapse "
-        f"this fixture exists to show is gone")
+    assert r["pages"] < inv["states"] / 2, (
+        f"карта держит {r['pages']} из {inv['states']} объявленных состояний. Если это перестало "
+        f"быть меньшинством, вторая половина ограничения (маршрут без якоря невидим фронтиру) "
+        f"исчезла — и тогда переписывать надо ЭТУ строку, с замером, а не удалять её")
 
 
 def test_the_flat_budget_ends_the_walk_short_of_its_coverage_target():
@@ -499,71 +521,116 @@ def test_the_flat_budget_ends_the_walk_short_of_its_coverage_target():
         f"the lifted-budget run drifted from the live measurement {LIVE_INDEX_AT_200}: {_brief(lifted)}")
 
 
-def test_the_budget_stop_writes_no_terminal_record_at_all():
-    """M3, the part a reader of the artifacts meets. `plan()` is the ONLY place that writes the
-    terminal `decision: done` + `reason` record — and `route_checkpoint` diverts to `scenario` as soon
-    as `current_step >= max_steps`, so on the budget path plan() is never reached. The run ends with
-    no reason recorded anywhere: not "max_steps", nothing. Measured first on this fixture, because on
-    testdata/site the budget is never spent (8 steps of 40)."""
+def test_the_budget_stop_says_nothing_in_the_transcript_and_says_it_in_the_artefact():
+    """M3, ПЕРЕПИСАН ДВАЖДЫ, и оба раза по делу.
+
+    ИСХОДНОЕ УТВЕРЖДЕНИЕ (верное тогда): `plan()` — единственное место, пишущее терминальную запись
+    `decision: done` + `reason`, а `route_checkpoint` уводит в `scenario`, как только
+    `current_step >= max_steps`. На бюджетном пути `plan()` не достигается, и прогон кончался
+    БЕЗ ПРИЧИНЫ, записанной где бы то ни было: ни «max_steps», ничего.
+
+    ПЕРВАЯ ПОЛОВИНА ЭТОГО ВСЁ ЕЩЁ ВЕРНА и утверждается: транскрипт на бюджетном пути по-прежнему пуст.
+
+    ВТОРАЯ ПОЛОВИНА ИСПРАВЛЕНА ADR-131, и это ровно то, ради чего он писался: причина выводится из тех
+    же чисел, по которым её распознал бы `plan()`, и лежит в `plan.json` блоком `completeness`. То
+    есть «нигде» превратилось в «в артефакте, который человек и открывает».
+
+    Обе половины здесь, потому что порознь каждая обманчива: пустой транскрипт без второй читается
+    как дефект, а `completeness` без первой скрывает, что канал остался разным."""
     r = _walk("index.html")
     assert r["terminal_records"] == 0, (
-        f"the budget stop now writes {r['terminal_records']} terminal record(s) (reason={r['reason']!r}). "
-        f"That is an IMPROVEMENT if it was deliberate — the run finally says why it stopped — and this "
-        f"assertion is then what must be rewritten, with the reason recorded, rather than deleted")
-    # …and the same run does record a reason when it converges or runs dry, so the emptiness above is
-    # about this path and not about the transcript being unwired.
-    assert _walk("cards.html")["terminal_records"] == 1, "the converged run must record its reason"
-    assert _walk("chain.html")["terminal_records"] == 1, "the exhausted run must record its reason"
+        f"бюджетный путь теперь пишет {r['terminal_records']} терминальную запись "
+        f"(reason={r['reason']!r}). Если это сделано намеренно — переписать ЭТУ строку с причиной")
+    c = r["completeness"]
+    assert c.get("reason") == "max_steps" and c.get("complete") is False, (
+        f"артефакт бюджетного прогона не называет причину: {c} — это и есть тот случай, ради "
+        f"которого ADR-131 завёл блок, и молчание тут возвращает прежний дефект")
+    assert c.get("stopped_at_step") == r["steps"] and c.get("max_steps") == DEFAULT_MAX_STEPS, (
+        f"числа блока не совпадают с прогоном: {c} против {r['steps']} шагов")
+    # Встречное: сошедшийся прогон запись ДЕЛАЕТ, поэтому пустота выше — про этот путь, а не про
+    # неподключённый транскрипт.
+    assert _walk("cards.html")["terminal_records"] == 1, "сошедшийся прогон обязан записать причину"
 
 
-def test_twelve_cards_collapse_to_one_identity_and_the_run_calls_that_converged():
-    """M2 + M6. Twelve card buttons share one accessible name, so they share ONE semantic_id: one
-    entry in the coverage denominator and one in the numerator. The walk opens a single card of
-    twelve, reaches coverage 1.00 over the six identities it can see, and the run is labelled
-    `converged` — the flattering terminal reason, on an application it walked almost none of."""
+def test_twelve_cards_still_share_one_identity_but_the_run_no_longer_flatters_itself():
+    """M2 + M6, ПЕРЕПИСАН ПОД НОВОЕ СОСТОЯНИЕ (ADR-132). Дедуп остался, лесть ушла.
+
+    ДЕДУП — свойство ДОСТУПНЫХ ИМЁН, и правка его не касалась: двенадцать карточек на ОДНОМ маршруте
+    носят одно имя «Open», значит один `semantic_id`, значит одну строку в знаменателе покрытия. Это
+    по-прежнему так, и утверждается ниже.
+
+    ЛЕСТЬ — свойство ИДЕНТИЧНОСТИ СТРАНИЦЫ, и её правка убрала. БЫЛО: 40 шагов, `coverage 1.00` по
+    ШЕСТИ элементам одного адреса и ярлык «converged» на приложении, которого обход почти не видел.
+    СТАЛО (замерено живьём): 12 шагов, знаменатель 11, карта 3 страницы, сходимость наступает после
+    того, как обход открыл карточку и ВЕРНУЛСЯ. Единица исчезла не потому, что стало хуже, а потому
+    что знаменатель перестал быть шестёркой."""
     r = _walk("cards.html")
-    assert r["reason"] == "converged", f"expected the flattering label, got {r['reason']!r}"
-    assert r["coverage"] == 1.0, f"coverage {r['coverage']} — convergence at less than 1.00?"
+    assert r["reason"] == "converged", f"ожидалась сходимость, получено {r['reason']!r}"
+    assert r["coverage"] < 1.0, (
+        f"покрытие снова {r['coverage']} — единица на этой двери означала, что знаменатель считается "
+        f"по одному адресу; если она вернулась, схлопывание маршрутов вернулось вместе с ней")
+    assert r["pages"] >= 2, (
+        f"карта сайта держит {r['pages']} страниц — якорь `#/order/7`, который фикстура держит "
+        f"приманкой, снова ведёт «туда же»")
 
-    # The dedup itself, through the production identity function over what the executor reported.
-    # HOW MANY entries the map holds is deliberately not asserted: whether a page's duplicate controls
-    # are stored once or twelve times is an unrelated property of the map builder, and a check that
-    # rides on it would go red the day that changes for a good reason. What must hold is that they all
-    # carry the ONE identity, and that the walk's denominator is far smaller than the catalogue.
-    path = normalize_url("file://" + os.path.join(FIXTURE, "cards.html"))
-    opens = [e for e in r["site_map"][path] if e["role"] == "button" and e["name"] == "Open"]
-    assert opens, "no button named 'Open' reached the site map — the catalogue is not what it was"
-    assert {e["semantic_id"] for e in opens} == {semantic_id(path, "button", "Open")}, (
-        "the cards no longer collapse to the ONE identity brain/state.py computes for "
-        "(path, button, 'Open') — coverage now counts them separately, so this fixture stopped "
-        "measuring the dedup it was built for")
-    cards = [x for x in r["inventory"]["routes"] if x.startswith("#/order/")]
-    assert r["seen"] < len(cards), (
-        f"{r['seen']} identities seen against {len(cards)} card routes the fixture declares — the "
-        f"denominator grew, and coverage 1.00 would no longer be the small-denominator effect this "
-        f"test is about")
+    # Дедуп — через ПРОДУКТОВУЮ функцию идентичности над тем, что отдал исполнитель.
+    #
+    # ⚠ Ключ карты ВЫВОДИТСЯ, а не пишется: до ADR-132 он был голым путём двери, теперь это маршрут
+    # (`…cards.html#/orders`), и рукописная строка здесь протухла бы на первой же смене стартового
+    # маршрута фикстуры. Берётся страница, на которой карточки и лежат.
+    pages_with_cards = {k: v for k, v in r["site_map"].items()
+                        if sum(1 for e in v if e["role"] == "button" and e["name"] == "Open") >= 10}
+    assert pages_with_cards, (
+        f"ни на одной странице карты нет десятка кнопок «Open»: "
+        f"{ {k: len(v) for k, v in r['site_map'].items()} } — каталог стал не тем, чем был")
+    for path, elements in pages_with_cards.items():
+        opens = [e for e in elements if e["role"] == "button" and e["name"] == "Open"]
+        assert {e["semantic_id"] for e in opens} == {semantic_id(path, "button", "Open")}, (
+            f"на {path} карточки перестали схлопываться в ОДНУ идентичность, которую считает "
+            f"brain/state.py для (path, button, 'Open') — покрытие считает их порознь, и фикстура "
+            f"больше не меряет дедуп")
+    # ⚠ И ЧЕСТНОЕ СЛЕДСТВИЕ, КОТОРОЕ ВИДНО В ЗАМЕРЕ: таких страниц ДВЕ, и на обеих одни и те же
+    # двенадцать карточек. Приложение этой фикстуры маршрут из хеша НЕ читает (стартовый берётся из
+    # `body[data-start]`), поэтому переход по якорю `#/order/7` меняет адрес и не меняет разметку —
+    # и один и тот же экран попадает в карту под двумя идентичностями. Это свойство ФИКСТУРЫ, а не
+    # обхода: у настоящего роутера (Angular, Juice Shop) hashchange перерисовывает экран. Сказано
+    # здесь, чтобы читатель карты не принял вторую запись за найденный новый экран.
+    assert len(pages_with_cards) >= 1, "unreachable — оставлено ради формы утверждения выше"
     opened = [c for c in r["clicks"] if c == "Open"]
-    assert len(opened) == 1, f"the walk opened {len(opened)} cards; twelve exist and one is reachable"
+    assert len(opened) == 1, f"обход открыл {len(opened)} карточек; их двенадцать, достижима одна"
 
 
-def test_the_checkout_chain_stops_with_budget_left_and_says_nothing():
-    """M4. A branch point, one branch taken, a dead end at the end of it — and no way back: there is
-    no `back` verb, the frontier is empty, and candidates come only from the CURRENT screen. The walk
-    stops with 87% of its budget unspent, under its coverage target, and — because nothing was
-    blocked, disabled or hidden — without a single line of diagnostics."""
+def test_the_checkout_chain_now_walks_both_branches_and_dies_of_the_budget():
+    """M4, ПЕРЕПИСАН ПОД НОВОЕ СОСТОЯНИЕ (ADR-132), и это самое крупное изменение из четырёх.
+
+    БЫЛО: точка ветвления, взята ОДНА ветка, тупик в её конце — и назад дороги нет: верба `back` в
+    инструменте не существует, фронтир пуст, кандидаты берутся только с ТЕКУЩЕГО экрана. Обход
+    останавливался на 5 шагах из 40 с причиной «нет кандидатов», не увидев ветку счетов вовсе.
+
+    СТАЛО (замерено живьём): 40 шагов, 22 навигации, 11 страниц карты — и в списке кликов есть
+    «Pay by invoice». Возврат появился не из ниоткуда: базовый адрес двери — отдельное состояние от
+    любого `#/…`-маршрута, он попадает во фронтир, и обход по нему возвращается к точке ветвления.
+    Тупик перестал быть тупиком.
+
+    ⚠ ЧТО ЭТО СТОИТ: обход теперь умирает от ПОТОЛКА, а не от «идти некуда». Это ХУДШЕЕ окончание с
+    точки зрения читателя — «кончился бюджет» не говорит, сколько осталось, — и потому именно здесь
+    ADR-131 требует блока `completeness`. Он утверждается ниже: цена улучшения записана рядом с ним."""
     r = _walk("chain.html")
-    assert r["reason"] == "no_candidates", f"expected no_candidates, got {r['reason']!r}"
-    assert r["steps"] < DEFAULT_MAX_STEPS / 2, (
-        f"{r['steps']} steps — the point is that the walk stops with budget LEFT, not that it runs out")
-    assert r["coverage"] < 0.85, f"coverage {r['coverage']} met the target on a chain it half-walked"
+    clicks = [(c or "").lower() for c in r["clicks"]]
+    assert any("invoice" in c for c in clicks), (
+        f"ветка счетов снова недостижима: {r['clicks']} — возврат к точке ветвления пропал")
+    assert any("card" in c for c in clicks), f"ни одна ветка не взята: {r['clicks']}"
+    assert r["pages"] > 1, f"карта держит {r['pages']} страниц — цепочка снова читается как один экран"
+    assert r["steps"] == DEFAULT_MAX_STEPS, (
+        f"обход прошёл {r['steps']} шагов вместо потолка {DEFAULT_MAX_STEPS} — он снова кончается "
+        f"раньше бюджета, и утверждение о цене улучшения меряет не то")
+    # Цена, названная своим словом В АРТЕФАКТЕ. Без этого «40 шагов» неотличимы от «прошли всё».
+    c = r["completeness"]
+    assert c.get("complete") is False and c.get("reason") == "max_steps", (
+        f"обход упёрся в потолок и не объявил этого: {c}")
     assert r["unactionable"] == [], (
-        f"the run now reports unactionable elements {r['unactionable']} — the silence is the finding: "
-        f"`plan.unactionable_elements` only fires when something was BLOCKED, and a dead end blocks "
-        f"nothing, so the tester is told nothing at all")
-    # The road not taken: the invoice branch is three states the walk can never reach from here.
-    assert not any("invoice" in (c or "").lower() for c in r["clicks"]), (
-        f"the invoice branch became reachable: {r['clicks']}")
-    assert any("card" in (c or "").lower() for c in r["clicks"]), f"no branch was taken at all: {r['clicks']}"
+        f"обход сообщил о непроходимых элементах {r['unactionable']} — молчание здесь и есть находка: "
+        f"`plan.unactionable_elements` срабатывает только когда что-то ЗАБЛОКИРОВАНО")
 
 
 def test_the_offline_replica_still_reproduces_the_live_browser_run():

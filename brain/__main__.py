@@ -20,7 +20,7 @@ from .executor import make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
 from .planner import make_planner
-from .state import base_origin_of, normalize_url, semantic_id
+from .state import base_origin_of, page_identity, semantic_id
 
 _STORE_PATH = str(pathlib.Path("state") / "locators.db")
 
@@ -296,8 +296,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         ex.call("initialize")
         ex.call("browser.navigate", url=target)
         init = {"step_id": 1, "intent": f"navigate to target {target}",
-                "semantic_id": semantic_id(normalize_url(target), "navigate", ""),
-                "action_type": "navigate", "target": normalize_url(target),
+                "semantic_id": semantic_id(page_identity(target), "navigate", ""),
+                "action_type": "navigate", "target": page_identity(target),
                 "locator": None, "alternatives": None, "is_milestone": True}
         init_state = {
             "run_id": run_id, "run_mode": "explore", "target_url": target, "base_origin": base_origin,
@@ -761,8 +761,8 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                             "site_map": {}, "phase": "explore", "scenario_steps": [],
                             "scenario_unmatched": [], "current_url": target, "page_model": {},
                             "exploration_plan": [{"step_id": 1, "intent": f"navigate to target {target}",
-                                                  "semantic_id": semantic_id(normalize_url(target), "navigate", ""),
-                                                  "action_type": "navigate", "target": normalize_url(target),
+                                                  "semantic_id": semantic_id(page_identity(target), "navigate", ""),
+                                                  "action_type": "navigate", "target": page_identity(target),
                                                   "locator": None, "alternatives": None, "is_milestone": True}],
                             "plan_hash": "", "current_step": 1, "interactive_seen": [],
                             "interactive_exercised": [], "visited_paths": [], "nav_frontier": [],

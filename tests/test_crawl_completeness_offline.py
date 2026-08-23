@@ -271,6 +271,73 @@ def test_a_planner_that_stopped_on_its_own_is_not_a_covered_site():
           f"шаг {c.get('stopped_at_step')}/90 frontier_left={c.get('frontier_left')}")
 
 
+class RoutingEx(FakeEx):
+    """Исполнитель, у которого КЛИК меняет адрес, ничего не перезагружая, — то есть SPA.
+
+    Нужен затем, что обычный `FakeEx` возвращает из клика тот же адрес, и разницу между «прочитали
+    ответ клика» и «выбросили его» замерить нечем."""
+
+    def call(self, m, **p):
+        if m == "browser.click":
+            self.url = "http://t/#/after-click"
+            return {"clicked": True, "url": self.url}
+        return super().call(m, **p)
+
+
+def test_a_click_that_changed_the_address_is_recognised_as_navigation():
+    """`browser.click` возвращает `url`, и до ADR-132 он ВЫБРАСЫВАЛСЯ.
+
+    На SPA клик и есть навигация: приложение меняет маршрут, ничего не перезагружая. До следующего
+    `perceive` состояние утверждало, что обход стоит там же, где стоял, — а если следующего `perceive`
+    не будет (упёрлись в потолок, прогон оборван), найденный маршрут терялся целиком.
+
+    Утверждение ПАРНОЕ: клик, адрес НЕ сменивший, состояние двигать не должен — иначе «признаём
+    навигацией» вырождается в «пишем что попало на каждый клик»."""
+    import contextlib
+    import importlib
+    from langgraph.checkpoint.memory import MemorySaver as _MS
+    from brain.state import page_identity
+
+    def drive(ex_cls, steps):
+        art = tempfile.mkdtemp(prefix="routing-")
+        budget.reset(plan_limit=10 ** 9, heal_limit=10 ** 9)
+        eventlog.reset_degradations()
+        target = "http://t/"
+        init = {"step_id": 1, "intent": "navigate", "semantic_id": semantic_id(target, "navigate", ""),
+                "action_type": "navigate", "target": target, "locator": None,
+                "alternatives": None, "is_milestone": True}
+        st = {"run_id": "rt", "run_mode": "explore", "target_url": target,
+              "base_origin": base_origin_of(target), "coverage_target": 0.85, "artifact_dir": art,
+              "goal": "", "describe": "", "site_map": {}, "phase": "explore", "scenario_steps": [],
+              "scenario_unmatched": [], "current_url": target, "page_model": {},
+              "exploration_plan": [init], "plan_hash": "", "current_step": 1,
+              "interactive_seen": [], "interactive_exercised": [], "visited_paths": [],
+              "nav_frontier": [], "coverage_achieved": 0.0, "exploration_complete": False,
+              "max_steps": steps,
+              "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": []}
+        app = build_graph(ex_cls(), HeuristicPlanner(), lambda r: None).compile(checkpointer=_MS())
+        with contextlib.redirect_stdout(io.StringIO()):
+            return app.invoke(st, config={"recursion_limit": max(60, steps * 8),
+                                          "configurable": {"thread_id": "rt"}})
+
+    # ⚠ ПОТОЛОК РАВЕН ДВУМ, И ЭТО НЕ ПРОИЗВОЛ. Первая редакция этой проверки ставила 3 и была
+    # ВАКУУМНОЙ: `perceive` следующего шага перезаписывает `current_url` тем, что ответил
+    # `browser.currentUrl`, поэтому итоговое состояние выглядело правильным и с выброшенным ответом
+    # клика — мутация «вернуть `ex.call(...)` без чтения» проходила зелёной. Вклад `act` виден ровно
+    # там, где следующего `perceive` НЕ БУДЕТ: прогон кончился на клике. При `max_steps=2` шаг 2 —
+    # клик, и `route_checkpoint` уводит в `scenario` сразу после него.
+    moved = drive(RoutingEx, 2)
+    if page_identity(moved.get("current_url", "")) != "http://t/#/after-click":
+        fail(f"клик сменил адрес, а состояние этого не заметило: "
+             f"current_url={moved.get('current_url')!r} — ответ клика снова выброшен")
+    stayed = drive(FakeEx, 2)
+    if page_identity(stayed.get("current_url", "")) != "http://t/":
+        fail(f"клик адреса НЕ менял, а состояние сдвинулось: current_url={stayed.get('current_url')!r} — "
+             f"«признаём навигацией» выродилось в «пишем что попало на каждый клик»")
+    print(f"  ok  клик-навигация: сменивший адрес → {moved.get('current_url')} · "
+          f"не сменивший → {stayed.get('current_url')}")
+
+
 def _run_real(goal: str, max_steps: int):
     """Прогнать НАСТОЯЩИЙ `_run_explore` (не только граф) и вернуть каталог артефакта.
 
@@ -333,6 +400,7 @@ def main() -> int:
                test_a_crawl_that_crashed_keeps_what_it_found,
                test_a_degraded_crawl_says_so_in_the_artefact,
                test_a_planner_that_stopped_on_its_own_is_not_a_covered_site,
+               test_a_click_that_changed_the_address_is_recognised_as_navigation,
                test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_short):
         fn()
     if failures:
