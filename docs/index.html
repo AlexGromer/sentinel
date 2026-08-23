@@ -2894,6 +2894,54 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     return out;
   }
 
+  /* ADR-131/132 — СКОЛЬКО САЙТА ОБХОД ВООБЩЕ ПРОШЁЛ, и почему остановился.
+     Директива Alex 2026-08-23: «если количество шагов недостаточно, должна быть информация в UI».
+     До этого `completeness` лежал в plan.json и не читался интерфейсом ВООБЩЕ (grep по docs/ давал
+     ноль вхождений) — то есть блок, заведённый затем, чтобы прогон не врал о полноте, до человека не
+     доезжал ни по какому каналу. Ровно тот же класс, что и `reason`, который уезжал только в
+     llm-transcript.jsonl: факт есть, читателя нет.
+     ⚠ Покрытие тут не помощник и сказано об этом прямо: оно считается ДОЛЕЙ ОТ УВИДЕННОГО, поэтому
+     оборванный обход спокойно показывает 100% — замерено на живой цели. */
+  function completenessBlock(plan){
+    var c = plan && plan.completeness; if (!c) return '';
+    var stopped=c.stopped_at_step, max=c.max_steps, left=c.frontier_left;
+    if (c.complete === true){
+      return '<div style="color:var(--ok);font-size:.85rem;margin:.15rem 0 .15rem 2.1rem">✓ '
+        + bi('обход прошёл сайт до конца — непройденных адресов не осталось',
+             'the crawl covered the site — no addresses were left unwalked') + '</div>';
+    }
+    var why = {
+      max_steps:        [ 'кончился потолок шагов', 'the step ceiling ran out' ],
+      no_candidates:    [ 'на текущем экране не осталось того, что можно нажать', 'nothing left to press on the current screen' ],
+      planner_done:     [ 'планировщик решил, что достаточно', 'the planner decided it had enough' ],
+      aborted:          [ 'прогон оборвала ошибка инструмента', 'a tool error aborted the run' ],
+      orchestrator_abort:[ 'прогон остановил оркестратор (бюджет)', 'the orchestrator stopped the run (budget)' ],
+      operator_abort:   [ 'прогон остановил человек', 'a person stopped the run' ],
+      unknown:          [ 'причина не записана', 'the reason was not recorded' ]
+    }[c.reason] || [ String(c.reason||''), String(c.reason||'') ];
+    var nums=[];
+    if (stopped!=null && max!=null) nums.push(bi('шаг ','step ')+'<b>'+stopped+'</b>'+bi(' из ',' of ')+'<b>'+max+'</b>');
+    if (left) nums.push('<b>'+left+'</b> '+bi('адрес(ов) осталось непройденными','address(es) left unwalked'));
+    var advice='';
+    if (c.reason==='max_steps'){
+      advice='<div style="margin-top:.25rem">'
+        + bi('Шагов не хватило. Поднимите <code>max_steps</code> в разделе «Модель и LLM · бюджеты · auth» — сейчас там '+(max!=null?max:'40')+' — и запустите снова.',
+             'There were not enough steps. Raise <code>max_steps</code> under “Model and LLM · budgets · auth” — it is '+(max!=null?max:'40')+' now — and run again.')
+        + '</div>';
+    }
+    var err = c.error ? '<div style="margin-top:.25rem;color:var(--mut)">'+esc(String(c.error).slice(0,300))+'</div>' : '';
+    return '<div style="margin:.25rem 0 .25rem 2.1rem;padding:.4rem .6rem;border-left:3px solid var(--warn);'
+      + 'background:var(--bg2);border-radius:0 6px 6px 0;font-size:.85rem">'
+      + '<b style="color:var(--warn)">⚠ '+bi('Обход прошёл НЕ ВЕСЬ сайт','The crawl did NOT cover the whole site')+'</b> — '
+      + bi(why[0], why[1])
+      + (nums.length?'<div style="color:var(--mut);margin-top:.15rem">'+nums.join(' · ')+'</div>':'')
+      + advice + err
+      + '<div style="color:var(--mut);margin-top:.25rem">'
+      + bi('Покрытие выше считается долей от УВИДЕННОГО, поэтому оборванный обход может показывать и 100%.',
+           'The coverage above is a fraction of what was SEEN, so an interrupted crawl can still read 100%.')
+      + '</div></div>';
+  }
+
   async function renderRunPhases(base, id){
     var box=ge('b-phases'); box.innerHTML='';
     var planRaw=await fetchArtifact(base,id,'plan.json'); if (!planRaw) return;
@@ -2914,7 +2962,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                    (covPct?bi('покрытие ','coverage ')+covPct:null),
                    (steps!=null?'<b>'+steps+'</b> '+bi('шагов','steps'):null),
                    bi('эвристика, без LLM','heuristic, no LLM') ].filter(Boolean).join(' · ');
-    var html=row('1', true, bi('Исследование UI','UI exploration'), exDetail);
+    // ⚠ Галочка снимается, когда обход не дошёл до конца: «✓ Исследование UI» над оборванным
+    // обходом — это и есть та самая уверенная неправда, ради которой заводился `completeness`.
+    var full = !(plan.completeness && plan.completeness.complete === false);
+    var html=row('1', full ? true : 'warn', bi('Исследование UI','UI exploration'), exDetail);
+    html+=completenessBlock(plan);
     html+=perceptionBlock(plan);
     // phase 2 exists only for goal/describe (scenario_head wired -> scenario.json with run_mode "scenario")
     if (sc && (sc.run_mode==='scenario' || (sc.steps&&sc.steps.length) || sc.unmatched!=null)){
@@ -6199,7 +6251,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   // a box, where what matters is the WORDING — specifically that a file the server refused to import
   // is NAMED rather than folded into a count. Driving the upload path to assert that would test the
   // file input and the fetch, not the sentence. It holds no state.
-  window.__gate = { perceptionBlock: perceptionBlock, renderImportReport: renderImportReport };
+  window.__gate = { perceptionBlock: perceptionBlock, completenessBlock: completenessBlock, renderImportReport: renderImportReport };
 
   /* ---- PROD-IMPORT (ADR-105): the UI-upload channel to POST /v1/import ---- */
   (function importPanel(){

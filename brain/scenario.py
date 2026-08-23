@@ -12,7 +12,7 @@ synthesized in CODE** from the element's `page` key (a real URL), never from LLM
 verb fields (value/text/key/condition/…) cross into a step — LLM `reason`/score never enter a step dict
 (so `canonical_plan_hash` stays meaningful and the frozen plan replays deterministically).
 """
-from .state import normalize_url, semantic_id
+from .state import normalize_url, page_identity, semantic_id
 
 # Verbs an authored step may carry (brain/replay.py schema). An LLM verb outside this -> unmatched.
 VALID_VERBS = {"click", "fill", "type", "select", "press", "assert"}
@@ -71,9 +71,9 @@ def _verb_step(element: dict, verb: str, extra: dict, step_id: int) -> dict:
 
 def _emit(bound: list, start_page: str, start_id: int) -> list:
     """bound = [(element, verb, extra)]. Synthesize cross-page navigates; assign sequential step_ids."""
-    steps, sid, cur_page = [], start_id, normalize_url(start_page or "")
+    steps, sid, cur_page = [], start_id, page_identity(start_page or "")
     for element, verb, extra in bound:
-        page = normalize_url(element.get("page", ""))
+        page = page_identity(element.get("page", ""))
         if page and page != cur_page:
             steps.append(_nav_step(page, sid)); sid += 1     # cross-page navigate (real URL from the map)
             cur_page = page
@@ -115,8 +115,8 @@ def _match(draft_target: dict, flat_map: list):
     role = (draft_target.get("role") or "").strip().lower()
     name = (draft_target.get("name") or "").strip().lower()
     text = (draft_target.get("text") or "").strip().lower()
-    page = normalize_url(draft_target.get("page") or "")
-    pool = [e for e in flat_map if (not page or normalize_url(e.get("page", "")) == page)]
+    page = page_identity(draft_target.get("page") or "")
+    pool = [e for e in flat_map if (not page or page_identity(e.get("page", "")) == page)]
 
     def _unique(hits):
         return hits[0] if len(hits) == 1 else None          # >1 -> ambiguous -> unmatched (never guess)

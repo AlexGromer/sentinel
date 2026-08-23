@@ -1680,6 +1680,40 @@ try {
     eq(msg.recorded, false, 'a run with no log file must report recorded=false');
     ok(msg.reason.length > 0, 'recorded=false must carry a reason a person can read');
   });
+  await check('the step ceiling is a field with a visible default, not a hidden constant', async () => {
+    // Директива Alex 2026-08-23: «количество шагов обхода должно задаваться в UI, дефолт должен
+    // присутствовать». Поле есть давно — а вот что оно ПОКАЗЫВАЕТ свой дефолт, не утверждал никто:
+    // пустая рамка «max_steps» заставляет человека угадывать, с чем он вообще запускает прогон, и
+    // экспорт в YAML при этом подставил бы 40 у него за спиной.
+    const box = page.locator('#b-maxsteps');
+    ok(await box.count() === 1, 'the hub has no max_steps field at all');
+    const shown = await box.inputValue();
+    ok(shown !== '' && Number(shown) > 0, `max_steps shows ${JSON.stringify(shown)} — the default is not visible`);
+    // И то же число обязано уехать в конфигурацию прогона: поле, которое видно и не читается, хуже
+    // отсутствующего.
+    const yaml = await page.evaluate(() => (document.querySelector('#b-yaml') || {}).textContent || '');
+    ok(!yaml || /max_steps:\s*\d+/.test(yaml), 'the exported RunConfig does not carry max_steps');
+  });
+  await check('completeness: an interrupted crawl says so, with the numbers and what to do', async () => {
+    // Директива Alex 2026-08-23: «если количество шагов недостаточно, должна быть информация в UI».
+    // До ADR-132 `completeness` лежал в plan.json и интерфейсом не читался ВООБЩЕ. Проверяется через
+    // настоящую функцию страницы — она чистая от plan.json, прогон ей не нужен, — и утверждается то,
+    // что человек РЕАЛЬНО видит.
+    const cut = await page.evaluate(() => window.__gate.completenessBlock({ completeness: {
+      complete: false, reason: 'max_steps', stopped_at_step: 60, max_steps: 60, frontier_left: 6 } }));
+    ok(/⚠/.test(cut), 'an interrupted crawl must warn, not stay silent');
+    ok(/60/.test(cut) && /\b6\b/.test(cut), 'the numbers must be there: where it stopped and what is left');
+    ok(/max_steps/.test(cut), 'the field to raise must be NAMED — "not enough steps" without the knob is not information');
+    // Встречное: прошедший до конца обход не должен носить ту же тревогу, иначе предупреждение
+    // становится обоями и его перестают читать.
+    const full = await page.evaluate(() => window.__gate.completenessBlock({ completeness: {
+      complete: true, reason: 'converged', stopped_at_step: 8, max_steps: 40, frontier_left: 0 } }));
+    ok(!/⚠/.test(full), 'a crawl that finished must not carry the same warning');
+    ok(/✓/.test(full), 'and it must say plainly that the site was covered');
+    // И у прогона без блока (старые артефакты) — молчание, а не пустая рамка.
+    const none = await page.evaluate(() => window.__gate.completenessBlock({}));
+    ok(none === '', 'a run with no completeness block must render nothing at all');
+  });
   await check('perception: three categories, and they add up to what the audit measured', async () => {
     // ADR-097. Exercised through the real `perceptionBlock` in the real page — it is a pure function
     // of plan.json, so it needs no run, and asserting the rendered HTML is what an operator sees.

@@ -33,7 +33,7 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from brain.state import base_origin_of, normalize_url  # noqa: E402
+from brain.state import base_origin_of, normalize_url, page_identity  # noqa: E402
 
 failures: "list[str]" = []
 
@@ -57,6 +57,17 @@ CASES = [
     ("https://myapp.com/a/b/c.html", "https://myapp.com/a/b/", "вложенный путь сужает так же"),
     ("file:///opt/x/site/index.html", "file:///opt/x/site/", "у file:// хоста нет — граница остаётся каталогом"),
     ("", "", "пустая цель не даёт границы"),
+    # ⚠ ФРАГМЕНТНЫЕ ЦЕЛИ. С ADR-132 маршрут SPA участвует в идентичности СТРАНИЦЫ — и не должен
+    # участвовать в ГРАНИЦЕ. Правило «путь сужает границу» написано про путь, и молча применить его к
+    # маршруту значило бы завести семантику, которой ADR-130 не проектировал: цель `.../#/orders`
+    # сузила бы обход до одного маршрута, а `.../#/` — до чего-то, что вообще не адрес. Ни одной
+    # фрагментной цели в этой таблице не было, поэтому граница на них не проверялась НИКОГДА.
+    ("https://myapp.com/#/orders", "https://myapp.com/", "маршрут SPA границу НЕ сужает — он не путь"),
+    ("https://myapp.com/shop/#/x", "https://myapp.com/shop/", "сужает по-прежнему ПУТЬ, а маршрут поверх него игнорируется"),
+    ("https://myapp.com#/orders", "https://myapp.com/", "цель без слэша с маршрутом — всё ещё хост, а не схема"),
+    ("https://myapp.com/#!/orders", "https://myapp.com/", "хешбэнг старых роутеров — тот же ответ"),
+    ("https://myapp.com/page#section", "https://myapp.com/", "обычный якорь тем более границу не двигает"),
+    ("file:///opt/x/site/index.html#/orders", "file:///opt/x/site/", "у file:// граница остаётся каталогом и с маршрутом"),
 ]
 
 
@@ -89,6 +100,21 @@ def test_the_boundary_actually_excludes_a_foreign_host() -> None:
         if normalize_url(u).startswith(origin):
             fail(f"ЧУЖОЙ адрес {u!r} проходит границу {origin!r} — прогон уйдёт на сайт, разрешения "
                  f"на который никто не давал")
+
+    # ⚠ И ТЕМ ЖЕ СРАВНЕНИЕМ, НО НАД `page_identity` — потому что с ADR-132 во фронтир кладётся
+    # ИМЕННО ОНА (brain/graph.py, узел ground), а граница по-прежнему считается без фрагмента. Если
+    # эти двое разъедутся, маршрут собственного сайта начнёт отвергаться как чужой (обход ослепнет на
+    # SPA) или чужой маршрут начнёт проходить (обход уйдёт на посторонний сайт). Ни то, ни другое
+    # таблица выше не видит: она сравнивает границу с границей.
+    own_routes = ["http://127.0.0.1:8181/#/orders", "http://127.0.0.1:8181/index.html#!/x"]
+    foreign_routes = ["http://127.0.0.1:8182/#/orders", "http://evil.example/#/orders"]
+    for u in own_routes:
+        if not page_identity(u).startswith(origin):
+            fail(f"собственный МАРШРУТ {u!r} не проходит границу {origin!r} — обход не увидит "
+                 f"собственного SPA, ради которого маршрут и попал в идентичность")
+    for u in foreign_routes:
+        if page_identity(u).startswith(origin):
+            fail(f"ЧУЖОЙ маршрут {u!r} проходит границу {origin!r}")
 
 
 def test_the_boundary_is_computed_in_one_place() -> None:

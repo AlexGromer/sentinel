@@ -28,7 +28,7 @@ import sys
 
 from .eventlog import log
 from .scenario import VALID_VERBS, ground_scenario
-from .state import canonical_plan_hash, normalize_url, semantic_id
+from .state import canonical_plan_hash, normalize_url, page_identity, semantic_id
 from .strategies import prior_for as _prior_for
 from .strategies import STRATEGY_BY_LOCATOR_KEY as _STRATEGY_BY_KEY
 from .strategies import CSS as _CSS
@@ -139,7 +139,7 @@ def events_to_steps(events: list, start_id: int = 1):
         if not resolved:                                # no real selector -> skip, never fabricate
             continue
         primary, alternatives, role, name = resolved
-        page = normalize_url(ev.get("url") or "")
+        page = page_identity(ev.get("url") or "")
         sid = semantic_id(page, role, name or _loc_label(primary))
         ref = {"ref": sid, "verb": verb,
                "intent": f"{verb} {role} '{name}'".strip() if (role or name) else f"{verb} {_loc_label(primary)}"}
