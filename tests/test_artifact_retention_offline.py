@@ -56,17 +56,48 @@ def test_the_checkpoint_is_deleted_when_the_run_ends():
 
 
 def test_the_checkpoint_is_discarded_even_when_the_run_crashes():
-    """Asserted on the source, because provoking a graph crash needs a browser and an LLM.
+    """The discard belongs to a `finally`, and that is asserted on the SYNTAX TREE, not on a window
+    of text.
 
-    Anchored on the `finally` that owns the call: a happy-path `_discard_checkpoint()` after the
-    `with` would leave the largest files behind on exactly the runs that produce them."""
-    src = (REPO / "brain" / "__main__.py").read_text()
-    i = src.index("with _checkpointer(ckpt) as saver:")
-    window = src[i:i + 900]
-    assert "finally:" in window, f"the checkpointer block has no finally:\n{window[:400]}"
-    fin = window[window.index("finally:"):]
-    assert "_discard_checkpoint(" in fin.split("\n\n")[0], (
-        f"the discard is not in the finally, so a crashed run keeps its checkpoint:\n{fin[:200]}")
+    ⚠ REWRITTEN FOR ADR-131, and the reason is worth keeping. The first version read 900 characters
+    after `with _checkpointer(` and looked for the word `finally:` in them. That held only while the
+    block stayed short: W7 added a nested `try/except` around `app.invoke` (the salvage path), the
+    real `finally` slid past the 900th character, and this assertion went red over a property that
+    had not changed at all. A window is a proxy for structure, and it fails the moment structure
+    grows.
+
+    Walking the tree asks the actual question — is there a `Try` whose `finalbody` calls
+    `_discard_checkpoint` — and it cannot be fooled by length, indentation or an intervening handler.
+
+    The old docstring also said the behaviour could not be provoked without a browser and an LLM.
+    That stopped being true in the same wave: tests/test_crawl_completeness_offline.py crashes the
+    real graph on a chosen step with a controllable fake and checks what survives. This gate keeps
+    the structural half — the discard must be UNCONDITIONAL — and that half is cheap here."""
+    import ast
+
+    tree = ast.parse((REPO / "brain" / "__main__.py").read_text())
+
+    def calls_discard(nodes) -> bool:
+        for n in nodes:
+            for sub in ast.walk(n):
+                if isinstance(sub, ast.Call) and getattr(sub.func, "id", "") == "_discard_checkpoint":
+                    return True
+        return False
+
+    in_finally = [t for t in ast.walk(tree) if isinstance(t, ast.Try) and calls_discard(t.finalbody)]
+    assert in_finally, (
+        "no `try/finally` in brain/__main__.py calls _discard_checkpoint from its `finally`. A "
+        "happy-path discard after the `with` would leave the largest files behind on exactly the "
+        "runs that produce them — the crashed ones.")
+    # And it is not ALSO called somewhere that would make the finally redundant-looking: the count is
+    # reported so a second, conditional call site shows up as a number rather than as silence.
+    total = sum(1 for n in ast.walk(tree)
+                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_discard_checkpoint")
+    print(f"     _discard_checkpoint: {total} call site(s), {len(in_finally)} of them in a `finally`")
+    # ⚠ Прежний остаток этой проверки резал тот же текстовый хвост по `finally:` и повторял уже
+    # сделанное утверждение более хрупким способом. Удалён вместе с окном: два высказывания об одном
+    # факте, из которых одно ломается от вложенного `try`, — это не двойная защита, а лишний способ
+    # покраснеть не по делу.
 
 
 def test_the_reason_it_is_safe_to_delete_is_written_down():

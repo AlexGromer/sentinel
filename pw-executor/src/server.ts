@@ -332,15 +332,22 @@ async function frameSelector(page: Page, f: Frame): Promise<string | null> {
     const own = await el.evaluate((node) => {
       const e = node as HTMLIFrameElement;
       const doc = e.ownerDocument;
+      // ⚠ ТЕГ ВЫВОДИТСЯ ИЗ ЭЛЕМЕНТА, А НЕ ЗАШИТ. Все три ветки ниже раньше говорили `iframe`, а
+      // индекс считался по `querySelectorAll('iframe')`. Для <frame> внутри <frameset> это давало
+      // -1 → адрес null → корень МОЛЧА выпадал из обхода; а если у фрейма было имя, возвращался
+      // `iframe[name="frame-top"]` — адрес выдан, адресуемое по нему не резолвится. Замерено на
+      // `the-internet/nested_frames`, где оба фрейма несут name.
+      const tag = e.tagName.toLowerCase() === 'frame' ? 'frame' : 'iframe';
       return {
+        tag,
         name: e.getAttribute('name'),
         id: e.id || null,
-        nth: doc ? Array.from(doc.querySelectorAll('iframe')).indexOf(e) : -1,
+        nth: doc ? Array.from(doc.querySelectorAll(tag)).indexOf(e) : -1,
       };
     });
-    if (own.name) return `iframe[name="${own.name}"]`;
-    if (own.id) return `iframe#${own.id}`;
-    return own.nth >= 0 ? `iframe >> nth=${own.nth}` : null;
+    if (own.name) return `${own.tag}[name="${own.name}"]`;
+    if (own.id) return `${own.tag}#${own.id}`;
+    return own.nth >= 0 ? `${own.tag} >> nth=${own.nth}` : null;
   } catch {
     // Detached or mid-navigation: it had a frame a moment ago and does not now. Reporting null lets
     // the caller count it as unreachable instead of inventing an address for it.
@@ -800,9 +807,41 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
     }
     case 'browser.snapshot': {
       await ensureBrowser();
-      const ariaSnapshot = await page!.locator('body').ariaSnapshot();
+      // ⚠ КОРЕНЬ — ТОТ, ЧТО НА СТРАНИЦЕ ЕСТЬ, А НЕ ТОЛЬКО `body`. Прежняя строка ждала `body`
+      // безусловно и роняла ВЕСЬ прогон на странице, у которой его нет по стандарту.
+      //
+      // Замерено 2026-08-23 на `the-internet/nested_frames`: обход прошёл 45 шагов и умер здесь с
+      // `locator.ariaSnapshot: Timeout 5000ms exceeded — waiting for locator('body')`, exit 4, и
+      // `plan.json` не появился вовсе. Страница отдаёт чистый `<frameset>` с двумя `<frame>`.
+      //
+      // Тонкость, из-за которой это не бросалось в глаза: по спецификации HTML `document.body` на
+      // frameset-странице возвращает НЕ null, а сам `<frameset>` — «первый ребёнок html, который либо
+      // body, либо frameset». То есть JS, читающий `document.body`, тут работает, а CSS-селектор
+      // `body` не матчит: он сравнивает имя тега. Код и спецификация расходились молча.
+      //
+      // Таймаут задан ЯВНО и он короткий: дефолт страницы — 5 с (`page.setDefaultTimeout`), и он
+      // выбран под бюджет `browser.expect`, а не под снимок. Снимок либо есть сразу, либо его нет.
+      //
+      // ⚠ ОТСУТСТВИЕ КОРНЯ — ДЕГРАДАЦИЯ С ПРИЧИНОЙ, А НЕ ОТКАЗ. В этом же процессе `decorate.ts`
+      // давно обращается с отсутствующим `<body>` как со штатным поводом промолчать («the page has
+      // no <body> to draw into yet»), а снимок считал это поводом уронить прогон: одна подсистема
+      // называла нормой то, что другая называла катастрофой.
+      const SNAPSHOT_ROOT = 'body, frameset';
+      const root = page!.locator(SNAPSHOT_ROOT).first();
+      let ariaSnapshot = '';
+      let rootless: string | null = null;
+      try {
+        ariaSnapshot = await root.ariaSnapshot({ timeout: 1500 });
+      } catch {
+        rootless =
+          `this document has no ${SNAPSHOT_ROOT} to snapshot — the page carries no rendered root ` +
+          `(a frameset whose frames failed, a document still mid-parse, or a non-HTML body)`;
+      }
       const nodeCount = ariaSnapshot.split('\n').filter((l) => l.trim().startsWith('-')).length;
-      return { ariaSnapshot, nodeCount };
+      // `rootless` присутствует, только когда снимка нет: пустая строка и «снимок пуст, потому что
+      // корня нет» — разные новости, и вторая обязана быть произнесённой, а не выведенной читателем
+      // из нуля узлов.
+      return rootless ? { ariaSnapshot, nodeCount, rootless } : { ariaSnapshot, nodeCount };
     }
     case 'browser.currentUrl':
       await ensureBrowser();
@@ -812,9 +851,33 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       // Its own selector ON PURPOSE (ADR-093): this feeds the navigation frontier — which URLs are
       // reachable from here — not the control inventory. Folding it into PERCEPTION_SELECTOR would
       // make every button on the page look like somewhere to go.
-      const links = await page!.$$eval('a[href]', (els) =>
-        els.map((a) => ({ href: (a as HTMLAnchorElement).href, text: (a.textContent || '').trim() })),
-      );
+      //
+      // ⚠ ФРЕЙМЫ ОБХОДЯТСЯ, КАК У `browser.interactives`. `$$eval` не пересекает границу фрейма —
+      // свойство селекторного движка, а не недосмотр, — поэтому ссылки внутри фрейма не попадали во
+      // фронтир ВООБЩЕ, и это молчало: инструмент возвращал `{links: []}`, что неотличимо от
+      // «ссылок нет». Замерено на `the-internet/nested_frames`: верхний документ — чистый frameset,
+      // весь его контент во фреймах, и обход считал страницу тупиком.
+      //
+      // Корни те же, что у инвентаря контролов, и берутся тем же `frameSelector`: два перечня одного
+      // сайта, построенные по-разному, разъехались бы на первой же странице с фреймом.
+      const roots: Array<Page | Frame> = [page!];
+      for (const f of page!.frames()) {
+        if (await frameSelector(page!, f)) roots.push(f);
+      }
+      const perRoot = await Promise.all(roots.map((scope) =>
+        scope.$$eval('a[href]', (els) =>
+          els.map((a) => ({ href: (a as HTMLAnchorElement).href, text: (a.textContent || '').trim() })),
+        ).catch(() => [] as Array<{ href: string; text: string }>),
+      ));
+      // Дедуп по href: один и тот же адрес может встретиться и в верхнем документе, и во фрейме, а
+      // фронтир — это множество адресов, а не список вхождений.
+      const seen = new Set<string>();
+      const links: Array<{ href: string; text: string }> = [];
+      for (const l of perRoot.flat()) {
+        if (seen.has(l.href)) continue;
+        seen.add(l.href);
+        links.push(l);
+      }
       return { links };
     }
     case 'browser.click': {

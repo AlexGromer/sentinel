@@ -263,6 +263,15 @@
       "en": "The tool itself failed",
       "ru_hint": "это НАША ошибка, а не находка в вашем приложении — приложите вывод к отчёту о баге",
       "en_hint": "this is OUR failure, not a finding about your application — attach the output to a bug report"
+    },
+    "5": {
+      "icon": "🧩",
+      "severity": "tool_failure_salvaged",
+      "fault": "tool",
+      "ru": "Инструмент сломался, но найденное сохранено",
+      "en": "The tool broke, and what it found was saved",
+      "ru_hint": "прогон прерван НАШЕЙ ошибкой — это не находка в вашем приложении, — но обход до этого места записан: план, карта и предложенный сценарий лежат в артефакте, и в них сказано, на каком шаге всё оборвалось",
+      "en_hint": "the run was aborted by OUR failure — not a finding about your application — but everything up to that point was written: the plan, the map and the proposed scenario are in the artefact, and they say at which step it stopped"
     }
   },
   "$comment_narrative": "Stream A. Templates for the AG-UI event types (brain/agui.py + cmd/control-api). `{}` placeholders are filled from the event's `data`.",
@@ -966,6 +975,58 @@
       "en": "Exploration stopped at {coverage}%: {blocked} element(s) could not be reached (disabled, or they would not act)",
       "modules": [
         "graph"
+      ]
+    },
+    "explore.incomplete": {
+      "lvl": "warn",
+      "cat": "run",
+      "phase": "report",
+      "degrades": true,
+      "ru": "Обход прошёл НЕ ВЕСЬ сайт: остановлен по причине «{reason}» на шаге {step}, во фронтире осталось {frontier} адрес(ов), покрытие {coverage}% — считано от увиденного, а не от всего сайта",
+      "en": "The crawl did NOT cover the whole site: stopped for «{reason}» at step {step}, {frontier} address(es) left in the frontier, coverage {coverage}% — measured against what was seen, not against the site",
+      "ru_verdict": "прошло, но обход НЕПОЛОН: часть сайта не открывалась вовсе, и покрытие посчитано от увиденного",
+      "en_verdict": "passed, but the crawl is INCOMPLETE: part of the site was never opened, and coverage was measured against what was seen",
+      "modules": [
+        "graph"
+      ]
+    },
+    "explore.crashed": {
+      "lvl": "error",
+      "cat": "run",
+      "phase": "report",
+      "degrades": true,
+      "ru": "Обход прерван ошибкой инструмента: {error}. Это НЕ находка в вашем приложении; сейчас будет предпринята попытка сохранить всё, что он успел найти",
+      "en": "The crawl was aborted by a tool error: {error}. This is NOT a finding about your application; what it managed to find will now be salvaged",
+      "ru_verdict": "обход прерван нашей ошибкой — найденное до этой точки сохранено отдельно",
+      "en_verdict": "the crawl was aborted by our error — what was found up to that point is saved separately",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "explore.salvaged": {
+      "lvl": "warn",
+      "cat": "run",
+      "phase": "report",
+      "degrades": true,
+      "ru": "Обход упал, но найденное СОХРАНЕНО: {steps} шаг(ов) и {pages} страниц(ы) записаны в артефакт, причина обрыва — {error}",
+      "en": "The crawl crashed, but what it found was SAVED: {steps} step(s) and {pages} page(s) written to the artefact; the abort was caused by {error}",
+      "ru_verdict": "прогон оборван НАШЕЙ ошибкой, но обход до этого места сохранён — план и карта в артефакте",
+      "en_verdict": "the run was aborted by OUR failure, but the crawl up to that point was saved — the plan and the map are in the artefact",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "explore.salvage_failed": {
+      "lvl": "error",
+      "cat": "run",
+      "phase": "report",
+      "degrades": true,
+      "ru": "Спасти найденное не удалось: {error}. Обход упал, и записать даже частичный результат не получилось",
+      "en": "Salvaging what was found failed: {error}. The crawl crashed and not even a partial result could be written",
+      "ru_verdict": "обход упал, и спасти из него не удалось ничего",
+      "en_verdict": "the crawl crashed and nothing could be salvaged from it",
+      "modules": [
+        "__main__"
       ]
     },
     "heal.explore_stub": {

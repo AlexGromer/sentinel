@@ -460,13 +460,19 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
             tx_write({"step": step, "planner": planner.name, "model": planner.model,
                       "decision": "done", "reason": reason,
                       "prompt_tokens": None, "completion_tokens": None})
-            return {"exploration_complete": True}
+            # Причина уезжает В СОСТОЯНИЕ, а не только в транскрипт. Транскрипт не входит в перечень
+            # отдаваемых артефактов, поэтому до сих пор единственный ответ на вопрос «почему обход
+            # кончился» не доезжал до человека ни по какому каналу.
+            return {"exploration_complete": True, "stop_reason": reason}
         decision = planner.propose(dict(state), candidates)
         if decision.get("done") or not decision.get("action"):
             tx_write({"step": step, "planner": planner.name, "model": planner.model,
                       "decision": "done", "reason": decision.get("reason", ""),
                       "prompt_tokens": None, "completion_tokens": None})
-            return {"exploration_complete": True}
+            # Планировщик сказал «хватит» — это ТРЕТЬЯ причина, и она не совпадает ни с покрытием, ни
+            # с потолком: модель могла решить так на втором шаге. Своё имя, чтобы читатель не принял
+            # её за сходимость.
+            return {"exploration_complete": True, "stop_reason": "planner_done"}
         a = decision["action"]
         sid = step + 1
         planned = {"step_id": sid, "intent": a["intent"], "semantic_id": a["semantic_id"],
@@ -691,6 +697,42 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
                     "interactive_seen": len(state.get("interactive_seen", [])),
                     "interactive_exercised": len(state.get("interactive_exercised", [])),
                     "steps": steps}
+        # ⚠ ПОЛНОТА ОБХОДА — ОТДЕЛЬНОЕ УТВЕРЖДЕНИЕ, И ДО СИХ ПОР ЕГО НЕ БЫЛО НИГДЕ.
+        #
+        # Замерено 2026-08-23 на `the-internet`: обход упёрся в потолок шагов и записал
+        # `coverage_achieved: 1.0`. Обе цифры верны по отдельности и вместе врут: покрытие считается
+        # долей от `interactive_seen`, а `seen` — это только то, что успели УВИДЕТЬ, поэтому оборванный
+        # обход легко даёт единицу. Читателю показывали «покрыто всё», когда за краем осталось
+        # тридцать страниц фронтира.
+        #
+        # `exploration_complete` для этого не годится: этот булев защёлк ставится ОДИНАКОВО и при
+        # сходимости, и при потолке, и при пустых кандидатах, и при остановке оркестратором. А
+        # `reason`, который причину знал, уезжал только в `llm-transcript.jsonl` — файл, не входящий
+        # в перечень отдаваемых артефактов.
+        #
+        # ⚠ ПРИЧИНА ВЫВОДИТСЯ, ЕСЛИ ЕЁ НЕ СООБЩИЛИ. Есть третий путь выхода, минующий plan() вовсе:
+        # маршрутизатор `route_checkpoint` уводит в `scenario` по `current_step >= max_steps`, и тогда
+        # `stop_reason` пуст. Молчаливое «неизвестно» здесь было бы худшим из ответов, поэтому потолок
+        # распознаётся по тем же числам, по которым его распознал бы plan().
+        step_now = state.get("current_step", 0)
+        max_steps = state.get("max_steps", 40)
+        frontier_left = len(state.get("nav_frontier", []) or [])
+        reason = state.get("stop_reason") or ("max_steps" if step_now >= max_steps else "unknown")
+        plan_obj["completeness"] = {
+            # Полным обход считается ровно в одном случае: он сам решил, что больше некуда идти.
+            # Потолок, пустые кандидаты и решение планировщика — все три означают, что за краем
+            # осталось неизвестное количество непройденного.
+            "complete": reason == "converged",
+            "reason": reason,
+            "stopped_at_step": step_now,
+            "max_steps": max_steps,
+            "frontier_left": frontier_left,
+        }
+        if reason != "converged":
+            # Событие с `degrades: true`: обход, прошедший не весь сайт, — это потерянное качество
+            # прогона, а не деталь его устройства, и хаб читает деградации именно так.
+            log("explore.incomplete", reason=reason, step=step_now,
+                frontier=frontier_left, coverage=round(state.get("coverage_achieved", 0.0) * 100))
         # ADR-092: perception coverage rides ALONGSIDE the steps, not inside them — a step's identity
         # must not change because a page turned out to have a shadow root, or every existing plan_hash
         # would break for a measurement that describes the page rather than the test.
