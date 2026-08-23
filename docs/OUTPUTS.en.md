@@ -26,13 +26,25 @@ machine-readable for CI tooling; the HTML artifacts are human-facing.
 The primary output of an `--explore` run and the primary input for every subsequent
 `--replay` or `--ci` run.
 
-Schema (real top-level keys, `brain/graph.py:401-416`): `{plan_id (UUID), plan_hash (SHA-256 of
-canonical JSON over steps[] with sorted keys; numbers serialised as-is, no rounding, no field
-excluded), target_url, run_mode, coverage_target, coverage_achieved, interactive_seen (int),
-interactive_exercised (int), steps[], tokens (from `budget.tracker().summary()`), models
-({"plan": <planner model name>})}`. Every `steps[]` object has exactly 8 keys: `step_id`,
-`intent`, `semantic_id`, `action_type`, `target`, `locator`, `alternatives` (a flat list of
-`{strategy, locator, prior}`, not an `L1..L6` map), `is_milestone`.
+Schema (real top-level keys; the list is CHECKED against the code by
+`tests/test_outputs_schema_offline.py` rather than re-typed by hand): `{plan_id (UUID), plan_hash
+(SHA-256 of canonical JSON over steps[] with sorted keys; numbers serialised as-is, no rounding, no
+field excluded), target_url, run_mode, coverage_target, coverage_achieved, interactive_seen (int),
+interactive_exercised (int), steps[], completeness, perception, degradations, tokens (from
+`budget.tracker().summary()`), models ({"plan": <planner model name>})}`. Every `steps[]` object has
+exactly 8 keys: `step_id`, `intent`, `semantic_id`, `action_type`, `target`, `locator`,
+`alternatives` (a flat list of `{strategy, locator, prior}`, not an `L1..L6` map), `is_milestone`.
+
+⚠ **`coverage_achieved` alone does not answer "was the whole site walked", and reading it that way is
+the most expensive mistake this file can invite.** Coverage is a fraction of what was SEEN
+(`interactive_seen`), so a crawl cut off at the step ceiling happily reports `1.0` with thirty
+frontier addresses left behind — measured on a live target (ADR-131). The answer is `completeness`
+(ADR-131): `complete` (true exactly when `reason == "converged"`), `reason` (`converged` ·
+`max_steps` · `no_candidates` · `planner_done` · `aborted` · `orchestrator_abort` · `operator_abort` · `unknown`), `stopped_at_step`,
+`max_steps`, `frontier_left`, and — on a plan salvaged from a crash — `error` carrying what the tool
+tripped over. `degradations` lists the catalogue codes with `degrades: true` that fired during the
+run; it is incomplete by construction (the file is frozen inside the graph while teardown runs after
+it). `perception` (ADR-092) is the addressable fraction per page plus `worst_ratio`.
 
 **As-built:** `aut_version` and `exploration_seed` are **not** part of `plan.json` — no such
 fields exist in the code. `golden_snapshots` is not embedded in `plan.json` either — the

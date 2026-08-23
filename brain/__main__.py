@@ -40,7 +40,117 @@ def _checkpointer(ckpt_path: str):
             yield saver
 
 
-def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None) -> int:
+# Код выхода «инструмент сломался, но найденное сохранено» (см. brain/events.json → exit_codes).
+# Константа, а не литерал: число читают agentctl, control-api и хаб, и разъехаться им негде.
+EXIT_TOOL_FAILURE_SALVAGED = 5
+# И его пара: инструмент сломался, а спасать оказалось нечего. Названа рядом, потому что решение
+# между 4 и 5 принимается в одной строке, и два числа, из которых одно литерал, разъезжаются первыми.
+EXIT_TOOL_FAILURE = 4
+
+
+def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None, describe=False) -> dict:
+    """Записать то, что обход успел найти, когда он упал, и предложить тест хотя бы по этому.
+
+    ⚠ ПОЧЕМУ ЭТО ВООБЩЕ ВОЗМОЖНО. Всё, из чего узел `report` собирает `plan.json`, копится в
+    состоянии НА КАЖДОМ суперстепе: `exploration_plan`, `site_map`, `coverage_achieved`,
+    `interactive_seen/exercised`, `perception`. Вычисляется оно ровно в одном месте — в конце графа,
+    — и исключение до этого места отбрасывало всё разом. Здесь то же вычисление делается по
+    состоянию, которое чекпойнтер уже сохранил.
+
+    ⚠ ЧТО ЗАПИСЫВАЕТСЯ ЧЕСТНО. `completeness.complete` — `false`, `reason` — `aborted`, и рядом лежит
+    сама ошибка: без неё «неполон» неотличимо от «дошёл до потолка». `plan_hash` считается по тем же
+    правилам, что и у целого плана: частичный план — это ПЛАН, просто короче, и он должен
+    воспроизводиться так же.
+
+    ⚠ ТЕСТ ПРЕДЛАГАЕТСЯ ПО ТОМУ, ЧТО УСПЕЛИ УВИДЕТЬ. Прецедент записан в самом графе — ветка
+    `map.rejected` сохраняет обход, когда человек отказал сценарию: «выбросить карту значило бы, что
+    „нет“ стоило человеку ещё и обхода». Упавший обход — тот же случай: карта собрана, и отказать ей
+    в авторинге значит потерять её дважды.
+
+    Каждый шаг — best-effort и по отдельности: спасение, падающее посреди себя, оставило бы меньше,
+    чем спасение, записавшее хотя бы план.
+    """
+    from .state import canonical_plan_hash
+    state = {}
+    try:
+        snap = app.get_state(cfg)
+        state = dict(snap.values or {})
+    except Exception as e:
+        log("explore.salvage_failed", error=e)
+        return {}
+
+    steps = list(state.get("exploration_plan", []) or [])
+    site_map = state.get("site_map") or {}
+
+    plan_obj = {
+        "plan_id": run_id,
+        "plan_hash": canonical_plan_hash(steps),
+        "target_url": state.get("target_url") or target,
+        "run_mode": state.get("run_mode", "explore"),
+        "coverage_target": state.get("coverage_target"),
+        "coverage_achieved": round(state.get("coverage_achieved", 0.0) or 0.0, 4),
+        "interactive_seen": len(state.get("interactive_seen", []) or []),
+        "interactive_exercised": len(state.get("interactive_exercised", []) or []),
+        "steps": steps,
+        "completeness": {
+            "complete": False,
+            "reason": "aborted",
+            "stopped_at_step": state.get("current_step", 0),
+            "max_steps": state.get("max_steps"),
+            "frontier_left": len(state.get("nav_frontier", []) or []),
+            "error": str(crash)[:400],
+        },
+    }
+    # Деградации — и на упавшем прогоне ОСОБЕННО: обход, оборванный на 46-м шаге, потерял качество
+    # ровно тем, что оборвался, и `plan.json` — единственный файл, который у человека остался.
+    # Собирается ЗДЕСЬ, а не в графе: узел `report` до падения не доехал (см. верх функции).
+    from . import eventlog
+    plan_obj["degradations"] = eventlog.degradations()
+    wrote_plan = False
+    try:
+        with open(out / "plan.json", "w") as f:
+            json.dump(plan_obj, f, indent=2)
+        wrote_plan = True
+    except Exception as e:
+        log("explore.salvage_failed", error=e)
+    if any((site_map or {}).values()):
+        try:
+            with open(out / "site-map.json", "w") as f:
+                json.dump(site_map, f, indent=2)
+        except Exception as e:
+            log("explore.salvage_failed", error=e)
+
+    # ⚠ ОБЪЯВЛЕНИЕ ИДЁТ ПОСЛЕ ЗАПИСИ, А НЕ ДО НЕЁ. Текст этого кода в каталоге утверждает
+    # совершившийся факт — «{steps} шаг(ов) и {pages} страниц(ы) ЗАПИСАНЫ в артефакт», — и он
+    # произносился раньше, чем что-либо писалось. На кончившемся диске в журнале оказывались рядом
+    # два degrades-события: «найденное СОХРАНЕНО: 45 шагов» и «спасти найденное не удалось», причём
+    # первое — про пустой каталог. Событие, сообщающее об исходе операции, произносится после неё.
+    if wrote_plan:
+        log("explore.salvaged", steps=len(steps), pages=len(site_map), error=crash)
+
+    # Сценарий по накопленной карте. Голова может отсутствовать (обычный explore без goal/describe) —
+    # тогда предлагать нечего, и это не отказ.
+    if scenario_head is not None and site_map:
+        try:
+            from .scenario import flatten_site_map, ground_scenario, reconcile
+            if getattr(scenario_head, "name", "") == "goal":
+                built = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"))
+                sc, unmatched = ground_scenario(built.get("refs", []), site_map, start_id=len(steps) + 1)
+            else:
+                draft = scenario_head.draft()
+                sc, unmatched = reconcile(draft.get("draft", []), site_map, start_id=len(steps) + 1)
+            _write_scenario(out, run_id, target, sc, unmatched, bool(describe),
+                            author_model=getattr(scenario_head, "model", None), crawl_complete=False)
+        except Exception as e:
+            log("explore.salvage_failed", error=e)
+    # Пустой словарь означает ровно одно: спасать было нечем ИЛИ записать не удалось. Вызывающий
+    # решает по нему между кодами 5 и 4, поэтому «состояние прочиталось» здесь недостаточно —
+    # обещание кода 5 («вот что успели») держит файл на диске, а не удачный `get_state`.
+    return state if wrote_plan else {}
+
+
+def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None,
+                    crawl_complete=True) -> int:
     """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
     (describe). Exit: describe with any unmatched -> 1; zero grounded steps -> 1; else 0.
 
@@ -53,6 +163,10 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
     obj = {"plan_id": f"{run_id}-scenario", "plan_hash": canonical_plan_hash(sc), "target_url": target,
            "run_mode": "scenario", "mode": ("describe" if is_describe else "goal"),
            "unmatched": len(unmatched), "steps": sc,
+           # Сценарий, собранный по НЕПОЛНОЙ карте, проверяет меньше, чем читатель думает. Поле
+           # присутствует всегда — отсутствующее читалось бы как «полон», а это ровно то умолчание,
+           # ради снятия которого оно заводится.
+           "crawl_complete": bool(crawl_complete),
            "models": {"author": author_model}, "tokens": budget.tracker().summary()}
     with open(out / "scenario.json", "w") as f:
         json.dump(obj, f, indent=2)
@@ -77,9 +191,14 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
     # that most needed explaining was the one that explained least. The serialiser already existed,
     # the list was already collected (scenario.py), and the file was already in control-api's artifact
     # whitelist — the only thing standing between a person and the evidence was this `if`.
+    # ⚠ И ПОЛНОТА ОБХОДА, ПО КОТОРОМУ СЦЕНАРИЙ АВТОРИЛСЯ. Без неё `unmatched` читается как фантазия
+    # модели: «сослалась на элементы, которых нет». Но когда обход оборвался, половина карты просто не
+    # успела собраться, и та же цифра означает противоположное — что виноват не автор, а обрыв. Две
+    # разные новости одним числом; теперь рядом сказано, какая именно.
     with open(out / "reconcile-report.json", "w") as f:
         json.dump({"target_url": target, "mode": ("describe" if is_describe else "goal"),
-                   "grounded": len(sc), "unmatched": unmatched}, f, indent=2)
+                   "grounded": len(sc), "unmatched": unmatched,
+                   "crawl_complete": bool(crawl_complete)}, f, indent=2)
     log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
     # HEALTH-004: a goal run that grounded 3 of 10 exits 0, reports a counter, and is over. That is the
     # exact shape `degrades` exists for — green, and quietly worth less than it looks. Describe mode
@@ -200,14 +319,60 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         # store (`_conversations_store_path`) instead of reusing this one.
         rc = runcontrol.make_client()  # M8/M9.8 F4: shared by the graph's checkpoint gate + the resume loop
         cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": run_id}}
+        # ⚠ ЧТО НАЙДЕНО — СОХРАНЯЕТСЯ, ДАЖЕ ЕСЛИ ОБХОД УПАЛ (директива Alex 2026-08-23).
+        #
+        # Замерено: исключение на 46-м шаге отбрасывало ВСЕ 45 предыдущих. Узел `report`, который
+        # единственный пишет `plan.json`, стоит в конце графа и до него не доходили; `scenario` —
+        # тем более; а копия состояния лежала в `checkpoint.db`, который тут же удалялся в `finally`
+        # («упавший прогон не должен оставлять больше мусора, чем чистый»). Человек, потративший
+        # полторы минуты обхода, получал exit 4 и пустой каталог.
+        #
+        # Спасение берёт состояние ИЗ ГРАФА (`app.get_state`), а не из файла: чекпойнтер знает
+        # актуальные значения каналов, и читать sqlite руками значило бы завести второе высказывание
+        # об одном факте. Порядок важен — состояние снимается ДО `_discard_checkpoint`, поэтому
+        # спасение стоит внутри `try`, а не после него.
+        #
+        # ⚠ ВИНА НЕ ПЕРЕКРАШИВАЕТСЯ. Спасённый результат не делает нашу поломку находкой о чужом
+        # приложении: код выхода — новый `5` («сломались мы, но вот что успели»), с `fault: tool`,
+        # а не `1`, который в каталоге означает `fault: app`. Это ровно та подмена, которую запретил
+        # ADR-087, когда вводил `4`.
+        salvaged = crashed = False
         try:
             with _checkpointer(ckpt) as saver:
                 app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
-                final = app.invoke(init_state, config=cfg)
-                # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
-                final = _resume_through_takeovers(app, final, cfg, rc, run_id)
+                try:
+                    final = app.invoke(init_state, config=cfg)
+                    # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
+                    final = _resume_through_takeovers(app, final, cfg, rc, run_id)
+                except Exception as crash:
+                    # Код произносится ЗДЕСЬ, в месте, где ошибка поймана, а не только внутри
+                    # спасения: обработчик, который ловит и молчит, — это проглоченная ошибка, даже
+                    # если вызванная им функция что-то напишет. Гейт проглоченных ошибок прав, требуя
+                    # этого от САМОГО обработчика: спасение может не дойти до своего лога, и тогда
+                    # падение осталось бы без единого слова.
+                    log("explore.crashed", error=crash)
+                    crashed = True
+                    # ⚠ ВИНА ДЕЛИТСЯ ПО ТОМУ, ЧТО ЛЕЖИТ НА ДИСКЕ, а не по тому, что мы попытались.
+                    # Пустой ответ спасения означает, что `plan.json` не написан: либо состояние не
+                    # прочиталось, либо запись упала. Код 5 в каталоге обещает «сломались мы, но вот
+                    # что успели» — вернуть его над пустым каталогом значило бы пообещать человеку
+                    # артефакт, которого нет, и он пошёл бы его искать. Тогда честен код 4.
+                    final = _salvage_explore(app, cfg, out, run_id, target, crash,
+                                             scenario_head=scenario_head, describe=bool(describe))
+                    salvaged = bool(final)
         finally:
             _discard_checkpoint(ckpt)
+        if crashed:
+            _stop_trace(ex, trace_path, 1)
+            _stop_video(ex, video_path, 1)
+            # Тот же приём, что у соседей по разборке: их собственные ошибки глотаются, потому что
+            # прогон уже решён, а исключение отсюда ушло бы наружу и переписало код выхода на 4 —
+            # то есть стёрло бы разницу между «спасли» и «не спасли» в последней строке.
+            try:
+                ex.call("shutdown")
+            except Exception as e:
+                log("system.executor_shutdown_failed", err=e)
+            return EXIT_TOOL_FAILURE_SALVAGED if salvaged else EXIT_TOOL_FAILURE
         # ADR-084: explore's trace holds the same live application DOM a replay's does, so the same
         # rule applies. The exit code is not known yet here, so the decision is made below, right
         # before it is computed.
@@ -222,8 +387,21 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             print(f"  #{s['step_id']:>2} {s['action_type']:<9} {s['intent']}")
         print("=" * 60)
         if scenario_head is not None:    # M9.2b: goal/describe -> scenario.json is the deliverable
+            # ⚠ `crawl_complete` НЕ ПОДРАЗУМЕВАЕТСЯ, а читается из уже замороженного плана. Поле
+            # заведено ровно затем, чтобы `unmatched` не читался как фантазия модели, когда причина в
+            # оборванном обходе, — а брался из умолчания `True` на ОБОИХ обычных путях, то есть
+            # именно там, где обход и упирается в потолок. Два артефакта одного прогона говорили
+            # разное: `plan.json` → `completeness.complete: false, reason: max_steps`, а
+            # `scenario.json` рядом → `crawl_complete: true`.
+            #
+            # Источник — САМ УЗЕЛ `report`, который полноту и вычисляет: он кладёт её в состояние
+            # рядом с `plan_hash`, и здесь она просто читается. Первая редакция читала записанный
+            # `plan.json` — и завела обработчик `except: return True`, который гейт проглоченных
+            # ошибок справедливо покрасил: битый план молча становился бы «обход полон». Ни файла,
+            # ни обработчика тут больше нет, а автор факта по-прежнему один.
             return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe),
-                                   author_model=getattr(scenario_head, "model", None))
+                                   author_model=getattr(scenario_head, "model", None),
+                                   crawl_complete=bool((final.get("completeness") or {}).get("complete", True)))
         plan_file = out / "plan.json"
         # `trace.exists()` used to be part of this criterion. It asserted a BY-PRODUCT rather than the
         # result — a trace file proves the browser ran, which `len(steps) >= 5` already proves better —
@@ -736,6 +914,34 @@ def _redact_trace(trace_path: str) -> None:
     """
     import shutil
     import subprocess
+
+    if not os.path.exists(trace_path):
+        # NOTHING WAS WRITTEN, so there is nothing to redact and nothing to leak.
+        #
+        # ⚠ This branch exists because the executor's answer cannot be used to tell. `browser.traceStop`
+        # returns `{path: path ?? null}` — an ECHO of what it was asked for — while it only writes the
+        # archive when `context && tracingStarted && !tracingStopped` (pw-executor/src/server.ts). Two
+        # ordinary cases produce a path with no file behind it: `PW_NO_TRACE=1` (an auth run never
+        # starts tracing) and a context that died together with the run — which is precisely the
+        # crashed run the salvage path was built for.
+        #
+        # Without this guard `agentctl redact-trace` fails with "no such file", `os.remove` then raises
+        # FileNotFoundError, and the failure lands in the branch that logs `system.trace_leak`: an
+        # ERROR telling a person that an unredacted trace holding passwords is on disk and must be
+        # deleted by hand — about a path that does not exist. A leak alarm that is false on a whole
+        # class of runs is an alarm people stop reading, and it is the ONLY thing we say when a leak is
+        # real. `_stop_video` already draws this distinction (`run.video_absent`); the trace did not.
+        #
+        # TWO DIFFERENT FACTS, and collapsing them would trade one silence for another. `PW_NO_TRACE=1`
+        # means nobody asked for a trace, so its absence is expected and costs one info line. Without
+        # it the caller DID ask — `_keep_trace` only says yes on a run that did not finish clean — and
+        # a post-mortem the operator expects and does not get is a fact about the run, which in this
+        # catalogue means it degrades the verdict rather than living in a log nobody opens.
+        if os.environ.get("PW_NO_TRACE") == "1":
+            log("run.trace_absent", path=trace_path)
+        else:
+            log("system.trace_missing", path=trace_path)
+        return
 
     if os.environ.get("SENTINEL_TRACE_RAW") == "1":
         # Opt-in escape hatch for diagnosing the tool itself. Announced every time, because a mode

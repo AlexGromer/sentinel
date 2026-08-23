@@ -10,7 +10,10 @@
 // against the real run flag set. A duplicate here is checked by nothing, which is why it rotted.
 //
 // It spawns the Python brain (venv) via subprocess + env (no gRPC yet; M2b) and propagates the
-// brain's structured exit code (0 pass / 1 step-fail / 2 golden regression / 3 integrity: plan_hash or golden HMAC).
+// brain's structured exit code. The codes are NOT listed here: this was a second copy of the
+// contract and it had already rotted — it named four while brain/events.json declared six, and
+// nothing compared the two. The one source is the `exit_codes` block of that catalogue, which
+// control-api reads for the verdict and the fault domain alike.
 package main
 
 import (

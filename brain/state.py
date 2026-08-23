@@ -60,6 +60,17 @@ class RunState(TypedDict, total=False):
     nav_frontier: list
     coverage_achieved: float
     exploration_complete: bool
+    # ПОЧЕМУ обход кончился. `exploration_complete` — булев маршрутный защёлк: он ставится ОДИНАКОВО
+    # и когда покрытие достигнуто, и когда упёрлись в потолок шагов, и когда кандидаты кончились, и
+    # когда оркестратор прервал прогон. То есть по нему нельзя отличить «обошли всё» от «нам не дали
+    # доходить». Замерено: `reason` вычислялся в plan() и уезжал ТОЛЬКО в llm-transcript.jsonl, а тот
+    # не входит в перечень отдаваемых артефактов — до человека причина не доезжала ни по какому
+    # каналу, и `coverage_achieved: 1.0` на оборванном обходе читалось как «покрыто всё».
+    stop_reason: str
+    # Полнота обхода, вычисленная узлом `report` (ADR-131). Живёт в состоянии, а не только в
+    # файле: вызывающему она нужна для пометки на сценарии, а второй расчёт по тем же полям
+    # был бы вторым автором одного факта — они расходятся первыми.
+    completeness: dict
     executed_actions: list
     errors: list
     # M9.8 F4 (ADR-054): operator-takeover resume payloads, appended each time the checkpoint node
