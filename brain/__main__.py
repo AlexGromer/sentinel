@@ -20,7 +20,7 @@ from .executor import make_executor
 from .otel import setup_tracing, span
 from .graph import build_graph
 from .planner import make_planner
-from .state import normalize_url, semantic_id
+from .state import base_origin_of, normalize_url, semantic_id
 
 _STORE_PATH = str(pathlib.Path("state") / "locators.db")
 
@@ -151,7 +151,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
     # ADR-125: named beside the trace because the two artifacts are teardown siblings —
     # one is stopped before the other, and both are kept only when the run is worth a look.
     video_path = str((out / "video.webm").resolve())
-    base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
+    base_origin = base_origin_of(target)
     goal = os.environ.get("GOAL", "").strip()            # M9.2a goal-mode
     describe = os.environ.get("DESCRIBE", "").strip()    # M9.2b describe-mode
     if goal and describe:
@@ -569,7 +569,7 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                     # ADR-125: named beside the trace because the two artifacts are teardown siblings —
                     # one is stopped before the other, and both are kept only when the run is worth a look.
                     video_path = str((out / "video.webm").resolve())
-                    base_origin = normalize_url(target).rsplit("/", 1)[0] + "/"
+                    base_origin = base_origin_of(target)
                     ex = make_executor(os.environ["PW_EXECUTOR_CMD"])   # only the cold turn spawns a browser
                     try:
                         ex.call("initialize")

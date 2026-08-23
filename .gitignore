@@ -1235,6 +1235,10 @@ state/
 # UI-smoke screenshots (scripts/ui-smoke.mjs default --out) — regenerated per run, uploaded by CI
 ui-smoke/
 
+# Press-walk report (scripts/ui-press.mjs default --out) — the same kind of artefact as the frames
+# beside it: regenerated per run, and the verdict a person reads is the exit code, not the file.
+ui-press/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALLOW LIST (OVERRIDE IGNORES)
 # ─────────────────────────────────────────────────────────────────────────────

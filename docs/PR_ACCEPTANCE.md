@@ -44,6 +44,7 @@
 | DOM-гейт статичной витрины — хаб без control-API за спиной (пол 5) | `build` | `Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)` |
 | Питоновский офлайн-сьют: **все** `tests/test_*_offline.py`, обнаруживаются глобом, пол 25 | `build` | `Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)` |
 | Сквозной смоук интерфейса против настоящего развёртывания | `build` | `End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)` |
+| Протыкивание КАЖДОГО контрола хаба: нажат либо не нажат по записанной причине; исключение падает, если контрол не нажат и причина не объявлена | `build` | `Press every control of the hub (Ф4 — the walk ui-smoke does not do)` |
 | Выгрузка скриншотов смоука артефактом (`always()` — падение и есть тот случай, когда они нужны) | `build` | `Upload UI smoke screenshots` |
 | Детерминированный replay по фикстурам с golden-diff и утверждением кода выхода | `replay` | `Explore + freeze goldens + replay (assert exit code)` |
 | Explore по `testdata/site` до `plan.json` | `explore` | `Explore testdata/site -> plan.json` |
