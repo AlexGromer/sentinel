@@ -734,6 +734,15 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         step_now = state.get("current_step", 0)
         max_steps = state.get("max_steps", 40)
         frontier_left = len(state.get("nav_frontier", []) or [])
+        # ⚠ ВЕТКА `unknown` СЕЙЧАС НЕДОСТИЖИМА, И ЭТО ЗАМЕРЕНО, А НЕ ПРЕДПОЛОЖЕНО. Все четыре места,
+        # ставящие `exploration_complete: True`, называют свою причину (сходимость/потолок/пустые
+        # кандидаты · решение планировщика · останов оркестратором · останов человеком), а
+        # единственный оставшийся путь в `scenario` мимо `plan()` — `route_checkpoint` по
+        # `current_step >= max_steps` — попадает во вторую ветку и даёт то же «max_steps».
+        # Следствие честно: мутация, выбрасывающая `unknown`, ЭКВИВАЛЕНТНА — гейт её не убивает и
+        # убить не может. Ветка оставлена полом на будущее: она стоит ровно столько, сколько стоит
+        # следующая ветка останова, которая забудет назвать себя, и тогда читатель получит слово
+        # «unknown» вместо молчаливого «max_steps» на третьем шаге из девяноста.
         reason = state.get("stop_reason") or ("max_steps" if step_now >= max_steps else "unknown")
         plan_obj["completeness"] = {
             # Полным обход считается ровно в одном случае: он сам решил, что больше некуда идти.
