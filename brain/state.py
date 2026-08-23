@@ -67,6 +67,10 @@ class RunState(TypedDict, total=False):
     # не входит в перечень отдаваемых артефактов — до человека причина не доезжала ни по какому
     # каналу, и `coverage_achieved: 1.0` на оборванном обходе читалось как «покрыто всё».
     stop_reason: str
+    # Полнота обхода, вычисленная узлом `report` (ADR-131). Живёт в состоянии, а не только в
+    # файле: вызывающему она нужна для пометки на сценарии, а второй расчёт по тем же полям
+    # был бы вторым автором одного факта — они расходятся первыми.
+    completeness: dict
     executed_actions: list
     errors: list
     # M9.8 F4 (ADR-054): operator-takeover resume payloads, appended each time the checkpoint node

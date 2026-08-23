@@ -350,10 +350,20 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         _agui("state.transition", rid, to="perceive")
         cur = ex.call("browser.currentUrl")
         snap = ex.call("browser.snapshot")
+        # ⚠ НАЗВАННАЯ ПРИЧИНА ДОЛЖНА БЫТЬ ПРОИЗНЕСЕНА, А НЕ ПРОСТО ВОЗВРАЩЕНА. Инструмент теперь
+        # отличает «у документа нет корня» от «корень есть, а снимок не удался» и присылает текст
+        # причины — но до сих пор его читали только тесты: отсюда наружу уходили ровно
+        # `ariaSnapshot` и `nodeCount`. Человек видел `nodeCount: 0` и не имел ни одного способа
+        # узнать, пустая это страница или непрочитанная. Код несёт `degrades: true`, поэтому причина
+        # доезжает и до вердикта, и до блока `degradations` в `plan.json`.
+        reason = snap.get("rootless") or snap.get("snapshotError")
+        if reason:
+            log("browser.snapshot_degraded", reason=reason)
         return {"current_url": cur.get("url", ""),
                 "page_model": {"url": cur.get("url", ""), "title": cur.get("title", ""),
                                "aria": snap.get("ariaSnapshot", ""),
-                               "nodeCount": snap.get("nodeCount", 0)}}
+                               "nodeCount": snap.get("nodeCount", 0),
+                               "degraded": reason}}
 
     def ground(state: RunState) -> dict:
         """Catalogue buttons (with healing alternatives), grow the frontier, recompute coverage."""
@@ -487,7 +497,11 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         if rc.report(state.get("run_id", ""), "plan", tok.get("prompt"),
                      tok.get("completion")) == runcontrol.ABORT:
             log("plan.orchestrator_abort")
-            return {"exploration_complete": True}
+            # ⚠ ПРИЧИНА ЕСТЬ, И ОНА ОБЯЗАНА БЫТЬ НАЗВАНА. Эта ветка возвращала только защёлку, а
+            # `report` не имеет способа отличить её ни от чего другого и выводил `unknown` — то есть
+            # прогон, оборванный ЧУЖИМ РЕШЕНИЕМ по бюджету, объявлялся неполным по неизвестной
+            # причине. Человек, у которого сработал потолок расходов, читал «непонятно почему».
+            return {"exploration_complete": True, "stop_reason": "orchestrator_abort"}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + [planned],
                 "_pending": planned}
 
@@ -608,7 +622,10 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         verb = rc.poll(rid, "checkpoint")
         if verb == runcontrol.ABORT:
             log("hitl.abort_over_takeover")
-            return {"exploration_complete": True, "_takeover_armed": False}
+            # То же и здесь, и по той же причине: остановил ЧЕЛОВЕК, и это самая знаемая из всех
+            # причин остановки — молчать о ней в отчёте нечем.
+            return {"exploration_complete": True, "_takeover_armed": False,
+                    "stop_reason": "operator_abort"}
         if verb == runcontrol.TAKEOVER:
             log("hitl.takeover_arming")
             return {"_takeover_armed": True}
@@ -759,6 +776,25 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         _author_model = getattr(scenario_head, "model", None)
         plan_obj["models"] = {"plan": _explore_model or _author_model,
                               "explore": _explore_model, "author": _author_model}
+        # ⚠ ДЕГРАДАЦИИ ОБХОДА ДО СИХ ПОР НЕ ДОЕЗЖАЛИ ДО АРТЕФАКТА ВООБЩЕ.
+        #
+        # `eventlog.degradations()` читался ровно в одном месте — `replay.py:604`, — поэтому потерянное
+        # качество попадало в `report.json` повторного прогона и НЕ попадало в `plan.json` обхода ни
+        # разу. Обход без ключа к модели, обход на исчерпанном бюджете и обход, не прошедший сайт,
+        # оставляли артефакт, который читается как чистый: каталог всегда знал, какие коды означают
+        # деградацию, и всегда нёс фразу для вердикта — читать это со стороны обхода было некому.
+        #
+        # ⚠ ПЕРЕЧЕНЬ НЕПОЛОН ПО ПОСТРОЕНИЮ, И ЭТО НАДО ЗНАТЬ. Файл пишется ЗДЕСЬ, а разбор прогона
+        # продолжается после графа: `system.trace_missing` и события видео произносятся в teardown
+        # (`_stop_trace`/`_stop_video` в `__main__.py`), то есть уже после этой строки. Они доезжают до
+        # человека журналом и вердиктом, но в `plan.json` их не будет. Врать об этом нечем: ключ
+        # называет то, что было известно НА МОМЕНТ ЗАМОРОЗКИ ПЛАНА, и заморозка стоит раньше разборки.
+        #
+        # `plan_hash` не двигается: он считается `canonical_plan_hash(steps)` — только по шагам, — и
+        # ни один ключ уровня плана в него не входит. Проверено тем же гейтом, что стережёт 106
+        # сохранённых планов.
+        from . import eventlog
+        plan_obj["degradations"] = eventlog.degradations()
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:
             json.dump(plan_obj, f, indent=2)
         # PROD-IMPORT: the explore map, written as an artifact. `ground_imported` has always been able
@@ -796,7 +832,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         _agui("verdict", state.get("run_id", ""), verdict=("failed" if failed_run else "ok"),
               exit_code=(1 if failed_run else 0), healed=0,
               failed=state.get("failed_steps", 0))
-        return {"plan_hash": ph}
+        return {"plan_hash": ph, "completeness": plan_obj["completeness"]}
 
     def route_plan(state: RunState) -> str:
         return "scenario" if state.get("exploration_complete") else "act"

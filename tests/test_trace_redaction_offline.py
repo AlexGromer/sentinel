@@ -91,6 +91,60 @@ def test_a_kept_trace_is_redacted_and_an_unredactable_one_is_deleted():
         "leak, and keeping it because the cleanup failed inverts the point of the cleanup.")
 
 
+def test_a_trace_that_was_never_written_is_not_announced_as_a_leak():
+    """The alarm that says "a trace with passwords is on disk, delete it by hand" must not fire over a
+    file that does not exist — and it did, on a whole class of runs.
+
+    MEASURED 2026-08-23 while building the salvage gate for ADR-131. `_stop_trace` asks the executor to
+    stop tracing with a path whenever `_keep_trace` says the run did not finish clean. The executor
+    answers `{path: path ?? null}` — an ECHO — while it only writes the archive when
+    `context && tracingStarted && !tracingStopped`. So `_redact_trace` was handed a path with nothing
+    behind it, `agentctl redact-trace` failed with "no such file", `os.remove` raised
+    FileNotFoundError, and the FileNotFoundError branch is the one that logs `system.trace_leak`: an
+    ERROR sending a person after a file that is not there. Two ordinary ways in — `PW_NO_TRACE=1`, and
+    a context that died together with the crash, which is exactly the run the salvage path exists for.
+
+    ⚠ THE TWO ABSENCES ARE NOT THE SAME FACT, and this asserts both. With `PW_NO_TRACE=1` nobody asked
+    for a trace and its absence costs one info line. WITHOUT it the caller did ask, so the absence is a
+    post-mortem the operator expected and did not get — which in this catalogue degrades the verdict,
+    exactly as the check above requires of every other trace outcome."""
+    import brain.__main__ as M
+    seen: "list[tuple[str, dict]]" = []
+    real_log, old_env = M.log, os.environ.get("PW_NO_TRACE")
+    M.log = lambda code, **kw: seen.append((code, kw))
+    gone = str(pathlib.Path(tempfile.mkdtemp()) / "never-written.zip")
+    try:
+        for env, want in (("1", "run.trace_absent"), (None, "system.trace_missing")):
+            seen.clear()
+            if env is None:
+                os.environ.pop("PW_NO_TRACE", None)
+            else:
+                os.environ["PW_NO_TRACE"] = env
+            M._redact_trace(gone)
+            codes = [c for c, _ in seen]
+            assert "system.trace_leak" not in codes, (
+                f"a trace that was never written was announced as a leak (PW_NO_TRACE={env!r}): {codes}. "
+                "This is the only thing we say when a leak is real; false on a class of runs, it stops "
+                "being read.")
+            assert codes == [want], f"PW_NO_TRACE={env!r} said {codes}, want [{want!r}]"
+    finally:
+        M.log = real_log
+        if old_env is None:
+            os.environ.pop("PW_NO_TRACE", None)
+        else:
+            os.environ["PW_NO_TRACE"] = old_env
+
+    # ...and the two codes must disagree about the verdict, or the split above bought nothing.
+    cat = json.loads((REPO / "brain" / "events.json").read_text(encoding="utf-8"))["events"]
+    assert cat["run.trace_absent"].get("degrades") is not True, (
+        "a trace nobody asked for degrades the verdict — that is a warning on every auth run")
+    assert cat["system.trace_missing"].get("degrades") is True, (
+        "a trace the caller asked for and did not get does NOT degrade the verdict, so a crashed run "
+        "with no post-mortem looks exactly like one with a full trace")
+    for k in ("ru_verdict", "en_verdict"):
+        assert cat["system.trace_missing"].get(k), f"system.trace_missing has no {k}"
+
+
 def test_every_outcome_reaches_the_verdict_as_a_degradation():
     """A post-mortem the operator expects and does not get is a fact about the run.
 

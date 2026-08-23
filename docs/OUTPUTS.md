@@ -26,11 +26,24 @@
 Основной вывод запуска `--explore` и основной вход для всех последующих запусков
 `--replay` или `--ci`.
 
-Схема (реальные top-level ключи, `brain/graph.py:401-416`): `{plan_id (UUID), plan_hash (SHA-256
-канонического JSON над steps[] с сортированными ключами; числа сериализуются как есть, без
+Схема (реальные top-level ключи; перечень СВЕРЯЕТСЯ с кодом гейтом
+`tests/test_outputs_schema_offline.py`, а не переписывается руками): `{plan_id (UUID), plan_hash
+(SHA-256 канонического JSON над steps[] с сортированными ключами; числа сериализуются как есть, без
 округления, ни одно поле не исключается), target_url, run_mode, coverage_target,
-coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[], tokens (из
-`budget.tracker().summary()`), models ({"plan": <имя модели планировщика>})}`. Каждый объект
+coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[], completeness,
+perception, degradations, tokens (из `budget.tracker().summary()`), models ({"plan": <имя модели
+планировщика>})}`.
+
+⚠ **`coverage_achieved` в одиночку не отвечает на вопрос «весь ли сайт пройден», и читать его так —
+самая дорогая ошибка этого файла.** Покрытие считается долей от УВИДЕННОГО (`interactive_seen`),
+поэтому обход, оборванный на потолке шагов, спокойно даёт `1.0`, оставив за краем тридцать адресов
+фронтира — замерено на живой цели (ADR-131). Ответ даёт `completeness` (ADR-131): `complete` (истинно
+ровно при `reason == "converged"`), `reason` (`converged` · `max_steps` · `no_candidates` ·
+`planner_done` · `aborted` · `orchestrator_abort` · `operator_abort` · `unknown`), `stopped_at_step`, `max_steps`, `frontier_left` и — на
+спасённом после падения плане — `error` с текстом того, обо что споткнулся инструмент.
+`degradations` — коды каталога с `degrades: true`, сработавшие за прогон; перечень неполон по
+построению (файл замораживается в графе, а разборка прогона идёт после него). `perception` (ADR-092)
+— доля адресуемого на страницу плюс `worst_ratio`. Каждый объект
 `steps[]` — ровно 8 ключей: `step_id`, `intent`, `semantic_id`, `action_type`, `target`, `locator`,
 `alternatives` (плоский список `{strategy, locator, prior}`, не карта `L1..L6`), `is_milestone`.
 

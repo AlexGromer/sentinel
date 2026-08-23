@@ -830,18 +830,38 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       const root = page!.locator(SNAPSHOT_ROOT).first();
       let ariaSnapshot = '';
       let rootless: string | null = null;
+      let snapshotError: string | null = null;
       try {
         ariaSnapshot = await root.ariaSnapshot({ timeout: 1500 });
-      } catch {
-        rootless =
-          `this document has no ${SNAPSHOT_ROOT} to snapshot — the page carries no rendered root ` +
-          `(a frameset whose frames failed, a document still mid-parse, or a non-HTML body)`;
+      } catch (e) {
+        // ⚠ ДВА РАЗНЫХ ФАКТА, И ОДИН ИЗ НИХ НЕЛЬЗЯ УТВЕРЖДАТЬ, НЕ СПРОСИВ. Голый `catch`, который
+        // здесь стоял, приписывал ЛЮБОЙ отказ отсутствию корня — а с таймаутом в 1500 мс самый
+        // частый отказ совсем другой: `act` кликает по ссылке и НЕ ждёт навигацию, следующий узел
+        // сразу просит снимок, и на удалённой цели новый документ доходит до DOMContentLoaded
+        // дольше полутора секунд. Страница с корнем объявлялась бескорневой, текст настоящей ошибки
+        // выбрасывался, а вызывающий получал пустой снимок с уверенной ложной причиной.
+        //
+        // Вопрос «есть ли корень» задаётся отдельно и дёшево. `count()` не ждёт появления — он
+        // отвечает о том, что в документе есть СЕЙЧАС, — поэтому ноль здесь означает именно то, что
+        // объявляется, а не «не дождались».
+        const n = await page!.locator(SNAPSHOT_ROOT).count().catch(() => -1);
+        const detail = String((e as Error)?.message ?? e).split('\n')[0].slice(0, 200);
+        if (n === 0) {
+          rootless =
+            `this document has no ${SNAPSHOT_ROOT} to snapshot — the page carries no rendered root ` +
+            `(a frameset whose frames failed, a document still mid-parse, or a non-HTML body)`;
+        } else {
+          snapshotError =
+            `the ${SNAPSHOT_ROOT} root is present but the snapshot did not complete: ${detail}`;
+        }
       }
       const nodeCount = ariaSnapshot.split('\n').filter((l) => l.trim().startsWith('-')).length;
       // `rootless` присутствует, только когда снимка нет: пустая строка и «снимок пуст, потому что
       // корня нет» — разные новости, и вторая обязана быть произнесённой, а не выведенной читателем
       // из нуля узлов.
-      return rootless ? { ariaSnapshot, nodeCount, rootless } : { ariaSnapshot, nodeCount };
+      if (rootless) return { ariaSnapshot, nodeCount, rootless };
+      if (snapshotError) return { ariaSnapshot, nodeCount, snapshotError };
+      return { ariaSnapshot, nodeCount };
     }
     case 'browser.currentUrl':
       await ensureBrowser();

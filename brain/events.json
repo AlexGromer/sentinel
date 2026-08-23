@@ -990,6 +990,19 @@
         "graph"
       ]
     },
+    "browser.snapshot_degraded": {
+      "lvl": "warn",
+      "cat": "browser",
+      "phase": "perceive",
+      "ru": "Страница осмотрена не полностью: {reason}. Обход продолжается, но об этой странице он знает меньше, чем о соседних",
+      "en": "The page was not fully perceived: {reason}. The crawl continues, but it knows less about this page than about its neighbours",
+      "modules": [
+        "graph"
+      ],
+      "degrades": true,
+      "ru_verdict": "часть страниц осмотрена не полностью — снимок не удался или у документа нет корня",
+      "en_verdict": "some pages were not fully perceived — the snapshot failed, or the document has no root"
+    },
     "explore.crashed": {
       "lvl": "error",
       "cat": "run",
@@ -2126,6 +2139,28 @@
       "modules": [
         "__main__"
       ]
+    },
+    "run.trace_absent": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Трейса нет: трассировка для этого прогона не велась (или контекст закрылся вместе с падением), поэтому очищать было нечего ({path})",
+      "en": "No trace: tracing was not running for this run (or the context died with the crash), so there was nothing to redact ({path})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "system.trace_missing": {
+      "lvl": "warn",
+      "cat": "system",
+      "phase": "report",
+      "ru": "Трейса для разбора НЕТ, хотя прогон закончился не чисто: {path} не был записан — трассировка не велась или контекст закрылся вместе с падением",
+      "en": "There is NO trace to post-mortem, although the run did not finish clean: {path} was never written — tracing was not running, or the context died with the crash",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "разбор невозможен: трейс упавшего прогона не был записан",
+      "en_verdict": "no post-mortem is possible: the failed run's trace was never written"
     },
     "system.video_stop_error": {
       "lvl": "warn",
