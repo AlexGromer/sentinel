@@ -95,7 +95,27 @@ class FakeEx:
         return {}
 
 
-def _run(max_steps: int, break_at: "int | None" = None) -> "tuple[dict, str]":
+class DonePlanner:
+    """Планировщик, который САМ говорит «хватит» — третья причина остановки.
+
+    ⚠ Без него `complete` не привязан к причине НИЧЕМ. Замерено: на двух прежних случаях (потолок и
+    сходимость) мутация `\"complete\": reason == \"converged\"` → `bool(state[\"exploration_complete\"])`
+    выживает — то есть блок возвращается к ровно тому булеву защёлку, ради размежевания с которым он
+    и заводился. Причина в том, что на потолке граф уходит в `scenario` мимо `plan()`, поэтому защёлк
+    остаётся False и случайно совпадает с ответом; а на сходимости он True и снова совпадает. Нужен
+    третий случай, где защёлк True, а обход НЕ полон, — и это ровно то, что делает живая модель,
+    отвечая «done» на втором шаге из девяноста."""
+
+    name = "done-on-step-2"
+    model = None
+
+    def propose(self, state: dict, candidates: list) -> dict:
+        if state.get("current_step", 0) >= 2:
+            return {"done": True, "reason": "хватит", "tokens": None}
+        return HeuristicPlanner().propose(state, candidates)
+
+
+def _run(max_steps: int, break_at: "int | None" = None, planner=None) -> "tuple[dict, str]":
     """Прогнать НАСТОЯЩИЙ граф обхода и вернуть (что записано в plan.json, каталог артефакта)."""
     art = tempfile.mkdtemp(prefix="crawl-complete-")
     target = "http://t/"
@@ -119,7 +139,7 @@ def _run(max_steps: int, break_at: "int | None" = None) -> "tuple[dict, str]":
           "nav_frontier": [], "coverage_achieved": 0.0, "exploration_complete": False,
           "max_steps": max_steps,
           "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": []}
-    app = build_graph(ex, HeuristicPlanner(), lambda r: None).compile(checkpointer=MemorySaver())
+    app = build_graph(ex, planner or HeuristicPlanner(), lambda r: None).compile(checkpointer=MemorySaver())
     cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": "cc"}}
     import contextlib
     with contextlib.redirect_stdout(io.StringIO()):
@@ -226,6 +246,31 @@ def test_a_degraded_crawl_says_so_in_the_artefact():
     print(f"  ok  деградации: оборванный={degr} · чистый={clean.get('degradations')}")
 
 
+def test_a_planner_that_stopped_on_its_own_is_not_a_covered_site():
+    """Третий случай, и он ЕДИНСТВЕННЫЙ, где булев защёлк и полнота расходятся.
+
+    `exploration_complete` ставится ОДИНАКОВО при сходимости, потолке, пустых кандидатах и решении
+    планировщика — именно поэтому он не годился в ответ. Здесь защёлк True, фронтир НЕ пуст, и
+    честный ответ — «неполон, потому что планировщик так решил».
+
+    ⚠ ЗАМЕР, КУПИВШИЙ ЭТУ ПРОВЕРКУ: без неё мутация `complete = bool(exploration_complete)` держала
+    оба прежних случая зелёными, и мутация `reason = stop_reason or "max_steps"` (без ветки
+    `unknown`) — тоже. Два случая совпадали с защёлком по совпадению, а не по смыслу."""
+    plan, _ = _run(max_steps=90, planner=DonePlanner())
+    c = plan.get("completeness") or {}
+    if c.get("reason") != "planner_done":
+        fail(f"планировщик сказал «хватит», а причиной названо {c.get('reason')!r}")
+        return
+    if c.get("complete") is not False:
+        fail(f"обход, законченный решением планировщика на шаге {c.get('stopped_at_step')} из 90, "
+             f"объявил себя ПОЛНЫМ: {c}")
+    if not c.get("frontier_left"):
+        fail(f"фикстура не воспроизводит случай: фронтир пуст, значит «неполон» здесь неотличимо от "
+             f"сходимости и утверждение выше ничего не стоит: {c}")
+    print(f"  ok  решение планировщика: complete={c.get('complete')} reason={c.get('reason')} "
+          f"шаг {c.get('stopped_at_step')}/90 frontier_left={c.get('frontier_left')}")
+
+
 def _run_real(goal: str, max_steps: int):
     """Прогнать НАСТОЯЩИЙ `_run_explore` (не только граф) и вернуть каталог артефакта.
 
@@ -287,6 +332,7 @@ def main() -> int:
                test_a_crawl_that_finished_says_that_too,
                test_a_crawl_that_crashed_keeps_what_it_found,
                test_a_degraded_crawl_says_so_in_the_artefact,
+               test_a_planner_that_stopped_on_its_own_is_not_a_covered_site,
                test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_short):
         fn()
     if failures:

@@ -320,7 +320,7 @@ matching the English template against the server-rendered string. Axes:
 - **source** derived from the category (`brain/embed.go::SourceOf`): the tool · the application · testing;
 - **audience** (ADR-068 rev.2) — a layer above the sources: `business` (application+testing) versus `tool`;
   the gate requires audiences to partition sources **exactly**;
-- **`degrades: true`** (34 codes) — the one legitimate crossing from diagnostics into the narrative: a run
+- **`degrades: true`** (the set is DERIVED from `brain/events.json`; the count is printed by `tests/test_event_catalog_offline.py` on every run) — the one legitimate crossing from diagnostics into the narrative: a run
   that exits zero with the LLM absent must be able to say so on its verdict rather than hide in the log;
 - **fault** (`fault`, ADR-113) — WHOSE problem this is: `none` · `app` · `tool` · `test` · `config`. Only
   codes that can END a run carry it, and that rule is derived rather than listed: an entry declaring
