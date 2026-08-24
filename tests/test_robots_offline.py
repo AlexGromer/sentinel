@@ -168,12 +168,45 @@ LINKS = {"https://t.example/": ["https://t.example/contact",
                                 "https://t.example/download-secure",
                                 "https://t.example/notes/api/list"]}
 
+# ADR-135: то, что страница открыла у себя САМА — второй источник фронтира. Ни один из этих адресов
+# НЕ встречается в LINKS, и в этом весь смысл: до PR-2 запрет владельца применялся физически внутри
+# цикла по якорям, поэтому проверить его на другом источнике было нечем. Один адрес разрешён, один
+# запрещён — пара, без которой утверждение удовлетворяется каналом, не пропускающим НИЧЕГО.
+#
+# ⚠ ЗАПРЕТ ЗДЕСЬ — ПО ПУТИ, А НЕ ПО ФРАГМЕНТУ, и это не выбор оформления. `robots.txt` говорит о
+# ресурсах, которые отдаёт сервер; hash-маршрут на сервер не уходит, и `RobotsPolicy.allows` судит по
+# `urlsplit(...).path`. Гейт, написанный на `#/…`-маршрутах, не смог бы получить вердикт `robots`
+# НИКОГДА и был бы зелен по построению — ровно тот вакуум, ради которого этот файл существует.
+ROUTES = {"https://t.example/": [
+    {"url": "https://t.example/panel/reports", "ts": 1, "how": "push"},
+    {"url": "https://t.example/notes/api/list/2", "ts": 2, "how": "replace"},
+]}
+
+
+# Вербы, которые эта реплика умеет. Перечень существует ровно затем, чтобы отсутствие в нём было
+# ОТКАЗОМ: см. комментарий в `call`.
+_KNOWN_VERBS = {"browser.navigate", "browser.currentUrl", "browser.snapshot", "browser.interactives",
+                "browser.links", "browser.click", "browser.perceptionAudit", "browser.routes"}
+
 
 class FakeEx:
     def __init__(self):
         self.url = "https://t.example/"
+        self.route_calls = 0
+        # Копия на прогон: журнал СЪЕДАЕТСЯ чтением, и общий на два прогона он сделал бы второй
+        # прогон зависящим от первого — а второй тут и есть встречный случай (`--ignore-robots`).
+        self.routes = {k: list(v) for k, v in ROUTES.items()}
 
     def call(self, m, **p):
+        # ⚠ НЕИЗВЕСТНЫЙ ВЕРБ — ОТКАЗ, А НЕ ПУСТОЙ СЛОВАРЬ. Прежний `return {}` в конце делал этот
+        # фейк согласным на что угодно: узел графа, начавший звать верб, которого фейк не знает,
+        # получал пустоту, `.get(...)` давал пустой список, и гейт оставался ЗЕЛЁНЫМ над механизмом,
+        # которого в замере нет вовсе. Замерено на этом самом файле: проводка второго источника
+        # фронтира была внесена целиком, и все четыре гейта обхода прошли, не заметив.
+        if m.startswith("browser.") and m not in _KNOWN_VERBS:
+            raise AssertionError(
+                f"граф зовёт {m}, а фейк исполнителя такого верба не знает. Это не поломка теста: "
+                f"это единственное место, где видно, что замер перестал мерить то, что произошло")
         if m == "browser.navigate":
             self.url = p["url"]
             return {"url": self.url, "status": 200, "timing": None}
@@ -191,7 +224,14 @@ class FakeEx:
             return {"clicked": True, "url": self.url}
         if m == "browser.perceptionAudit":
             return {"ratio": 1.0, "total": 1, "addressable": 1}
-        return {}
+        if m == "browser.routes":
+            # Отдаёт И ОЧИЩАЕТ — как настоящий верб. Если бы реплика отдавала журнал на каждом шаге,
+            # утверждение «адрес пришёл ИМЕННО из журнала» удовлетворялось бы и кодом, читающим его
+            # один раз, и кодом, читающим бесконечно, — то есть не различало бы их.
+            out = self.routes.pop(self.url, [])
+            self.route_calls += 1
+            return {"routes": out, "dropped": 0, "journal": True}
+        raise AssertionError(f"фейк не знает верба {m} — см. _KNOWN_VERBS")
 
 
 def _walk(policy):
@@ -214,8 +254,11 @@ def _walk(policy):
     app = build_graph(FakeEx(), HeuristicPlanner(), lambda r: None,
                       robots=policy).compile(checkpointer=MemorySaver())
     with contextlib.redirect_stdout(io.StringIO()):
-        app.invoke(st, config={"recursion_limit": 60, "configurable": {"thread_id": "rb"}})
-    return json.load(open(os.path.join(art, "plan.json")))
+        final = app.invoke(st, config={"recursion_limit": 60, "configurable": {"thread_id": "rb"}})
+    # ⚠ ФИНАЛЬНОЕ СОСТОЯНИЕ ВОЗВРАЩАЕТСЯ ВМЕСТЕ С АРТЕФАКТОМ. В `plan.json` фронтир не пишется —
+    # только его ДЛИНА, — поэтому утверждение «этот адрес во фронтир не попал» из артефакта
+    # недоказуемо: длина совпадёт у любого набора той же мощности.
+    return json.load(open(os.path.join(art, "plan.json"))), final
 
 
 def test_what_was_excluded_is_written_down():
@@ -224,37 +267,90 @@ def test_what_was_excluded_is_written_down():
     Половина про «не пошли» удовлетворяется политикой, запрещающей всё. Половина про «сказали»
     удовлетворяется перечнем, в который пишут что попало. Вместе они требуют, чтобы в артефакте
     оказались ИМЕННО запрещённые адреса — и чтобы разрешённый остался во фронтире."""
-    plan = _walk(load("https://t.example/", fetch=_fetch_ok))
+    plan, _final = _walk(load("https://t.example/", fetch=_fetch_ok))
     r = plan.get("robots")
     if not r:
         fail("в plan.json нет блока robots — исключённое снова неотличимо от ненайденного")
         return
     ex = set(r.get("excluded") or [])
-    want = {"https://t.example/download-secure", "https://t.example/notes/api/list"}
+    want = {"https://t.example/download-secure", "https://t.example/notes/api/list",
+            "https://t.example/notes/api/list/2"}
     if ex != want:
         fail(f"в артефакте исключено {sorted(ex)}, ожидалось {sorted(want)}")
     if r.get("respected") is not True or r.get("source") != "fetched":
         fail(f"блок не описывает, откуда правила: {r}")
-    # Встречное: разрешённый адрес обязан остаться пройденным или ждущим во фронтире.
-    seen_paths = set(plan.get("steps") and [s.get("target") for s in plan["steps"]] or [])
+    # ⚠ ВСТРЕЧНОЕ УТВЕРЖДЕНИЕ, КОТОРОЕ ЗДЕСЬ ОБЕЩАЛОСЬ КОММЕНТАРИЕМ И НЕ ДЕЛАЛОСЬ. Множество
+    # `seen_paths` вычислялось и не использовалось ни разу — то есть «не пошли» держалось на одном
+    # только перечне исключённого, а перечень удовлетворяется кодом, который пишет в него что попало
+    # и ходит куда хочет. Теперь запрещённый адрес обязан ОТСУТСТВОВАТЬ среди целей навигации.
+    seen_paths = {s.get("target") for s in (plan.get("steps") or [])}
+    went_where_forbidden = seen_paths & ex
+    if went_where_forbidden:
+        fail(f"обход СХОДИЛ по запрещённым адресам {sorted(went_where_forbidden)}, "
+             f"хотя перечень исключённого утверждает обратное")
     if "https://t.example/contact" in ex:
         fail("разрешённый адрес попал в исключённые")
 
     # И вторая половина пары: без политики блок молчит, а фронтир полон.
-    plan2 = _walk(load("https://t.example/", ignore=True, fetch=_fetch_ok))
+    plan2, _f2 = _walk(load("https://t.example/", ignore=True, fetch=_fetch_ok))
     r2 = plan2.get("robots") or {}
     if r2.get("respected") is not False or r2.get("excluded"):
         fail(f"с --ignore-robots блок обязан говорить respected=false и НИЧЕГО не исключать: {r2}")
     print(f"  ok  исключённое в артефакте: {sorted(ex)} · с флагом — пусто")
 
 
+def test_the_second_source_of_the_frontier_goes_through_the_same_gate():
+    """ADR-135. Запрещённый адрес приходит НЕ ИЗ ЯКОРЕЙ — и всё равно не берётся.
+
+    ⚠ ДО ЭТОГО ГЕЙТА ТАКОГО СЛУЧАЯ НЕ БЫЛО НИ ОДНОГО во всём репозитории, и это не пробел
+    покрытия, а прямое следствие устройства: до ADR-134 запрет владельца и граница обхода
+    применялись физически ВНУТРИ цикла по `browser.links`, поэтому проверить их на другом источнике
+    было технически нечем — другого источника не существовало. ADR-134 вынес решение в
+    `admit_to_frontier` и предсказал дословно: «любой новый канал фронтира обойдёт оба фильтра, а
+    `test_robots_offline.py` останется зелёным — он кормит граф исключительно якорями».
+
+    Утверждение ПАРНОЕ, потому что непарное удовлетворяется каналом, который не пропускает ничего:
+      · разрешённый маршрут из журнала обязан ОКАЗАТЬСЯ во фронтире — иначе второго источника нет;
+      · запрещённый обязан оказаться в перечне исключённого и НЕ оказаться во фронтире.
+    """
+    plan, final = _walk(load("https://t.example/", fetch=_fetch_ok))
+    frontier = set(final.get("nav_frontier") or [])
+    visited = set(final.get("visited_paths") or [])
+    allowed = page_identity("https://t.example/panel/reports")
+    denied = page_identity("https://t.example/notes/api/list/2")
+
+    if allowed not in frontier | visited:
+        fail(f"разрешённый маршрут из журнала не дошёл ни до фронтира, ни до посещённых "
+             f"({sorted(frontier)}) — второго источника фронтира нет, и следующее утверждение "
+             f"было бы зелёным просто потому, что канал пуст")
+    if denied in frontier | visited:
+        fail(f"ЗАПРЕЩЁННЫЙ маршрут {denied} прошёл во фронтир мимо ворот — воля владельца сайта "
+             f"применяется не ко всем источникам")
+    if denied not in set((plan.get("robots") or {}).get("excluded") or []):
+        fail(f"запрещённый маршрут из журнала не назван в перечне исключённого: "
+             f"{(plan.get('robots') or {}).get('excluded')}")
+    print("  ok  журнал маршрутов ходит через те же ворота: разрешённый взят, запрещённый назван")
+
+
+def _checks():
+    """Перечень проверок ВЫВОДИТСЯ из модуля, а не переписывается руками.
+
+    ⚠ Рукописный кортеж, стоявший здесь, — это список того, что надо покрыть, внутри самой проверки:
+    ровно то, что запрещает `docs/DEVELOPMENT.md` §0, принцип 5. Отказывает он молча в одну сторону:
+    лишнее имя роняет прогон и потому заметно, а ЗАБЫТОЕ представления не имеет — функция просто не
+    исполняется, и файл рапортует успех. Пол на число — обязательный спутник вывода: обход,
+    переставший что-либо находить, прошёл бы идеально над пустым множеством.
+    """
+    found = sorted((n, f) for n, f in globals().items()
+                   if n.startswith("test_") and callable(f))
+    if len(found) < 7:
+        fail(f"в модуле найдено {len(found)} проверок — было семь; либо их стало меньше, "
+             f"либо вывод перечня сломался и дальше он молча пройдёт над пустым множеством")
+    return [f for _, f in found]
+
+
 def main() -> int:
-    for fn in (test_the_rules_are_read_and_obeyed,
-               test_the_shape_that_defeats_the_standard_library,
-               test_absence_allows_and_unreachability_says_so,
-               test_ignoring_is_a_persons_choice_and_it_is_recorded,
-               test_a_file_target_has_nothing_to_respect,
-               test_what_was_excluded_is_written_down):
+    for fn in _checks():
         fn()
     if failures:
         print(f"FAIL — {len(failures)} проблем(а):")

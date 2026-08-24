@@ -441,14 +441,52 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         frontier = list(state.get("nav_frontier", []))
         # Якоря — ПЕРВЫЙ источник фронтира, и он ходит через те же ворота, что и всякий следующий.
         excluded = list(state.get("robots_excluded", []) or [])
-        for l in links:
-            nu = page_identity(l.get("href", ""))
-            verdict = admit_to_frontier(nu, origin=origin, robots=robots, visited=visited,
-                                        frontier=frontier, current=path)
-            if verdict == ADMIT:
-                frontier.append(nu)
-            elif verdict == ADMIT_ROBOTS and nu not in excluded:
-                excluded.append(nu)
+
+        def _admit_all(candidates, source):
+            """Пропустить перечень адресов через ворота. ЕДИНСТВЕННЫЙ путь во фронтир — оба источника.
+
+            Вынесено в функцию не ради краткости: пока проводка была написана в теле цикла по
+            якорям, второй источник физически НЕ МОГ пройти теми же воротами — его пришлось бы
+            написать заново, и написанное заново разошлось бы (ADR-134 предсказал это дословно).
+            Теперь добавить источник — значит вызвать это, и другого способа положить адрес во
+            фронтир в узле нет."""
+            admitted = 0
+            for nu in candidates:
+                verdict = admit_to_frontier(nu, origin=origin, robots=robots, visited=visited,
+                                            frontier=frontier, current=path)
+                if verdict == ADMIT:
+                    frontier.append(nu)
+                    admitted += 1
+                elif verdict == ADMIT_ROBOTS and nu not in excluded:
+                    excluded.append(nu)
+                    log("plan.route_refused_by_robots", url=nu, source=source)
+            return admitted
+
+        # Якоря — ПЕРВЫЙ источник фронтира, и он ходит через те же ворота, что и всякий следующий.
+        _admit_all((page_identity(l.get("href", "")) for l in links), "links")
+
+        # ADR-135: ВТОРОЙ источник — журнал смен маршрута, который вела сама страница. Отвечает на
+        # вопрос, которого якоря не слышат: какие адреса приложение у себя уже открывало. Маршрут,
+        # открытый `pushState` и покинутый раньше, чем адрес прочитали снаружи (редирект роутера,
+        # `replaceState`), не виден НИ снимку `browser.currentUrl`, НИ якорям — он виден только тут.
+        #
+        # ⚠ ВЫЗОВ ЗАЩИЩЁН, В ОТЛИЧИЕ ОТ СОСЕДНЕГО. `browser.links` зовётся голым, и это безопасно
+        # ровно потому, что верб старый. Незнакомый метод исполнитель ОТКЛОНЯЕТ броском, а этот узел
+        # ловли не имеет — прогон против исполнителя прежней сборки падал бы целиком, вместо того
+        # чтобы просто не увидеть маршрутов. Та же забота, что ADR-134 проявил к отсутствующему полю
+        # `navigated`: новый контракт не имеет права ломать старую пару.
+        try:
+            _taken = ex.call("browser.routes") or {}
+        except Exception as e:
+            _taken = {}
+            log("browser.route_journal_unavailable", error=str(e)[:200])
+        _records = _taken.get("routes") or []
+        if _records or _taken.get("dropped"):
+            _admitted = _admit_all((page_identity(r.get("url", "")) for r in _records), "routes")
+            # Событие произносится ПОСЛЕ работы ворот и несёт ОБА числа. Одно «журнал отдал N»
+            # читалось бы как находка, хотя N записей об уже посещённых адресах — это ноль находок.
+            log("browser.routes_observed", seen=len(_records), admitted=_admitted,
+                dropped=int(_taken.get("dropped") or 0))
         visited_paths = list(dict.fromkeys(list(state.get("visited_paths", [])) + [path]))
         frontier = [f for f in frontier if f != path]
         exercised = set(state.get("interactive_exercised", []))

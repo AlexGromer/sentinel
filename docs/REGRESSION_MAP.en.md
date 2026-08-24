@@ -178,8 +178,11 @@ breakdown (`unseen.outside_selector`, `unseen.iframe`, `opaque.{canvas, shadow_r
 frames_unreachable}`), the plan carries `worst_ratio`, and partial visibility raises
 `perception.partial` with `degrades: true`. The boundary is drawn; what lies beyond it still does.
 
-**SPA states.** The frontier grows from `browser.links` of the same origin. A route change without an
-`<a href>` is invisible. There is no state deduplication: two URLs rendering the same view count
+**SPA states.** The frontier grows from TWO same-origin sources — `browser.links` (anchors) and
+`browser.routes` (the route-change journal the page itself keeps, ADR-135); both pass through one gate.
+⚠ What stays invisible is a route the application has NOT yet visited: the interception knows what the
+application did, not what it can do. Measured A/B on `l13-routes.html` — 7 pages against 6; on
+`site-spa`, where every `pushState` lands, there is no gain at all (12 against 12). There is no state deduplication: two URLs rendering the same view count
 twice, one URL with different states counts once. There is no return to a prior state between
 exploration branches.
 
