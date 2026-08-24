@@ -35,7 +35,7 @@ max_steps=40 (backstop); artifact_dir; errors:list
 `perceive → ground → plan → act → verify → (heal*) → checkpoint → report`  (* heal = stub @ M1)
 - **perceive**: `browser.snapshot` + `browser.currentUrl` → page_model; start trace at run start.
 - **ground**: parse interactive elements → assign semantic_ids → update `interactive_seen`;
-  `browser.links` → push same-origin unseen URLs to `nav_frontier`; recompute `coverage_achieved`.
+  TWO frontier sources — `browser.links` (anchors) and `browser.routes` (the page's route journal) — and both pass through ONE gate, `admit_to_frontier` (boundary → known → robots), ADR-134/135; recompute `coverage_achieved`.
 - **plan**: `Planner.propose`; append PlannedAction OR set `exploration_complete` (gated). Log to transcript.
 - **act**: execute via pw-executor (`browser.navigate` | `browser.click`); record executed_action;
   mark semantic_id exercised; `current_step++`.
@@ -50,8 +50,9 @@ Conditional edges: `ground→report` if explore_complete; `plan→report` if don
 ## pw-executor — new tools (M1)
 | Method | Params | Result |
 |--------|--------|--------|
-| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url}` (via `getByRole`/css) |
+| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url, navigated}` (via `getByRole`/css; `navigated` is a SEPARATE fact from the side that waited, ADR-134) |
 | `browser.links` | — | `{links:[{href,text}]}` (anchors; brain filters same-origin) |
+| `browser.routes` | — | `{routes:[{url,ts,how}], dropped, journal}` — the route-change journal the page itself kept; handed over AND cleared. `journal:false` means the init script did not run on this document (ADR-135) |
 | `browser.currentUrl` | — | `{url, title}` |
 (plus M0: `initialize`, `browser.navigate`, `browser.snapshot`, `browser.traceStop`, `shutdown`)
 

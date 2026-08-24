@@ -200,9 +200,43 @@ function boot(door) {
     addEventListener: (t, h) => { if (t === 'click') clickHandlers.push(h); },
     title: ''
   };
-  const history = { pushState: (s, t, u) => { state.url = new URL(u, state.url).href; } };
-  const location = { get hash() { return new URL(state.url).hash; }, set hash(v) { state.url = new URL(v, state.url).href; } };
-  const windowObj = { addEventListener: () => {}, document: document };
+  // ADR-135: журнал смен маршрута. Реплика моделирует ПАРУ «браузер + init-скрипт», а не наш
+  // скрипт отдельно: снаружи от brain видна ровно одна вещь — что всякая смена адреса без
+  // перезагрузки документа попадает в журнал. Как именно она замечена (обёртка history, popstate),
+  // проверяет `pw-executor/src/routes.test.ts` на ЖИВОМ Chromium — здесь это было бы утверждением
+  // о нашем же коде, переписанным на другом языке.
+  //
+  // ⚠ ПОТОЛКА ЗДЕСЬ НЕТ НАМЕРЕННО. Он есть у настоящего скрипта и замеряется там; здесь он был бы
+  // ВТОРЫМ числом того же смысла, и разойтись эти два числа могли бы молча.
+  const journal = [];
+  let lastRoute = null;
+  function noteRoute(how) {
+    if (state.url === lastRoute) return;   // подряд идущий повтор — как в настоящем скрипте
+    lastRoute = state.url;
+    journal.push({ url: state.url, ts: journal.length + 1, how: how });
+  }
+  const popHandlers = [];
+  const history = {
+    pushState: (s, t, u) => { state.url = new URL(u, state.url).href; noteRoute('push'); },
+    // Была известна ОДНА функция из двух. `replaceState` — та, которой роутеры делают редиректы, и
+    // именно она не оставляет следа ни в истории, ни в снимке адреса: до ADR-135 её не видел никто.
+    replaceState: (s, t, u) => { state.url = new URL(u, state.url).href; noteRoute('replace'); },
+    back: () => { for (const h of popHandlers) h({}); noteRoute('pop'); },
+  };
+  const location = {
+    get hash() { return new URL(state.url).hash; },
+    // ⚠ ЗАМЕРЕНО В ЖИВОМ CHROMIUM: присвоение `location.hash` поднимает `popstate`, поэтому
+    // настоящий скрипт видит его как 'pop', а не как отдельный механизм. Реплика повторяет ЗАМЕР,
+    // а не спецификацию.
+    set hash(v) { state.url = new URL(v, state.url).href; for (const h of popHandlers) h({}); noteRoute('pop'); },
+  };
+  // Слушатели окна больше не выбрасываются. Прежняя заглушка `() => {}` глотала подписку на
+  // `popstate`, которую делает сама фикстура (`testdata/site-spa/app.js`), — то есть реплика
+  // расходилась с приложением на возврате назад и молчала об этом.
+  const windowObj = {
+    addEventListener: (t, h) => { if (t === 'popstate') popHandlers.push(h); },
+    document: document,
+  };
   const sandbox = { document, history, location, window: windowObj, console };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -236,6 +270,10 @@ function boot(door) {
     // фрагмент терял. Замер: с потерей фрагмента реплика давала 40 шагов, 2 страницы и 33 навигации
     // по кругу, живой Chromium — 12 шагов, 3 страницы, сходимость.
     setUrl: (u) => { state.url = u; },
+    // Отдать И ОЧИСТИТЬ — как настоящий верб. Журнал, который читают и не чистят, отдавал бы на
+    // каждом шаге всё с начала прогона; ворота отсеяли бы это по ADMIT_KNOWN, и утверждение
+    // «фронтир пополнился из журнала» осталось бы верным при коде, который не чистит ничего.
+    takeRoutes: () => { const out = journal.slice(); journal.length = 0; return out; },
     interactives: () => harvest().map(h => h.d),
     links: () => anchors.map(e => ({ href: e.getAttribute('href'), text: String(e.textContent).trim() })),
     click: (loc) => {
@@ -272,7 +310,8 @@ rl.on('line', (line) => {
     else if (req.m === 'links') res = { links: ctx.links() };
     else if (req.m === 'click') res = ctx.click(req.locator || {});
     else if (req.m === 'fixture') res = ctx.fixture();
-    else res = {};
+    else if (req.m === 'routes') res = { routes: ctx.takeRoutes(), dropped: 0, journal: true };
+    else throw new Error('the DOM host was asked for ' + req.m + ', which it does not model');
     process.stdout.write(JSON.stringify({ ok: true, r: res }) + '\n');
   } catch (e) {
     process.stdout.write(JSON.stringify({ ok: false, e: String((e && e.message) || e) }) + '\n');
@@ -336,6 +375,17 @@ class FixtureEx:
             return self._rpc("click", locator=p["locator"])
         if m == "browser.screenshotHash":
             return {"hash": "h"}
+        if m == "browser.routes":
+            return self._rpc("routes")
+        if m.startswith("browser."):
+            # ⚠ НЕИЗВЕСТНАЯ БРАУЗЕРНАЯ ВЕРБА — ОТКАЗ, А НЕ `return {}`. Прежняя последняя строка
+            # делала реплику согласной на что угодно: узел, начавший звать незнакомый верб, получал
+            # пустой словарь, `.get(...)` давал пустой список, и ЭТОТ ФАЙЛ — главный замер обхода —
+            # оставался зелёным над механизмом, которого в замере нет вовсе. Замерено 2026-08-24:
+            # второй источник фронтира был проведён целиком, и четыре гейта обхода не заметили.
+            raise AssertionError(
+                f"граф зовёт {m}, а реплика исполнителя такого верба не знает — замер перестал "
+                f"мерить то, что произошло")
         return {}
 
     def inventory(self):
@@ -423,6 +473,12 @@ def _walk(door: str, max_steps=None) -> dict:
             "clicks": list(ex.clicks),
             "errors": list(final.get("errors", [])),
             "unactionable": [f for c, f in logs if c == "plan.unactionable_elements"],
+            # ADR-135: второй источник фронтира, СЧИТАННЫЙ ИЗ СОБЫТИЙ ПРОГОНА, а не выведенный из
+            # исходника. Два числа, а не одно: «журнал отдал N» без «из них взято M» читается как
+            # находка, хотя N записей об уже посещённых адресах — это ноль находок.
+            "routes_seen": sum(f.get("seen", 0) for c, f in logs if c == "browser.routes_observed"),
+            "routes_admitted": sum(f.get("admitted", 0) for c, f in logs if c == "browser.routes_observed"),
+            "route_journal_lost": [f for c, f in logs if c == "browser.route_journal_unavailable"],
             "links": [l["href"] for l in ex.call("browser.links").get("links", [])],
             "inventory": ex.inventory(),
         }
@@ -466,6 +522,43 @@ def test_the_fixture_declares_more_application_than_one_budget_can_walk():
     # The catalogue branch has to keep enough cards for the dedup measurement to mean anything.
     cards = [r for r in inv["routes"] if r.startswith("#/order/")]
     assert len(cards) >= 10, f"only {len(cards)} card routes left; the dedup claim needs a dozen"
+
+
+def test_the_route_journal_is_live_here_and_gives_the_frontier_nothing():
+    """ADR-135. Второй источник фронтира РАБОТАЕТ на этой цели — и не даёт ей ни одного адреса.
+
+    ⚠ ЭТО ЗАМЕР, А НЕ ДЕФЕКТ, и он опровергает посылку, с которой волна начиналась. Роутер фикстуры
+    (`testdata/site-spa/app.js`) устроен так, что КАЖДЫЙ `pushState` немедленно рисует свой экран:
+
+        function go(to) { state.route = to; …; setUrl(to); render(); }
+
+    Значит журнал маршрутов здесь тождественно равен множеству ПОСЕЩЁННЫХ адресов, и ворота
+    (`admit_to_frontier`) отвечают на каждую его запись `known`. Прибавки быть не может по
+    устройству цели, а не по слабости механизма.
+
+    ⚠ ПАРА УТВЕРЖДЕНИЙ ОБЯЗАТЕЛЬНА. Одно «взято ноль» удовлетворяется каналом, которого нет вовсе —
+    ровно тем состоянием, что было до этого PR, — поэтому первое утверждение требует, чтобы журнал
+    ОТДАВАЛ записи, и только второе говорит, что ворота их не пустили. Порознь каждое зелено над
+    противоположным дефектом.
+
+    Если `admitted` когда-нибудь станет ненулевым, эта строка обязана быть ПЕРЕПИСАНА с новым
+    замером, а не удалена: она держит число, которым волна отчитывается.
+    """
+    r = _walk("index.html")
+    if r["route_journal_lost"]:
+        fail(f"журнал маршрутов не прочитан ({r['route_journal_lost'][:1]}) — дальнейшие числа "
+             f"описывали бы прогон без второго источника, а не прогон с ним")
+    assert r["routes_seen"] >= 10, (
+        f"журнал отдал {r['routes_seen']} смен(ы) маршрута за прогон, в котором карта набрала "
+        f"{r['pages']} страниц — канал молчит, и следующее утверждение стало бы зелёным просто "
+        f"потому, что источника нет")
+    assert r["routes_admitted"] == 0, (
+        f"журнал дал фронтиру {r['routes_admitted']} новых адрес(ов) — на этой цели их не может "
+        f"быть ни одного, потому что каждый pushState здесь ПРИЗЕМЛЯЕТСЯ. Либо цель изменилась, "
+        f"либо ворота перестали узнавать посещённое; и то и другое требует перезамера, а не правки "
+        f"этого числа")
+    print(f"  routes: журнал отдал {r['routes_seen']}, ворота пустили {r['routes_admitted']} "
+          f"(на этой цели ноль — по устройству роутера)")
 
 
 def test_the_frontier_takes_route_anchors_now_and_still_cannot_see_a_pushstate_route():

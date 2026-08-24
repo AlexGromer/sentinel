@@ -35,6 +35,33 @@
   <li><button id="inert">No route</button>
       — не трогает адрес вовсе. ВСТРЕЧНЫЙ случай: без него утверждение «клик признан навигацией»
       удовлетворяется кодом, объявляющим навигацией каждый клик.</li>
+
+  <li><button id="chain">Redirect chain</button>
+      — <code>pushState</code> НА ПРОМЕЖУТОЧНЫЙ маршрут и сразу следом на конечный, в одном такте.
+      Так ведёт себя роутер с охраной маршрута (guard): открыл, проверил, увёл. ⚠ ЭТО ЕДИНСТВЕННЫЙ
+      случай на странице, где снимок адреса физически не может увидеть промежуточный маршрут —
+      снаружи виден только последний. Ради него журнал и заводился (ADR-135).</li>
+
+  <li><button id="replace">Replace route</button>
+      — <code>history.replaceState</code>. Не поднимает НИ ОДНОГО события и не оставляет следа в
+      истории: единственный способ узнать о ней — обёртка. До ADR-135 её не видел никто, и ни одна
+      фикстура корпуса её не исполняла.</li>
+
+  <li><button id="back">Back</button>
+      — <code>history.back()</code>. Проверяет вторую половину перехвата: возврат — тоже смена
+      маршрута, и обход обязан о нём знать.</li>
+
+  <li><button id="flood">Flood routes</button>
+      — толкает столько маршрутов, сколько попросили запросом <code>?flood=N</code>. ⚠ ЧИСЛО ПРИХОДИТ
+      СНАРУЖИ НАМЕРЕННО: потолок журнала живёт в коде исполнителя, и вписать его сюда значило бы
+      завести второе число того же смысла — подняли потолок, фикстура молча перестала его достигать,
+      и проверка переполнения стала бы зелёной над отсутствующим механизмом.</li>
+
+  <li><a id="anchor" href="#/from-anchor">Anchor route</a>
+      — обычный якорь на фрагмент. ⚠ ЗАМЕР, КОТОРЫЙ ЭТОТ СЛУЧАЙ ДЕРЖИТ: в Chromium такой клик
+      поднимает <code>popstate</code>, а не только <code>hashchange</code>, — поэтому отдельного
+      слушателя <code>hashchange</code> в перехватчике нет. Если движок это когда-нибудь изменит,
+      красным станет тест, а не тишина в журнале.</li>
 </ul>
 
 <p id="where">route: (none)</p>
@@ -63,6 +90,47 @@
   document.getElementById('sync').addEventListener('click', function () { go('#/sync', 0); });
   document.getElementById('async').addEventListener('click', function () { go('#/async', 1); });
   document.getElementById('inert').addEventListener('click', function () { /* адрес не трогаем */ });
+
+  // ADR-135. Цепочка редиректа: ДВА перехода в одном такте. Снаружи между ними нет ни одного
+  // протокольного обмена, поэтому `page.url()` — сколько его ни жди — вернёт только конечный
+  // адрес. Промежуточный существует ровно в журнале, и это и есть тот случай, ради которого
+  // второй источник фронтира заводился.
+  document.getElementById('chain').addEventListener('click', function () {
+    // ⚠ push, А ЗАТЕМ replace — И ЭТО ИЗМЕРЕННАЯ ПОПРАВКА, а не оформление. Первая редакция делала
+    // два pushState подряд, и промежуточный маршрут оставался В ИСТОРИИ: обход доходил до него
+    // кнопкой «назад», то есть случай проверял не то, что обещал. Замерено A/B — с журналом и без
+    // него прогон давал одинаковые 7 страниц.
+    //
+    // Настоящая охрана маршрута делает ровно так: открыть, проверить, увести с ЗАМЕНОЙ записи
+    // (`router.navigate(..., {replaceUrl: true})` в Angular). После этого промежуточный адрес
+    // исчезает отовсюду: снимок видит конечный, история его не помнит, «назад» ведёт мимо. Он
+    // существует ровно в одном месте — в журнале.
+    history.pushState({ to: '#/chain/guard' }, '', '#/chain/guard');
+    history.replaceState({ to: '#/chain/final' }, '', '#/chain/final');
+    routes += 2;
+    document.getElementById('where').textContent = 'route: #/chain/final';
+    document.title = 'L13 routes=' + routes;
+  });
+
+  // `replaceState` не поднимает событий и не оставляет следа в истории — обёртка или ничего.
+  document.getElementById('replace').addEventListener('click', function () {
+    history.replaceState({ to: '#/replaced' }, '', '#/replaced');
+    routes += 1;
+    document.getElementById('where').textContent = 'route: #/replaced';
+    document.title = 'L13 routes=' + routes;
+  });
+
+  document.getElementById('back').addEventListener('click', function () { history.back(); });
+
+  document.getElementById('flood').addEventListener('click', function () {
+    var n = parseInt((/[?&]flood=(\d+)/.exec(location.search) || [])[1] || '0', 10);
+    // Адреса РАЗЛИЧНЫ: перехватчик не пишет подряд идущий повтор, и заливка одинаковым адресом
+    // проверяла бы отсечку повтора, а не потолок.
+    for (var i = 0; i < n; i++) history.pushState({}, '', '#/flood/' + i);
+    routes += n;
+    document.title = 'L13 routes=' + routes;
+  });
+
   document.title = 'L13 routes=0';
 </script>
 </body>

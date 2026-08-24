@@ -27,6 +27,7 @@ import {
   installDecorations, announce, echo, withCleanFrame, restoreCursor, sleep,
   DECOR_TYPE_DELAY_MS, type Point,
 } from './decorate.js';
+import { installRouteJournal, takeRoutes } from './routes.js';
 import { makeVideoDir, dropVideoDir } from './record.js';
 import { shouldTrackNewPage, shouldClosePagesOnTeardown } from './ownership.js';
 
@@ -577,6 +578,24 @@ async function ensureBrowser(): Promise<void> {
       log('recording video to a scratch dir; the file is written AS THE RUN GOES and kept or dropped ' +
           'afterwards — unlike the trace, there is no way to un-write it');
     }
+  }
+
+  // W8 PR-2 (ADR-135): журнал смен маршрута, тоже на КОНТЕКСТЕ — и БЕЗУСЛОВНО.
+  //
+  // ⚠ ОТСУТСТВИЕ `if` ЗДЕСЬ — САМО РЕШЕНИЕ, а не недостающая строка. Соседний init-скрипт стоит под
+  // флагом, потому что украшение есть режим: человек его просит. Журнал маршрутов режимом не
+  // является — от него зависит, что обход НАЙДЁТ. Поставленный под флагом, он дал бы продукт, у
+  // которого полнота обхода тем выше, чем чаще на него смотрят.
+  //
+  // ⚠ И СТАВИТСЯ ДО `context.newPage()` НИЖЕ. `addInitScript` действует на будущие документы;
+  // страница, созданная раньше регистрации, пошла бы без журнала, и первый же экран прогона — тот,
+  // на котором роутер приложения обычно и делает свой первый редирект, — остался бы неучтённым.
+  try {
+    await installRouteJournal(context);
+  } catch (e) {
+    // Fail-OPEN и вслух, по образцу соседа: обход без журнала беднее, но работает — он всё ещё
+    // видит якоря. Молчаливый отказ дал бы прогон, который просто ничего не находит.
+    log('журнал маршрутов не установлен — смены маршрута SPA этот прогон не увидит:', e);
   }
 
   // LIVE-HUMAN (ADR-120): the page-side half of the decoration layer, registered on the CONTEXT.
@@ -1547,6 +1566,23 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       log('video saved:', vpath);
       return { path: vpath, kept: true };
     }
+    case 'browser.routes': {
+      // W8 PR-2 (ADR-135): снять журнал смен маршрута, который вела сама страница, и очистить его.
+      //
+      // ⚠ ВТОРОЙ ИСТОЧНИК ФРОНТИРА, А НЕ ДИАГНОСТИКА. `browser.links` отвечает «куда отсюда ведут
+      // ссылки», этот верб — «какие адреса эта страница у себя уже открывала». Второй вопрос
+      // отвечает на то, чего первый не видит вовсе: маршрут, открытый `pushState` и покинутый
+      // раньше, чем адрес успели прочитать снаружи.
+      //
+      // `journal: false` произносится вслух, потому что молчаливо пустой журнал неотличим от
+      // «страница никуда не ходила», а означает противоположное — что инъекция не отработала.
+      await ensureBrowser();
+      const taken = await takeRoutes(page!);
+      if (!taken.journal)
+        log('browser.routes: на этом документе нет журнала маршрутов (init-скрипт здесь не ' +
+            'отработал) — смены маршрута этой страницы во фронтир не попадут');
+      return taken;
+    }
     case 'browser.tabs': {
       // M9.4 (A6): list tracked browser tabs/pages (drop any that closed). Indices match switchTab.
       await ensureBrowser();
@@ -1603,6 +1639,8 @@ const TOOL_METHODS = [
   'browser.screencastStop',
   'browser.screencastFrame',
   'browser.traceStop',
+  'browser.videoStop',
+  'browser.routes',
   'browser.tabs',
   'browser.switchTab',
 ];
@@ -1726,6 +1764,10 @@ async function mainMcp(): Promise<void> {
     'browser.screencastStop': {},
     'browser.screencastFrame': {},
     'browser.traceStop': { path: z.string().optional() }, // ADR-084: omitted = discard the trace
+    'browser.videoStop': { path: z.string().optional() }, // ADR-125: omitted = drop the recording
+    'browser.routes': {},                                 // ADR-135: журнал берётся целиком, без параметров
+    'browser.tabs': {},
+    'browser.switchTab': { index: z.number() },
   };
   for (const method of TOOL_METHODS) {
     const toolName = method.replace('browser.', 'browser_'); // MCP tool names avoid dots

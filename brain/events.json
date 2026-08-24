@@ -1003,6 +1003,29 @@
       "ru_verdict": "часть страниц осмотрена не полностью — снимок не удался или у документа нет корня",
       "en_verdict": "some pages were not fully perceived — the snapshot failed, or the document has no root"
     },
+    "browser.routes_observed": {
+      "lvl": "info",
+      "cat": "browser",
+      "phase": "ground",
+      "ru": "Страница сообщила о сменах маршрута: {seen}, из них новых для обхода {admitted} (потеряно журналом {dropped})",
+      "en": "The page reported {seen} route change(s); {admitted} were new to the crawl (the journal dropped {dropped})",
+      "modules": [
+        "graph"
+      ]
+    },
+    "browser.route_journal_unavailable": {
+      "lvl": "warn",
+      "cat": "browser",
+      "phase": "ground",
+      "ru": "Журнал маршрутов не прочитан ({error}) — смены маршрута SPA этот прогон во фронтир не положит, и неполнота карты объясняется этим, а не приложением",
+      "en": "The route journal could not be read ({error}) — this run will not add SPA route changes to the frontier, and a thin map is explained by that, not by the application",
+      "modules": [
+        "graph"
+      ],
+      "degrades": true,
+      "ru_verdict": "журнал маршрутов недоступен — маршруты SPA, открытые кнопкой, в обход не попали",
+      "en_verdict": "the route journal was unavailable — SPA routes opened by a button did not enter the crawl"
+    },
     "explore.crashed": {
       "lvl": "error",
       "cat": "run",
@@ -2198,6 +2221,16 @@
       "en": "The robots.txt rules for {target} are NOT being respected: requested with --ignore-robots. This is a person's choice, not the tool's default",
       "modules": [
         "robots"
+      ]
+    },
+    "plan.route_refused_by_robots": {
+      "lvl": "info",
+      "cat": "plan",
+      "phase": "ground",
+      "ru": "Адрес {url} в обход не взят — владелец сайта запретил его в robots.txt (источник: {source})",
+      "en": "Address {url} was not taken into the crawl — the site owner disallowed it in robots.txt (source: {source})",
+      "modules": [
+        "graph"
       ]
     },
     "plan.robots_excluded": {

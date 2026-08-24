@@ -186,3 +186,150 @@ test('the settle bound is a ceiling, not a delay: a navigating click does not pa
     await ex.close();
   }
 });
+
+// --- W8 PR-2 (ADR-135): журнал маршрутов ----------------------------------------------------------
+//
+// ⚠ ЭТОТ ФАЙЛ — ЕДИНСТВЕННОЕ, ЧТО ВООБЩЕ МОЖЕТ ПРОВЕРИТЬ СТРАНИЧНУЮ ПОЛОВИНУ. Init-скрипт живёт в
+// строке (`addInitScript({content})` иного не принимает), а строку `tsc` не разбирает и линтера в
+// пакете нет ни одного. Синтаксическая ошибка внутри неё собирается ЗЕЛЁНОЙ и проявляется только в
+// браузере — то есть в прогоне пользователя. Поэтому проверка тут и говорит с настоящим Chromium.
+
+type Take = { routes: Array<{ url: string; ts: number; how: string }>; dropped: number; journal: boolean };
+
+test('the journal records what the address snapshot cannot see: a redirect chain', async () => {
+  // ⚠ ГЛАВНОЕ УТВЕРЖДЕНИЕ PR-2, и оно ПАРНОЕ. Кнопка делает два pushState в ОДНОМ такте: между ними
+  // снаружи нет ни одного протокольного обмена, поэтому `page.url()` — сколько его ни жди — вернёт
+  // только конечный адрес. Промежуточный маршрут существует ровно в журнале.
+  // KILLS: журнал, читающий адрес по событию Playwright вместо перехвата в странице.
+  // KILLS: любая редакция, отдающая только последнюю запись.
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');                       // сбросить след загрузки
+    const click = await ex.call<ClickResult>('browser.click', { locator: { css: '#chain' } });
+    const took = await ex.call<Take>('browser.routes');
+    const urls = took.routes.map((r) => r.url);
+
+    assert.match(click.url, /#\/chain\/final$/,
+      `снаружи виден только конечный адрес — это и есть предпосылка: ${click.url}`);
+    assert.ok(urls.some((u) => /#\/chain\/guard$/.test(u)),
+      `ПРОМЕЖУТОЧНЫЙ маршрут не попал в журнал (${JSON.stringify(urls)}) — значит журнал видит то ` +
+      'же, что снимок адреса, и заводить его было незачем');
+    assert.ok(urls.some((u) => /#\/chain\/final$/.test(u)),
+      `конечный маршрут не попал в журнал: ${JSON.stringify(urls)}`);
+  } finally {
+    await ex.close();
+  }
+});
+
+test('replaceState and back are recorded, and each says which mechanism moved the address', async () => {
+  // `replaceState` не поднимает НИ ОДНОГО события и не оставляет следа в истории: единственный
+  // способ узнать о ней — обёртка. Возврат — вторая половина: он тоже смена маршрута.
+  // KILLS: обёртка только над pushState (так было до PR-2 и в реплике офлайн-замера).
+  // KILLS: отсутствие подписки на popstate.
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');
+
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#replace' } });
+    const afterReplace = await ex.call<Take>('browser.routes');
+    const hows = afterReplace.routes.map((r) => r.how);
+    assert.ok(hows.includes('push'), `нет записи push: ${JSON.stringify(afterReplace.routes)}`);
+    assert.ok(hows.includes('replace'),
+      `replaceState не записан (${JSON.stringify(afterReplace.routes)}) — обёртка стоит только над ` +
+      'pushState, и редиректы роутера остаются невидимыми');
+
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#back' } });
+    const afterBack = await ex.call<Take>('browser.routes');
+    assert.ok(afterBack.routes.some((r) => r.how === 'pop'),
+      `возврат не записан: ${JSON.stringify(afterBack.routes)}`);
+  } finally {
+    await ex.close();
+  }
+});
+
+test('a fragment reached by clicking an anchor is recorded — the measurement that removed hashchange', async () => {
+  // ⚠ ЭТА ПРОВЕРКА ДЕРЖИТ ЗАМЕР, А НЕ ПОВЕДЕНИЕ НАШЕГО КОДА. Замерено 2026-08-24: в Chromium клик по
+  // `<a href="#/x">`, присвоение `location.hash` и `history.back()` поднимают `popstate` И
+  // `hashchange`, причём popstate ВСЕГДА первым. Поэтому отдельный слушатель `hashchange` не мог бы
+  // выиграть отсечку повтора ни разу, и значение `how: "hash"` было бы мёртвой альтернативой —
+  // именем, которое читатель артефакта принял бы за нечто, что бывает. Слушателя нет; если движок
+  // это изменит, красным станет ЭТА строка, а не тишина в журнале.
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#anchor' } });
+    const took = await ex.call<Take>('browser.routes');
+    assert.ok(took.routes.some((r) => /#\/from-anchor$/.test(r.url)),
+      `переход по якорю-фрагменту не записан (${JSON.stringify(took.routes)}) — Chromium перестал ` +
+      'поднимать popstate на фрагмент, и слушателя hashchange, который это закрывал, здесь нет');
+  } finally {
+    await ex.close();
+  }
+});
+
+test('the journal survives navigation, and taking it clears it', async () => {
+  // Две половины одного механизма, и обе — ловушки, названные в исходнике.
+  // KILLS: `page.evaluate` вместо `context.addInitScript` — журнал пропал бы на первой навигации.
+  // KILLS: чтение без очистки — журнал отдавал бы всё с начала прогона на каждом шаге, ворота
+  //        отсеивали бы это молча по ADMIT_KNOWN, а стоимость росла бы квадратично.
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    const first = await ex.call<Take>('browser.routes');
+    assert.ok(first.routes.length >= 1, 'до навигации журнал уже пуст');
+
+    const again = await ex.call<Take>('browser.routes');
+    assert.equal(again.routes.length, 0,
+      `повторное чтение на неподвижной странице отдало ${again.routes.length} запис(ей) — журнал ` +
+      'читают и не чистят');
+
+    // Навигация ДОКУМЕНТА: одноразовый evaluate здесь бы и стёрся.
+    await ex.call('browser.navigate', { url: FIXTURE });
+    await ex.call<Take>('browser.routes');
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    const afterNav = await ex.call<Take>('browser.routes');
+    assert.equal(afterNav.journal, true, 'после навигации журнала на документе нет — инъекция потеряна');
+    assert.ok(afterNav.routes.length >= 1,
+      'после навигации документа журнал не записал ничего — скрипт не переустановился');
+  } finally {
+    await ex.close();
+  }
+});
+
+test('the journal is bounded, and what it dropped is counted rather than silently lost', async () => {
+  // ⚠ ПОТОЛОК УТВЕРЖДАЕТСЯ ПОВЕДЕНЧЕСКИ, А НЕ ЧТЕНИЕМ ИСХОДНИКА. «В коде есть срез массива» —
+  // суррогат: мутация проходит насквозь. Заливаем ЗАВЕДОМО больше потолка и требуем двух вещей
+  // сразу: журнал остался ограниченным И разница НАЗВАНА. Без второй половины переполнение теряет
+  // находки молча, а молчаливая потеря — ровно то, чего этот журнал не имеет права делать.
+  //
+  // ⚠ ЧИСЛО ЗАЛИВКИ ВЫВОДИТСЯ ИЗ ПОТОЛКА И ПЕРЕДАЁТСЯ ФИКСТУРЕ ЗАПРОСОМ. Записать его в фикстуру
+  // значило бы завести ВТОРОЕ число того же смысла: подняли потолок — фикстура молча перестала его
+  // достигать, и проверка стала бы зелёной над отсутствующим механизмом.
+  // KILLS: удаление проверки `log.length >= MAX`.
+  // KILLS: переполнение, не считающее отброшенное (`dropped` остался нулём).
+  const { ROUTE_JOURNAL_MAX } = await import('./routes.js');
+  const extra = 7;
+  const ex = new Exec();
+  try {
+    await ex.call('initialize');
+    await ex.call('browser.navigate', { url: `${FIXTURE}?flood=${ROUTE_JOURNAL_MAX + extra}` });
+    await ex.call<Take>('browser.routes');
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#flood' } });
+    const took = await ex.call<Take>('browser.routes');
+
+    assert.equal(took.routes.length, ROUTE_JOURNAL_MAX,
+      `журнал держит ${took.routes.length} записей при потолке ${ROUTE_JOURNAL_MAX} — потолка нет ` +
+      'либо он не тот, что объявлен');
+    assert.equal(took.dropped, extra,
+      `отброшено ${took.dropped} при заливке на ${extra} сверх потолка — переполнение теряет ` +
+      'записи молча, и человек прочитает неполный журнал как полный');
+  } finally {
+    await ex.close();
+  }
+});

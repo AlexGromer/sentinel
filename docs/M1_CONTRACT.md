@@ -35,7 +35,7 @@ max_steps=40 (backstop); artifact_dir; errors:list
 `perceive → ground → plan → act → verify → (heal*) → checkpoint → report`  (* heal = заглушка @ M1)
 - **perceive**: `browser.snapshot` + `browser.currentUrl` → page_model; запускает трассировку в начале запуска.
 - **ground**: разбор интерактивных элементов → назначение semantic_ids → обновление `interactive_seen`;
-  `browser.links` → добавление непросмотренных URL с тем же источником в `nav_frontier`; пересчёт `coverage_achieved`.
+  ДВА источника фронтира — `browser.links` (якоря) и `browser.routes` (журнал маршрутов страницы), — и оба проходят через ОДНИ ворота `admit_to_frontier` (граница → известное → robots), ADR-134/135; пересчёт `coverage_achieved`.
 - **plan**: `Planner.propose`; добавление PlannedAction ИЛИ установка `exploration_complete` (с гейтом). Запись в транскрипт.
 - **act**: выполнение через pw-executor (`browser.navigate` | `browser.click`); запись executed_action;
   пометка semantic_id как использованного; `current_step++`.
@@ -50,8 +50,9 @@ max_steps=40 (backstop); artifact_dir; errors:list
 ## pw-executor — новые инструменты (M1)
 | Method | Params | Result |
 |--------|--------|--------|
-| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url}` (через `getByRole`/css) |
+| `browser.click` | `{locator:{role,name}|{css}}` | `{clicked, url, navigated}` (через `getByRole`/css; `navigated` — ОТДЕЛЬНЫЙ факт от того, кто ждал, ADR-134) |
 | `browser.links` | — | `{links:[{href,text}]}` (якоря; brain фильтрует по same-origin) |
+| `browser.routes` | — | `{routes:[{url,ts,how}], dropped, journal}` — журнал смен маршрута, который вела сама страница; отдаётся И ОЧИЩАЕТСЯ. `journal:false` значит, что init-скрипт на этом документе не отработал (ADR-135) |
 | `browser.currentUrl` | — | `{url, title}` |
 (плюс из M0: `initialize`, `browser.navigate`, `browser.snapshot`, `browser.traceStop`, `shutdown`)
 
