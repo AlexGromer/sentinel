@@ -2149,6 +2149,66 @@
         "__main__"
       ]
     },
+    "run.robots_applied": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Правила {url} прочитаны: запретов в файле {rules}. Пути под запретом в обход не попадут — исключённое записано в артефакт",
+      "en": "Rules from {url} were read: {rules} disallow rule(s). Forbidden paths will not enter the crawl — what was excluded is written to the artefact",
+      "modules": [
+        "robots"
+      ]
+    },
+    "run.robots_absent": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Сайт не отдал {url} — запретов нет, обход не ограничивается",
+      "en": "The site served no {url} — there are no disallow rules, and the crawl is not restricted",
+      "modules": [
+        "robots"
+      ]
+    },
+    "run.robots_unreachable": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Прочитать {url} не удалось ({error}). Обход НЕ ограничивался — и это не значит, что запретов нет; значит, что мы их не видели",
+      "en": "Could not read {url} ({error}). The crawl was NOT restricted — which does not mean there are no rules, only that we did not see them",
+      "modules": [
+        "robots"
+      ],
+      "degrades": true,
+      "ru_verdict": "правила robots.txt цели прочитать не удалось — обход не ограничивался",
+      "en_verdict": "the target's robots.txt could not be read — the crawl was not restricted"
+    },
+    "run.robots_check_failed": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Правило robots.txt не удалось применить к {url}: {error}. Адрес пропущен в обход — «не знаем» здесь разрешает, но молчать об этом нельзя",
+      "en": "A robots.txt rule could not be applied to {url}: {error}. The address was let through — “we do not know” allows here, but it must not be silent",
+      "modules": [
+        "robots"
+      ],
+      "degrades": true,
+      "ru_verdict": "часть правил robots.txt применить не удалось — эти адреса обошли без проверки",
+      "en_verdict": "some robots.txt rules could not be applied — those addresses were crawled unchecked"
+    },
+    "run.robots_ignored": {
+      "lvl": "warn",
+      "cat": "run",
+      "ru": "Правила robots.txt для {target} НЕ соблюдаются: так запрошено флагом --ignore-robots. Это выбор человека, а не умолчание инструмента",
+      "en": "The robots.txt rules for {target} are NOT being respected: requested with --ignore-robots. This is a person's choice, not the tool's default",
+      "modules": [
+        "robots"
+      ]
+    },
+    "plan.robots_excluded": {
+      "lvl": "info",
+      "cat": "plan",
+      "ru": "Из обхода исключено адресов по robots.txt: {count}. Перечень лежит в plan.json — иначе «исключено» неотличимо от «там ничего нет»",
+      "en": "Addresses excluded from the crawl by robots.txt: {count}. The list is in plan.json — otherwise “excluded” is indistinguishable from “there is nothing there”",
+      "modules": [
+        "graph"
+      ]
+    },
     "system.trace_missing": {
       "lvl": "warn",
       "cat": "system",

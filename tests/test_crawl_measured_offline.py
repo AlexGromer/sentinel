@@ -52,7 +52,7 @@ from langgraph.checkpoint.memory import MemorySaver     # noqa: E402
 from brain import budget, graph as graph_mod            # noqa: E402
 from brain.graph import _CLICK_ROLES, build_graph       # noqa: E402
 from brain.planner import HeuristicPlanner              # noqa: E402
-from brain.state import normalize_url, page_identity, semantic_id  # noqa: E402
+from brain.state import base_origin_of, normalize_url, page_identity, semantic_id  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -389,7 +389,7 @@ def _walk(door: str, max_steps=None) -> dict:
                 "action_type": "navigate", "target": page_identity(target),
                 "locator": None, "alternatives": None, "is_milestone": True}
         st = {"run_id": "spa", "run_mode": "explore", "target_url": target,
-              "base_origin": normalize_url(target).rsplit("/", 1)[0] + "/",
+              "base_origin": base_origin_of(target),
               "coverage_target": 0.85, "artifact_dir": art, "goal": "", "describe": "",
               "site_map": {}, "phase": "explore", "scenario_steps": [], "scenario_unmatched": [],
               "current_url": target, "page_model": {}, "exploration_plan": [init], "plan_hash": "",

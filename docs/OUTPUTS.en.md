@@ -30,7 +30,7 @@ Schema (real top-level keys; the list is CHECKED against the code by
 `tests/test_outputs_schema_offline.py` rather than re-typed by hand): `{plan_id (UUID), plan_hash
 (SHA-256 of canonical JSON over steps[] with sorted keys; numbers serialised as-is, no rounding, no
 field excluded), target_url, run_mode, coverage_target, coverage_achieved, interactive_seen (int),
-interactive_exercised (int), steps[], completeness, perception, degradations, tokens (from
+interactive_exercised (int), steps[], completeness, perception, degradations, robots, tokens (from
 `budget.tracker().summary()`), models ({"plan": <planner model name>})}`. Every `steps[]` object has
 exactly 8 keys: `step_id`, `intent`, `semantic_id`, `action_type`, `target`, `locator`,
 `alternatives` (a flat list of `{strategy, locator, prior}`, not an `L1..L6` map), `is_milestone`.
@@ -45,6 +45,8 @@ frontier addresses left behind — measured on a live target (ADR-131). The answ
 tripped over. `degradations` lists the catalogue codes with `degrades: true` that fired during the
 run; it is incomplete by construction (the file is frozen inside the graph while teardown runs after
 it). `perception` (ADR-092) is the addressable fraction per page plus `worst_ratio`.
+
+⚠ **`robots` (ADR-133) answers a question no other key asks: where the crawl did NOT go BECAUSE THE SITE'S OWNER SAID SO.** Without it, excluded is indistinguishable from not-found: a person opens the map, does not see a section and concludes the tool never reached it. Fields: `respected` (whether the rules were followed in this run — `false` only under `--ignore-robots`), `source` (`fetched` · `absent` — the site served no file · `unreachable` — it could not be read, and the crawl was NOT restricted · `not_applicable` — the scheme has no `robots.txt` · `ignored`), `detail` — the same thing as a sentence, `rules` — how many disallow rules the file holds, and `excluded` — the addresses kept out of the frontier. An empty `excluded` with `respected: true` means “the rules were read and nothing fell under them” — a DIFFERENT statement from the key being absent.
 
 **As-built:** `aut_version` and `exploration_seed` are **not** part of `plan.json` — no such
 fields exist in the code. `golden_snapshots` is not embedded in `plan.json` either — the

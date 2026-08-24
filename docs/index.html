@@ -953,6 +953,9 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <label style="margin-top:.35rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
             <input id="b-healllm" type="checkbox" style="width:auto">heal_llm (<span data-lang="ru">LLM-перепривязка при починке</span><span data-lang="en">LLM re-grounding during heal</span>)
           </label>
+          <label style="margin-top:.35rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
+            <input id="b-ignorerobots" type="checkbox" style="width:auto">ignore_robots (<span data-lang="ru">НЕ соблюдать robots.txt цели</span><span data-lang="en">do NOT respect the target's robots.txt</span>)
+          </label>
           <label style="margin-top:.5rem;display:block;color:var(--tx)">
             <span data-lang="ru">Наблюдение</span><span data-lang="en">Observation</span>
             <select id="b-observe" style="margin-top:.25rem">
@@ -2426,6 +2429,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (lp)  lines.push('  login_plan: '+bq(lp));
       lines.push('  pw_no_trace: '+(pnt?'true':'false'));
     }
+    /* ADR-133: выводится ТОЛЬКО когда человек отступил от умолчания. Строка `ignore_robots:
+       false` в каждом экспорте была бы шумом, а её отсутствие означает ровно «правила
+       соблюдаются», что и есть умолчание инструмента. */
+    if (ge('b-ignorerobots') && ge('b-ignorerobots').checked) {
+      lines.push('ignore_robots: true');
+    }
     ge('b-yaml').textContent=lines.join('\n');
 
     /* env */
@@ -3198,6 +3207,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     storage_state: 'b-ss', storage_state_save: 'b-sss', login_plan: 'b-loginplan',
     pw_no_trace: 'b-pwnotrace',
     ci: 'b-ci', force_replay: 'b-forcereplay', aut_version: 'b-autversion', heal_llm: 'b-healllm',
+    ignore_robots: 'b-ignorerobots',
     observe: 'b-observe',
     conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key; typing one into a run form would let a person graft a run onto someone else’s conversation' }
   };

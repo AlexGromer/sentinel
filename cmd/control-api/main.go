@@ -388,6 +388,9 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			"force_replay": map[string]any{"type": "bool", "default": false, "group": "gates"},
 			"aut_version":  map[string]any{"type": "string", "group": "gates"},
 			"heal_llm":     map[string]any{"type": "bool", "default": false, "group": "healing"},
+			// ADR-133. Группа `gates`, а не `healing`: это ворота обхода, как `ci`, и умолчание
+			// `false` означает «правила соблюдаются» — отступление требует ключа.
+			"ignore_robots": map[string]any{"type": "bool", "default": false, "group": "gates"},
 			// LIVE-MATRIX (ADR-120). The observation mode is the PERSON's choice, not something the tool
 			// derives: a deployment default lives in settings, a run overrides it here, and the CLI takes
 			// the same name. `cost` rides along because a mode that only has a NAME leaves somebody
@@ -605,11 +608,12 @@ type runRequest struct {
 	// file. The hub rendered inputs for the budgets and the auth block and then wrote them into a
 	// downloadable run.yaml with "Pass via: --run-config <file>" — a form that assembled a file and
 	// sent the person back to the console, because the API had nowhere to put the values.
-	Scenario    string `json:"scenario"`     // --scenario: pick a named scenario out of the RunConfig
-	AutVersion  string `json:"aut_version"`  // --aut-version: app-under-test sha, keys flake quarantine
-	CI          bool   `json:"ci"`           // --ci: forbids --force-replay
-	ForceReplay bool   `json:"force_replay"` // --force-replay: bypass the plan_hash hard-abort
-	HealLLM     bool   `json:"heal_llm"`     // --heal-llm: allow LLM re-grounding during heal
+	Scenario     string `json:"scenario"`      // --scenario: pick a named scenario out of the RunConfig
+	AutVersion   string `json:"aut_version"`   // --aut-version: app-under-test sha, keys flake quarantine
+	CI           bool   `json:"ci"`            // --ci: forbids --force-replay
+	ForceReplay  bool   `json:"force_replay"`  // --force-replay: bypass the plan_hash hard-abort
+	HealLLM      bool   `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
+	IgnoreRobots bool   `json:"ignore_robots"` // --ignore-robots: ADR-133, a person's explicit choice
 	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the deployment default, which the form
 	// SHOWS rather than implies — an invisible default makes "I did not choose" and "I chose exactly
 	// this" the same act, and then nobody can say what the run will produce.
@@ -663,6 +667,9 @@ func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string 
 	}
 	if req.HealLLM {
 		args = append(args, "--heal-llm")
+	}
+	if req.IgnoreRobots {
+		args = append(args, "--ignore-robots")
 	}
 	// LIVE-MATRIX (ADR-120). This rides argv, not environment, and that is not a style choice.
 	// agentctl builds the brain's run-vars unconditionally — `"SENTINEL_OBSERVE=" + *observe` is

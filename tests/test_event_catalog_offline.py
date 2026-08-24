@@ -39,7 +39,7 @@ CATALOG = REPO / "brain" / "events.json"
 
 # Modules that emit diagnostics through the module-level log()/_log() helpers. Kept explicit rather
 # than globbed: a new brain module that logs must be added here deliberately, which is the point.
-LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol",
+LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol", "robots",
                "record_bridge", "replay", "server", "budget", "report", "store", "otel", "health",
                "frames"]
 # `frames` joined with PROD-FAIL-MEDIA part A, and the gate is why the list is right. `capture_frame`

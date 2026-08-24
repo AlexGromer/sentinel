@@ -31,7 +31,7 @@
 (SHA-256 канонического JSON над steps[] с сортированными ключами; числа сериализуются как есть, без
 округления, ни одно поле не исключается), target_url, run_mode, coverage_target,
 coverage_achieved, interactive_seen (int), interactive_exercised (int), steps[], completeness,
-perception, degradations, tokens (из `budget.tracker().summary()`), models ({"plan": <имя модели
+perception, degradations, robots, tokens (из `budget.tracker().summary()`), models ({"plan": <имя модели
 планировщика>})}`.
 
 ⚠ **`coverage_achieved` в одиночку не отвечает на вопрос «весь ли сайт пройден», и читать его так —
@@ -44,6 +44,8 @@ perception, degradations, tokens (из `budget.tracker().summary()`), models ({"
 `degradations` — коды каталога с `degrades: true`, сработавшие за прогон; перечень неполон по
 построению (файл замораживается в графе, а разборка прогона идёт после него). `perception` (ADR-092)
 — доля адресуемого на страницу плюс `worst_ratio`. Каждый объект
+
+⚠ **`robots` (ADR-133) отвечает на вопрос, которого не задаёт никакой другой ключ: куда обход НЕ ПОШЁЛ ПО ВОЛЕ ВЛАДЕЛЬЦА сайта.** Без него исключённое неотличимо от ненайденного: человек откроет карту, не увидит раздела и решит, что инструмент до него не добрался. Поля: `respected` (соблюдались ли правила в этом прогоне — `false` только при `--ignore-robots`), `source` (`fetched` · `absent` — сайт не отдал файл · `unreachable` — прочитать не удалось, и обход НЕ ограничивался · `not_applicable` — у схемы нет `robots.txt` · `ignored`), `detail` — та же мысль фразой, `rules` — сколько запретов в файле, и `excluded` — перечень адресов, не попавших во фронтир. Пустой `excluded` при `respected: true` означает «правила прочитаны, под них ничего не попало» — это ДРУГОЕ утверждение, чем отсутствие ключа.
 `steps[]` — ровно 8 ключей: `step_id`, `intent`, `semantic_id`, `action_type`, `target`, `locator`,
 `alternatives` (плоский список `{strategy, locator, prior}`, не карта `L1..L6`), `is_milestone`.
 

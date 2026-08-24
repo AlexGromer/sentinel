@@ -85,7 +85,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "               [--observe off|frames|stream|human|record]   # what this run lets you see")
 	fmt.Fprintln(os.Stderr, "               [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
 	fmt.Fprintln(os.Stderr, "               [--run-config <run.yaml>] [--scenario <name>] [--coverage-target <0..1>]")
-	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--artifact-dir <dir>]        (all flags: agentctl run --help)")
+	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--ignore-robots] [--artifact-dir <dir>]")
+	fmt.Fprintln(os.Stderr, "                                                                    (all flags: agentctl run --help)")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--message <text>] [--goal <g>|--describe <d>]")
 	fmt.Fprintln(os.Stderr, "                                             # (M9.10 multi-turn) --message is this turn; --goal/--describe pin the objective")
 	fmt.Fprintln(os.Stderr, "  agentctl report --run <run-dir>              # report.html + report.json + metrics.prom + junit.xml")
@@ -558,6 +559,7 @@ type runFlags struct {
 	replay         *bool
 	planFile       *string
 	healLLM        *bool
+	ignoreRobots   *bool
 	observe        *string
 	autVersion     *string
 	ci             *bool
@@ -592,6 +594,11 @@ func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	f.replay = fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
 	f.planFile = fs.String("plan", "", "path to plan.json (required with --replay)")
 	f.healLLM = fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
+	// ADR-133: правила чужого сайта соблюдаются ПО УМОЛЧАНИЮ, и отказ от них — осознанный выбор
+	// человека, который прогон записывает в журнал. Флаг отрицательный (`--ignore-robots`, а не
+	// `--respect-robots=true`) именно поэтому: умолчание не требует ключа, а отступление от него —
+	// требует, и остаётся в командной строке, которую потом читают.
+	f.ignoreRobots = fs.Bool("ignore-robots", false, "ignore the target's robots.txt (default: respect it)")
 	// LIVE-MATRIX (ADR-120): the same choice the hub offers, under the same name. A capability the UI
 	// has and the terminal does not is the gap ADR-107 exists to close; an EMPTY value is left empty
 	// so the brain can tell "nothing was asked for" from "frames was asked for" and say which it used.
@@ -611,6 +618,7 @@ func cmdRun(repo string, args []string) int {
 	goal, message, owner, describe := rf.goal, rf.message, rf.owner, rf.describe
 	scenario, runConfig, coverageTarget, maxSteps := rf.scenario, rf.runConfig, rf.coverageTarget, rf.maxSteps
 	replay, planFile, healLLM, observe := rf.replay, rf.planFile, rf.healLLM, rf.observe
+	ignoreRobots := rf.ignoreRobots
 	autVersion, ci, force, conversationID := rf.autVersion, rf.ci, rf.force, rf.conversationID
 	_ = fs.Parse(args)
 
@@ -672,6 +680,7 @@ func cmdRun(repo string, args []string) int {
 		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,
 		"HEAL_LLM=" + boolEnv(*healLLM),
+		"IGNORE_ROBOTS=" + boolEnv(*ignoreRobots),
 		"SENTINEL_OBSERVE=" + *observe,
 		"AUT_VERSION=" + *autVersion,
 		"CI=" + boolEnv(*ci),
