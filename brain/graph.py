@@ -325,6 +325,48 @@ def _capped_history(user_turns: list, keep: int = _REFINE_HISTORY_KEEP) -> list:
     return [f"[earlier: {_rolling_summary(older)}]"] + recent
 
 
+# ⚠ ОДНИ ВОРОТА ДЛЯ ВСЕХ ИСТОЧНИКОВ ФРОНТИРА, И ЭТО НЕ НАВЕДЕНИЕ ПОРЯДКА.
+#
+# До ADR-134 обе проверки — граница обхода (ADR-130) и воля владельца сайта (ADR-133) — стояли
+# ФИЗИЧЕСКИ ВНУТРИ цикла `for l in links` узла `ground`. Пока источник фронтира был один (`a[href]`),
+# разницы не было. Как только источников становится два, второй обходит обе проверки целиком — и
+# `tests/test_robots_offline.py` этого НЕ ЗАМЕТИТ: он кормит граф исключительно якорями, поэтому
+# останется зелёным над самой дырой. Класс тот же, что дефект границы, замеренный 2026-08-22:
+# инструмент уйдёт туда, куда владелец сайта запретил, а блок `robots.excluded` в `plan.json` будет
+# утверждать, что запрет соблюдён.
+#
+# Поэтому решение принимается ЗДЕСЬ и только здесь, а вызывающий обязан произнести его вслух: ответ
+# — не булев, а НАЗВАННЫЙ, потому что «не пустили» бывает трёх разных сортов, и два из них человек
+# обязан увидеть в артефакте по-разному.
+ADMIT = "admit"            # адрес наш, не посещён, не запрещён — во фронтир
+ADMIT_OUTSIDE = "outside"  # за границей обхода: чужой хост или чужой раздел
+ADMIT_KNOWN = "known"      # уже посещён, уже во фронтире или это текущая страница
+ADMIT_ROBOTS = "robots"    # владелец сайта попросил сюда не ходить
+
+
+def admit_to_frontier(nu, *, origin, robots, visited, frontier, current) -> str:
+    """Пускать ли адрес во фронтир. ЕДИНСТВЕННОЕ место, где это решается.
+
+    ⚠ ПОРЯДОК ПРОВЕРОК ЗНАЧИМ. Граница идёт ПЕРВОЙ: чужой адрес не должен попасть в перечень
+    исключённых по `robots`, иначе перечень начнёт утверждать, что владелец СОСЕДНЕГО сайта нам
+    что-то запретил — а он о нас ничего не говорил.
+
+    ⚠ `robots` СУДИТ ПО ПУТИ ДОКУМЕНТА, а не по маршруту, и теперь это сказано, а не выходит
+    случайно. `robots.txt` говорит о ресурсах, которые отдаёт СЕРВЕР; hash-маршрут (`#/orders`) на
+    сервер не уходит вовсе, и правила о нём не бывает. `RobotsPolicy.allows` берёт `urlsplit(...).path`
+    — то есть путь документа, — и для двух маршрутов одной страницы ответ по построению один.
+    """
+    if not nu:
+        return ADMIT_KNOWN
+    if not nu.startswith(origin or ""):
+        return ADMIT_OUTSIDE
+    if nu == current or nu in visited or nu in frontier:
+        return ADMIT_KNOWN
+    if robots is not None and not robots.allows(nu):
+        return ADMIT_ROBOTS
+    return ADMIT
+
+
 def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
@@ -397,19 +439,16 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         origin = state.get("base_origin", "")
         visited = set(state.get("visited_paths", []))
         frontier = list(state.get("nav_frontier", []))
-        # ⚠ ВОЛЯ ВЛАДЕЛЬЦА САЙТА — ВТОРОЙ ФИЛЬТР, И ОН НЕ ЗАМЕНЯЕТ ГРАНИЦУ. Граница отвечает «наш ли
-        # это сайт», robots — «пускают ли нас сюда на нашем же сайте». Порядок важен: чужой адрес не
-        # должен попасть в перечень исключённых по robots, иначе перечень начнёт утверждать, что
-        # владелец соседнего сайта нам что-то запретил.
+        # Якоря — ПЕРВЫЙ источник фронтира, и он ходит через те же ворота, что и всякий следующий.
         excluded = list(state.get("robots_excluded", []) or [])
         for l in links:
             nu = page_identity(l.get("href", ""))
-            if nu and nu.startswith(origin) and nu not in visited and nu not in frontier and nu != path:
-                if robots is not None and not robots.allows(nu):
-                    if nu not in excluded:
-                        excluded.append(nu)
-                    continue
+            verdict = admit_to_frontier(nu, origin=origin, robots=robots, visited=visited,
+                                        frontier=frontier, current=path)
+            if verdict == ADMIT:
                 frontier.append(nu)
+            elif verdict == ADMIT_ROBOTS and nu not in excluded:
+                excluded.append(nu)
         visited_paths = list(dict.fromkeys(list(state.get("visited_paths", [])) + [path]))
         frontier = [f for f in frontier if f != path]
         exercised = set(state.get("interactive_exercised", []))
@@ -537,7 +576,17 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
                 # состояние утверждало, что обход стоит там же, где стоял. Цена видна на последнем
                 # шаге: прогон, упёршийся в потолок на клике, терял найденный им маршрут целиком,
                 # потому что `ground` до него уже не доходил.
-                moved = page_identity((ex.call("browser.click", locator=p["locator"]) or {}).get("url") or "")
+                _clicked = ex.call("browser.click", locator=p["locator"]) or {}
+                # ⚠ ФАКТ БЕРЁТСЯ У ИСПОЛНИТЕЛЯ, А НЕ ВЫВОДИТСЯ ЗДЕСЬ (ADR-134). Сравнивая адреса
+                # сам, вызывающий не отличал «не двигались» от «не успели увидеть»: обе ситуации
+                # выглядели как равные строки, и отложенный переход роутера терялся молча. Теперь
+                # `navigated` произносит тот, кто единственный может его знать, — тот, кто ждал.
+                # `.get(..., None)` и запасной путь: исполнитель прежней версии поля не пришлёт, и
+                # прогон против него обязан остаться рабочим, а не тихо считать всё навигацией.
+                _nav = _clicked.get("navigated")
+                moved = page_identity(_clicked.get("url") or "")
+                if _nav is False:
+                    moved = ""
             elif at in ("fill", "type", "select"):
                 # M9.1 forward-compat: the explorer emits only click/navigate today; frozen/authored
                 # plans run through act reuse replay's verb dispatch (single source of truth).

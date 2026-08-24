@@ -177,16 +177,60 @@ def test_a_replayed_plan_actually_moves_to_the_new_host() -> None:
 
 
 def test_the_frontier_still_filters_by_the_boundary() -> None:
-    """И сам фильтр никуда не делся.
+    """И сам фильтр никуда не делся — теперь ПОВЕДЕНЧЕСКИ, а не грепом.
 
-    Свойство поведенческое и куплено живым прогоном; здесь — только страж проводки: если сравнение
-    исчезнет из узла perceive, граница станет верной и НЕ ПРИМЕНЯЕМОЙ, а таблица выше останется
-    зелёной. Это единственное утверждение в файле о ФОРМЕ исходника, и оно объявлено таковым.
-    """
-    src = read(os.path.join("brain", "graph.py"))
-    if not re.search(r"startswith\(origin\)", src):
-        fail("brain/graph.py больше не сверяет адрес с origin — граница вычисляется и не применяется, "
-             "то есть фронтир принимает всё")
+    ⚠ ПРЕЖНЯЯ РЕДАКЦИЯ БЫЛА ГРЕПОМ `startswith(origin)` по `brain/graph.py` и объявляла себя
+    единственным утверждением файла о ФОРМЕ исходника. Она сделала ровно то, чего от такого
+    утверждения и ждут: покраснела на ОСОЗНАННОЙ правке (ADR-134 вынес решение в
+    `admit_to_frontier`, где сравнение записано как `startswith(origin or "")`) — при том что
+    свойство не менялось ни на байт. Греп ловит запись, а не поведение.
+
+    Спрашивать стало у кого: решение вынесено в функцию, и вопрос «пустят ли чужой адрес» задаётся
+    ей напрямую. Проверяются ВСЕ ЧЕТЫРЕ исхода, потому что «не пустили» бывает трёх сортов и два из
+    них человек обязан увидеть в артефакте по-разному."""
+    from brain.graph import (ADMIT, ADMIT_KNOWN, ADMIT_OUTSIDE, ADMIT_ROBOTS,
+                             admit_to_frontier)
+
+    origin = base_origin_of("http://127.0.0.1:8181")
+
+    class _NoRobots:
+        def allows(self, _u): return True
+
+    class _Forbids:
+        def __init__(self, bad): self.bad = bad
+        def allows(self, u): return self.bad not in u
+
+    def verdict(nu, robots=None, visited=(), frontier=(), current="http://127.0.0.1:8181/"):
+        return admit_to_frontier(nu, origin=origin, robots=robots or _NoRobots(),
+                                 visited=set(visited), frontier=list(frontier), current=current)
+
+    CASES = [
+        ("http://127.0.0.1:8181/page2.html", ADMIT, "свой непосещённый адрес обязан войти во фронтир"),
+        ("http://127.0.0.1:8182/index.html", ADMIT_OUTSIDE, "другой ПОРТ — тот случай, что замерен живьём"),
+        ("http://evil.example/x", ADMIT_OUTSIDE, "чужой хост"),
+        ("http://127.0.0.1:8181.evil.example/", ADMIT_OUTSIDE, "префиксный двойник хоста"),
+        ("http://127.0.0.1:8181/#/orders", ADMIT, "СВОЙ маршрут SPA — иначе обход ослепнет на собственном приложении"),
+        ("", ADMIT_KNOWN, "пустой адрес не адрес"),
+    ]
+    for nu, want, why in CASES:
+        got = verdict(nu)
+        if got != want:
+            fail(f"admit_to_frontier({nu!r}) = {got!r}, ожидалось {want!r} — {why}")
+
+    # Уже известное не попадает во фронтир второй раз — тремя разными способами.
+    if verdict("http://127.0.0.1:8181/") != ADMIT_KNOWN:
+        fail("текущая страница снова принимается во фронтир — обход зациклится на себе")
+    if verdict("http://127.0.0.1:8181/a", visited=["http://127.0.0.1:8181/a"]) != ADMIT_KNOWN:
+        fail("посещённый адрес принимается снова")
+    if verdict("http://127.0.0.1:8181/a", frontier=["http://127.0.0.1:8181/a"]) != ADMIT_KNOWN:
+        fail("адрес, уже стоящий во фронтире, добавляется вторично")
+
+    # ⚠ ПОРЯДОК ПРОВЕРОК: чужой адрес НЕ должен объявляться запрещённым по robots — иначе перечень
+    # исключённого начнёт утверждать, что владелец СОСЕДНЕГО сайта нам что-то запретил.
+    if verdict("http://evil.example/secret", robots=_Forbids("secret")) != ADMIT_OUTSIDE:
+        fail("чужой адрес объявлен запрещённым по robots — граница обязана отвечать ПЕРВОЙ")
+    if verdict("http://127.0.0.1:8181/secret", robots=_Forbids("secret")) != ADMIT_ROBOTS:
+        fail("свой запрещённый адрес не назван запрещённым")
 
 
 def main() -> int:

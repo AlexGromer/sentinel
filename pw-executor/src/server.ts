@@ -400,6 +400,11 @@ let videoDir: string | null = null;
 // the bytes are complete. So `browser.videoStop` is destructive in a way `browser.traceStop` is not,
 // and this flag is what keeps the shutdown path from closing an already-closed context and turning a
 // finished run into a crash in its last line.
+// ADR-134: сколько ждать смены адреса после клика, прежде чем признать, что навигации не было.
+// Потолок, а не задержка: клик, действительно сменивший маршрут, разрешает ожидание немедленно.
+// Платит только клик, который навигацией не был.
+const CLICK_NAV_SETTLE_MS = Number(process.env.SENTINEL_CLICK_NAV_SETTLE_MS || 250);
+
 let contextClosed = false;
 
 // LIVE-HUMAN (ADR-120): does this run draw for a person? Decided ONCE, by the launch plan, which is
@@ -907,9 +912,38 @@ async function dispatchInner(method: string, params: Record<string, unknown>): P
       // no box to aim at — either way the click below is the one that always ran.
       const aim = decorate ? await announce(page!, loc, decorPauseMs, log) : null;
       if (aim) decorAt = aim;
+      // ⚠ АДРЕС СНИМАЕТСЯ ДО КЛИКА, И ПОСЛЕ КЛИКА ЕГО ЖДУТ — ADR-134.
+      //
+      // Прежняя строка читала `page.url()` ТЕМ ЖЕ ТАКТОМ, что и клик, и возвращала мгновенный
+      // снимок. Для документа это верно — навигация документа синхронна для Playwright. Для SPA
+      // неверно вдвойне: Playwright обновляет адрес фрейма по протокольному событию
+      // (`Page.navigatedWithinDocument`), поэтому даже СИНХРОННЫЙ `history.pushState` в обработчике
+      // может не успеть отразиться, а роутер Angular меняет маршрут в промисе — и тогда возвращался
+      // СТАРЫЙ адрес. Обход, для которого клик и есть способ найти маршрут (ADR-134), тихо не
+      // замечал находку: маршрут открыт, а во фронтир он не попадал.
+      //
+      // Ждём СОСТОЯНИЯ, а не спим: `waitForURL` с предикатом разрешается немедленно, если адрес уже
+      // сменился, и это единственное API в этом файле, которое штатно срабатывает на навигацию
+      // ВНУТРИ документа. Потолок платит только клик, который НЕ был навигацией, — цена замерена и
+      // названа в ADR-134; переменная существует затем, чтобы её можно было перезамерить, а не
+      // затем, что число выбрано на глаз.
+      const urlBefore = page!.url();
       await loc.click({ timeout: 5000 });
       if (aim) await echo(page!, aim.x, aim.y, undefined, log);
-      return { clicked: true, url: page!.url() };
+      // ⚠ `> 0` — НЕ ЗАЩИТНАЯ ПРИВЫЧКА, А ЗАМЕРЕННЫЙ ДЕФЕКТ. В Playwright `timeout: 0` означает «ждать
+      // ВЕЧНО», а не «не ждать»: человек, поставивший `SENTINEL_CLICK_NAV_SETTLE_MS=0`, чтобы
+      // выключить ожидание, получал прогон, повисший на ПЕРВОМ же клике без навигации. Замерено —
+      // прогон встал на шаге 2 и не двинулся. Ноль здесь обязан значить то, что он значит для
+      // человека: не ждать вовсе.
+      if (CLICK_NAV_SETTLE_MS > 0 && page!.url() === urlBefore) {
+        await page!
+          .waitForURL((u) => u.href !== urlBefore, { timeout: CLICK_NAV_SETTLE_MS })
+          .catch(() => { /* не навигация — это самый частый исход, и он не отказ */ });
+      }
+      const urlAfter = page!.url();
+      // `navigated` — ОТДЕЛЬНЫЙ факт, а не вывод вызывающего. Сравнивая адреса сам, brain не мог
+      // отличить «не двигались» от «не успели увидеть»: обе ситуации выглядели как равные строки.
+      return { clicked: true, url: urlAfter, navigated: urlAfter !== urlBefore };
     }
     // --- M9.1 (ADR-026): form/login interaction verbs + assert + auth-state ------
     case 'browser.fill': {

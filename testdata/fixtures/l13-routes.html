@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>L13 — a click that changes the address</title>
+<style>
+  /* Нет ни одного :hover/:focus/:active, отличного от базового состояния, и outline подавлен —
+     как в l11-decorate.html и по той же причине: страница обязана выглядеть одинаково до и после
+     действия, иначе кадр «до» нельзя сравнить с кадром «после». */
+  * { outline: none !important; }
+  button, a { background: #eee; color: #111; border: 1px solid #999; padding: .4rem .8rem;
+              font: 14px system-ui, sans-serif; text-decoration: none; display: inline-block; }
+  button:hover, button:focus, button:active, a:hover, a:focus, a:active { background: #eee; color: #111; }
+  body { font: 14px system-ui, sans-serif; margin: 2rem; }
+</style>
+</head>
+<body>
+<h1>L13 — a click that changes the address</h1>
+
+<p>
+  Ровно три кнопки, и разница между ними — ЕДИНСТВЕННОЕ, что эта страница измеряет:
+  насколько быстро после клика адрес становится виден снаружи.
+</p>
+
+<ul>
+  <li><button id="sync">Sync route</button>
+      — <code>history.pushState</code> прямо в обработчике. Адрес меняется синхронно для страницы,
+      но снаружи он виден только после протокольного события, поэтому «прочитать сразу»
+      недостаточно даже здесь.</li>
+
+  <li><button id="async">Async route</button>
+      — <code>pushState</code> в промисе, через два тика. Так ведёт себя роутер, откладывающий
+      переход (Angular, ленивый чанк). Клик уже вернулся, а адрес ещё прежний.</li>
+
+  <li><button id="inert">No route</button>
+      — не трогает адрес вовсе. ВСТРЕЧНЫЙ случай: без него утверждение «клик признан навигацией»
+      удовлетворяется кодом, объявляющим навигацией каждый клик.</li>
+</ul>
+
+<p id="where">route: (none)</p>
+
+<script>
+  'use strict';
+  // Счётчик переходов публикуется в document.title — единственный канал, который доезжает обратно
+  // по RPC (`browser.currentUrl`) и не меняет ни одного пикселя. Приём взят у l11-decorate.html.
+  var routes = 0;
+  function go(to, delayTicks) {
+    function apply() {
+      history.pushState({ to: to }, '', to);
+      routes += 1;
+      document.getElementById('where').textContent = 'route: ' + to;
+      document.title = 'L13 routes=' + routes;
+    }
+    if (!delayTicks) { apply(); return; }
+    // ⚠ ЗАДЕРЖКА ЯВНАЯ И ЗАМЕРЕННАЯ, а не «пара тиков». Первая редакция откладывала переход двумя
+    // микрозадачами и `setTimeout(0)` — и этого НЕ ХВАТАЛО: между возвратом клика и чтением адреса
+    // проходит несколько протокольных обменов, за которые роутер успевал сработать, и утверждение
+    // «клик вернулся раньше роутера» проверяло не то. 120 мс заведомо больше любого обмена и
+    // заведомо меньше дефолтного потолка ожидания (250 мс), поэтому случай остаётся ЖИВЫМ для
+    // продукта и НЕДОСТИЖИМЫМ для мгновенного снимка.
+    setTimeout(apply, 120);
+  }
+  document.getElementById('sync').addEventListener('click', function () { go('#/sync', 0); });
+  document.getElementById('async').addEventListener('click', function () { go('#/async', 1); });
+  document.getElementById('inert').addEventListener('click', function () { /* адрес не трогаем */ });
+  document.title = 'L13 routes=0';
+</script>
+</body>
+</html>
