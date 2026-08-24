@@ -26,7 +26,7 @@ from .healing import AUTO as _HEAL_AUTO
 from .healing import is_reground
 from .eventlog import log
 from .frames import capture_frame   # PROD-FAIL-MEDIA part A: the picture of a failed step
-from .state import normalize_url, page_identity, canonical_plan_hash
+from .state import base_origin_of, normalize_url, page_identity, canonical_plan_hash
 from .store import GoldenIntegrityError
 
 
@@ -62,6 +62,30 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return v if v >= 0 else default
+
+
+def retarget_bases(plan_target: str, new_target: str) -> "tuple[str, str]":
+    """Пара баз для переноса плана: откуда и куда.
+
+    ⚠ ОТДЕЛЬНОЙ ФУНКЦИЕЙ, ЧТОБЫ ЭТО МОЖНО БЫЛО УТВЕРЖДАТЬ ПОВЕДЕНЧЕСКИ. Пока обе строки жили внутри
+    `_run_replay`, единственным стражем оставалось утверждение о ФОРМЕ ИСХОДНИКА — а такое
+    утверждение суррогатно: оно ловит одну запись формулы и не ловит другую, дающую тот же неверный
+    ответ. Теперь вопрос «переедет ли план» задаётся коду, а не тексту."""
+    return base_origin_of(plan_target or ""), base_origin_of(new_target or "")
+
+
+def retarget(step_target: str, old_base: str, new_base: str) -> str:
+    """Перенести адрес шага со старой базы на новую (ADR-133).
+
+    Отдельной функцией — потому что свойство «адрес ДЕЙСТВИТЕЛЬНО переехал» надо уметь утверждать, а
+    выражение внутри цикла утверждать нечем. Дефект, который это купил, был именно здесь: базы
+    считались формулой «всё до последнего слэша», и на цели без завершающего слэша обе вырождались в
+    `https://`, отчего `replace` становился пустой операцией — переигранный план молча оставался на
+    СТАРОМ хосте, а прогон рапортовал зелёным про другую систему.
+    """
+    if not step_target or not old_base or old_base == new_base:
+        return step_target
+    return step_target.replace(old_base, new_base)
 
 
 def _basename(url: str) -> str:
@@ -290,8 +314,17 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     # what ADR-006 refuses to do.
     _write_executed_plan(plan, run_dir)
 
-    old_base = normalize_url(plan.get("target_url", "")).rsplit("/", 1)[0] + "/"
-    new_base = normalize_url(new_target).rsplit("/", 1)[0] + "/"
+    # ⚠ ЧЕРЕЗ `base_origin_of`, А НЕ ЧЕРЕЗ `rsplit` — ЭТО ЗАМЕРЕНО, А НЕ СТИЛЬ. Формула «всё до
+    # последнего слэша» на цели БЕЗ завершающего слэша — то есть на самой естественной форме,
+    # `--target https://old.example` — даёт `https://` с ОБЕИХ сторон, и `replace` становится пустой
+    # операцией: каждый шаг переигранного плана остаётся смотреть на СТАРЫЙ хост. Человек наводит
+    # замороженный план на стенд, получает зелёный прогон — и этот прогон был про другую систему.
+    # Замер: цель `https://old.example` → `https://new.example`, шаг
+    # `https://old.example/app/page-a.html` оставался собой; через `base_origin_of` становится
+    # `https://new.example/app/page-a.html`.
+    # ADR-130 забраковал эту формулу для ГРАНИЦЫ; здесь она жила дальше, потому что запрет читал
+    # только `brain/__main__.py`. Теперь запрет читает весь `brain/`.
+    old_base, new_base = retarget_bases(plan.get("target_url", ""), new_target)
     report["old_base"], report["new_base"] = old_base, new_base
 
     # GAP-RISK-009: visual (screenshot) golden regressions are ADVISORY by default. A deployment
@@ -325,7 +358,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
         _emit("step.progress", run_id, n=idx + 1, total=total, desc=f"{kind}: {s.get('intent') or step_key}")
 
         if kind == "navigate":
-            tgt = (s.get("target") or "").replace(old_base, new_base)
+            tgt = retarget(s.get("target") or "", old_base, new_base)
             try:
                 nav = ex.call("browser.navigate", url=tgt)
                 note_load_speed(nav, tgt)   # HEALTH-004: the application's own load timing

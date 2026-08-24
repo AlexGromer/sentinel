@@ -129,9 +129,51 @@ def test_the_boundary_is_computed_in_one_place() -> None:
     if calls < 2:
         fail(f"brain/__main__.py вычисляет base_origin через base_origin_of() {calls} раз(а), а точек "
              f"вычисления две — холодный старт и продолжение беседы")
-    if re.search(r'rsplit\("/",\s*1\)\[0\]\s*\+\s*"/"', src):
-        fail("brain/__main__.py снова считает границу вручную через rsplit — ровно та формула, что "
-             "вырождалась в схему на цели без завершающего слэша")
+    # ⚠ ЗАПРЕТ ЧИТАЕТ ВЕСЬ `brain/`, А НЕ ОДИН ФАЙЛ — и это исправление ЗАМЕРЕНО, а не наведение
+    # порядка. Пока проверялся только `__main__.py`, забракованная формула спокойно жила в
+    # `brain/replay.py`, где считала базу для РЕ-ТАРГЕТИНГА замороженного плана: на цели без
+    # завершающего слэша обе базы вырождались в `https://`, замена становилась пустой, и переигранный
+    # план молча оставался на СТАРОМ хосте — то есть зелёный прогон был про другую систему.
+    # Гейт, нацеленный на один случай класса, обходится следующим случаем того же класса.
+    for name in sorted(os.listdir(os.path.join(REPO, "brain"))):
+        if not name.endswith(".py") or name == "state.py":
+            continue   # в state.py формула ЖИВЁТ ВНУТРИ `base_origin_of` — это её единственный дом
+        body = read(os.path.join("brain", name))
+        if re.search(r'rsplit\("/",\s*1\)\[0\]\s*\+\s*"/"', body):
+            fail(f"brain/{name} снова считает базу вручную через rsplit — ровно та формула, что "
+                 f"вырождается в схему на цели без завершающего слэша (ADR-130)")
+
+
+def test_a_replayed_plan_actually_moves_to_the_new_host() -> None:
+    """ПОВЕДЕНЧЕСКИ, а не по форме исходника: план, наведённый на другой стенд, обязан туда поехать.
+
+    ⚠ ЗАМЕР, КОТОРЫЙ ЭТО КУПИЛ. Базы для ре-таргетинга считались формулой «всё до последнего слэша»
+    — той самой, что ADR-130 забраковал для границы, — и запрет на неё читал ТОЛЬКО
+    `brain/__main__.py`. На цели `https://old.example` (форма без завершающего слэша, самая
+    естественная) обе базы вырождались в `https://`, `replace` становился пустой операцией, и каждый
+    шаг переигранного плана оставался смотреть на СТАРЫЙ хост. Человек получал зелёный прогон про
+    другую систему.
+
+    Утверждение ПАРНОЕ: адрес обязан переехать при смене хоста и обязан НЕ меняться, когда цель та же
+    — иначе «переезжает всегда» удовлетворило бы половину идеально."""
+    # ⚠ Базы берутся у ПРОДУКТА (`retarget_bases`), а не считаются здесь: гейт, который вычисляет
+    # их сам, проверяет только перенос и слеп к тому, ЧЕМ база посчитана — то есть ровно к дефекту.
+    from brain.replay import retarget, retarget_bases
+
+    step = "https://old.example/app/page-a.html"
+    moved = retarget(step, *retarget_bases("https://old.example", "https://new.example"))
+    if moved != "https://new.example/app/page-a.html":
+        fail(f"план не переехал: {step!r} -> {moved!r}; на цели без завершающего слэша базы "
+             f"вырождаются, и прогон идёт по старому хосту")
+    same = retarget(step, *retarget_bases("https://old.example", "https://old.example"))
+    if same != step:
+        fail(f"адрес изменился при неизменной цели: {step!r} -> {same!r}")
+    # И форма со слэшем, и вложенный путь — тот же ответ: форма записи цели не должна решать.
+    deep = retarget("https://old.example/app/page-a.html",
+                    *retarget_bases("https://old.example/app/index.html",
+                                    "https://new.example/app/index.html"))
+    if deep != "https://new.example/app/page-a.html":
+        fail(f"вложенная цель переехала неверно: {deep!r}")
 
 
 def test_the_frontier_still_filters_by_the_boundary() -> None:
@@ -148,8 +190,12 @@ def test_the_frontier_still_filters_by_the_boundary() -> None:
 
 
 def main() -> int:
-    for fn in (test_boundary_table, test_the_boundary_actually_excludes_a_foreign_host,
-               test_the_boundary_is_computed_in_one_place, test_the_frontier_still_filters_by_the_boundary):
+    # ⚠ ПЕРЕЧЕНЬ ВЫВОДИТСЯ, А НЕ ПИШЕТСЯ. Рукописный кортеж уже сделал ровно то, чего от него ждут:
+    # новая проверка была написана, добавлена в файл и НЕ ЗАПУЩЕНА — мутация прошла мимо неё, потому
+    # что её никто не звал. Отсутствие имени в списке не имеет представления, и увидеть его нечем.
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    assert len(fns) >= 5, f"обнаружено {len(fns)} проверок — глоб сломался, и сьют прошёл бы по пустому"
+    for fn in fns:
         fn()
     if failures:
         print(f"FAIL — {len(failures)} проблем(а):")

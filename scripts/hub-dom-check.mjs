@@ -1680,6 +1680,21 @@ try {
     eq(msg.recorded, false, 'a run with no log file must report recorded=false');
     ok(msg.reason.length > 0, 'recorded=false must carry a reason a person can read');
   });
+  await check('robots.txt is respected by default, and refusing it is a visible, unchecked choice', async () => {
+    // ADR-133. Умолчание — СОБЛЮДАТЬ, поэтому чекбокс обязан быть СНЯТ: отмеченный по умолчанию
+    // ящик означал бы, что инструмент по умолчанию игнорирует волю владельца чужого сайта, и человек
+    // узнал бы об этом, только присмотревшись. Отрицательное имя (`ignore_robots`) — часть того же:
+    // отступление требует действия, умолчание не требует ничего.
+    const box = page.locator('#b-ignorerobots');
+    ok(await box.count() === 1, 'the hub offers no way to say “ignore robots.txt” — the capability lives only in the CLI');
+    ok(!(await box.isChecked()), 'ignore_robots is checked by default — the tool would ignore the owner’s will unless told otherwise');
+    // И он обязан ДОЕЗЖАТЬ до запроса: видимый и не отправляемый контрол хуже отсутствующего.
+    const wired = await page.evaluate(() => {
+      const src = Array.from(document.querySelectorAll('script')).map((s) => s.textContent).join('\n');
+      return /ignore_robots\s*:\s*'b-ignorerobots'/.test(src);
+    });
+    ok(wired, 'the checkbox is not mapped into the run request — it would be a control that does nothing');
+  });
   await check('the step ceiling is a field with a visible default, not a hidden constant', async () => {
     // Директива Alex 2026-08-23: «количество шагов обхода должно задаваться в UI, дефолт должен
     // присутствовать». Поле есть давно — а вот что оно ПОКАЗЫВАЕТ свой дефолт, не утверждал никто:

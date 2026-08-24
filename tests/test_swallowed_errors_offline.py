@@ -66,6 +66,19 @@ def _allow(key: str, reason: str) -> None:
 
 # 1. Configuration parsing. A bad env value falls back to a documented default; there is no operation
 #    being guarded, only a value that was never going to be anything but its own default.
+# ADR-133. `_fetch` НЕ проглатывает: оба его обработчика ПЕРЕВОДЯТ отказ в строку-причину, которую
+# вызывающий (`load`) произносит каталогизированным кодом — `run.robots_absent` для 4xx (законный
+# ответ половины сайтов) и `run.robots_unreachable` (`degrades`) для всего остального. То есть
+# сообщение существует и доезжает до вердикта; здесь оно просто рождается не в том кадре стека,
+# который видит этот гейт. Скрыть настоящий отказ они не могут: путь «правил не видели» громкий по
+# построению и утверждается tests/test_robots_offline.py.
+for _k in [
+    "robots.py::_fetch::0",
+    "robots.py::_fetch::1",
+]:
+    _allow(_k, "переводит отказ в причину, которую вызывающий произносит кодом каталога "
+               "(run.robots_absent / run.robots_unreachable с degrades)")
+
 for _k in [
     "planner.py::_tok_budget::0",
     "budget.py::_limit::0",

@@ -325,7 +325,7 @@ def _capped_history(user_turns: list, keep: int = _REFINE_HISTORY_KEEP) -> list:
     return [f"[earlier: {_rolling_summary(older)}]"] + recent
 
 
-def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
+def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None):
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
     M9.2b (ADR-028): when `scenario_head` (a GoalPlanner or DescribePlanner) is wired, a `scenario` node
@@ -397,9 +397,18 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         origin = state.get("base_origin", "")
         visited = set(state.get("visited_paths", []))
         frontier = list(state.get("nav_frontier", []))
+        # ⚠ ВОЛЯ ВЛАДЕЛЬЦА САЙТА — ВТОРОЙ ФИЛЬТР, И ОН НЕ ЗАМЕНЯЕТ ГРАНИЦУ. Граница отвечает «наш ли
+        # это сайт», robots — «пускают ли нас сюда на нашем же сайте». Порядок важен: чужой адрес не
+        # должен попасть в перечень исключённых по robots, иначе перечень начнёт утверждать, что
+        # владелец соседнего сайта нам что-то запретил.
+        excluded = list(state.get("robots_excluded", []) or [])
         for l in links:
             nu = page_identity(l.get("href", ""))
             if nu and nu.startswith(origin) and nu not in visited and nu not in frontier and nu != path:
+                if robots is not None and not robots.allows(nu):
+                    if nu not in excluded:
+                        excluded.append(nu)
+                    continue
                 frontier.append(nu)
         visited_paths = list(dict.fromkeys(list(state.get("visited_paths", [])) + [path]))
         frontier = [f for f in frontier if f != path]
@@ -410,7 +419,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         pm["buttons"] = buttons
         return {"interactive_seen": seen, "nav_frontier": frontier, "visited_paths": visited_paths,
                 "coverage_achieved": coverage, "page_model": pm, "site_map": site_map,
-                "perception": perception}
+                "perception": perception, "robots_excluded": excluded}
 
     def plan(state: RunState) -> dict:
         """Assemble candidates, enforce convergence, ask the planner for the next action."""
@@ -817,6 +826,14 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None):
         # `plan_hash` не двигается: он считается `canonical_plan_hash(steps)` — только по шагам, — и
         # ни один ключ уровня плана в него не входит. Проверено тем же гейтом, что стережёт 106
         # сохранённых планов.
+        # ⚠ ИСКЛЮЧЁННОЕ ПИШЕТСЯ ВСЕГДА, а не только когда оно непусто. Пустой перечень при
+        # `respected: true` говорит читателю «правила прочитаны, и под них ничего не попало» —
+        # это ДРУГОЕ утверждение, чем отсутствие ключа, из которого читатель не узнает ничего.
+        _rex = list(state.get("robots_excluded", []) or [])
+        if robots is not None:
+            plan_obj["robots"] = robots.as_artifact(_rex)
+            if _rex:
+                log("plan.robots_excluded", count=len(_rex))
         from . import eventlog
         plan_obj["degradations"] = eventlog.degradations()
         with open(os.path.join(state.get("artifact_dir", "."), "plan.json"), "w") as f:

@@ -71,6 +71,9 @@ class RunState(TypedDict, total=False):
     # файле: вызывающему она нужна для пометки на сценарии, а второй расчёт по тем же полям
     # был бы вторым автором одного факта — они расходятся первыми.
     completeness: dict
+    # Адреса, не попавшие во фронтир по воле владельца сайта (ADR-133). Живут в состоянии,
+    # потому что писать их обязан ТОТ ЖЕ узел, что пишет план, — и на спасённом плане тоже.
+    robots_excluded: list
     executed_actions: list
     errors: list
     # M9.8 F4 (ADR-054): operator-takeover resume payloads, appended each time the checkpoint node

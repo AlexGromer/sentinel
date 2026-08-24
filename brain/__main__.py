@@ -48,7 +48,8 @@ EXIT_TOOL_FAILURE_SALVAGED = 5
 EXIT_TOOL_FAILURE = 4
 
 
-def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None, describe=False) -> dict:
+def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None, describe=False,
+                     robots=None) -> dict:
     """Записать то, что обход успел найти, когда он упал, и предложить тест хотя бы по этому.
 
     ⚠ ПОЧЕМУ ЭТО ВООБЩЕ ВОЗМОЖНО. Всё, из чего узел `report` собирает `plan.json`, копится в
@@ -104,6 +105,8 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
     # Деградации — и на упавшем прогоне ОСОБЕННО: обход, оборванный на 46-м шаге, потерял качество
     # ровно тем, что оборвался, и `plan.json` — единственный файл, который у человека остался.
     # Собирается ЗДЕСЬ, а не в графе: узел `report` до падения не доехал (см. верх функции).
+    if robots is not None:
+        plan_obj["robots"] = robots.as_artifact(state.get("robots_excluded", []))
     from . import eventlog
     plan_obj["degradations"] = eventlog.degradations()
     wrote_plan = False
@@ -308,6 +311,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             "exploration_plan": [init], "plan_hash": "", "current_step": 1,
             "interactive_seen": [], "interactive_exercised": [], "visited_paths": [],
             "nav_frontier": [], "coverage_achieved": 0.0, "exploration_complete": False,
+            "robots_excluded": [],
             "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}], "errors": [],
         }
         ckpt = str((out / "checkpoint.db").resolve())
@@ -318,6 +322,12 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         # run_id that is unique per run, which is exactly why multi-turn chat keeps its own shared
         # store (`_conversations_store_path`) instead of reusing this one.
         rc = runcontrol.make_client()  # M8/M9.8 F4: shared by the graph's checkpoint gate + the resume loop
+        # ADR-133: воля владельца цели читается ОДИН раз, до первого шага, и живёт весь прогон.
+        # Здесь, а не в графе: сетевой вызов на каждом узле `ground` был бы запросом к чужому сайту
+        # на каждый шаг обхода — то есть ровно тем невежливым поведением, ради запрета которого
+        # `robots.txt` и существует.
+        from .robots import from_env as _robots_from_env
+        robots = _robots_from_env(target)
         cfg = {"recursion_limit": max(60, max_steps * 8), "configurable": {"thread_id": run_id}}
         # ⚠ ЧТО НАЙДЕНО — СОХРАНЯЕТСЯ, ДАЖЕ ЕСЛИ ОБХОД УПАЛ (директива Alex 2026-08-23).
         #
@@ -339,7 +349,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         salvaged = crashed = False
         try:
             with _checkpointer(ckpt) as saver:
-                app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc).compile(checkpointer=saver)
+                app = build_graph(ex, planner, tx_write, scenario_head=scenario_head, rc=rc,
+                                  robots=robots).compile(checkpointer=saver)
                 try:
                     final = app.invoke(init_state, config=cfg)
                     # M9.8 F4 (ADR-054): if the run paused for an operator takeover, await Return and resume.
@@ -358,7 +369,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
                     # что успели» — вернуть его над пустым каталогом значило бы пообещать человеку
                     # артефакт, которого нет, и он пошёл бы его искать. Тогда честен код 4.
                     final = _salvage_explore(app, cfg, out, run_id, target, crash,
-                                             scenario_head=scenario_head, describe=bool(describe))
+                                             scenario_head=scenario_head, describe=bool(describe),
+                                             robots=robots)
                     salvaged = bool(final)
         finally:
             _discard_checkpoint(ckpt)
