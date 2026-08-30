@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>L14 — a frontier that does not fit the prompt</title>
+<style>
+  /* Как в l11/l13 и по той же причине: страница обязана выглядеть одинаково до и после действия,
+     иначе кадр «до» нельзя сравнить с кадром «после». */
+  * { outline: none !important; }
+  a, button { background: #eee; color: #111; border: 1px solid #999; padding: .2rem .5rem;
+              font: 13px system-ui, sans-serif; text-decoration: none; display: inline-block;
+              margin: 1px; }
+  a:hover, a:focus, a:active, button:hover, button:focus, button:active { background: #eee; color: #111; }
+  body { font: 14px system-ui, sans-serif; margin: 2rem; }
+  #links { max-width: 60rem; }
+</style>
+</head>
+<body>
+<h1>L14 — a frontier that does not fit the prompt</h1>
+
+<p>
+  Единственное, что эта страница измеряет, — <strong>цену фронтира</strong>. Она отдаёт столько
+  внутренних якорей, сколько попросили запросом <code>?links=N</code>, и каждый ведёт в отдельную
+  идентичность страницы (фрагмент участвует в идентичности с ADR-132). Обход кладёт их все во
+  фронтир, а фронтир целиком уезжает в промпт КАЖДОГО шага.
+</p>
+
+<p>
+  ⚠ <strong>Число приходит СНАРУЖИ намеренно.</strong> Бюджет перечня кандидатов живёт в
+  <code>brain/planner.py</code> (<code>STEP_MENU_CHARS</code>); вписать сюда число значило бы завести
+  второе число того же смысла — подняли бюджет, фикстура молча перестала его достигать, и проверка
+  кепа стала бы зелёной над отсутствующим механизмом. Тот же приём, что <code>?flood=N</code> в
+  <code>l13-routes.html</code>.
+</p>
+
+<p>
+  ⚠ <strong>Зачем это вообще нужно отдельной фикстурой.</strong> Замерено 2026-08-24: во всём корпусе
+  максимум четырнадцать якорей на страницу, а фронтир на живых прогонах не превышал двух. Цену
+  «весь фронтир в промпте каждого шага» на таком корпусе показать нечем — она замеряется на
+  механизме (≈130 символов на запись) и остаётся утверждением о коде. Эта страница делает её
+  утверждением о ПРОГОНЕ.
+</p>
+
+<h2>Кнопки страницы — встречный случай</h2>
+<p>
+  Три контрола, которые НЕ навигация. Они существуют затем, чтобы кеп нельзя было удовлетворить
+  кодом, выбрасывающим всё: клики ограничены страницей, фронтир — нет, и выбрасывать надо второе.
+</p>
+<p>
+  <button id="a">Local action A</button>
+  <button id="b">Local action B</button>
+  <button id="c">Local action C</button>
+</p>
+<p id="acted">acted: none</p>
+
+<h2>Фронтир</h2>
+<div id="links"></div>
+
+<script>
+  'use strict';
+  // Кнопки адрес не трогают — иначе они стали бы навигациями и встречный случай исчез бы.
+  ['a', 'b', 'c'].forEach(function (id) {
+    document.getElementById(id).addEventListener('click', function () {
+      document.getElementById('acted').textContent = 'acted: ' + id;
+    });
+  });
+
+  var n = parseInt((/[?&]links=(\d+)/.exec(location.search) || [])[1] || '12', 10);
+  var host = document.getElementById('links');
+  for (var i = 0; i < n; i++) {
+    var a = document.createElement('a');
+    // ФРАГМЕНТ, а не путь: адрес обязан РАЗРЕШАТЬСЯ. Ссылка на несуществующий файл дала бы отказ
+    // навигации, и прогон мерил бы обработку ошибок, а не цену фронтира.
+    a.setAttribute('href', '#/section-' + i);
+    a.textContent = 'Section ' + i;
+    host.appendChild(a);
+  }
+  // Счётчик публикуется в document.title — канал, доезжающий по RPC и не меняющий ни пикселя
+  // (приём из l11-decorate.html и l13-routes.html).
+  document.title = 'L14 links=' + n;
+</script>
+</body>
+</html>

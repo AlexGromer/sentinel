@@ -33,7 +33,9 @@ code and without a new "profile" knob** (ADR-029): provider profiles are *docume
 |---|---|---|
 | Output type | structured JSON (index-pick / scenario), **not** long-form generation | `brain/planner.py` |
 | Output size | PLAN propose ≤ **200** tok · scenario ≤ **800** tok · HEAL-text ≤ **200** · HEAL-vision ≤ **100** | `planner.py:116,177,228,282` · `healing.py:131,176` |
-| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.py:222` · `healing.py:126` |
+| Input context | ≤ **8000** chars (PLAN-menu) / ≤ **3000** chars (HEAL) ≈ ≤ 2000 / 750 tok | `planner.STEP_MENU_CHARS` · `healing.HEAL_MENU_CHARS` |
+
+⚠ **These two limits became true only with ADR-136.** Before it the PLAN menu had NO cap at all — the document promised 8000 characters while the step prompt carried the whole frontier (measured: with a 1000-address frontier, 131 562 characters, 16× the promise). HEAL had a cap, but it cut the already-serialised string mid-JSON. And these bound ONE LINE of the prompt, not the prompt: the fixed text, `intent` and `attempted_locator` add about a kilobyte on top.
 | Vision input | one PNG (≈1280×720) + tiny marks menu | `healing.py:168` |
 | Temperature | **0** (deterministic selection) | `planner.py` / `healing.py` |
 | Replay (hot path) | **LLM-free**, 0 tokens | `brain/replay.py` |

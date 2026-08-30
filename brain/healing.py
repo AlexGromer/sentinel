@@ -16,7 +16,7 @@ import os
 from .eventlog import log
 from .llm import complete_structured, extract_json
 from .otel import prompt_hash, set_llm_tokens, span
-from .sanitize import safe_json, safe_text
+from .sanitize import fit_json_list, partial_note, safe_json, safe_text
 from .strategies import PRIORS as _PRIORS
 from .strategies import canonical, prior_for
 
@@ -150,6 +150,13 @@ def pick_confidence(loc: dict) -> float:
     return PRIORS["testid" if loc.get("testid") else "role_name"] * PICK_DISCOUNT
 
 
+
+
+# --- ADR-136: сколько символов перечня элементов уезжает в промпт лечения -------------------------
+#
+# Прежний предел текстового тира, перенесённый без изменения: волна меняет ФОРМУ укладки, а не порог.
+# Тот же бюджет получил и визуальный тир, у которого кепа не было вовсе.
+HEAL_MENU_CHARS = 3000
 
 
 class HealingEngine:
@@ -335,6 +342,16 @@ class HealingEngine:
                 return None                      # nothing to choose from; let the visual tier try
             menu = [{"index": i, "role": e.get("role"), "name": e.get("name"),
                      "testid": e.get("testid")} for i, e in enumerate(elements)]
+            # ADR-136: укладка ЦЕЛЫМИ записями — тот же класс, что `planner.py`. Прежний
+            # `json.dumps(...)[:3000]` рубил сериализованную строку посреди дескриптора, и, поскольку
+            # "index" — ПЕРВЫЙ ключ записи, оборванный хвостовой объект оставался «читаемым» по
+            # индексу, а описание элемента терялось: проверка границ такой пик пропускала.
+            # ⚠ Обрезка отъедала прежде всего элементы ФРЕЙМОВ: `browser.interactives` кладёт их
+            # ПОСЛЕ элементов верхнего документа (ADR-095), то есть в хвост.
+            menu_text, heal_dropped = fit_json_list(menu, HEAL_MENU_CHARS)
+            if heal_dropped:
+                log("heal.menu_truncated", shown=len(menu) - heal_dropped, total=len(menu),
+                    budget=HEAL_MENU_CHARS)
             # The framing is load-bearing, and a live run proved it. Asked to find "the element
             # matching the intent", qwen3:14b and qwen2.5vl:7b both answered {"none": true} for every
             # rename we offered — correctly, in a literal reading: no element carries that name any
@@ -349,7 +366,8 @@ class HealingEngine:
                 "anyway. Return none only if no element could plausibly serve that purpose.\n"
                 f"step intent: {safe_text(ctx.get('intent'))}\n"
                 f"element the step used to use: {json.dumps(safe_json(ctx.get('attempted_locator')))}\n"
-                f"elements on the page now: {json.dumps(safe_json(menu))[:3000]}\n"
+                + partial_note(len(menu), heal_dropped)
+                + f"elements on the page now: {menu_text}\n"
                 'Reply with ONLY JSON: {"index": <int>} or {"none": true}.'
             )
             with span("heal.llm", model=self._backend.model, prompt_hash=prompt_hash(prompt)) as _sp:
@@ -397,10 +415,19 @@ class HealingEngine:
             with open(img, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
             menu = [{"mark": m["mark"], "role": m.get("role"), "name": m.get("name")} for m in marks]
+            # ⚠ У ЭТОГО ТИРА КЕПА НЕ БЫЛО ВООБЩЕ, хотя документация называла его меню «крошечным».
+            # Марки ставит `browser.setOfMarks` по числу видимых контролов, и на плотном экране их
+            # сотни; вдобавок этот вызов несёт КАРТИНКУ, то есть самый дорогой запрос прогона. Тот же
+            # помощник и тот же бюджет: одна политика на оба тира лечения.
+            marks_text, marks_dropped = fit_json_list(menu, HEAL_MENU_CHARS)
+            if marks_dropped:
+                log("heal.menu_truncated", shown=len(menu) - marks_dropped, total=len(menu),
+                    budget=HEAL_MENU_CHARS)
             prompt = (
                 "Numbered red marks overlay interactive UI elements. Pick the mark number for the "
                 f"element matching this intent: {safe_text(ctx.get('intent'))}\n"
-                f"marks: {json.dumps(safe_json(menu))}\n"
+                + partial_note(len(menu), marks_dropped)
+                + f"marks: {marks_text}\n"
                 'Reply with ONLY JSON: {"mark": <int>} or {"none": true}.')
             result = self._backend.complete_vision(prompt, b64, max_tokens=100, temperature=0)
             budget.tracker().add("heal", result)
