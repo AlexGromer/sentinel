@@ -23,7 +23,8 @@ from . import agui, runcontrol
 from .otel import span
 from .eventlog import log
 from .frames import capture_frame   # ADR-108d; shared with replay since PROD-FAIL-MEDIA part A
-from .state import RunState, normalize_url, page_identity, semantic_id, canonical_plan_hash
+from .state import (RunState, normalize_url, page_identity, semantic_id,
+                    control_id, canonical_plan_hash)
 from . import strategies as S     # ADR-083: one vocabulary, shared with the recorder
 
 
@@ -270,7 +271,13 @@ def _elements_from_interactives(elements: list, path: str) -> list:
         # already-exercised. Appended to the anchor rather than added as a fourth component so a
         # top-frame control hashes to exactly what it always did (`fr` is empty there).
         sid_anchor = f"{e['frame']}|{anchor}" if e.get("frame") else anchor
-        out.append({"semantic_id": semantic_id(path, role, sid_anchor), "role": role, "name": name,
+        out.append({"semantic_id": semantic_id(path, role, sid_anchor),
+                    # ADR-137: вторая ось — «этот контрол», без маршрута. Считается от того же
+                    # якоря, что и `semantic_id` (testid, если он есть, иначе доступное имя), и с
+                    # тем же префиксом фрейма: контрол во фрейме и одноимённый в верхнем документе —
+                    # РАЗНЫЕ контролы, и склеивать их значило бы объявить проработанным тот, до
+                    # которого не дотрагивались.
+                    "control_id": control_id(role, sid_anchor), "role": role, "name": name,
                     "testid": testid, "locator": primary, "alternatives": alts, "page": path,
                     "disabled": bool(e.get("disabled")), "visible": e.get("visible"), **fr})
     return out
@@ -441,8 +448,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
             # we can ACT on. Both come from the same moment on the same page — computing them apart
             # is how the audit and perception came to describe different pages in the first place.
             perception[path] = _perception_audit(ex, path, elements)
+        # ADR-137: знаменатель покрытия — ось КОНТРОЛА, а не вхождения. До этой правки один и тот
+        # же контрол рельса считался столько раз, сколько маршрутов его показывали (замерено: 137
+        # вместо 49 на `site-spa`), и точно так же раздувался числитель — поэтому само ЧИСЛО
+        # покрытия почти не менялось (0.2701 против 0.2653), а вот перечень непроработанных
+        # раздувался втрое и уводил туда бюджет.
         seen = list(dict.fromkeys(list(state.get("interactive_seen", []))
-                                  + [b["semantic_id"] for b in buttons]))
+                                  + [b["control_id"] for b in buttons]))
         # M9.2b (ADR-028): accumulate the site-wide element map (superset of buttons) for the scenario head.
         site_map = dict(state.get("site_map") or {})
         have = {el["semantic_id"] for el in site_map.get(path, [])}
@@ -522,7 +534,11 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         candidates = []
         blocked = 0
         for b in pm.get("buttons", []):
-            if b["semantic_id"] in exercised:
+            # ADR-137: проработанность спрашивается у оси КОНТРОЛА. Прежняя проверка по
+            # `semantic_id` означала «этот контрол на ЭТОМ экране», поэтому переход на новый маршрут
+            # воскрешал весь рельс целиком, и `clicks[0]` уходил в него снова. Замерено: со ВТОРОГО
+            # шага прогона и до конца — 66 % бюджета.
+            if b["control_id"] in exercised:
                 continue
             # Three distinct reasons not to propose it, counted together because the tester's question
             # is the same either way: "why does coverage say 60% when I can see ten buttons?"
@@ -534,7 +550,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
             # controls sit in closed tab panels. Like `disabled`, it does NOT remove the element from
             # `interactive_seen`: the page has that control, and a denominator that forgets it would
             # report coverage over a smaller page than the one under test.
-            if b["semantic_id"] in spent or b.get("disabled") or b.get("visible") is False:
+            if b["control_id"] in spent or b.get("disabled") or b.get("visible") is False:
                 blocked += 1
                 continue
             # ADR-094: the element's OWN role, not the literal "button". This was a third place where
@@ -543,6 +559,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
             # a tab. The locator was already right; the label beside it disagreed, which is exactly
             # how a wrong role stays invisible to a reader.
             candidates.append({"kind": "click", "semantic_id": b["semantic_id"],
+                               "control_id": b["control_id"],
                                "role": b["role"], "name": b["name"], "target": None,
                                "intent": f"click {b['role']} '{b['name']}'",
                                "locator": b["locator"], "alternatives": b["alternatives"]})
@@ -659,7 +676,25 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
             # candidate and was proposed again on the very next step. Live logs showed the same click
             # 34 times, ~5s apart, until max_steps — the run burned its whole budget on one element
             # and reported it as exploration.
-            sid_el = p.get("semantic_id") or ""
+            # ADR-137: ОТКАЗ СЧИТАЕТСЯ ПО ОСИ КОНТРОЛА — по той же, что и проработанность.
+            #
+            # ⚠ ЭТО ВТОРАЯ ПОЛОВИНА ТОЙ ЖЕ БОЛЕЗНИ, и найдена она тестом, а не задумана. Пока отказ
+            # ключевался вхождением, чёрный список действовал ТОЛЬКО на том маршруте, где контрол
+            # сломался: на следующем это уже другой `semantic_id`, снова кандидат, снова
+            # `_EXPLORE_FAIL_LIMIT` попыток. Для одного глобального контрола на двенадцати маршрутах
+            # это 24 шага впустую — ровно та осцилляция, ради устранения которой заведена ось.
+            # Два вопроса — «проработан ли» и «стоит ли предлагать снова» — обязаны спрашиваться у
+            # одной оси, иначе они расходятся.
+            #
+            # ⚠ ЧЕМ ЗА ЭТО ПЛАТИМ, НАЗВАНО: контрол, закрытый оверлеем на ОДНОМ экране и рабочий на
+            # другом, попадёт в чёрный список глобально. Цена ограничена тем, что до списка надо
+            # набрать ВЕСЬ лимит отказов: контрол, сработавший хоть где-то, к этому моменту уже
+            # проработан и из кандидатов ушёл. Потеря — один контрол; выигрыш — лимит × число
+            # маршрутов шагов.
+            _btns_f = (state.get("page_model") or {}).get("buttons") or []
+            sid_el = next((b.get("control_id") for b in _btns_f
+                           if b.get("semantic_id") == p.get("semantic_id")), None) \
+                     or p.get("semantic_id") or ""
             failed = dict(state.get("interactive_failed", {}))
             if sid_el:
                 failed[sid_el] = failed.get(sid_el, 0) + 1
@@ -680,7 +715,18 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         exercised = list(state.get("interactive_exercised", []))
         moved_to = {}
         if p["action_type"] == "click":
-            exercised = list(dict.fromkeys(exercised + [p["semantic_id"]]))
+            # ADR-137: в проработанные ложится ось КОНТРОЛА, и берётся она из МОДЕЛИ СТРАНИЦЫ,
+            # а не из шага.
+            #
+            # ⚠ ПОЛОЖИТЬ `control_id` В САМ ШАГ БЫЛО НЕЛЬЗЯ, и это не стилистика:
+            # `canonical_plan_hash` хеширует ВСЕ поля всех шагов (`brain/state.py`), поэтому лишнее
+            # поле сдвинуло бы хеш КАЖДОГО замороженного плана — включая голдены `testdata/site` и
+            # `site-v2`, у которых эта правка не меняет ни одного шага. Шаг остаётся байт-в-байт
+            # прежним; вторая ось живёт рядом, в модели страницы, где её и вычислили.
+            _btns = (state.get("page_model") or {}).get("buttons") or []
+            _cid = next((b.get("control_id") for b in _btns
+                         if b.get("semantic_id") == p["semantic_id"]), None)
+            exercised = list(dict.fromkeys(exercised + [_cid or p["semantic_id"]]))
             # Клик, сменивший адрес, ПРИЗНАЁТСЯ навигацией: это дешевле и честнее, чем угадывать
             # маршруты из разметки. В состояние идёт только то, что действительно известно, —
             # текущий адрес; `visited_paths` и фронтир по-прежнему ведёт `ground`, у которого есть

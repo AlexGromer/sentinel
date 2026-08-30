@@ -22,7 +22,7 @@ from langgraph.checkpoint.memory import MemorySaver          # noqa: E402
 from brain import budget, graph as graph_mod                 # noqa: E402
 from brain.graph import build_graph                          # noqa: E402
 from brain.planner import HeuristicPlanner                   # noqa: E402
-from brain.state import normalize_url, semantic_id           # noqa: E402
+from brain.state import control_id, normalize_url, semantic_id  # noqa: E402
 
 PAGE = "file:///s/index.html"
 MAX_STEPS = 40
@@ -126,7 +126,11 @@ def test_a_permanently_failing_element_is_tried_twice_and_then_dropped():
     assert "Works" in ex.clicks, ex.clicks
     assert final["exploration_complete"] is True
 
-    sid = semantic_id(normalize_url(PAGE), "button", "Broken")
+    # ADR-137: знаменатель покрытия ведётся по оси КОНТРОЛА, а не вхождения. Утверждение то же
+    # самое — недостижимый элемент обязан остаться в знаменателе, — но спрашивать его надо у той
+    # оси, которая знаменатель и держит. ⚠ Проверено замером, что это смена КЛЮЧА, а не свойства:
+    # элемент по-прежнему в `interactive_seen`, по-прежнему не кликается, покрытие честные 0.5.
+    sid = control_id("button", "Broken")
     assert final["interactive_failed"].get(sid) == graph_mod._EXPLORE_FAIL_LIMIT, final["interactive_failed"]
     assert sid not in final["interactive_exercised"], "a failing element must not count as exercised"
     assert sid in final["interactive_seen"], (
@@ -159,7 +163,7 @@ def test_a_disabled_element_is_never_clicked_but_still_counted_as_seen():
         "actionability and times out, which is where the ~5s per useless iteration came from")
     assert "Works" in ex.clicks, ex.clicks
 
-    sid = semantic_id(normalize_url(PAGE), "button", "Submit")
+    sid = control_id("button", "Submit")   # ADR-137, см. соседний тест
     assert sid in final["interactive_seen"], (
         "a disabled control is part of the page; dropping it from perception would report coverage "
         "over a smaller page than the one under test, and it is usually enabled later in a filled form")
