@@ -1212,6 +1212,19 @@
         "healing"
       ]
     },
+    "heal.menu_truncated": {
+      "lvl": "warn",
+      "cat": "heal",
+      "phase": "heal",
+      "ru": "Починка видит {shown} элементов страницы из {total} — остальные не поместились в {budget} символов",
+      "en": "Healing sees {shown} page elements of {total} — the rest did not fit {budget} characters",
+      "modules": [
+        "healing"
+      ],
+      "degrades": true,
+      "ru_verdict": "починка выбирала элемент из части перечня — страница не поместилась в промпт целиком",
+      "en_verdict": "healing chose from part of the list — the page did not fit the prompt whole"
+    },
     "system.trace_stop_error": {
       "lvl": "warn",
       "cat": "system",
@@ -2241,6 +2254,19 @@
       "modules": [
         "graph"
       ]
+    },
+    "plan.scenario_map_truncated": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "scenario",
+      "ru": "В промпт авторинга уехало {shown} элементов карты из {total} — остальные не поместились в {budget} символов. Модель авторит по ЧАСТИ сайта, и в самом промпте об этом сказано",
+      "en": "The authoring prompt carried {shown} map elements of {total} — the rest did not fit {budget} characters. The model authors over PART of the site, and the prompt says so",
+      "modules": [
+        "planner"
+      ],
+      "degrades": true,
+      "ru_verdict": "сценарий авторился по части карты сайта — она не поместилась в промпт целиком",
+      "en_verdict": "the scenario was authored over part of the site map — it did not fit the prompt whole"
     },
     "system.trace_missing": {
       "lvl": "warn",

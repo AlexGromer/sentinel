@@ -61,11 +61,22 @@ def summarise_site_map(site_map: dict) -> dict:
                 risky.append({"page": page, "name": name, "role": role})
             if any(w in low for w in ("login", "sign in", "войти", "password", "пароль", "log in")):
                 auth.append({"page": page, "name": name, "role": role})
+    # ⚠ ЧЕТЫРЕ СРЕЗА НИЖЕ БЫЛИ МОЛЧАЛИВЫМИ, И ЭТО ТА ЖЕ БОЛЕЗНЬ, ЧТО В ПРОМПТАХ (ADR-136). Сводка —
+    # то, по чему человек даёт разрешение на авторинг (ADR-108c): он читает «страницы: …» и решает.
+    # На двадцать первой странице перечень молча терял хвост, и решение принималось по неполной
+    # картине, выглядевшей полной. Число рядом с каждым срезом стоит НЕ вместо перечня, а рядом с
+    # ним: `pages` уже говорит, сколько их всего, поэтому достаточно назвать, сколько СКРЫТО.
+    kinds_sorted = sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))
     return {
         "pages": len(pages), "page_list": pages[:20], "interactives": total,
-        "kinds": dict(sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))[:8]),
+        "kinds": dict(kinds_sorted[:8]),
         "form_fields": forms,
         "looks_destructive": risky[:10], "looks_like_auth": auth[:10],
+        # Скрытое ОБЪЯВЛЕНО. Ноль здесь — законный и частый ответ, и он тоже информация: он говорит
+        # читателю, что перечень выше ПОЛОН, а не что его никто не считал.
+        "omitted": {"pages": max(0, len(pages) - 20), "kinds": max(0, len(kinds_sorted) - 8),
+                    "looks_destructive": max(0, len(risky) - 10),
+                    "looks_like_auth": max(0, len(auth) - 10)},
     }
 
 
@@ -371,7 +382,8 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
     """Build and return an uncompiled StateGraph. Caller compiles it with a checkpointer.
 
     M9.2b (ADR-028): when `scenario_head` (a GoalPlanner or DescribePlanner) is wired, a `scenario` node
-    runs once after the explore converges — it authors a grounded scenario over the COMPLETE site map.
+    runs once after the explore converges — it authors a grounded scenario over the site map (as much
+    of it as the prompt budget carries; ADR-136 spreads that budget across pages and names the rest).
     Pure explore (scenario_head=None) routes straight through scenario as a no-op to report.
 
     M9.8 F4 (ADR-054): `rc` is the RunControl client (orchestrator link). Defaults to make_client()
@@ -761,7 +773,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
                 "takeover_returns": list(state.get("takeover_returns", [])) + [payload]}
 
     def scenario(state: RunState) -> dict:
-        """M9.2b (ADR-028): phase-2 head — author a grounded scenario over the COMPLETE site map.
+        """M9.2b (ADR-028): phase-2 head — author a grounded scenario over the site map.
+
+        ⚠ НЕ «COMPLETE», И ЭТО ПОПРАВКА ПО ЗАМЕРУ (ADR-136). Слово стояло тут и в двух соседних
+        докстрингах с появления среза `[:8000]`, то есть было неверно всё время его существования:
+        на `testdata/site-spa` до модели доезжали 55 элементов из 184, а восемь страниц из
+        двенадцати не были представлены ни одним. Теперь бюджет раскладывается по всем страницам, а
+        остаток произносится в самом промпте и в журнале — но «весь» он от этого не стал.
         No-op unless `scenario_head` is wired (goal/describe mode). Appends grounded steps to the plan;
         records `scenario_unmatched` (refs/draft steps that couldn't bind to a real element).
 

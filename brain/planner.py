@@ -22,7 +22,7 @@ from typing import Optional, Protocol
 
 from .eventlog import log
 from .llm import complete_structured
-from .sanitize import safe_json, safe_text
+from .sanitize import fit_json_list, partial_note, safe_json, safe_text
 
 
 def _tok_budget(env_key: str, default: int) -> int:
@@ -42,6 +42,85 @@ def _tok_budget(env_key: str, default: int) -> int:
 # starve 4 of 6 fixtures at 800. Ceilings below are reasoning-aware; env-tunable for exotic models.
 _PICK_TOKENS = _tok_budget("LLM_MAX_TOKENS_PICK", 1024)       # per-action index pick (small output)
 _SCENARIO_TOKENS = _tok_budget("LLM_MAX_TOKENS_SCENARIO", 3072)  # whole-scenario / draft authoring
+
+# --- ADR-136: сколько символов перечня элементов уезжает в промпт ---------------------------------
+#
+# Оба числа — ПРЕЖНИЕ пределы, перенесённые сюда без изменения: правка этой волны меняет ФОРМУ
+# укладки (целые записи вместо среза строки) и добавляет объявление остатка, а не порог. Сдвинуть
+# порог заодно значило бы смешать два изменения в одном замере.
+MAP_CHARS = _tok_budget("LLM_SCENARIO_MAP_CHARS", 8000)      # карта сайта в промпт авторинга
+STEP_MENU_CHARS = _tok_budget("LLM_STEP_MENU_CHARS", 8000)   # перечень кандидатов в промпт шага
+
+
+def _fit_step_menu(menu: list, budget: int = STEP_MENU_CHARS) -> "tuple[str, set, int]":
+    """Уложить перечень кандидатов шага в бюджет символов. Возвращает `(text, shown, dropped)`.
+
+    ⚠ КЛИКИ ИМЕЮТ ПРЕИМУЩЕСТВО ПЕРЕД НАВИГАЦИЯМИ, и это не вкус, а следствие того, ЧТО именно растёт.
+    Кандидаты-клики ограничены страницей: их столько, сколько контролов на экране, и это десятки.
+    Кандидаты-навигации — это фронтир, у которого потолка нет вовсе (`brain/graph.py`, узел `ground`).
+    Замерено: запись фронтира стоит ~130 символов промпта НА КАЖДОМ ШАГЕ, поэтому при фронтире в 500
+    адресов промпт шага — 66 КБ, при 1000 — 131 КБ. Простой срез «первые N» по общему списку выбросил
+    бы на длинной странице ВЕСЬ фронтир (клики стоят в списке первыми, `graph.py`), то есть отнял бы у
+    модели ровно тот выбор, ради которого фронтир и ведётся.
+
+    ⚠ ИНДЕКС `i` — ИСХОДНЫЙ, И ЭТО УСЛОВИЕ ПРАВИЛЬНОСТИ. Модель отвечает индексом, вызывающий берёт
+    `candidates[idx]`. Перенумеровать записи после отбора значило бы отправить обход на ЧУЖОЙ элемент
+    — молча, потому что индекс остался бы в границах. Поэтому отбор идёт по УЖЕ пронумерованным
+    записям, а вызывающий проверяет принадлежность `shown`, а не диапазону.
+    """
+    clicks = [r for r in menu if r.get("kind") != "navigate"]
+    navs = [r for r in menu if r.get("kind") == "navigate"]
+    # ⚠ У НАВИГАЦИЙ ЕСТЬ ЗАБРОНИРОВАННАЯ ДОЛЯ, И ЭТО НАЙДЕНО МУТАЦИЕЙ, А НЕ ПРЕДУСМОТРЕНО. Первая
+    # редакция отдавала бюджет кликам целиком, а навигациям — остаток; замерено: на странице со ста
+    # контролами в перечень попадали 89 кликов и НОЛЬ навигаций, то есть модель теряла единственный
+    # способ уйти со страницы, а обход — фронтир. Клики нельзя выбрасывать первыми (их десятки и они
+    # ограничены экраном), но и вытеснять ими фронтир целиком нельзя: треть бюджета за ним
+    # закреплена, и берётся она только если навигациям есть что в неё положить.
+    nav_reserve = min(len(json.dumps(safe_json(navs))), budget // 3) if navs else 0
+    _, c_dropped = fit_json_list(clicks, budget - nav_reserve)
+    kept_clicks = clicks[:len(clicks) - c_dropped]
+    used = len(json.dumps(safe_json(kept_clicks)))
+    _, n_dropped = fit_json_list(navs, max(budget - used, 2))
+    kept = kept_clicks + navs[:len(navs) - n_dropped]
+    text, extra = fit_json_list(kept, budget)   # окончательная укладка: гарантирует бюджет целиком
+    shown = {r["i"] for r in kept[:len(kept) - extra]}
+    return text, shown, len(menu) - len(shown)
+
+
+
+
+def _spread_by_page(flat_map: list) -> list:
+    """Переупорядочить карту так, чтобы бюджет промпта достался ВСЕМ страницам, а не первым по алфавиту.
+
+    ⚠ ОДНОЙ УКЛАДКИ ЦЕЛЫМИ ЗАПИСЯМИ НЕ ХВАТАЕТ, и это замерено. Порядок карты детерминирован
+    сортировкой по ключу страницы (`brain/scenario.py`, `flatten_site_map`), поэтому любой префиксный
+    отбор берёт алфавитное начало: на `testdata/site-spa` в промпт попадали три страницы целиком и
+    одна частично, а ВОСЕМЬ из двенадцати не были представлены НИ ОДНИМ элементом. Модель, которую
+    просят собрать сценарий «по всему сайту», физически не могла сослаться на две трети сайта — и
+    молчала об этом, потому что сказать ей было нечем.
+
+    ⚠ И РОСТ КАРТЫ ДЕЛАЛ ЭТО ХУЖЕ: при потолке в 200 шагов карта выросла со 184 элементов до 284, а
+    доля дошедшего упала с 29 % до 19 %. Успех обхода оборачивался ухудшением авторинга.
+
+    Раскладка — по кругу: первый элемент каждой страницы, затем второй каждой и так далее. Порядок
+    внутри страницы и порядок самих страниц не меняются, поэтому результат остаётся детерминированным;
+    меняется только ОЧЕРЕДЬ, в которой бюджет расходуется. Страница, у которой элементов меньше,
+    просто раньше выбывает из круга.
+    """
+    by_page: "dict[str, list]" = {}
+    for el in flat_map:
+        by_page.setdefault(el.get("page"), []).append(el)
+    out, i = [], 0
+    while len(out) < len(flat_map):
+        added = False
+        for page in by_page:                      # порядок ключей = порядок первого появления
+            if i < len(by_page[page]):
+                out.append(by_page[page][i])
+                added = True
+        if not added:
+            break
+        i += 1
+    return out
 
 
 def _log_unparsed(where: str, result) -> None:
@@ -146,6 +225,7 @@ class LLMPlanner:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"),
                      "name": c.get("name"), "target": c.get("target")}
                     for i, c in enumerate(candidates)]
+            menu_text, shown, dropped = _fit_step_menu(menu)
             prompt = (
                 "You are an autonomous UI explorer. Choose the single best next action to "
                 "maximize coverage of distinct interactive elements, or stop if exploration is "
@@ -153,7 +233,8 @@ class LLMPlanner:
                 f"current_url: {safe_text(state.get('current_url'))}\n"
                 f"coverage_achieved: {state.get('coverage_achieved', 0.0):.2f} "
                 f"target: {state.get('coverage_target')}\n"
-                f"candidates: {json.dumps(safe_json(menu))}\n"
+                + partial_note(len(menu), dropped)
+                + f"candidates: {menu_text}\n"
                 'Reply with ONLY JSON: {"index": <int>} to act, or {"done": true} to stop.'
             )
             result = complete_structured(self._backend, prompt, _SCHEMA_PICK,
@@ -167,7 +248,10 @@ class LLMPlanner:
             if j.get("done"):
                 return {"action": None, "done": True, "reason": "llm: done", "tokens": tokens}
             idx = int(j["index"])
-            if 0 <= idx < len(candidates):
+            # ⚠ ПРИНАДЛЕЖНОСТЬ ПОКАЗАННОМУ, А НЕ ДИАПАЗОНУ. После укладки меню часть кандидатов
+            # модель не видела; индекс из невиданной части лежит В ГРАНИЦАХ списка и потому прошёл бы
+            # прежнюю проверку, отправив обход туда, чего в промпте не было.
+            if idx in shown:
                 return {"action": candidates[idx], "done": False,
                         "reason": f"llm picked #{idx}", "tokens": tokens}
             return {"action": None, "done": True, "reason": "llm index OOB", "tokens": tokens}
@@ -207,6 +291,7 @@ class GoalPlanner:
             menu = [{"i": i, "kind": c["kind"], "role": c.get("role"), "name": c.get("name"),
                      "target": c.get("target"), "intent": c.get("intent")}
                     for i, c in enumerate(candidates)]
+            menu_text, shown, dropped = _fit_step_menu(menu)
             prompt = (
                 "You are an autonomous UI agent pursuing a specific GOAL. Choose the single best next "
                 "action from the candidate list to advance the goal, or stop when the goal is achieved "
@@ -214,7 +299,8 @@ class GoalPlanner:
                 f"goal: {self.goal}\n"
                 f"current_url: {safe_text(state.get('current_url'))}\n"
                 f"steps_taken: {state.get('current_step', 0)} of max {state.get('max_steps')}\n"
-                f"candidates: {json.dumps(safe_json(menu))}\n"
+                + partial_note(len(menu), dropped)
+                + f"candidates: {menu_text}\n"
                 'Reply with ONLY JSON: {"index": <int>} to take that candidate action, or '
                 '{"done": true, "reason": "<why the goal is met or unreachable>"}.'
             )
@@ -230,7 +316,7 @@ class GoalPlanner:
                 return {"action": None, "done": True,
                         "reason": f"goal: {j.get('reason', 'done')}", "tokens": tokens}
             idx = int(j["index"])
-            if 0 <= idx < len(candidates):
+            if idx in shown:   # принадлежность ПОКАЗАННОМУ подмножеству — см. LLMPlanner.propose
                 return {"action": candidates[idx], "done": False,
                         "reason": f"goal -> #{idx}", "tokens": tokens}   # GROUNDED: a real candidate only
             return {"action": None, "done": True, "reason": "goal: index OOB", "tokens": tokens}
@@ -239,7 +325,7 @@ class GoalPlanner:
             return self._fallback.propose(state, candidates)
 
     def build_scenario(self, flat_map: list, goal: str = None, history: list = None) -> dict:
-        """M9.2b (ADR-028) scenario head: given the COMPLETE flattened site map + goal, return ordered
+        """M9.2b (ADR-028) scenario head: given the flattened site map + goal, return ordered
         refs `{"refs":[{ref,verb,value?}], "tokens":...}`. Returns empty on no-goal/no-backend/budget/
         error (the caller authors nothing). The actual grounding (ref must exist in the map) is enforced
         downstream in brain/scenario.ground_scenario — this just proposes candidate refs.
@@ -255,7 +341,17 @@ class GoalPlanner:
             return {"refs": [], "tokens": None}
         try:
             menu = [{"ref": e["semantic_id"], "page": e.get("page"), "role": e.get("role"),
-                     "name": e.get("name")} for e in flat_map]
+                     "name": e.get("name")} for e in _spread_by_page(flat_map)]
+            # ADR-136: укладка ЦЕЛЫМИ записями. Прежний `json.dumps(...)[:8000]` резал уже
+            # сериализованную строку и потому отдавал модели СЛОМАННЫЙ JSON: замерено на site-spa —
+            # из 184 элементов доезжали 55, последний оборван посреди строкового литерала, а восемь
+            # страниц из двенадцати не были представлены НИ ОДНИМ элементом. Об этом не писалось
+            # ничего. ⚠ И рост карты делал промпт ХУЖЕ: при потолке 200 шагов доля дошедшего падала
+            # с 29 % до 19 %.
+            map_text, map_dropped = fit_json_list(menu, MAP_CHARS)
+            if map_dropped:
+                log("plan.scenario_map_truncated", shown=len(menu) - map_dropped, total=len(menu),
+                    budget=MAP_CHARS)
             convo = ""
             if history:   # M9.10 (ADR-048): multi-turn refine context — prior conversation turns
                 convo = ("prior conversation turns (oldest first) — REFINE the scenario to satisfy ALL of "
@@ -265,7 +361,8 @@ class GoalPlanner:
                 "real elements discovered across the whole site. Output the ordered actions.\n"
                 f"goal: {goal}\n"
                 + convo
-                + f"elements: {json.dumps(safe_json(menu))[:8000]}\n"
+                + partial_note(len(menu), map_dropped)
+                + f"elements: {map_text}\n"
                 + 'Reply with ONLY JSON: {"steps": [{"ref": "<semantic_id from elements>", '
                 '"verb": "click|fill|type|select|press|assert", "value": "<optional>", '
                 '"secretRef": "<optional ENV VAR NAME for a secret>"}]}. '
