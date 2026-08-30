@@ -36,6 +36,7 @@ import pathlib
 import subprocess
 import sys
 
+_UNSET = object()
 REPO = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "testdata" / "fixtures"
 
@@ -308,12 +309,70 @@ def test_the_brain_treats_an_old_executors_silence_as_unknown_not_as_invisible()
     assert _elements_from_interactives(new_hidden, "/p")[0]["visible"] is False
     assert _elements_from_interactives(new_shown, "/p")[0]["visible"] is True
 
-    # And the consumer has to act on that distinction, not merely store it.
-    src = (REPO / "brain" / "graph.py").read_text()
-    i = src.index('if b["semantic_id"] in spent')
-    line = src[i:src.index("\n", i)]
-    assert 'b.get("visible") is False' in line, (
-        f"the candidate filter must test `is False`, not truthiness. Found: {line.strip()}")
+    # И потребитель обязан ДЕЙСТВОВАТЬ по этому различию, а не просто хранить его.
+    #
+    # ⚠ ЗДЕСЬ СТОЯЛ ГРЕП ПО ИСХОДНИКУ — `src.index('if b["semantic_id"] in spent')` с проверкой, что
+    # в той же строке есть `is False`. Это утверждение о ФОРМЕ кода, то есть суррогат: оно ничего не
+    # говорит о поведении и ломается от переименования, не связанного с предметом. Так и вышло —
+    # ADR-137 переименовал ключ отсечки на `control_id`, и гейт покраснел, не заметив ни одной
+    # перемены в том, что охраняет. Заменено на ЗАМЕР: прогоняем настоящий узел `plan` через
+    # настоящий граф и смотрим, предлагается ли контрол.
+    from langgraph.checkpoint.memory import MemorySaver
+    from brain.graph import build_graph
+    from brain.planner import HeuristicPlanner
+    from brain.state import base_origin_of, page_identity, semantic_id as _sid
+    import contextlib, io, tempfile
+
+    def _proposes(visible_value) -> bool:
+        """Предложит ли обход единственную кнопку, у которой `visible` равен переданному."""
+        btn = {"tag": "button", "role": "button", "name": "Save", "testid": None, "text": "Save"}
+        if visible_value is not _UNSET:
+            btn["visible"] = visible_value
+        clicked = []
+
+        class Ex:
+            def call(self, m, **p):
+                if m == "browser.currentUrl":
+                    return {"url": "file:///s/index.html", "title": ""}
+                if m == "browser.snapshot":
+                    return {"ariaSnapshot": "- document", "nodeCount": 1}
+                if m == "browser.interactives":
+                    return {"elements": [btn]}
+                if m == "browser.links":
+                    return {"links": []}
+                if m == "browser.click":
+                    clicked.append((p.get("locator") or {}).get("name"))
+                    return {"clicked": True, "url": "file:///s/index.html", "navigated": False}
+                if m.startswith("browser."):
+                    return {}
+                return {}
+
+        target = "file:///s/index.html"
+        art = tempfile.mkdtemp(prefix="perc-")
+        init = {"step_id": 1, "intent": "nav", "semantic_id": _sid(page_identity(target), "navigate", ""),
+                "action_type": "navigate", "target": page_identity(target), "locator": None,
+                "alternatives": None, "is_milestone": True}
+        st = {"run_id": "p", "run_mode": "explore", "target_url": target,
+              "base_origin": base_origin_of(target), "coverage_target": 0.85, "artifact_dir": art,
+              "goal": "", "describe": "", "site_map": {}, "phase": "explore", "scenario_steps": [],
+              "scenario_unmatched": [], "current_url": target, "page_model": {},
+              "exploration_plan": [init], "plan_hash": "", "current_step": 1,
+              "interactive_seen": [], "interactive_exercised": [], "visited_paths": [],
+              "nav_frontier": [], "coverage_achieved": 0.0, "exploration_complete": False,
+              "max_steps": 3, "executed_actions": [{"step_id": 1, "type": "navigate", "ok": True}],
+              "errors": []}
+        app = build_graph(Ex(), HeuristicPlanner(), lambda r: None).compile(checkpointer=MemorySaver())
+        with contextlib.redirect_stdout(io.StringIO()):
+            app.invoke(st, config={"recursion_limit": 40, "configurable": {"thread_id": "p"}})
+        return "Save" in clicked
+
+    assert _proposes(_UNSET) is True, (
+        "молчание СТАРОГО исполнителя (ключа `visible` нет вовсе) прочитано как «невидим» — обход "
+        "перестал бы предлагать что-либо и закончился бы нулевым покрытием без единой ошибки")
+    assert _proposes(True) is True, "видимый контрол не предложен"
+    assert _proposes(False) is False, (
+        "контрол, о котором исполнитель сказал `visible: False`, всё равно предложен — фильтр "
+        "проверяет истинность вместо `is False`, и бюджет уходит на то, что не может сработать")
 
 
 if __name__ == "__main__":
