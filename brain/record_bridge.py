@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import json
 import sys
+from urllib.parse import urlsplit
 
 from .eventlog import log
 from .scenario import VALID_VERBS, ground_scenario
-from .state import canonical_plan_hash, normalize_url, page_identity, semantic_id
+from .state import base_origin_of, canonical_plan_hash, normalize_url, page_identity, semantic_id
 from .strategies import prior_for as _prior_for
 from .strategies import STRATEGY_BY_LOCATOR_KEY as _STRATEGY_BY_KEY
 from .strategies import CSS as _CSS
@@ -125,12 +126,70 @@ def _attach_value(ref: dict, verb: str, ev: dict) -> bool:
     return True
 
 
+def _route_of(url: str, base: str) -> str:
+    """The part of `url` that identifies the ROUTE, relative to the recording's own base.
+
+    ⚠ NOT the full address, and that is a portability decision with a measured reason: `retarget`
+    rewrites only a `navigate` step's `target` (replay.py), so a full address baked into an
+    assertion's `expected` would fail the moment the plan is replayed against a different host —
+    a red that says "your application changed" about a stand that merely moved.
+    """
+    if base and url.startswith(base):
+        tail = url[len(base):]
+        return tail or "/"
+    # No shared base (a `file://` recording, a cross-origin hop): fall back to path+query+fragment,
+    # which is still address-shaped and still free of the host.
+    s = urlsplit(url)
+    tail = s.path + (f"?{s.query}" if s.query else "") + (f"#{s.fragment}" if s.fragment else "")
+    return tail or url
+
+
 def events_to_steps(events: list, start_id: int = 1):
     """events -> (steps, unmatched), grounded via brain/scenario.ground_scenario. Pure/offline."""
     site_map: dict = {}
     refs: list = []
+    base = ""
+    # Did any accepted action happen since the last route line? It answers the one question the
+    # scenario could not previously ask: did the PREVIOUS STEP cause this address change, or did the
+    # application move on its own? A transition someone's click already performs must not be
+    # performed a second time by a synthesized `navigate` — that second performance is what silently
+    # repaired broken routing on replay and made the regression invisible (measured).
+    acted_since_route = False
     for ev in events or []:
         if not isinstance(ev, dict):
+            continue
+        if not base:
+            base = base_origin_of(ev.get("url") or "").rstrip("/")
+        if (ev.get("type") or "").strip().lower() == "route":
+            # ADR-138. This branch must stand HERE, before the verb lookup: without it the line falls
+            # through `_verb_for` -> None -> `continue` and the bridge's output does not move by a
+            # single byte — measured, and the reason a bare new event type buys nothing at all.
+            url = (ev.get("url") or "").strip()
+            if not url:
+                log("record.route_dropped", reason="no url")
+                continue
+            page = page_identity(url)
+            route = _route_of(url, base)
+            # Keyed by the OBSERVED address, not by `page_identity` — that is what makes a query-string
+            # route visible without touching `page_identity` itself, whose key feeds `semantic_id` and
+            # therefore every saved plan_hash.
+            sid = semantic_id(url, "arrive", "")
+            bucket = site_map.setdefault(page, [])
+            if not any(e["semantic_id"] == sid for e in bucket):
+                bucket.append({"semantic_id": sid, "role": "", "name": "",
+                               "locator": None, "alternatives": [], "page": page})
+            how = (ev.get("how") or "push").strip().lower()
+            refs.append({
+                "ref": sid, "verb": "assert", "condition": "url_contains", "expected": route,
+                "expect_ok": True, "intent": f"arrived at {route}",
+                # No `navigate` is needed when an action caused the transition, and none is needed
+                # when the application redirected ITSELF (push/replace with nothing before it) —
+                # on replay it will redirect itself again. A bare `pop` is the exception: the person
+                # pressed Back, and nothing in the scenario would reproduce that on its own.
+                "route_arrived": acted_since_route or how != "pop",
+                "observed_url": url,
+            })
+            acted_since_route = False
             continue
         verb = _verb_for(ev)
         if verb not in VALID_VERBS:                     # None (e.g. submit) or out-of-spec -> drop
@@ -152,11 +211,15 @@ def events_to_steps(events: list, start_id: int = 1):
                            "locator": primary, "alternatives": alternatives, "page": page})
         # collapse consecutive same-element fills: live typing emits many input events, one per keystroke,
         # but the scenario wants a single fill carrying the final value.
+        acted_since_route = True
         if verb == "fill" and refs and refs[-1]["ref"] == sid and refs[-1].get("verb") == "fill":
             refs[-1] = ref
             continue
         refs.append(ref)
-    return ground_scenario(refs, site_map, start_page="", start_id=start_id)
+    # `trust_observed` is opt-in and set ONLY here. `ground_scenario` is also the last validator on
+    # the LLM authoring path, where a model returning `route_arrived: true` could otherwise delete a
+    # navigate from its own plan; the recording is the one caller that actually watched the browser.
+    return ground_scenario(refs, site_map, start_page="", start_id=start_id, trust_observed=True)
 
 
 def build_scenario(events: list, session: str = "", target_url: str = "", start_id: int = 1):

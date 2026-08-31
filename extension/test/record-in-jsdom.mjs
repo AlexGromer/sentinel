@@ -58,6 +58,26 @@ globalThis.chrome = {
   },
 };
 
+// ADR-138: the MAIN-world route journal, installed on the SAME window. In production it lives in the
+// page's world and reaches the recorder through window.postMessage; here there is only one world, so
+// the transport is real and the isolation is not — that limit is stated in
+// tests/test_recorder_routes_offline.py rather than papered over.
+//
+// ⚠ ONE jsdom limitation is compensated, and only one: jsdom delivers `window.postMessage` with
+// `event.source === null`, while a real Chromium delivers `=== window` (both measured). The recorder
+// checks `e.source === window` as a guard, so without this the offline run would drop every route and
+// the gate would be red for a reason that has nothing to do with the product. The message itself is
+// still the real one the real journal posts — only the `source` field is restored.
+const { installRouteJournal } = await import('../src/content/route-journal.ts');
+const nativePostMessage = window.postMessage.bind(window);
+window.postMessage = (data) => {
+  window.dispatchEvent(new window.MessageEvent('message', {
+    data, source: window, origin: window.location.origin,
+  }));
+};
+void nativePostMessage;
+installRouteJournal(window);
+
 // Importing the module installs the recorder on the globals above — that is its production shape.
 await import('../src/content/recorder.ts');
 if (!controlListeners.length) {
@@ -123,6 +143,11 @@ for (const el of targets) {
       console.error(`unknown data-record verb ${JSON.stringify(verb)} on #${el.id}`);
       process.exit(2);
     }
+    // Drain microtasks between actions (ADR-138). A real browser gives each click its own task, so a
+    // router that lands its route in a promise has resolved before the next click; this loop is
+    // otherwise synchronous across clicks, which would deliver a deferred route AFTER the actions
+    // that followed it and make the observed order an artefact of the driver.
+    await sleep(0);
   }
 }
 await sleep(400);                                        // let any trailing debounce land

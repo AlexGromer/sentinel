@@ -17,6 +17,10 @@ const watch = process.argv.includes('--watch');
 const entries = {
   background: 'src/background/index.ts',
   content: 'src/content/recorder.ts',
+  // ADR-138: the route journal is a FIFTH world — the page's own (`world: 'MAIN'`). It cannot be part
+  // of `content` because the recorder runs ISOLATED, where the page's `history.pushState` is
+  // invisible (measured), which is the entire reason this entry exists.
+  'route-journal': 'src/content/route-journal-main.ts',
   devtools: 'src/devtools/devtools.ts',
   panel: 'src/devtools/panel.ts',
 };

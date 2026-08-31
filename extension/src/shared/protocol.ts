@@ -25,7 +25,7 @@ export interface Locator {
   xpath?: string;
 }
 
-/** Locator strategy names, ranked by trust (record_bridge._PRIORS). `role_name` is the role+name pair. */
+/** Locator strategy names, ranked by trust (brain/strategies.PRIORS). `role_name` is the role+name pair. */
 export type Strategy = 'testid' | 'role_name' | 'label' | 'text' | 'css' | 'xpath';
 
 /** One ranked candidate: a named strategy plus the locator that realises it. */
@@ -54,6 +54,29 @@ export interface RecorderEvent {
   /** key for a 'press' verb (e.g. 'Enter'); record_bridge routes it to the press step. */
   key?: string;
 }
+
+/** How the address changed. `pop` covers Back/Forward AND a bare `location.hash = …` — measured in
+ * Chromium (ADR-135) and again here: both raise `popstate` first, so a separate `hashchange`
+ * listener never wins. */
+export type RouteHow = 'push' | 'replace' | 'pop';
+
+/** A route change the page made WITHOUT a document load — the fact the recorder was blind to.
+ *
+ * It is NOT a `RecorderEvent`: there is no element and no verb, and `selectorCandidates` is required
+ * on that type for a reason (`_resolve_locator` drops anything without one). A fifth member of
+ * `RecorderEventType` would have forced the field optional for everybody and traded that guarantee
+ * away for a value that is always empty here. */
+export interface RecorderRouteEvent {
+  type: 'route';
+  url: string;
+  how: RouteHow;
+}
+
+/** Everything the recorder puts on the wire, in OBSERVED order. `seq` is stamped in the recorder's
+ * single funnel, so "file order == observation order" is a checkable claim rather than an
+ * assumption — and a gap in it makes the already-silent drop at index.ts (`event dropped (socket not
+ * open)`) visible instead of looking like a person who did nothing. */
+export type RecorderLine = (RecorderEvent | RecorderRouteEvent) & { seq?: number };
 
 // ---------------------------------------------------------------------------------------------------
 // 2. WebSocket transport (control-api /v1/stream, ADR-043)
@@ -144,8 +167,32 @@ export type PanelMessage = { kind: 'status'; status: Status };
 
 // Content script → service worker (one-shot runtime messages).
 export type ContentMessage =
-  | { kind: 'recorder-event'; event: RecorderEvent }
-  | { kind: 'recorder-ready' };
+  | { kind: 'recorder-event'; event: RecorderLine }
+  | { kind: 'recorder-ready' }
+  /** A degradation the person needs to see while recording (ADR-138) — surfaced as `status.error`
+   * rather than swallowed, because the failure it reports produces no other symptom at all. */
+  | { kind: 'recorder-warning'; text: string };
+
+// ---------------------------------------------------------------------------------------------------
+// 4. MAIN-world route journal → ISOLATED content script (window.postMessage)
+// ---------------------------------------------------------------------------------------------------
+
+/** Envelope name for the one message the page-world journal posts. Checked together with
+ * `event.source === window` — measured true for a MAIN→ISOLATED post in Chromium; without both
+ * checks any page script could inject routes. (A page can already forge a `click` via
+ * `dispatchEvent`, which the capture-phase listener records, so this is not a new class of
+ * exposure — but the guard is cheap and its absence would widen it.) */
+export const ROUTE_MSG = 'sentinel.route.v1';
+
+/** What the MAIN-world journal posts out. `main:false` means the journal landed in the ISOLATED
+ * world by mistake, where the page's own `history.pushState` is invisible to it — the one failure
+ * of this feature that would otherwise be perfectly silent (zero routes forever, every gate green). */
+export interface RouteMessage {
+  __sentinel: typeof ROUTE_MSG;
+  url: string;
+  how: RouteHow;
+  main: boolean;
+}
 
 // Service worker → content script (response / push).
 export type RecordControl = { kind: 'record-control'; recording: boolean };

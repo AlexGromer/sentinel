@@ -9,8 +9,44 @@
 // is told `<x-color-picker>` where the user clicked the button inside it. Closed roots are a stated
 // boundary, and the non-composed events (change/submit) need a listener on the root itself; both are
 // spelled out at their implementations below.
-import type { ContentMessage, RecorderEvent, RecordControl } from '../shared/protocol.js';
-import { buildRecorderEvent, buildSelectorCandidates, controlKind, shadowHostOf } from './selectors.js';
+import {
+  ROUTE_MSG,
+  type ContentMessage,
+  type RecorderLine,
+  type RecordControl,
+  type RouteMessage,
+} from '../shared/protocol.js';
+import {
+  buildRecorderEvent,
+  buildSelectorCandidates,
+  controlKind,
+  nameLooksSecret,
+  shadowHostOf,
+} from './selectors.js';
+
+/** Replace the VALUE of any secret-looking query parameter, keeping the parameter name and the shape
+ * of the route (ADR-138).
+ *
+ * Until now `page_identity` dropped the query entirely, so a token in the address could never reach
+ * an artifact. Routes carry it, and `scenario.json` is a file people commit into their application's
+ * repository — so the same mandatory redaction that guards field values (M9.8 §2) has to guard the
+ * address. The cost is named: two routes differing only by a secret parameter become
+ * indistinguishable, which is the correct trade against writing the secret down. */
+function redactQuery(href: string): string {
+  const q = href.indexOf('?');
+  if (q < 0) return href;
+  const end = href.indexOf('#', q);
+  const tail = end < 0 ? '' : href.slice(end);
+  const query = href.slice(q + 1, end < 0 ? undefined : end);
+  if (!query) return href;
+  const parts = query.split('&').map((pair) => {
+    const eq = pair.indexOf('=');
+    if (eq < 0) return pair;
+    const name = pair.slice(0, eq);
+    return nameLooksSecret(decodeURIComponent(name)) ? `${name}=REDACTED` : pair;
+  });
+  return `${href.slice(0, q)}?${parts.join('&')}${tail}`;
+}
 
 // When a click lands on an inner node (e.g. <button><svg>…), climb to the nearest interactive ancestor so
 // the candidates bind to the real control (role_name) instead of an svg-path css/xpath.
@@ -93,8 +129,22 @@ function installRecorder(): void {
     if (msg?.kind === 'record-control') recording = msg.recording;
   });
 
-  function emit(event: RecorderEvent): void {
+  // The ONE funnel every line goes through — both producers (buildRecorderEvent and the hand-written
+  // Enter-submit literal below) and the route relay. `seq` is stamped here so that "file order ==
+  // observation order" is a claim a gate can check rather than one the reader has to assume; a gap in
+  // it also makes the already-silent drop in the service worker ("event dropped (socket not open)")
+  // visible, instead of looking like a person who did nothing.
+  let seq = 0;
+
+  function emit(event: RecorderLine): void {
     if (!recording) return;
+    event.seq = ++seq;
+    // Redaction of the ADDRESS belongs here, in the funnel, and covers every line — not just routes.
+    // Measured by the route gate: a click recorded while the address carried `?apiKey=…` wrote the
+    // live token into `runs/record-<session>/events.ndjson` verbatim. That predates routes (the
+    // bridge dropped the query, so it never reached `scenario.json`, and the leak stayed in the raw
+    // stream where nobody looked); routes would have carried it the rest of the way.
+    event.url = redactQuery(event.url);
     void chrome.runtime.sendMessage({ kind: 'recorder-event', event } satisfies ContentMessage);
   }
 
@@ -210,6 +260,31 @@ function installRecorder(): void {
     const target = deepTarget(e);
     if (target) hookShadowRootOf(target);
   }, true);
+
+  // ADR-138: the MAIN-world route journal reports every address change that happened WITHOUT a
+  // document load — the class of transition this recorder was blind to. It cannot reach the service
+  // worker itself (no `chrome.runtime` in the page's world, measured), so it posts and we relay.
+  //
+  // Both guards are required. `e.source === window` is measured true for a MAIN→ISOLATED post; the
+  // envelope name pins it to ours. A page could forge the message — but a page can already forge a
+  // `click` through `dispatchEvent`, which the capture-phase listener records, so this widens no
+  // class of exposure while the guards keep it from being trivially open.
+  let warnedWrongWorld = false;
+  window.addEventListener('message', (e: MessageEvent) => {
+    const data = e.data as RouteMessage | undefined;
+    if (e.source !== window || !data || data.__sentinel !== ROUTE_MSG) return;
+    if (!data.main && !warnedWrongWorld) {
+      // The journal landed in the ISOLATED world, where the page's own pushState is invisible to it.
+      // That failure records ZERO routes and leaves every gate green — say it once, loudly.
+      warnedWrongWorld = true;
+      void chrome.runtime.sendMessage({
+        kind: 'recorder-warning',
+        text: 'route journal is not in the page world — route changes will NOT be recorded',
+      } satisfies ContentMessage);
+    }
+    if (typeof data.url !== 'string' || !data.url) return;
+    emit({ type: 'route', url: data.url, how: data.how });   // redaction happens in emit(), for every line
+  });
 
   void chrome.runtime.sendMessage({ kind: 'recorder-ready' } satisfies ContentMessage);
 }

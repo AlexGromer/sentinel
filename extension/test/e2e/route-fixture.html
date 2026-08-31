@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>SPA route fixture (ADR-138)</title></head>
+<body>
+<!--
+  Fixture for the route journal (ADR-138), driven by test/record-in-jsdom.mjs and asserted by
+  tests/test_recorder_routes_offline.py.
+
+  TWO lists are DERIVED from this markup and neither is maintained anywhere else:
+    · what the driver DOES  — `data-record` (verb[:arg], several separated by `;`)
+    · what the gate EXPECTS — `data-route` (the route the control must produce)
+  A control added here is exercised because it is here; a control that changes the address without
+  declaring `data-route` makes the gate red, and so does a `data-route` that never arrives.
+
+  Every route change is driven through the EXISTING `click` verb: jsdom runs the fixture's own
+  scripts (`runScripts: 'dangerously'`), so the inline handler below performs the real
+  `history.pushState` and the real journal observes it. No new driver verb was needed.
+-->
+<h1>route fixture</h1>
+
+<!-- The control group: it must NOT produce a route. Without it, "fabricate a route per click" would
+     pass every other assertion in the file. -->
+<button id="plain" data-record="click">plain button (no address change)</button>
+
+<!-- A hash route — the shape `page_identity` already understood. -->
+<button id="to-b" data-record="click" data-route="#/b">go to #/b</button>
+
+<!-- A QUERY route — the shape that was invisible end to end: `page_identity` drops the query, so no
+     navigate was ever synthesized between two query routes and the scenario replayed one screen. -->
+<button id="to-orders" data-record="click" data-route="?tab=orders">go to ?tab=orders</button>
+
+<!-- A secret in the address. `scenario.json` is a file people commit into their own repository, so the
+     VALUE must never reach it; the parameter NAME stays, so the route is still distinguishable. -->
+<button id="secret" data-record="click" data-route="?apiKey=REDACTED">go to ?apiKey=…</button>
+
+<!-- replaceState, not pushState: a router redirecting itself. It changes the address without adding a
+     history entry, and the journal must still see it. -->
+<button id="redirect" data-record="click" data-route="#/redirected">replaceState to #/redirected</button>
+
+<!-- THE DISCRIMINATOR. The route changes inside a promise, exactly as a real router does (measured in
+     pw-executor: an Angular route lands in a promise, which is why clicking needs waitForURL with a
+     budget). Reading `location.href` a tick after the handler — the cheap alternative to this whole
+     mechanism — does not see this one. The journal does. -->
+<button id="deferred" data-record="click" data-route="#/late">deferred pushState</button>
+
+
+<!-- A FORGED envelope. The relay must ignore anything that is not ours; without the name check this
+     click would mint a route, and the exact-count assertion in the gate is what notices.
+     ⚠ What this does NOT cover, said plainly: the `event.source === window` half of the guard is
+     about a message from ANOTHER frame, and jsdom has one window — that half is held by review and
+     by the threat model, not by this file. -->
+<button id="forge" data-record="click">post a forged route envelope</button>
+
+<!-- LAST in document order on purpose: its transition has no action after it, and that is precisely
+     the case the scenario used to lose entirely (the route was inferred from the NEXT event's url,
+     and there is no next event). -->
+<button id="last" data-record="click" data-route="#/done">final route, nothing after it</button>
+
+<script>
+  function go(id, fn) { document.getElementById(id).addEventListener('click', fn); }
+  go('to-b',      function () { history.pushState({}, '', '#/b'); });
+  go('to-orders', function () { history.pushState({}, '', '?tab=orders'); });
+  go('secret',    function () { history.pushState({}, '', '?apiKey=SHOULD-NOT-APPEAR-IN-ANY-ARTIFACT'); });
+  go('redirect',  function () { history.replaceState({}, '', '#/redirected'); });
+  go('deferred',  function () { Promise.resolve().then(function () { history.pushState({}, '', '#/late'); }); });
+  go('last',      function () { history.pushState({}, '', '#/done'); });
+  go('forge',     function () { window.postMessage({ __sentinel: 'not.ours.v1', url: '/forged', how: 'push', main: true }, '*'); });
+  // #plain deliberately has no handler.
+</script>
+</body>
+</html>
