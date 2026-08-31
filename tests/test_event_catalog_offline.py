@@ -41,7 +41,11 @@ CATALOG = REPO / "brain" / "events.json"
 # than globbed: a new brain module that logs must be added here deliberately, which is the point.
 LOG_MODULES = ["__main__", "planner", "llm", "graph", "healing", "runcontrol", "robots",
                "record_bridge", "replay", "server", "budget", "report", "store", "otel", "health",
-               "frames"]
+               "frames", "outcome"]
+# `outcome` joined with ADR-139, and the gate is why this line exists rather than being forgotten:
+# `explore.saw_nothing` is emitted from `brain/outcome.py`, the new single author of the exit code,
+# and the moment the entry was added the gate called it a PHANTOM — "emitted by nothing I look at".
+# That is the right answer from a hand-kept list to a NEW emitter, exactly as it was for `frames`.
 # `frames` joined with PROD-FAIL-MEDIA part A, and the gate is why the list is right. `capture_frame`
 # moved out of `graph.py` into its own module so `replay.py` could take the picture of a failed step;
 # the code it emits (`live.frame_failed`) did not change at all, but the FILE that emits it did — and

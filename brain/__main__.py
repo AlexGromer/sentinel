@@ -40,12 +40,18 @@ def _checkpointer(ckpt_path: str):
             yield saver
 
 
-# Код выхода «инструмент сломался, но найденное сохранено» (см. brain/events.json → exit_codes).
-# Константа, а не литерал: число читают agentctl, control-api и хаб, и разъехаться им негде.
-EXIT_TOOL_FAILURE_SALVAGED = 5
-# И его пара: инструмент сломался, а спасать оказалось нечего. Названа рядом, потому что решение
-# между 4 и 5 принимается в одной строке, и два числа, из которых одно литерал, разъезжаются первыми.
-EXIT_TOOL_FAILURE = 4
+# ADR-139: коды и решение живут в `brain/outcome`. Здесь — реэкспорт, потому что на эти имена
+# ссылаются тесты и соседние функции; ЧИСЛА больше не объявляются в этом файле.
+from .outcome import (                                                    # noqa: E402
+    EXIT_TOOL_FAILURE,
+    VERDICT_WORD,
+    Facts,
+    EXIT_TOOL_FAILURE_SALVAGED,
+    Outcome,
+    announce,
+    decide,
+    facts_from,
+)
 
 
 def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None, describe=False,
@@ -153,9 +159,14 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
 
 
 def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None,
-                    crawl_complete=True) -> int:
+                    crawl_complete=True) -> dict:
     """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
-    (describe). Exit: describe with any unmatched -> 1; zero grounded steps -> 1; else 0.
+    (describe). Возвращает ФАКТЫ авторинга: `{"grounded": int, "unmatched": int}`.
+
+    ⚠ КОДА ВЫХОДА ЭТА ФУНКЦИЯ БОЛЬШЕ НЕ РЕШАЕТ (ADR-139). Прежнее правило — «describe с любым
+    unmatched → 1; ноль заземлённых → 1; иначе 0» — переехало в `outcome.decide` ДОСЛОВНО и живёт
+    там рядом со всеми остальными поводами, потому что решателей было пять и они расходились. Здесь
+    осталась одна работа: написать файлы и сказать, что получилось.
 
     `models`/`tokens` ride along because a scenario is the artifact people HAND EACH OTHER — it is the
     deliverable of a goal/describe run — and one that cannot say which model authored it, at what token
@@ -230,9 +241,7 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
                            for u in unmatched[:5]))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
           " + reconcile-report.json")
-    if is_describe and unmatched:
-        return 1
-    return 0 if sc else 1
+    return {"grounded": len(sc), "unmatched": len(unmatched)}
 
 
 def _resume_through_takeovers(app, final, cfg, rc, run_id):
@@ -278,7 +287,10 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
     describe = os.environ.get("DESCRIBE", "").strip()    # M9.2b describe-mode
     if goal and describe:
         log("fatal.goal_describe_conflict")
-        return 3
+        # ADR-139: даже отказ У ДВЕРИ идёт через единый источник. Литерал здесь был бы вторым
+        # автором кода выхода — тем самым, ради запрета которого писан весь модуль, — и гейт по AST
+        # его не отличил бы от возвращённой рядом единицы.
+        return announce(decide(Facts(mode="explore", config_conflict=True)), run_id)
     from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
     if goal:
         planner, scenario_head = HeuristicPlanner(), GoalPlanner(goal)
@@ -302,6 +314,9 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
                 "semantic_id": semantic_id(page_identity(target), "navigate", ""),
                 "action_type": "navigate", "target": page_identity(target),
                 "locator": None, "alternatives": None, "is_milestone": True}
+        # Режим — один на всю функцию: он решает, какие ФАКТЫ вообще осмысленны (у обхода нет
+        # заземления, у авторинга нет отказов шагов как повода покраснеть).
+        _mode = "describe" if describe else ("goal" if goal else "explore")
         init_state = {
             "run_id": run_id, "run_mode": "explore", "target_url": target, "base_origin": base_origin,
             "coverage_target": coverage_target, "max_steps": max_steps, "artifact_dir": str(out),
@@ -375,8 +390,13 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         finally:
             _discard_checkpoint(ckpt)
         if crashed:
-            _stop_trace(ex, trace_path, 1)
-            _stop_video(ex, video_path, 1)
+            # ⚠ ВИНА ДЕЛИТСЯ ПО ТОМУ, ЧТО ЛЕЖИТ НА ДИСКЕ (5 против 4) — правило не изменилось, но
+            # живёт теперь в `outcome.decide`, вместе со всеми остальными. И кадр `verdict` на этом
+            # пути появляется ВПЕРВЫЕ: узел `report` сюда не доезжает, а прежний эмиттер жил в нём,
+            # поэтому упавший прогон не произносил вердикта вообще.
+            o = decide(facts_from(final or {}, mode=_mode, crashed=True, salvaged=salvaged))
+            _stop_trace(ex, trace_path, o)
+            _stop_video(ex, video_path, o)
             # Тот же приём, что у соседей по разборке: их собственные ошибки глотаются, потому что
             # прогон уже решён, а исключение отсюда ушло бы наружу и переписало код выхода на 4 —
             # то есть стёрло бы разницу между «спасли» и «не спасли» в последней строке.
@@ -384,7 +404,7 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
                 ex.call("shutdown")
             except Exception as e:
                 log("system.executor_shutdown_failed", err=e)
-            return EXIT_TOOL_FAILURE_SALVAGED if salvaged else EXIT_TOOL_FAILURE
+            return announce(o, run_id)
         # ADR-084: explore's trace holds the same live application DOM a replay's does, so the same
         # rule applies. The exit code is not known yet here, so the decision is made below, right
         # before it is computed.
@@ -411,20 +431,33 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             # `plan.json` — и завела обработчик `except: return True`, который гейт проглоченных
             # ошибок справедливо покрасил: битый план молча становился бы «обход полон». Ни файла,
             # ни обработчика тут больше нет, а автор факта по-прежнему один.
-            return _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched, bool(describe),
-                                   author_model=getattr(scenario_head, "model", None),
-                                   crawl_complete=bool((final.get("completeness") or {}).get("complete", True)))
-        plan_file = out / "plan.json"
-        # `trace.exists()` used to be part of this criterion. It asserted a BY-PRODUCT rather than the
-        # result — a trace file proves the browser ran, which `len(steps) >= 5` already proves better —
-        # and after ADR-084 a clean explore deliberately leaves no trace at all, so keeping it would
-        # have made every successful explore report failure.
-        ok = plan_file.exists() and len(steps) >= 5
-        _stop_trace(ex, trace_path, 0 if ok else 1)
+            # `_write_scenario` теперь ПИШЕТ ФАЙЛЫ и отдаёт ФАКТЫ; кода выхода она не решает.
+            authored = _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched,
+                                        bool(describe),
+                                       author_model=getattr(scenario_head, "model", None),
+                                       crawl_complete=bool((final.get("completeness") or {}).get("complete", True)))
+            o = decide(facts_from(final, mode=_mode, grounded=authored["grounded"],
+                                  unmatched=authored["unmatched"]))
+        else:
+            # ⚠ ПОРОГ `len(steps) >= 5` УБРАН. Он наказывал РАЗМЕР приложения, а не его качество:
+            # замерено настоящим `_run_explore` — одностраничный сайт с одной кнопкой, обойдённый
+            # ЦЕЛИКОМ (`converged`, `complete: true`, coverage 1.00), давал 2 шага и `exit 1`, то есть
+            # `fault: app` «тест нашёл проблему» над прогоном без единой проблемы; двухстраничный
+            # (кнопка + ссылка) — 3 шага и тот же исход. Порог заводился приёмочным гейтом вехи M1
+            # под конкретную фикстуру, а объяснявшая его строка `GATE NOT MET` из кода давно удалена.
+            # Что он ловил на самом деле — «обход не увидел ничего» — сохранено в `outcome.decide`
+            # на фактах, которые это и описывают, и там же названо, чем законная страница без
+            # интерактивных элементов отличается от сломанного исполнителя (только адресом).
+            o = decide(facts_from(final, mode=_mode, plan_written=(out / "plan.json").exists()))
+        _stop_trace(ex, trace_path, o)
         # ADR-125: after the trace — stopping tracing needs a live context, finishing a video closes it.
-        _stop_video(ex, video_path, 0 if ok else 1)
+        _stop_video(ex, video_path, o)
         ex.call("shutdown")
-        return 0 if ok else 1
+        # ⚠ ЕДИНСТВЕННЫЙ возврат обычного пути, и разборка стоит ПЕРЕД ним. Раньше путь авторинга
+        # возвращался на восемь строк выше — ДО `_stop_trace`/`_stop_video`/`shutdown`, — поэтому на
+        # `--goal`/`--describe` не звался ни один из них, и `SENTINEL_TRACE_ALWAYS` там не делал
+        # ничего. Это чинится по построению: у выхода одно место.
+        return announce(o, run_id)
     finally:
         tx.close()
 
@@ -651,7 +684,10 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
     message = os.environ.get("MESSAGE", "").strip()
     if goal and describe:
         log("fatal.goal_describe_conflict")
-        return 3
+        # ADR-139: даже отказ У ДВЕРИ идёт через единый источник. Литерал здесь был бы вторым
+        # автором кода выхода — тем самым, ради запрета которого писан весь модуль, — и гейт по AST
+        # его не отличил бы от возвращённой рядом единицы.
+        return announce(decide(Facts(mode="explore", config_conflict=True)), run_id)
     if not goal and not describe and not message:
         log("fatal.chat_no_intent")
         return 3
@@ -787,10 +823,15 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                         # M9.8 F4 (ADR-054): a takeover during the cold turn pauses here too — await Return
                         # and resume BEFORE tearing down the browser (mirror _run_explore).
                         final = _resume_through_takeovers(app, final, cfg, rc, run_id)
-                        # ADR-084: a cold chat turn is an explore; same rule, and its exit code is
-                        # the scenario write below, so keep the trace only when nothing was authored.
-                        _stop_trace(ex, trace_path, 0 if final.get("scenario_steps") else 1)
-                        _stop_video(ex, video_path, 0 if final.get("scenario_steps") else 1)
+                        # ADR-084 + ADR-139: холодный ход чата — это обход, и правило то же. Исход
+                        # считается ОДНИМ решателем, тем же, что у всех прочих путей; прежняя строка
+                        # `0 if scenario_steps else 1` была ЧЕТВЁРТЫМ выражением о том же вопросе.
+                        _chat_outcome = decide(facts_from(
+                            final, mode=("describe" if describe else "goal"),
+                            grounded=len(final.get("scenario_steps") or []),
+                            unmatched=len(final.get("scenario_unmatched") or [])))
+                        _stop_trace(ex, trace_path, _chat_outcome)
+                        _stop_video(ex, video_path, _chat_outcome)
                         ex.call("shutdown")
                     finally:
                         ex.close()
@@ -803,9 +844,12 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
                 print("=" * 60)
-                return _write_scenario(out, run_id, eff_target, scenario_steps,
-                                       scenario_unmatched, bool(describe),
-                                       author_model=getattr(scenario_head, "model", None))
+                authored = _write_scenario(out, run_id, eff_target, scenario_steps,
+                                           scenario_unmatched, bool(describe),
+                                           author_model=getattr(scenario_head, "model", None))
+                return announce(decide(facts_from(
+                    final, mode=("describe" if describe else "goal"),
+                    grounded=authored["grounded"], unmatched=authored["unmatched"])), run_id)
         finally:
             tx.close()
 
@@ -842,13 +886,13 @@ def _discard_checkpoint(ckpt: str) -> None:
         log("system.checkpoint_discarded", path=ckpt)
 
 
-def _stop_trace(ex, trace_path: str, exit_code: int) -> None:
+def _stop_trace(ex, trace_path: str, outcome: "Outcome") -> None:
     """Stop tracing, keeping the artifact only when `_keep_trace` says the run is worth a post-mortem.
 
     Swallows its own errors: teardown must not turn a finished run into a crash, and every call site
     is already past the point where the result is decided."""
     try:
-        if _keep_trace(exit_code):
+        if _keep_trace(outcome):
             ex.call("browser.traceStop", path=trace_path)
             _redact_trace(trace_path)
         else:
@@ -857,7 +901,7 @@ def _stop_trace(ex, trace_path: str, exit_code: int) -> None:
         log("system.trace_stop_error", error=e)
 
 
-def _keep_video(exit_code: int) -> bool:
+def _keep_video(outcome: "Outcome") -> bool:
     """ADR-125: keep `video.webm` only when the run did NOT finish clean.
 
     Alex's rule, recorded under `[PROD-FAIL-MEDIA]`: write always, delete on green, and the switch is
@@ -876,11 +920,20 @@ def _keep_video(exit_code: int) -> bool:
     `browser.traceStop` announces its own — and why the lever is a single environment variable rather
     than an argument somebody would have to thread through. If this default is ever judged wrong, it
     is one line here and one sentence in ADR-125, not a redesign.
+    ⚠ ADR-139: аргумент — ИСХОД, а не число. Прежде правило звучало `exit_code != 0`, и при нём
+    у ЗЕЛЁНОГО, но неполного прогона улик не оставалось вовсе. Теперь деградация тоже может их
+    удержать — но по ЯВНОМУ рычагу, потому что широкое удержание это частичный откат ADR-084
+    (окно приватности над чужим DOM), а сальдо и без него положительное: прогон с отказами шагов
+    раньше давал 0 и ВЫБРАСЫВАЛ запись, а теперь даёт 1 и её сохраняет.
     """
-    return exit_code != 0 or os.environ.get("SENTINEL_VIDEO_ALWAYS") == "1"
+    if outcome.exit_code != 0:
+        return True
+    if outcome.degraded and os.environ.get("SENTINEL_VIDEO_ON_DEGRADED") == "1":
+        return True
+    return os.environ.get("SENTINEL_VIDEO_ALWAYS") == "1"
 
 
-def _stop_video(ex, video_path: str, exit_code: int) -> None:
+def _stop_video(ex, video_path: str, outcome: "Outcome") -> None:
     """Finish the recording, keeping the file only when `_keep_video` says the run is worth watching.
 
     ⚠ TERMINAL, and must be called LAST. Completing a video requires closing the browser context —
@@ -894,7 +947,7 @@ def _stop_video(ex, video_path: str, exit_code: int) -> None:
     observation resolver exists to prevent.
     """
     try:
-        keep = _keep_video(exit_code)
+        keep = _keep_video(outcome)
         r = ex.call("browser.videoStop", **({"path": video_path} if keep else {})) or {}
         if r.get("kept"):
             log("run.video_kept", path=video_path)
@@ -978,7 +1031,7 @@ def _redact_trace(trace_path: str) -> None:
         log("system.trace_leak", path=trace_path, error=f"{reason}; and removal failed: {e}")
 
 
-def _keep_trace(exit_code: int) -> bool:
+def _keep_trace(outcome: "Outcome") -> bool:
     """ADR-084: keep `trace.zip` only when the run did NOT finish clean.
 
     The trace is the best post-mortem tool we have — and on a GREEN run there is no post-mortem to
@@ -992,8 +1045,15 @@ def _keep_trace(exit_code: int) -> bool:
 
     `SENTINEL_TRACE_ALWAYS=1` restores the old behaviour for someone debugging a run that passes but
     behaves oddly. `PW_NO_TRACE=1` still wins over both — it means the trace was never recorded.
+    ⚠ ADR-139: аргумент — ИСХОД, а не число, по той же причине, что у `_keep_video`. Рычаг
+    `SENTINEL_TRACE_ON_DEGRADED=1` удерживает запись у зелёного, но неполного прогона; по умолчанию
+    он выключен, чтобы не откатывать ADR-084 молча.
     """
-    return exit_code != 0 or os.environ.get("SENTINEL_TRACE_ALWAYS") == "1"
+    if outcome.exit_code != 0:
+        return True
+    if outcome.degraded and os.environ.get("SENTINEL_TRACE_ON_DEGRADED") == "1":
+        return True
+    return os.environ.get("SENTINEL_TRACE_ALWAYS") == "1"
 
 
 def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_version, ci, force) -> int:
@@ -1049,8 +1109,15 @@ def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_ve
         try:
             # ADR-084: keep the artifact only when the run is worth a post-mortem; otherwise the
             # executor discards the buffered trace and nothing reaches the disk.
-            _stop_trace(ex, trace_path, int(report.get("exit_code", 1)))
-            _stop_video(ex, video_path, int(report.get("exit_code", 1)))
+            # ADR-139: `replay` считает свой код сам и правильно (одно число → слово → кадр), поэтому
+            # здесь он лишь ОБОРАЧИВАЕТСЯ в `Outcome` для решения об уликах. Своего решателя у replay
+            # не отнимаем: у него дефекта не было, а переписывать работающее без замеренной причины —
+            # это и есть тот риск, от которого весь PR.
+            _rc = int(report.get("exit_code", 1))
+            _replay_outcome = Outcome(exit_code=_rc, verdict=VERDICT_WORD.get(_rc, "problem"),
+                                      degraded=(_rc != 0), reason="", failed=int(report.get("failed", 0) or 0))
+            _stop_trace(ex, trace_path, _replay_outcome)
+            _stop_video(ex, video_path, _replay_outcome)
             ex.call("shutdown")
         except Exception as exc:
             # Said, not swallowed. An executor that will not shut down cleanly usually means a
@@ -1454,7 +1521,10 @@ def main() -> int:
         # exists to prevent, and the one the product is least able to afford.
         traceback.print_exc()
         log("fatal.internal_error", error=e)
-        rc = 4
+        # ADR-139: и здесь кадр `verdict` появляется ВПЕРВЫЕ. Прежде внутренний сбой возвращал голое
+        # число, а хаб об исходе не слышал ничего — то есть самый громкий отказ продукта был самым
+        # молчаливым. `announce` печатает кадр и отдаёт код одним движением.
+        rc = announce(decide(Facts(mode=run_mode, crashed=True)), run_id)
     finally:
         ex.close()
         _run_span.__exit__(None, None, None)

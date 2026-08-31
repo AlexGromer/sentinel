@@ -182,8 +182,10 @@ def test_scenario_json_says_who_authored_it_and_at_what_cost():
     import pathlib
     out = pathlib.Path(tempfile.mkdtemp())
     steps = [{"action_type": "click", "intent": "click 'Pay'", "locator": GOOD, "semantic_id": "s"}]
-    rc = _write_scenario(out, "run7", PAGE, steps, [], False, author_model="qwen3:14b")
-    assert rc == 0, rc
+    # ADR-139: `_write_scenario` больше НЕ решает код выхода — она пишет файлы и отдаёт ФАКТЫ
+    # авторинга. Решение переехало в `brain/outcome.decide`, единственный решатель на все пути.
+    facts = _write_scenario(out, "run7", PAGE, steps, [], False, author_model="qwen3:14b")
+    assert facts == {"grounded": 1, "unmatched": 0}, facts
     sc = json.load(open(out / "scenario.json"))
     assert sc.get("models"), "scenario.json carries no models block"
     assert sc["models"]["author"] == "qwen3:14b", sc["models"]

@@ -41,11 +41,31 @@ class Ex:
 
 
 # --- the rule ---------------------------------------------------------------------------------------
+def _outcome(code, degraded=False):
+    """ADR-139: решение об уликах принимает ИСХОД, а не голое число — так зелёный, но неполный
+    прогон тоже может удержать запись, по явному рычагу. Правило про код при этом не изменилось."""
+    from brain.outcome import Outcome, VERDICT_WORD
+    return Outcome(exit_code=code, verdict=VERDICT_WORD.get(code, "problem"),
+                   degraded=degraded, reason="", failed=0)
+
+
 def test_a_clean_run_discards_its_trace_and_a_failed_one_keeps_it():
-    assert _keep_trace(1) is True, "a failed run is exactly when a post-mortem happens"
-    assert _keep_trace(2) is True, "a golden regression exits 2 with no step failing — still worth it"
-    assert _keep_trace(3) is True, "a hard abort"
-    assert _keep_trace(0) is False, "nothing to diagnose on a green run"
+    assert _keep_trace(_outcome(1)) is True, "a failed run is exactly when a post-mortem happens"
+    assert _keep_trace(_outcome(2)) is True, "a golden regression exits 2 with no step failing — still worth it"
+    assert _keep_trace(_outcome(3)) is True, "a hard abort"
+    assert _keep_trace(_outcome(0)) is False, "nothing to diagnose on a green run"
+    assert _keep_trace(_outcome(0, degraded=True)) is False, (
+        "a green but incomplete run still discards by default — ADR-084 must not be rolled back silently")
+    # ⚠ И ОБРАТНАЯ ПОЛОВИНА, без которой предыдущая строка бессодержательна: убери ветку про
+    # деградацию целиком — и утверждение «по умолчанию не держим» останется верным, а рычаг молча
+    # перестанет существовать. Найдено мутацией.
+    os.environ["SENTINEL_TRACE_ON_DEGRADED"] = "1"
+    try:
+        assert _keep_trace(_outcome(0, degraded=True)) is True, (
+            "the lever that keeps a degraded run's trace is gone — the rule ADR-139 added has no effect")
+        assert _keep_trace(_outcome(0)) is False, "the lever must not keep a CLEAN run's trace"
+    finally:
+        os.environ.pop("SENTINEL_TRACE_ON_DEGRADED", None)
 
 
 def test_the_escape_hatch_restores_the_old_behaviour():
@@ -54,9 +74,9 @@ def test_the_escape_hatch_restores_the_old_behaviour():
     old = os.environ.get("SENTINEL_TRACE_ALWAYS")
     try:
         os.environ["SENTINEL_TRACE_ALWAYS"] = "1"
-        assert _keep_trace(0) is True
+        assert _keep_trace(_outcome(0)) is True
         os.environ["SENTINEL_TRACE_ALWAYS"] = "0"
-        assert _keep_trace(0) is False, "only an explicit 1 opts in"
+        assert _keep_trace(_outcome(0)) is False, "only an explicit 1 opts in"
     finally:
         os.environ.pop("SENTINEL_TRACE_ALWAYS", None)
         if old is not None:
@@ -68,11 +88,11 @@ def test_the_teardown_passes_a_path_only_when_the_trace_is_kept():
     """The rule being right is not enough — this is the seam where it is applied. `path` present means
     Playwright writes the file; absent means it throws the buffer away, so the bytes never land."""
     keep = Ex()
-    _stop_trace(keep, "/tmp/t.zip", 1)
+    _stop_trace(keep, "/tmp/t.zip", _outcome(1))
     assert keep.calls == [("browser.traceStop", {"path": "/tmp/t.zip"})], keep.calls
 
     drop = Ex()
-    _stop_trace(drop, "/tmp/t.zip", 0)
+    _stop_trace(drop, "/tmp/t.zip", _outcome(0))
     assert drop.calls == [("browser.traceStop", {})], drop.calls
 
 
@@ -81,23 +101,60 @@ def test_a_teardown_failure_does_not_crash_a_finished_run():
         def call(self, *a, **k):
             raise RuntimeError("executor already gone")
 
-    _stop_trace(Boom(), "/tmp/t.zip", 1)          # must not raise
+    _stop_trace(Boom(), "/tmp/t.zip", _outcome(1))          # must not raise
 
 
 # --- the criterion that depended on the by-product --------------------------------------------------
 def test_explore_no_longer_calls_a_missing_trace_a_failure():
     """`ok = ... and trace.exists()` asserted a BY-PRODUCT, not the result. After ADR-084 a clean
     explore deliberately leaves no trace, so that clause would have made every SUCCESSFUL explore
-    report failure — a self-inflicted red CI. Asserted against the source because the alternative is
-    a full browser run."""
-    # The ASSIGNMENT LINE, not a window: a window also covers the comment explaining the removal,
-    # which naturally quotes the very string being forbidden — the check would then fail on its own
-    # documentation. Assert the statement, not the prose around it.
-    lines = [ln.strip() for ln in (REPO / "brain" / "__main__.py").read_text().splitlines()
-             if ln.strip().startswith("ok = plan_file.exists()")]
-    assert len(lines) == 1, lines
-    assert "len(steps) >= 5" in lines[0], lines[0]
-    assert "trace" not in lines[0], f"the by-product is back in the success criterion: {lines[0]}"
+    report failure — a self-inflicted red CI.
+
+    ⚠ REWRITTEN BEHAVIOURALLY (ADR-139). It used to assert the TEXT of the assignment line
+    (`ok = plan_file.exists() and len(steps) >= 5`), which this repository calls a surrogate for a
+    reason: it agreed with any code that merely spelled itself that way, and it could not have
+    noticed the by-product coming back through a different statement. It also pinned the very
+    threshold ADR-139 removed — the one that called a fully converged two-page site a finding about
+    the application. The property it was defending is now driven: a HEALTHY explore that produced no
+    trace file at all exits 0. That is strictly stronger, and it survives the next rename."""
+    import contextlib
+    import io
+    import tempfile
+    from pathlib import Path
+    from brain.__main__ import _run_explore
+
+    url = "file:///x/app.html"
+
+    class _Healthy:
+        """One page, one button, nothing else — and no trace file is ever written."""
+
+        def call(self, m, **p):
+            if m == "browser.navigate":
+                return {"url": url, "title": "t", "status": 200}
+            if m == "browser.currentUrl":
+                return {"url": url, "title": "t"}
+            if m == "browser.snapshot":
+                return {"ariaSnapshot": '- button "Go"', "nodeCount": 2}
+            if m == "browser.interactives":
+                return {"elements": [{"role": "button", "name": "Go", "locator": {"css": "#go"},
+                                      "visible": True, "enabled": True, "kind": "button",
+                                      "testid": None}]}
+            if m == "browser.links":
+                return {"links": []}
+            if m == "browser.click":
+                return {"ok": True, "navigated": False}
+            if m == "browser.probe":
+                return {"count": 1}
+            return {}
+
+        def close(self):
+            pass
+
+    out = Path(tempfile.mkdtemp())
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = _run_explore(_Healthy(), "r", out, url, 0.85, 5)
+    assert not (out / "trace.zip").exists(), "the fake executor is not supposed to write a trace"
+    assert rc == 0, f"a healthy explore that left no trace reported failure: rc={rc}"
 
 
 # --- the session file -------------------------------------------------------------------------------

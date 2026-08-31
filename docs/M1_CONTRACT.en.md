@@ -76,5 +76,13 @@ Conditional edges: `ground→report` if explore_complete; `plan→report` if don
 - **THEN** `runs/<id>/plan.json` exists with **≥5 steps**, `coverage_achieved` recorded (>0), `plan_hash` present,
   `trace.zip` present, exit 0; **AND** a second identical run produces the **same `plan_hash`** (determinism).
 
+> ⚠ **ADR-139: "≥5 steps" is a statement about THIS FIXTURE, not an exit-code criterion.** Until this
+> wave the threshold lived in `_run_explore` and applied to ANY target, so it punished application
+> size: measured, a one-page site with one button crawled COMPLETELY (`converged`, coverage 1.00)
+> received `exit 1`, i.e. `fault: app` "the test found a problem" over a run with no problem. It is
+> gone from the code; here it remains what it was designed to be — an acceptance property of the
+> `testdata/site` fixture — and is EXERCISED for the first time by a floor in the offline suite,
+> rather than only indirectly through `set -e` over `agentctl run` in CI.
+
 ## Out of scope (M2+)
 real heal, MCP-SDK transport, gRPC + store-gateway, golden baselines, replay mode.

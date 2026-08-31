@@ -365,16 +365,29 @@ def test_runconfig_malformed_auth_and_scenarios_raise():
 
 # --- __main__ exit codes -----------------------------------------------------
 def test_write_scenario_exit_codes():
+    """⚠ ADR-139: `_write_scenario` больше НЕ решает код выхода — она пишет файлы и отдаёт ФАКТЫ
+    авторинга, а код выводит `outcome.decide`, единственный решатель на все пять прежних путей.
+    Утверждаются ОБЕ половины: что файлы легли и что правило по этим фактам даёт прежнее число, —
+    то есть перенос правила проверен, а не принят на слово."""
     import brain.__main__ as m
+    from brain.outcome import Facts, decide
+
+    def code(mode, facts):
+        return decide(Facts(mode=mode, grounded=facts["grounded"], unmatched=facts["unmatched"])).exit_code
+
     step = [{"step_id": 1, "action_type": "navigate", "semantic_id": "n", "intent": "go", "target": "u",
              "locator": None, "alternatives": None, "is_milestone": True, "phase": "scenario"}]
     o1 = pathlib.Path(tempfile.mkdtemp())
-    assert m._write_scenario(o1, "r", "file:///s", step, [], False) == 0 and (o1 / "scenario.json").exists()
+    f1 = m._write_scenario(o1, "r", "file:///s", step, [], False)
+    assert f1 == {"grounded": 1, "unmatched": 0}, f1
+    assert code("goal", f1) == 0 and (o1 / "scenario.json").exists()
     o2 = pathlib.Path(tempfile.mkdtemp())
-    assert m._write_scenario(o2, "r", "file:///s", step, [{"ref": "x"}], True) == 1   # describe unmatched -> 1
+    f2 = m._write_scenario(o2, "r", "file:///s", step, [{"ref": "x"}], True)
+    assert code("describe", f2) == 1, f2                        # describe unmatched -> 1
     assert (o2 / "reconcile-report.json").exists()
     o3 = pathlib.Path(tempfile.mkdtemp())
-    assert m._write_scenario(o3, "r", "file:///s", [], [], False) == 1               # zero grounded -> 1
+    f3 = m._write_scenario(o3, "r", "file:///s", [], [], False)
+    assert code("goal", f3) == 1, f3                            # zero grounded -> 1
 
 
 def test_goal_and_describe_mutually_exclusive_exit3():

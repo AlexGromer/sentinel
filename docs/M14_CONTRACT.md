@@ -31,7 +31,7 @@ M14 закрывает это: HTTP-поверхность доменов, жи�
 | `tool.call` | `{name,args_summary}` | brain (act) |
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
-| `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
+| `verdict` | `{verdict,exit_code,healed,failed}` | brain (`outcome.announce`) — **ADR-139**: печатается ИЗ ТОГО ЖЕ значения, которое возвращается как код выхода процесса, поэтому кадр не может ему противоречить. Раньше эмитился узлом `report` графа из СВОИХ полей и расходился в обе стороны. `verdict` — слово из таблицы `outcome.VERDICT_WORD` (`pass`/`problem`/`regression`/`integrity`/`tool_failure`/…), общей с путём `replay`; прежние `ok`/`failed` пути `explore` заменены на `pass`/`problem` (потребителей значения в репозитории замерено ноль) |
 | `run.finished` | `{exit_code,state}` | control-API — **эмитится** (finish-горутина инжектит `@@AGUI`-строку после stdout brain, до `finish()`; `seq` опущен — отдельное un-ordered-пространство; failed-spawn → `exit_code:-1` (различается по `state`: signal-kill=`done`, spawn-fail=`failed`); typed для WS, сырая строка в `log` для SSE) |
 | `log` | `{line}` | passthrough сырого stdout |
 

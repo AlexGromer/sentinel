@@ -31,7 +31,7 @@ M14 closes this: an HTTP surface for the domains, a live AG-UI timeline on top o
 | `tool.call` | `{name,args_summary}` | brain (act) |
 | `heal` | `{step,strategy(L1–L6),ok}` | brain (heal) |
 | `hitl_needed` | `{reason,count}` | brain (checkpoint auto-arm) |
-| `verdict` | `{verdict,exit_code,healed,failed}` | control-API/brain (report) |
+| `verdict` | `{verdict,exit_code,healed,failed}` | brain (`outcome.announce`) — **ADR-139**: printed FROM THE SAME value that is returned as the process exit code, so the frame cannot contradict it. It used to be emitted by the graph's `report` node from ITS OWN fields and disagreed in both directions. `verdict` is a word from `outcome.VERDICT_WORD` (`pass`/`problem`/`regression`/`integrity`/`tool_failure`/…), shared with the `replay` path; the former `ok`/`failed` of the `explore` path became `pass`/`problem` (measured: zero consumers of that value in the repository) |
 | `run.finished` | `{exit_code,state}` | control-API — **emitted** (the finish goroutine injects an `@@AGUI` line after the brain's stdout, before `finish()`; `seq` omitted — a separate un-ordered space; failed-spawn → `exit_code:-1` (disambiguated by `state`: signal-kill=`done`, spawn-fail=`failed`); typed for WS, a raw line inside a `log` event for SSE) |
 | `log` | `{line}` | passthrough of raw stdout |
 

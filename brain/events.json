@@ -1026,6 +1026,18 @@
       "ru_verdict": "журнал маршрутов недоступен — маршруты SPA, открытые кнопкой, в обход не попали",
       "en_verdict": "the route journal was unavailable — SPA routes opened by a button did not enter the crawl"
     },
+    "explore.saw_nothing": {
+      "lvl": "error",
+      "cat": "browser",
+      "phase": "report",
+      "fault": "tool",
+      "exit": 4,
+      "ru": "Обход не увидел на цели НИЧЕГО — ни одного элемента и ни одного адреса: это отказ инструмента, а не пустая страница",
+      "en": "The crawl saw NOTHING on the target — not one element and not one address: this is a tool failure, not an empty page",
+      "modules": [
+        "outcome"
+      ]
+    },
     "explore.crashed": {
       "lvl": "error",
       "cat": "run",
@@ -1367,6 +1379,7 @@
       "en": "Could not emit an event to the live timeline: {error}",
       "modules": [
         "graph",
+        "outcome",
         "replay"
       ]
     },

@@ -25,6 +25,7 @@ from .executor import ExecutorTransportError
 from .healing import AUTO as _HEAL_AUTO
 from .healing import is_reground
 from .eventlog import log
+from .outcome import VERDICT_WORD   # ADR-139: одна таблица слов на весь продукт
 from .frames import capture_frame   # PROD-FAIL-MEDIA part A: the picture of a failed step
 from .state import base_origin_of, normalize_url, page_identity, canonical_plan_hash
 from .store import GoldenIntegrityError
@@ -601,7 +602,7 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
     report["tokens"] = budget.tracker().summary()
     report["models"] = {"heal": getattr(getattr(heal, "_backend", None), "model", None)}
     # M14 tail 2: the REAL structured exit code (0/1/2/3), unlike graph-mode's best-effort verdict.
-    _verdict = {0: "pass", 1: "problem", 2: "regression", 3: "integrity"}.get(report["exit_code"], "problem")
+    _verdict = VERDICT_WORD.get(report["exit_code"], "problem")
     # ADR-071: a pass that needed healing is its own state. Reported on the verdict frame, so the co-pilot
     # timeline and any AG-UI consumer see it without reading heal-report.json.
     # Precedence when a run passes but is not clean: the APPLICATION misbehaving outranks our own test

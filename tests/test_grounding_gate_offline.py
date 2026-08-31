@@ -60,13 +60,20 @@ REAL_UNMATCHED = [
 
 
 def author(grounded, unmatched, tmp, is_describe=False):
-    """Drive the SHIPPED _write_scenario and capture what it said."""
+    """Drive the SHIPPED authoring path and capture what it said.
+
+    ⚠ ADR-139: `_write_scenario` пишет файлы и отдаёт ФАКТЫ; код выхода выводит `outcome.decide` —
+    единственный решатель на все пути. Здесь воспроизведена та же пара вызовов, что делает
+    `_run_explore`, поэтому проверяется ШИППЕД-правило, а не его копия."""
     from brain.__main__ import _write_scenario
+    from brain.outcome import Facts, decide
     steps = [{"action_type": "click", "intent": f"s{i}", "locator": {"role": "button", "name": f"b{i}"}}
              for i in range(grounded)]
     buf = io.StringIO()
     with redirect_stderr(buf):
-        rc = _write_scenario(tmp, "r", "file:///s/app.html", steps, unmatched, is_describe)
+        facts = _write_scenario(tmp, "r", "file:///s/app.html", steps, unmatched, is_describe)
+    rc = decide(Facts(mode="describe" if is_describe else "goal",
+                      grounded=facts["grounded"], unmatched=facts["unmatched"])).exit_code
     return rc, buf.getvalue()
 
 
@@ -201,13 +208,19 @@ def test_the_headline_verdict_no_longer_contradicts_the_exit_code():
           not final.get("scenario_steps") and final.get("scenario_unmatched"),
           {"steps": final.get("scenario_steps"), "unmatched": final.get("scenario_unmatched")})
 
+    # ⚠ ADR-139: кадр `verdict` БОЛЬШЕ НЕ ПРИХОДИТ от `app.invoke` — узел графа его не печатает, и
+    # это ядро правки. Прежние две проверки здесь сверяли кадр с ЛИТЕРАЛОМ `1`, написанным руками,
+    # то есть с убеждением автора теста, а не с тем, что вернул процесс. Согласие кадра с
+    # ФАКТИЧЕСКИМ кодом выхода перебирается теперь в tests/test_run_outcome_offline.py по всем
+    # достижимым ячейкам сразу. Здесь остаётся то, что принадлежит этому файлу: правило заземления.
     frames = [_json.loads(l.split("@@AGUI ", 1)[1]) for l in out.splitlines() if "@@AGUI " in l]
     verdicts = [f for f in frames if f.get("type") == "verdict"]
-    check("the run emitted a verdict frame at all", len(verdicts) == 1, len(verdicts))
-    if verdicts:
-        v = verdicts[-1]["data"]
-        check("the headline verdict says FAILED, not ok", v.get("verdict") == "failed", v)
-        check("...and its exit_code agrees with the process, which exits 1", v.get("exit_code") == 1, v)
+    check("узел графа не печатает вердикт — второго автора кода выхода больше нет",
+          len(verdicts) == 0, len(verdicts))
+    from brain.outcome import Facts as _F, decide as _d
+    _rc = _d(_F(mode="goal", grounded=len(final.get("scenario_steps") or []),
+                unmatched=len(final.get("scenario_unmatched") or []))).exit_code
+    check("прогон, не заземливший ничего, объявляется провалом", _rc == 1, _rc)
 
 
 def test_a_partly_grounded_run_is_not_reddened_by_the_new_rule():
@@ -242,15 +255,16 @@ def test_a_partly_grounded_run_is_not_reddened_by_the_new_rule():
     check("the fixture really is PARTLY grounded (something bound, something did not)",
           bool(final.get("scenario_steps")) and bool(final.get("scenario_unmatched")),
           {"steps": final.get("scenario_steps"), "unmatched": final.get("scenario_unmatched")})
+    # ⚠ ADR-139: см. выше — кадр печатает `outcome.announce`, а не узел. Правило же осталось тем
+    # самым, ради которого этот тест писан, и утверждается прямо на шиппед-решателе.
     verdicts = [_json.loads(l.split("@@AGUI ", 1)[1]) for l in out.splitlines() if "@@AGUI " in l]
     verdicts = [f for f in verdicts if f.get("type") == "verdict"]
-    check("a partly grounded run emitted a verdict", len(verdicts) == 1, len(verdicts))
-    if verdicts:
-        v = verdicts[-1]["data"]
-        check("...and it stays ok: partial grounding DEGRADES, it does not fail the run",
-              v.get("verdict") == "ok", v)
-        check("...with exit_code 0, matching what _write_scenario returns for the same case",
-              v.get("exit_code") == 0, v)
+    check("узел графа не печатает вердикт и на этом пути", len(verdicts) == 0, len(verdicts))
+    from brain.outcome import Facts as _F, decide as _d
+    _o = _d(_F(mode="goal", grounded=len(final.get("scenario_steps") or []),
+               unmatched=len(final.get("scenario_unmatched") or [])))
+    check("частичное заземление ДЕГРАДИРУЕТ, но прогон не валит", _o.exit_code == 0, _o)
+    check("...и деградация при этом ОБЪЯВЛЕНА, а не умолчана", _o.degraded is True, _o)
 
 
 if __name__ == "__main__":

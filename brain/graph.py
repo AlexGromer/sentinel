@@ -1007,23 +1007,22 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         if any(site_map.values()):
             with open(os.path.join(state.get("artifact_dir", "."), "site-map.json"), "w") as f:
                 json.dump(site_map, f, ensure_ascii=False, indent=2)
-        # M14 (ADR-055): a best-effort AG-UI verdict from this node's own view of the run (errors seen
-        # during explore) — NOT the true process exit code, which __main__.py computes after
-        # app.invoke() returns (outside this graph); that final code is out of scope here.
-        # PLAN-NOT-GROUNDED-SILENT. This frame used to be computed from `errors` ALONE — that is,
-        # from what the EXPLORE phase saw. The scenario node writes no errors, so an authoring run
-        # that grounded nothing emitted `verdict: ok, exit_code: 0` while the process exited 1.
-        # Measured twice on a live model, and the two lines sat in the same log file.
+        # ⚠ КАДР `verdict` ОТСЮДА УБРАН (ADR-139), И ЭТО КОНСТРУКЦИЯ, А НЕ ПЕРЕЕЗД.
+        # Здесь он вычислялся из `errors` и `scenario_unmatched` — то есть из того, что видел УЗЕЛ, —
+        # тогда как код выхода процесса считался в `__main__` из совсем других полей. Замерено: у двух
+        # выражений НЕ БЫЛО НИ ОДНОГО общего входа, поэтому они не «разъезжались со временем», а
+        # отвечали на разные вопросы и совпадали случайно; расхождение шло в ОБЕ стороны — короткий
+        # обход давал кадр `ok/0` при коде 1, а сошедшийся обход с упавшим кликом — `failed/1` при
+        # коде 0. Комментарий, стоявший здесь, честно требовал «не противоречить коду выхода», но
+        # исполнить это было нечем: узел не знает ни падения, ни разборки, ни того, записался ли
+        # `scenario.json`.
         #
-        # The frame still is not the process exit code (that is computed in __main__ after the graph
-        # returns) and does not pretend to be. What it must not do is contradict it: an authoring run
-        # whose only deliverable is a scenario, that produced no grounded step, has failed, and the
-        # UI's headline event is the last place that should be the one to disagree.
-        not_grounded = bool(state.get("scenario_unmatched")) and not state.get("scenario_steps")
-        failed_run = bool(state.get("errors")) or not_grounded
-        _agui("verdict", state.get("run_id", ""), verdict=("failed" if failed_run else "ok"),
-              exit_code=(1 if failed_run else 0), healed=0,
-              failed=state.get("failed_steps", 0))
+        # Теперь кадр печатает `brain/outcome.announce`, и печатает ИЗ ТОГО ЖЕ значения, которое
+        # возвращает как код выхода. Слова `"verdict"` в этом файле больше нет намеренно: второго
+        # эмиттера придётся ПИСАТЬ ЗАНОВО, а не дописывать строку, и гейт это утверждает.
+        #
+        # Узел по-прежнему автор `completeness` — это его собственный факт, и второй расчёт по тем же
+        # полям был бы вторым автором (`brain/state.py` уже фиксирует это правило).
         return {"plan_hash": ph, "completeness": plan_obj["completeness"]}
 
     def route_plan(state: RunState) -> str:
