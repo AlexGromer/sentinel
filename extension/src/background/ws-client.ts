@@ -14,7 +14,7 @@ import {
   WS_SUBPROTOCOL,
   wsSubprotocols,
   type Connection,
-  type RecorderEvent,
+  type RecorderLine,
   type ServerMessage,
   type TakeoverSignal,
 } from '../shared/protocol.js';
@@ -26,7 +26,7 @@ export interface WsClientCallbacks {
 
 export interface WsClient {
   connect(url: string, token: string): void;
-  send(event: RecorderEvent): boolean;
+  send(event: RecorderLine): boolean;
   sendSignal(signal: TakeoverSignal): boolean;
   close(): void;
   isOpen(): boolean;

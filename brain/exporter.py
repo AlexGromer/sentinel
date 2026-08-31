@@ -10,6 +10,22 @@ def _esc(s: object) -> str:
     return (str(s) if s is not None else "").replace("\\", "\\\\").replace("'", "\\'")
 
 
+# Characters that mean something inside a JS regex literal, plus `/` which ENDS one.
+_RE_META = set("\\^$.|?*+()[]{}/")
+
+
+def _esc_re(s: object) -> str:
+    """Escape a literal for use inside a JS regex literal `/…/` (ADR-138).
+
+    `url_contains` is the one condition rendered as a regex, and the executor treats its `expected` as
+    a LITERAL substring (`u.href.includes(want)`) — so escaping here is not merely safe, it is what
+    makes the exported test agree with the executor. It became load-bearing when routes started
+    reaching `expected`: a route is full of metacharacters, and `/app#/b` alone would close the
+    literal after one character and emit a .spec.ts that does not parse.
+    """
+    return "".join("\\" + c if c in _RE_META else c for c in (str(s) if s is not None else ""))
+
+
 def _locator_expr(loc: dict):
     """Map a locator dict to a Playwright `page.<...>` expression (None if unmappable).
 
@@ -41,21 +57,39 @@ def _locator_expr(loc: dict):
 
 
 def _assert_expr(s: dict) -> str:
-    """M9.1: map an assert step to a Playwright web-first assertion (polarity via `.not`)."""
+    """M9.1: map an assert step to a Playwright web-first assertion (polarity via `.not`).
+
+    ⚠ BRANCHES, NOT A DICT LITERAL, and that is a bug fix rather than a style choice. The previous
+    form built every entry EAGERLY, so `count_equals`'s `int(expected)` ran for every condition —
+    exporting any assert whose `expected` is not a number (`text_contains 'Welcome'`, and now
+    `url_contains '/app?tab=orders'`) raised ValueError and produced no artifact at all. Nothing
+    caught it because no test exported a non-numeric assert; routes made it reachable on the ordinary
+    path, which is how it was found.
+    """
     cond = s.get("condition")
     neg = "" if s.get("expect_ok", True) else ".not"
     expr = _locator_expr(s.get("locator")) or "page"
-    table = {
-        "visible": f"await expect({expr}){neg}.toBeVisible();",
-        "hidden": f"await expect({expr}){neg}.toBeHidden();",
-        "enabled": f"await expect({expr}){neg}.toBeEnabled();",
-        "disabled": f"await expect({expr}){neg}.toBeDisabled();",
-        "value_equals": f"await expect({expr}){neg}.toHaveValue('{_esc(s.get('expected'))}');",
-        "text_contains": f"await expect({expr}){neg}.toContainText('{_esc(s.get('expected'))}');",
-        "count_equals": f"await expect({expr}){neg}.toHaveCount({int(s.get('expected') or 0)});",
-        "url_contains": f"await expect(page){neg}.toHaveURL(/{_esc(s.get('expected'))}/);",
-    }
-    return table.get(cond, f"// unmapped assert condition {_esc(cond)}")
+    if cond == "visible":
+        return f"await expect({expr}){neg}.toBeVisible();"
+    if cond == "hidden":
+        return f"await expect({expr}){neg}.toBeHidden();"
+    if cond == "enabled":
+        return f"await expect({expr}){neg}.toBeEnabled();"
+    if cond == "disabled":
+        return f"await expect({expr}){neg}.toBeDisabled();"
+    if cond == "value_equals":
+        return f"await expect({expr}){neg}.toHaveValue('{_esc(s.get('expected'))}');"
+    if cond == "text_contains":
+        return f"await expect({expr}){neg}.toContainText('{_esc(s.get('expected'))}');"
+    if cond == "count_equals":
+        try:
+            want = int(s.get("expected") or 0)
+        except (TypeError, ValueError):
+            return f"// count_equals with a non-numeric expected {_esc(s.get('expected'))}"
+        return f"await expect({expr}){neg}.toHaveCount({want});"
+    if cond == "url_contains":
+        return f"await expect(page){neg}.toHaveURL(/{_esc_re(s.get('expected'))}/);"
+    return f"// unmapped assert condition {_esc(cond)}"
 
 
 def export_spec(plan: dict) -> str:

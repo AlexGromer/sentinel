@@ -1333,6 +1333,15 @@
         "record_bridge"
       ]
     },
+    "record.route_dropped": {
+      "lvl": "warn",
+      "cat": "record",
+      "ru": "Смена маршрута отброшена ({reason}) — записать её нечем",
+      "en": "A route change was dropped ({reason}) — nothing usable to record",
+      "modules": [
+        "record_bridge"
+      ]
+    },
     "record.line_unparseable": {
       "lvl": "warn",
       "cat": "record",

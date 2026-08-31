@@ -32,10 +32,17 @@ def _index_by_id(site_map: dict) -> dict:
             for page in (site_map or {}) for el in site_map[page]}
 
 
-def _nav_step(page: str, step_id: int) -> dict:
+def _nav_step(page: str, step_id: int, target: str = "") -> dict:
+    """`target` defaults to `page`, but a RECORDED transition supplies the address actually observed.
+
+    The difference is the query string: `page_identity` drops it, so without this a recording of
+    `?tab=orders` would replay a navigate to the bare path — a different screen than the one that was
+    recorded. `semantic_id` still keys off `page`, deliberately: moving that key would move every
+    saved plan_hash, and no key-migration mechanism exists.
+    """
     return {"step_id": step_id, "action_type": "navigate",
-            "semantic_id": semantic_id(page, "navigate", ""), "intent": f"navigate to {page}",
-            "target": page, "locator": None, "alternatives": None, "is_milestone": False,
+            "semantic_id": semantic_id(page, "navigate", ""), "intent": f"navigate to {target or page}",
+            "target": target or page, "locator": None, "alternatives": None, "is_milestone": False,
             "phase": "scenario"}
 
 
@@ -69,24 +76,41 @@ def _verb_step(element: dict, verb: str, extra: dict, step_id: int) -> dict:
     return step
 
 
-def _emit(bound: list, start_page: str, start_id: int) -> list:
-    """bound = [(element, verb, extra)]. Synthesize cross-page navigates; assign sequential step_ids."""
+def _emit(bound: list, start_page: str, start_id: int, trust_observed: bool = False) -> list:
+    """bound = [(element, verb, extra)]. Synthesize cross-page navigates; assign sequential step_ids.
+
+    ⚠ A synthesized navigate is a GUESS that the page changed by itself, and it is wrong exactly when
+    the previous step is what changed it. Measured cost of guessing wrong: on a path-routed SPA the
+    hard `goto` replaces the document and wipes the application's in-memory state (404 as well, on a
+    server with no history fallback); and on any router it silently REPAIRS a broken transition — a
+    click that lands on the wrong route is corrected by the next navigate, so replay stays green and
+    the routing regression is structurally invisible. `trust_observed` is honoured only for a
+    recording, whose `route_arrived` came from watching the browser rather than from a model.
+    """
     steps, sid, cur_page = [], start_id, page_identity(start_page or "")
     for element, verb, extra in bound:
         page = page_identity(element.get("page", ""))
         if page and page != cur_page:
-            steps.append(_nav_step(page, sid)); sid += 1     # cross-page navigate (real URL from the map)
-            cur_page = page
+            if trust_observed and extra.get("route_arrived"):
+                cur_page = page                              # the transition was OBSERVED, not assumed
+            else:
+                steps.append(_nav_step(page, sid, extra.get("observed_url") or "")); sid += 1
+                cur_page = page
         steps.append(_verb_step(element, verb, extra, sid)); sid += 1
     if steps:
         steps[0]["is_milestone"] = True
     return steps
 
 
-def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_id: int = 1):
+def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_id: int = 1,
+                    trust_observed: bool = False):
     """Goal head: bind ordered LLM `{ref, verb, value?}` to real elements. Returns (steps, unmatched).
 
     A `ref` (semantic_id) not in the map is dropped to `unmatched` — never fabricated (grounding).
+
+    `trust_observed` (ADR-138) is opt-in and OFF by default on purpose: this function is the last
+    validator on the LLM authoring path, and a model that returned `route_arrived: true` would
+    otherwise be able to delete a navigate from its own plan. Only `record_bridge` sets it.
     """
     idx = _index_by_id(site_map)
     bound, unmatched = [], []
@@ -107,7 +131,7 @@ def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_
             unmatched.append({"ref": r.get("ref"), "reason": f"secretRef is valid on fill only, not {verb!r}"})
             continue
         bound.append((el, verb, r))
-    return _emit(bound, start_page, start_id), unmatched
+    return _emit(bound, start_page, start_id, trust_observed), unmatched
 
 
 def _match(draft_target: dict, flat_map: list):

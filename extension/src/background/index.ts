@@ -84,9 +84,16 @@ function tellTab(tabId: number, msg: RecordControl): void {
   });
 }
 
-/** Inject the recorder bundle into a tab (idempotent — the content guard re-syncs on re-injection). */
+/** Inject the recorder bundle into a tab (idempotent — the content guard re-syncs on re-injection).
+ *
+ * TWO worlds, and the split is not a preference (ADR-138). The recorder runs ISOLATED (the default),
+ * which is what lets it use `chrome.runtime`. The route journal must run in the page's own world:
+ * measured in Chromium, a `history.pushState` patched from ISOLATED never sees the page's own call —
+ * the page keeps the native function — so a journal in this world would report zero routes forever
+ * while every gate stayed green. Both scripts carry their own idempotency latch. */
 async function injectRecorder(tabId: number): Promise<void> {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['route-journal.js'], world: 'MAIN' });
 }
 
 async function startRecording(tabId: number): Promise<void> {
@@ -134,6 +141,18 @@ function stopRecording(): void {
 
 // A full-page navigation destroys the injected recorder (the page's JS context is replaced). Re-inject on
 // the recording tab after each top-frame load so multi-page flows keep capturing (the bridge expects them).
+//
+// ⚠ WHAT THIS LISTENER DOES NOT DO, MEASURED (ADR-138). The registry entry
+// [RECORDER-BLIND-TO-PUSHSTATE] read this filter as the cause of the recorder missing SPA route
+// changes, on the theory that `pushState` never reaches `status: 'complete'`. It does. Measured on
+// Chrome 151 and Chromium 150: EVERY route change without a load — pushState, replaceState, a bare
+// `location.hash = …`, and history.back — raises a PAIR, `{status:'loading', url:<new>}` then
+// `{status:'complete'}` (which carries no url), so this filter passes and injects on every one of
+// them; a burst of three pushState calls injects three times. And the recorder does not need it to:
+// pushState does not replace the JS context, so the content script survives and keeps recording.
+// The real blindness was in the PROTOCOL — there was no line shape for "the address changed" — and
+// that is what the route journal above fixes. Re-injection here remains correct for the case it was
+// written for: a full document load, which really does destroy the recorder.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status !== 'complete' || !status.recording || tabId !== recordingTabId) return;
   injectRecorder(tabId)
@@ -188,6 +207,13 @@ chrome.runtime.onMessage.addListener((msg: ContentMessage, sender) => {
     if (ok) status.events++;
     else status.error = 'event dropped (socket not open)';
     broadcast();
+  } else if (msg?.kind === 'recorder-warning') {
+    // ADR-138: a degradation with no other symptom (the route journal in the wrong world records
+    // nothing, silently). Only from the tab being recorded, same rule as events.
+    if (status.recording && sender.tab?.id === recordingTabId) {
+      status.error = msg.text;
+      broadcast();
+    }
   } else if (msg?.kind === 'recorder-ready') {
     // (Re)injected recorder announces itself — resync its recording state.
     const tabId = sender.tab?.id;

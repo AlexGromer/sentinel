@@ -363,6 +363,18 @@ def run_replay(ex, store, heal, plan: dict, new_target: str, run_dir: str, *,
                 nav = ex.call("browser.navigate", url=tgt)
                 note_load_speed(nav, tgt)   # HEALTH-004: the application's own load timing
                 rec["outcome"], rec["url"] = "ok", tgt
+                # ADR-138: the executor has ALWAYS returned the response status here and nothing has
+                # ever looked at it. Measured: a synthesized navigate to a client-side route on a
+                # server with no history fallback answers 404, the step was recorded `ok`, and the run
+                # exited 0 — the failure surfaced a step later, on a locator, and was blamed on the
+                # application. `status is not None` because a same-document hop (fragment only) makes
+                # no request at all and reports null; `file://` answers 200 for a file that exists and
+                # THROWS for one that does not, so the fixture corpus is unaffected (both measured).
+                status = nav.get("status") if isinstance(nav, dict) else None
+                if status is not None and int(status) >= 400:
+                    rec["outcome"], passed = "failed", False
+                    rec["error"] = f"navigate: HTTP {int(status)} for {tgt}"
+                    rec["fault"] = _fault_of(None)   # the executor arrived; the answer is the site's
             except Exception as e:
                 rec["outcome"], rec["error"], passed = "failed", str(e), False
                 rec["fault"] = _fault_of(e)

@@ -94,6 +94,16 @@ _allow("runcontrol.py::_GrpcRunControl.close::0",
        "channel teardown; the caller is discarding the client")
 _allow("healing.py::HealingEngine._visual_reground::1",
        "temp screenshot cleanup; the only consequence is a leaked file in a temp dir")
+# ADR-138. Не проглатывает, а ПЕРЕВОДИТ отказ в видимую строку выданного артефакта: вместо шага
+# рендерится комментарий `// count_equals with a non-numeric expected …` — та же форма, которой этот
+# файл уже отвечает на неотобразимый локатор (`// step N: unmapped locator`) и на неизвестное условие.
+# Скрыть настоящий отказ он не может по построению: прежнее поведение было ХУЖЕ — таблица условий
+# строилась целиком, поэтому `int(expected)` из ветки `count_equals` исполнялся для ЛЮБОГО условия и
+# ронял ValueError весь экспорт, не оставляя ни файла, ни сообщения. Замерено на `text_contains` с
+# нечисловым значением и на новом `url_contains` с маршрутом.
+_allow("exporter.py::_assert_expr::0",
+       "малформед-план рендерится комментарием В .spec.ts (видимее, чем падение без артефакта); "
+       "та же форма, что у unmapped locator / unmapped condition в этом же файле")
 _allow("__main__.py::_discard_checkpoint::0",
        "removing an optional -wal/-shm sidecar that is commonly absent")
 

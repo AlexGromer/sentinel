@@ -50,8 +50,12 @@ const SECRET_TOKEN_RE =
 // autocomplete values that mark a genuinely sensitive field (WHATWG autofill tokens).
 const SECRET_AUTOCOMPLETE = new Set(['current-password', 'new-password', 'one-time-code', 'cc-number', 'cc-csc']);
 
-/** True if a field name/id reads as a secret — token-wise, not substring-wise. */
-function nameLooksSecret(s: string): boolean {
+/** True if a field name/id reads as a secret — token-wise, not substring-wise.
+ *
+ * Exported since ADR-138: the recorder now carries a route's query string into the scenario, so the
+ * same judgement has to be applied to query PARAMETER names. One definition, not two — a second copy
+ * would drift and the drift would be a leaked token. */
+export function nameLooksSecret(s: string): boolean {
   if (!s) return false;
   const tokens = s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean);
   const joined = s.replace(/[^A-Za-z0-9]+/g, '');
