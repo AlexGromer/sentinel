@@ -217,8 +217,12 @@ def test_threshold_zero_never_arms_regression():
     assert not any(e["type"] == "hitl_needed" for e in events)
     heals = [e for e in events if e["type"] == "heal"]
     assert len(heals) == 5, heals
-    verdict = next(e for e in events if e["type"] == "verdict")
-    assert verdict["data"]["failed"] == 5, verdict   # errors were real (FailNTimesEx genuinely raised)
+    # ⚠ ADR-139: кадр `verdict` больше не эмитится УЗЛОМ графа — его печатает `outcome.announce`
+    # из того же значения, которое возвращает как код выхода процесса, и потому он недостижим для
+    # теста, вызывающего `app.invoke` напрямую. Здесь проверяется то, что действительно принадлежит
+    # графу: счётчик отказов дошёл до состояния. Согласие кадра с кодом — предмет
+    # tests/test_run_outcome_offline.py, где перебираются ОБЕ наблюдаемые величины сразу.
+    assert final.get("failed_steps") == 5, final.get("failed_steps")
     budget.reset()
 
 
@@ -245,10 +249,13 @@ def test_walkex_regression_agui_emits_without_breaking_authoring():
 
     events = _parse_agui_lines(buf.getvalue())
     types = [e["type"] for e in events]
-    assert "run.started" in types and "verdict" in types
+    # ⚠ ADR-139: `verdict` из этого перечня УБРАН намеренно — он больше не принадлежит графу. Тест
+    # про аддитивность эмиссии остался про то, что граф действительно эмитит; вердикт переехал
+    # целиком в tests/test_run_outcome_offline.py вместе со своим согласием с кодом выхода.
+    assert "run.started" in types
+    assert "verdict" not in types, (
+        "узел графа снова печатает вердикт — это второй автор, ради запрета которого ADR-139 и писан")
     assert "heal" not in types, "the heal node is never entered on an all-succeeding walk"
-    verdict = next(e for e in events if e["type"] == "verdict")
-    assert verdict["data"]["verdict"] == "ok" and verdict["data"]["exit_code"] == 0, verdict
     budget.reset()
 
 

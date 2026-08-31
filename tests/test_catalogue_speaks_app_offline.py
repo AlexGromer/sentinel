@@ -73,14 +73,21 @@ def test_drift_is_visible_to_someone_filtering_the_business_side():
 # 2. Partial grounding is no longer silent.
 # --------------------------------------------------------------------------------------------
 def _author(grounded, unmatched, tmp, is_describe=False):
-    """Drive the SHIPPED _write_scenario and capture what it said."""
+    """Drive the SHIPPED authoring path and capture what it said.
+
+    ⚠ ADR-139: `_write_scenario` больше не решает код выхода — она пишет файлы и отдаёт ФАКТЫ, а код
+    выводит `outcome.decide`, единственный решатель на все пути. Здесь воспроизведена та же пара
+    вызовов, что делает `_run_explore`, поэтому проверяется ШИППЕД-правило, а не его копия."""
     from brain.__main__ import _write_scenario
+    from brain.outcome import Facts, decide
     steps = [{"action_type": "click", "intent": f"s{i}", "locator": {"role": "button", "name": f"b{i}"}}
              for i in range(grounded)]
     buf = io.StringIO()
     with redirect_stderr(buf):
-        rc = _write_scenario(tmp, "r", "file:///s/app.html", steps,
-                             [f"ref{i}" for i in range(unmatched)], is_describe)
+        facts = _write_scenario(tmp, "r", "file:///s/app.html", steps,
+                                [f"ref{i}" for i in range(unmatched)], is_describe)
+    rc = decide(Facts(mode="describe" if is_describe else "goal",
+                      grounded=facts["grounded"], unmatched=facts["unmatched"])).exit_code
     return rc, buf.getvalue()
 
 

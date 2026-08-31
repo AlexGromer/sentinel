@@ -194,7 +194,9 @@ def test_redaction_runs_where_the_trace_is_kept():
     src = (REPO / "brain" / "__main__.py").read_text()
     i = src.index("def _stop_trace(")
     body = src[i:src.index("\ndef ", i + 10)]
-    keep = body[body.index("if _keep_trace(exit_code):"):body.index("else:")]
+    # ADR-139: аргумент называется `outcome` (решение об уликах перешло с числа на исход); предмет
+    # проверки — что редактирует ИМЕННО ветка удержания — не изменился.
+    keep = body[body.index("if _keep_trace(outcome):"):body.index("else:")]
     assert "_redact_trace(" in keep, f"the keep branch does not redact:\n{keep}"
     discard = body[body.index("else:"):]
     assert "_redact_trace(" not in discard, "the discard branch redacts a file that was never written"

@@ -231,19 +231,36 @@ def test_the_keep_rule_is_the_trace_rule_and_the_lever_that_reverses_it_exists()
     The lever matters as much as the rule: a person who asked to record a run that then PASSED gets no
     file, and without a documented way to keep it that reads as the mode being broken rather than as
     the policy working. The executor announces the discard by name; here we pin that the name is real."""
+    # ADR-139: the argument is the run's OUTCOME, not a bare number — the decision moved off the
+    # integer so that a green-but-incomplete run can keep its evidence too, behind an explicit lever.
+    # The rule under test did not change: a clean run discards, a non-zero one keeps.
     from brain.__main__ import _keep_video
+    from brain.outcome import Outcome, VERDICT_WORD
+
+    def _o(code, degraded=False):
+        return Outcome(exit_code=code, verdict=VERDICT_WORD.get(code, "problem"),
+                       degraded=degraded, reason="", failed=0)
 
     os.environ.pop("SENTINEL_VIDEO_ALWAYS", None)
-    check("a clean run does NOT keep the video (the trace rule, ADR-084)", _keep_video(0) is False)
-    check("a failed run keeps it — that is the run somebody will want to watch", _keep_video(1) is True)
+    os.environ.pop("SENTINEL_VIDEO_ON_DEGRADED", None)
+    check("a clean run does NOT keep the video (the trace rule, ADR-084)", _keep_video(_o(0)) is False)
+    check("a failed run keeps it — that is the run somebody will want to watch", _keep_video(_o(1)) is True)
     check("...and so does a golden regression (exit 2), where no step failed at all",
-          _keep_video(2) is True,
+          _keep_video(_o(2)) is True,
           "exit_code != 0 rather than 'a step failed': a regression is exactly a case a human wants "
           "to look at frame by frame")
+    check("a GREEN but incomplete run still discards by default — ADR-084 is not rolled back silently",
+          _keep_video(_o(0, degraded=True)) is False,
+          "ADR-139 widened WHAT can keep evidence, not WHEN it happens without being asked")
+    os.environ["SENTINEL_VIDEO_ON_DEGRADED"] = "1"
+    try:
+        check("...and keeps it once the lever is thrown", _keep_video(_o(0, degraded=True)) is True)
+    finally:
+        os.environ.pop("SENTINEL_VIDEO_ON_DEGRADED", None)
     os.environ["SENTINEL_VIDEO_ALWAYS"] = "1"
     try:
         check("SENTINEL_VIDEO_ALWAYS=1 keeps a clean run's video — the lever the discard message names",
-              _keep_video(0) is True)
+              _keep_video(_o(0)) is True)
     finally:
         os.environ.pop("SENTINEL_VIDEO_ALWAYS", None)
 
