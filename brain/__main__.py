@@ -844,9 +844,27 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                 print(f"CHAT TURN COMPLETE — conversation={conversation_id}, "
                       f"{len(scenario_steps)} grounded, {len(scenario_unmatched)} unmatched")
                 print("=" * 60)
+                # ⚠ `crawl_complete` ЗДЕСЬ НЕ ПЕРЕДАВАЛОСЬ, и брался умолчательный `True` — ADR-144.
+                # Поле заведено (ADR-131) ровно затем, чтобы `unmatched` не читался как фантазия
+                # модели, когда причина в оборванном обходе; умолчание делало его истинным именно
+                # там, где обход и упирается в потолок. Замер 2026-09-01 на холодном ходе чата:
+                # `max_steps=3` → `plan.json` `completeness.complete: false` и `scenario.json`
+                # `crawl_complete: true` В ОДНОМ КАТАЛОГЕ; при `max_steps=60` оба говорили `true`,
+                # то есть расхождение ровно в оборванном случае.
+                #
+                # Выражение то же, что на пути explore (:435), и это НЕ копия правила, а чтение
+                # одного и того же факта: полноту вычисляет узел `report` и кладёт в состояние
+                # рядом с `plan_hash`. Здесь она только читается.
+                #
+                # ⚠ Умолчание `True` у параметра оставлено НАМЕРЕННО и теперь опасно ровно для
+                # одного случая — нового места вызова, которое про него забудет. Против этого
+                # заведён вывод в `tests/test_crawl_completeness_offline.py`: множество мест вызова
+                # берётся ОБХОДОМ AST, и место, не передающее параметр явно, краснеет.
                 authored = _write_scenario(out, run_id, eff_target, scenario_steps,
                                            scenario_unmatched, bool(describe),
-                                           author_model=getattr(scenario_head, "model", None))
+                                           author_model=getattr(scenario_head, "model", None),
+                                           crawl_complete=bool(
+                                               (final.get("completeness") or {}).get("complete", True)))
                 return announce(decide(facts_from(
                     final, mode=("describe" if describe else "goal"),
                     grounded=authored["grounded"], unmatched=authored["unmatched"])), run_id)

@@ -22,6 +22,7 @@ Run:  .venv/bin/python tests/test_crawl_completeness_offline.py
 управляемый: только так можно потребовать падения на ЗАДАННОМ шаге, а живой браузер такого не обещает.
 Устойчивость к настоящей странице проверяет tests/test_crawl_survives_any_page_offline.py на фикстуре.
 """
+import ast
 import io
 import json
 import os
@@ -388,6 +389,12 @@ def test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_sho
     `completeness: {complete: false, reason: "max_steps"}` и `scenario.json` с
     `crawl_complete: true`, и читатель не мог знать, какому верить.
 
+    ⚠ ЭТА ПРОВЕРКА ЗАКРЫЛА ТОЛЬКО ПОЛОВИНУ, И ЭТО СТОИТ ПОМНИТЬ. Она гоняет `_run_explore`, поэтому
+    чат оставался открытым ещё месяц: абзац выше называл ОБА пути, а тело трогало ОДИН. Замер
+    2026-09-01 подтвердил расхождение на холодном ходе чата (ADR-144). Отсюда две проверки ниже:
+    поведенческая на чат-путь и — важнее — вывод мест вызова обходом AST, потому что
+    следующий путь записи сценария не имеет права зависеть от того, вспомнил ли кто-то про него.
+
     Утверждение ПАРНОЕ: полнота проверяется и на оборванном прогоне, и на прошедшем до конца.
     Половина про `false` удовлетворяется константой `False`, половина про `true` — константой
     `True`; вместе они требуют, чтобы значение ВЫВОДИЛОСЬ."""
@@ -411,6 +418,138 @@ def test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_sho
         print(f"  ok  {label}: plan={want} · scenario={json.load(open(art / 'scenario.json')).get('crawl_complete')}")
 
 
+def _write_scenario_call_sites():
+    """Места вызова `_write_scenario` — ОБХОДОМ AST, а не перечнем (ADR-144).
+
+    Перечень здесь провалился бы ровно так, как описывает принцип 5 `docs/DEVELOPMENT.md`: лишнее
+    в нём видно, а ПРОПУЩЕННОЕ — нет. Именно так и вышло: параметр завели (ADR-131), закрыли им путь
+    salvage и путь explore, а третье место — холодный ход чата — осталось, и его отсутствие ничем
+    себя не выдавало почти месяц. ⚠ Коммит ADR-139 ПЕРЕПИСАЛ эти самые строки и параметр всё равно
+    не добавил: место вызова читали глазами, и глаза не видят того, чего нет.
+
+    Возвращает [(строка, передан ли `crawl_complete` ЯВНО)].
+    """
+    src = (pathlib.Path(REPO) / "brain" / "__main__.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not (isinstance(fn, ast.Name) and fn.id == "_write_scenario"):
+            continue
+        explicit = any(kw.arg == "crawl_complete" for kw in node.keywords)
+        out.append((node.lineno, explicit))
+    return sorted(out)
+
+
+# Пол на число мест вызова. Обязательный спутник вывода: обход, переставший что-либо находить,
+# прошёл бы идеально над пустым множеством — а именно пустое множество и получится, если функцию
+# переименуют или вызовы уедут в другой модуль.
+CALL_SITE_FLOOR = 3   # замерено 2026-09-01: salvage, explore, холодный ход чата
+
+
+def test_every_place_that_writes_a_scenario_says_whether_the_crawl_was_complete():
+    """Умолчание `True` безопасно ровно до следующего места вызова, которое про него забудет.
+
+    KILLS: снятие `crawl_complete=` с ЛЮБОГО из трёх мест — включая то, которое ADR-144 и починил.
+    """
+    sites = _write_scenario_call_sites()
+    if len(sites) < CALL_SITE_FLOOR:
+        fail(f"обход AST нашёл {len(sites)} мест вызова `_write_scenario`, пол {CALL_SITE_FLOOR} — "
+             f"вывод обмелел, и проверка ниже утверждала бы про пустое множество")
+        return
+    silent = [ln for ln, explicit in sites if not explicit]
+    if silent:
+        fail(f"brain/__main__.py: место(а) вызова {silent} зовут `_write_scenario` БЕЗ явного "
+             f"`crawl_complete` — берётся умолчание `True`, и артефакт заявит полный обход там, где "
+             f"обход упёрся в потолок. Ровно этим полем и отличается «модель нафантазировала» от "
+             f"«мы не досмотрели»")
+    print(f"  ok  все {len(sites)} мест вызова `_write_scenario` передают `crawl_complete` явно "
+          f"(строки {[ln for ln, _ in sites]})")
+
+
+def _run_chat_real(goal: str, max_steps: int):
+    """Прогнать НАСТОЯЩИЙ `_run_chat` (холодный ход) и вернуть каталог артефакта.
+
+    ⚠ Чат требует того, чего не требует explore, и каждое требование здесь снимается ИМЕНОВАННЫМ
+    способом, а не правкой продукта: планировщик — штатным `SENTINEL_HEALTH_SKIP` (у health есть
+    громкий per-component override ровно для таких случаев), исполнитель — подменой `make_executor`.
+    Реплика исполнителя расширена двумя вербами teardown, которых путь explore не зовёт: без них
+    прогон падал на `ex.close()` ДО записи сценария, и гейт мерил бы отсутствие файла вместо его
+    содержимого.
+    """
+    import contextlib
+    import importlib
+    art = tempfile.mkdtemp(prefix="crawl-chat-")
+    os.environ["SENTINEL_LIVE_FRAMES"] = "0"
+    os.environ["GOAL"] = goal
+    os.environ["MESSAGE"] = goal
+    os.environ["SENTINEL_HEALTH_SKIP"] = "llm"
+    os.environ["PW_EXECUTOR_CMD"] = "unused-the-executor-is-replaced"
+    for k in ("ORCH_ADDR", "DESCRIBE", "CHECKPOINT_DSN"):
+        os.environ.pop(k, None)
+
+    class ChatEx(FakeEx):
+        def close(self):
+            pass
+
+        def call(self, m, **p):
+            if m in ("browser.traceStop", "browser.videoStop"):
+                return {"ok": True}
+            return super().call(m, **p)
+
+    main_mod = importlib.import_module("brain.__main__")
+    prev_make = main_mod.make_executor
+    try:
+        budget.reset(plan_limit=10 ** 9, heal_limit=10 ** 9)
+        eventlog.reset_degradations()
+        fake = ChatEx()
+        main_mod.make_executor = lambda *a, **k: fake
+        with contextlib.redirect_stdout(io.StringIO()):
+            main_mod._run_chat("chatrun", pathlib.Path(art), f"conv-{max_steps}",
+                               "http://t/", 0.85, max_steps)
+    finally:
+        main_mod.make_executor = prev_make
+        for k in ("GOAL", "MESSAGE", "SENTINEL_HEALTH_SKIP", "PW_EXECUTOR_CMD"):
+            os.environ.pop(k, None)
+    return pathlib.Path(art)
+
+
+def test_the_chat_path_does_not_claim_a_complete_crawl_either():
+    """Тот же контракт, что у explore, на пути, который его НЕ соблюдал (ADR-144).
+
+    ⚠ Замер до правки: холодный ход с `max_steps=3` клал в один каталог `plan.json` с
+    `completeness.complete: false` и `scenario.json` с `crawl_complete: true`; при `max_steps=60`
+    оба говорили `true`. То есть расхождение было ровно в оборванном случае — там, где поле и
+    заводилось.
+
+    Утверждение ПАРНОЕ по той же причине, что у explore: половина про `false` удовлетворяется
+    константой `False`, половина про `true` — константой `True`; вместе они требуют вывода.
+    KILLS: снятие `crawl_complete=` с места вызова в `_run_chat`.
+    """
+    for label, max_steps, want in (("оборванный потолком", 3, False), ("прошедший до конца", 60, True)):
+        art = _run_chat_real("log in and finish", max_steps)
+        plan_p = art / "plan.json"
+        if not plan_p.exists():
+            fail(f"чат/{label}: plan.json не записан — холодный ход обязан оставить план")
+            continue
+        got = (json.load(open(plan_p)).get("completeness") or {}).get("complete")
+        if got is not want:
+            fail(f"чат/{label}: сам план объявил complete={got!r}, ожидалось {want!r} — фикстура не "
+                 "воспроизводит случай, и утверждение ниже проверяло бы не то")
+            continue
+        sc = art / "scenario.json"
+        if not sc.exists():
+            fail(f"чат/{label}: scenario.json не записан — ход чата обязан оставить сценарий")
+            continue
+        said = json.load(open(sc)).get("crawl_complete")
+        if said is not want:
+            fail(f"чат/{label}: scenario.json говорит crawl_complete={said!r}, а plan.json — "
+                 f"completeness.complete={want!r}. Два артефакта ОДНОГО прогона противоречат друг другу")
+        print(f"  ok  чат/{label}: plan={want} · scenario={said}")
+
+
 def main() -> int:
     for fn in (test_a_crawl_that_hit_the_ceiling_says_so,
                test_a_crawl_that_finished_says_that_too,
@@ -418,7 +557,9 @@ def main() -> int:
                test_a_degraded_crawl_says_so_in_the_artefact,
                test_a_planner_that_stopped_on_its_own_is_not_a_covered_site,
                test_a_click_that_changed_the_address_is_recognised_as_navigation,
-               test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_short):
+               test_the_scenario_does_not_claim_a_complete_crawl_when_the_crawl_was_cut_short,
+               test_every_place_that_writes_a_scenario_says_whether_the_crawl_was_complete,
+               test_the_chat_path_does_not_claim_a_complete_crawl_either):
         fn()
     if failures:
         print(f"FAIL — {len(failures)} проблем(а):")
