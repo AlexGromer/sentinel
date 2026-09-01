@@ -21,6 +21,7 @@ import {
 } from '../shared/protocol.js';
 import { createWsClient } from './ws-client.js';
 import { createTakeover } from './takeover.js';
+import { ensureRecorder } from './ensure-recorder.js';
 
 const status: Status = emptyStatus();
 const panels = new Set<chrome.runtime.Port>();
@@ -153,13 +154,19 @@ function stopRecording(): void {
 // The real blindness was in the PROTOCOL — there was no line shape for "the address changed" — and
 // that is what the route journal above fixes. Re-injection here remains correct for the case it was
 // written for: a full document load, which really does destroy the recorder.
+//
+// ⚠ ADR-142 ACTS ON THAT MEASUREMENT. The paragraph above has described this waste since ADR-138 —
+// "a burst of three pushState calls injects three times" — and the code kept doing it, because the
+// comment was corrected and the behaviour was not. The event cannot tell the two cases apart
+// (`{status:'complete'}` carries no url), so the tab is ASKED instead: a live content script answers
+// `tabs.sendMessage`, a replaced document does not. See ensure-recorder.ts for why the ping message
+// is the very `record-control` this listener used to send AFTER injecting.
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status !== 'complete' || !status.recording || tabId !== recordingTabId) return;
-  injectRecorder(tabId)
-    .then(() => tellTab(tabId, { kind: 'record-control', recording: true }))
-    .catch(() => {
-      /* tab closed or not scriptable — recorder-ready (if any) will resync */
-    });
+  void ensureRecorder(tabId, {
+    ping: (id) => chrome.tabs.sendMessage(id, { kind: 'record-control', recording: true }),
+    inject: (id) => injectRecorder(id),
+  });
 });
 
 async function handlePanelCommand(cmd: PanelCommand): Promise<void> {

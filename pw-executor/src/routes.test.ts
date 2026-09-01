@@ -333,3 +333,57 @@ test('the journal is bounded, and what it dropped is counted rather than silentl
     await ex.close();
   }
 });
+
+test('a route reopened right after a drain is recorded — the drain closes the dedup window', async () => {
+  // ADR-142. Дедуп подряд идущих повторов (`last`) переживал слив: он продолжал сравнивать с
+  // записью из ПРЕДЫДУЩЕГО окна, которого у читателя журнала уже нет. Замер до правки: клик #sync,
+  // слив отдал одну запись; клик #sync ЕЩЁ РАЗ, слив отдал ПУСТО — возврат на тот же адрес сразу
+  // после слива исчезал бесследно. Это противоречило контракту, записанному в шапке routes.ts:
+  // «A → B → A остаётся тремя записями — это разные моменты, и обход обязан видеть возврат».
+  // KILLS: `last`, переживающий take() (та самая редакция, что стояла до ADR-142).
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');                        // сбросить след загрузки
+
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    const first = await ex.call<Take>('browser.routes');
+    assert.ok(first.routes.some((r) => /#\/sync$/.test(r.url)),
+      `предпосылка не выполнена — первый переход не записан: ${JSON.stringify(first.routes)}`);
+
+    // Тот же адрес ещё раз, уже в НОВОМ окне наблюдения. Для приложения это отдельный момент.
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    const second = await ex.call<Take>('browser.routes');
+    assert.ok(second.routes.some((r) => /#\/sync$/.test(r.url)),
+      `возврат на тот же адрес сразу после слива не записан (${JSON.stringify(second.routes)}) — ` +
+      'дедуп сравнивает с записью из окна, которое уже отдано и очищено');
+  } finally {
+    await ex.close();
+  }
+});
+
+test('inside ONE window a repeated address is still collapsed — the ceiling guard survives', async () => {
+  // Парная половина к проверке выше, и она существует ровно затем, чтобы починка не была сделана
+  // ценой того, ради чего `last` заведён: `replaceState` на каждый чих не имеет права выбирать
+  // потолок журнала копиями одного адреса.
+  // KILLS: снятие дедупа целиком (например, удаление проверки `href === last`).
+  const ex = new Exec();
+  try {
+    await open(ex);
+    await ex.call<Take>('browser.routes');
+
+    // Три перехода на ОДИН адрес без слива между ними.
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+    const took = await ex.call<Take>('browser.routes');
+
+    const sync = took.routes.filter((r) => /#\/sync$/.test(r.url));
+    assert.equal(sync.length, 1,
+      `внутри одного окна адрес записан ${sync.length} раз(а) — дедуп снят, и приложение, ` +
+      `синхронизирующее адрес через replaceState, выберет потолок журнала копиями: ` +
+      JSON.stringify(took.routes));
+  } finally {
+    await ex.close();
+  }
+});

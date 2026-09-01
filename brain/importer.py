@@ -211,6 +211,107 @@ def _modifier_notes(line):
     return notes
 
 
+# --- url_contains: ОДНО значение `expected` на весь продукт — ЛИТЕРАЛЬНАЯ ПОДСТРОКА (ADR-142) ----
+#
+# ⚠ ПЯТЬ МЕСТ ТРОГАЮТ `expected`, И РАСХОДИЛОСЬ РОВНО ОДНО — ЭТО. Исполнитель
+# (`pw-executor/src/server.ts`) считает подстроку: `u.href.includes(want)`. Экспортёр
+# (`brain/exporter.py`) экранирует значение НАМЕРЕННО, чтобы согласоваться с исполнителем, и это
+# записано в его докстринге. Путь Cypress ниже кладёт литерал. Продюсер `record_bridge` кладёт
+# наблюдённый маршрут. А путь Playwright клал СЫРУЮ РЕГУЛЯРКУ — значение, которое исполнитель
+# понимает буквально и потому не принимает никогда.
+#
+# ЗАМЕР (2026-09-01), сквозной: `toHaveURL(/dash.*board/)` сохранялся как `dash.*board`, и
+# правило исполнителя давало False на `/dashboard` и на `/dash-XYZ-board` — то есть на ВСЕХ адресах,
+# ради которых регулярка писалась; True оно давало только на буквальном `/dash.*board`, которого не
+# бывает. Обратный экспорт выдавал `/dash\.\*board/` — ДРУГУЮ регулярку, так что круг был не только
+# нерабочим, но и менял смысл.
+#
+# ПОЧЕМУ ЛИТЕРАЛЬНЫЙ ФРАГМЕНТ, А НЕ ОТКАЗ. Утверждение, не срабатывающее никогда, — это молчаливо
+# зелёный шаг; выбросить его тоже нельзя, иначе импорт теряет проверку, которую автор написал.
+# Берётся самый длинный ЛИТЕРАЛЬНЫЙ фрагмент образца: он СЛАБЕЕ оригинала, но ВЕРЕН — `board`
+# действительно есть и в `/dashboard`, и в `/dash-XYZ-board`. Ослабление не молчит: рядом кладётся
+# заметка `narrowed`, потому что «стало слабее» и «стало неправдой» читатель обязан различать.
+_RE_META = set(".^$*+?()[]{}|")
+_RE_QUANT = set("*+?{")
+
+
+def _literal_fragments(pattern):
+    """Литеральные куски регулярного образца, в порядке появления.
+
+    Кусок обрывается на метасимволе. Символ, за которым стоит квантификатор, в кусок НЕ входит:
+    в `dashboards?` буква `s` необязательна, и включить её значило бы придумать утверждение строже
+    исходного — ровно та ошибка, которую этот разбор и лечит.
+    """
+    out, buf, i = [], [], 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            nxt = pattern[i + 1]
+            # `\d`, `\w`, `\s`, `\b` и прочие классы — не литералы; всё остальное экранирует символ.
+            if nxt.isalnum():
+                out.append("".join(buf)); buf = []
+            else:
+                if i + 2 < len(pattern) and pattern[i + 2] in _RE_QUANT:
+                    out.append("".join(buf)); buf = []
+                    i += 3
+                    continue
+                buf.append(nxt)
+            i += 2
+            continue
+        if ch in _RE_META:
+            out.append("".join(buf)); buf = []
+            i += 1
+            continue
+        if i + 1 < len(pattern) and pattern[i + 1] in _RE_QUANT:
+            out.append("".join(buf)); buf = []
+            i += 2
+            continue
+        buf.append(ch)
+        i += 1
+    out.append("".join(buf))
+    return [f for f in out if f]
+
+
+def _url_expected(arg, line):
+    """(значение `expected`, заметки) для `toHaveURL(...)`.
+
+    Возвращает ЛИТЕРАЛЬНУЮ ПОДСТРОКУ — единственную форму, которую понимает исполнитель.
+    """
+    notes = []
+    rx = re.match(r"^/(.*)/[a-z]*$", arg)
+    if rx:
+        pattern = rx.group(1)
+        frags = _literal_fragments(pattern)
+        best = max(frags, key=len) if frags else ""
+        if not best:
+            notes.append({"kind": "unmatched", "line": line,
+                          "why": "toHaveURL(/%s/) has no literal fragment at all, so no substring "
+                                 "assertion can stand for it; the step is DROPPED rather than left "
+                                 "as an assertion that can never hold" % pattern})
+            return None, notes
+        if best != pattern:
+            notes.append({"kind": "narrowed", "construct": "toHaveURL(/%s/)" % pattern,
+                          "why": "`url_contains` compares a LITERAL substring (the executor runs "
+                                 "`href.includes(expected)`), so the pattern cannot survive as a "
+                                 "regex. Kept its longest literal fragment %r — WEAKER than the "
+                                 "original, but true; storing the pattern itself produced an "
+                                 "assertion that never held on any address it was written for."
+                                 % best,
+                          "line": line})
+        return best, notes
+    literal = _unquote(arg)
+    # ⚠ ЧЕТВЁРТАЯ ОСЬ, КОТОРУЮ РЕЕСТР НЕ НАЗЫВАЛ. Строковая форма `toHaveURL('...')` — матчер
+    # РАВЕНСТВА, а `url_contains` сравнивает подстроку. Замерено: `toHaveURL('https://app.test/plain')`
+    # принимало `https://app.test/plain?x=1`, то есть импорт молча ОСЛАБЛЯЛ утверждение. Значение
+    # верное, ослабление настоящее — поэтому оно объявляется, а не подразумевается.
+    notes.append({"kind": "narrowed", "construct": "toHaveURL(%s)" % arg,
+                  "why": "toHaveURL with a string is an EQUALITY matcher; `url_contains` compares a "
+                         "substring, so the imported step also accepts addresses that merely contain "
+                         "this one (a query string, a longer path)",
+                  "line": line})
+    return literal, notes
+
+
 def parse_playwright_spec(src, source="<spec>"):
     """Transpile @playwright/test source into Sentinel steps + a rewrite report.
 
@@ -256,10 +357,18 @@ def parse_playwright_spec(src, source="<spec>"):
                 step["locator"] = loc
             if am.group("arg").strip():
                 arg = am.group("arg").strip()
-                # toHaveURL(/dashboard/) carries a regex literal, not a string — strip the // delimiters
-                # so the stored `expected` is the pattern, matching how url_contains is authored natively.
-                rx = re.match(r"^/(.*)/[a-z]*$", arg)
-                step["expected"] = rx.group(1) if rx else _unquote(arg)
+                if cond == "url_contains":
+                    # ⚠ ЗДЕСЬ СНИМАЛИСЬ ДЕЛИМИТЕРЫ И СОХРАНЯЛСЯ САМ ОБРАЗЕЦ, с комментарием «matching
+                    # how url_contains is authored natively» — а нативно `url_contains` это
+                    # ЛИТЕРАЛЬНАЯ ПОДСТРОКА, и образец в ней не срабатывал никогда (ADR-142).
+                    value, unotes = _url_expected(arg, line)
+                    cur["notes"].extend(unotes)
+                    if value is None:
+                        cur["notes"].extend(_modifier_notes(line))
+                        continue          # шага нет вовсе — см. заметку `unmatched` выше
+                    step["expected"] = value
+                else:
+                    step["expected"] = _unquote(arg)
             cur["steps"].append(step)
             cur["notes"].extend(_modifier_notes(line))
             cstrat = _strategy_of(loc) if loc else None
