@@ -40,7 +40,18 @@ pipeline {
               --aut-version "${GIT_COMMIT:-unknown}"
           ''')
           echo "sentinel exit code: ${code}"
-          // 0 pass · 1 the test found a problem · 2 visual/golden regression · 3 config/plan-integrity.
+          // 0 pass · 1 the test found a problem · 2 visual/golden regression · 3 config/plan-integrity
+          // · 4 OUR tool crashed · 5 OUR tool crashed but saved what it found.
+          //
+          // WHOSE PROBLEM IT IS decides the build result, not how bad it sounds. 1 and 2 are findings
+          // ABOUT YOUR APPLICATION and fail the build. 3, 4 and 5 are not: 3 is how the run was asked
+          // for, and 4/5 are Sentinel breaking. A red build there tells you to go and debug your own
+          // application, which is the one thing that is certainly not the answer — so they go UNSTABLE,
+          // loudly, with the reason in the log.
+          //
+          // ⚠ This chain used to end in `error "unexpected exit ${code}"` and knew only 0..3, so exit 4
+          // and exit 5 — both shipped and both reachable — ABORTED a user's pipeline as an unexplained
+          // failure. Measured 2026-08-31 (ADR-141).
           if (code == 0) {
             echo 'PASS — UI behaves as the frozen plan expects.'
           } else if (code == 1) {
@@ -50,6 +61,15 @@ pipeline {
           } else if (code == 3) {
             currentBuild.result = 'UNSTABLE'
             echo 'UNSTABLE: config / plan-integrity error (exit 3) — needs a human (re-baseline or fix config).'
+          } else if (code == 4) {
+            currentBuild.result = 'UNSTABLE'
+            echo 'UNSTABLE: Sentinel itself failed (exit 4). This is OUR bug, not a finding about your ' +
+                 'application — nothing was concluded about it. Please attach the run output to a bug report.'
+          } else if (code == 5) {
+            currentBuild.result = 'UNSTABLE'
+            echo 'UNSTABLE: Sentinel itself failed (exit 5), but everything it had found was saved. ' +
+                 'Still OUR bug, not a finding about your application; the artefacts say at which step ' +
+                 'it stopped, and the plan/map/scenario up to that point are usable.'
           } else {
             error "FAIL: unexpected exit ${code}."
           }

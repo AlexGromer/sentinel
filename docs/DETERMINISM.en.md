@@ -287,6 +287,9 @@ reproducibility guarantee the provider cannot give (see ADR-006 in `../ARCHITECT
 | **1** | One or more step failures, no golden-diff regression | Functional test failure; no baseline impact |
 | **2** | Golden-diff regression on a non-quarantined step | `a11y_hash` divergence on a milestone step (**always** gates); `screenshot_hash` divergence only when `SENTINEL_VISUAL_AUTHORITATIVE=1` (advisory by default) |
 | **3** | Plan-integrity violation **or** budget exhausted | Hash mismatch on load, explicit budget cap hit, or `--force-replay` used in CI mode |
+| **4** | THE TOOL ITSELF failed (ADR-087) | Our own exception, a vacuous crawl, or an artefact of ours left unwritten — fault `tool`, NOT a finding about the application |
+| **5** | The tool failed, findings saved (ADR-131) | The crawl up to the break is written to the artefact: plan, map, scenario |
+| **-1** | Could not be spawned, or killed by a signal | ⚠ A synthetic control-api code; no real process returns it |
 
 Quarantined steps are **excluded** from exit-code computation: a quarantined step
 that fails does not push the run from exit 0 to exit 1. Quarantine exists precisely

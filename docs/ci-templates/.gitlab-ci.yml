@@ -51,10 +51,19 @@ sentinel-replay:
       for d in runs/*/; do
         docker compose run --rm sentinel report --run "/$d" || true;
       done
-  # 0 pass → success · 1 step-fail / 2 visual regression → failure · 3 config/plan-integrity → warning.
+  # 0 pass → success · 1 step-fail / 2 visual regression → failure · 3 config/plan-integrity,
+  # 4 OUR tool crashed, 5 OUR tool crashed but saved its findings → warning.
+  #
+  # WHOSE PROBLEM IT IS decides this, not how bad it sounds. 1 and 2 are findings ABOUT YOUR
+  # APPLICATION and should fail the pipeline. 3, 4 and 5 are not — 4 and 5 are Sentinel breaking, and a
+  # red job there sends you to debug your own application, which is the one answer that is certainly
+  # wrong. ⚠ Until ADR-141 this list held only 3, so exits 4 and 5 — both shipped, both reachable —
+  # were a hard red. Measured 2026-08-31.
   allow_failure:
     exit_codes:
       - 3
+      - 4
+      - 5
   artifacts:
     when: always
     paths:

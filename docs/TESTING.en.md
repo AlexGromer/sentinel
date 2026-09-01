@@ -368,8 +368,15 @@ In baseline mode the file is named `baseline-report.json`.
 | **1** | At least one step failed without healing; or describe returned any unmatched; or zero grounded steps |
 | **2** | Golden regression — a11y hash or screenshot hash diverges from baseline |
 | **3** | Plan integrity violation (`plan_hash` mismatch); mutually exclusive flags (`GOAL` + `DESCRIBE`); malformed RunConfig; unknown `--scenario`; `secretRef` present with `PW_NO_TRACE != '1'` |
+| **4** | THE TOOL ITSELF failed: our own exception, or the crawl saw nothing at all (and not because there was nothing to see), or it failed to write its own artefact. This is NOT a finding about the application |
+| **5** | The tool itself failed, but what it found was SAVED: the plan, the map and the proposed scenario are in the artefact, and they say at which step it stopped |
+| **-1** | The process could not be spawned, or was killed by a signal. ⚠ A synthetic code: no real process exits with it — control-api assigns it by pairing `state` with a missing code |
 
-In CI: exit 0 or 1 are normal outcomes (1 = "test found a problem"); exit 2 = UI regression; exit 3 = configuration error, requires manual intervention.
+In CI: exit 0 or 1 are normal outcomes (1 = "test found a problem"); exit 2 = UI regression; exit 3 = configuration error, requires manual intervention; exits 4 and 5 are **our** breakage, not a finding about your application (the templates make them `unstable` rather than a failure).
+
+> The list is derived from `brain/events.json` → `exit_codes` and checked by the gate
+> `tests/test_exit_code_surfaces_offline.py` (ADR-141). A row for a code the catalogue does not
+> declare, and a missing row for one it does, are both red.
 
 ---
 

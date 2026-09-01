@@ -72,10 +72,16 @@ type ExitInfo struct {
 	Icon     string `json:"icon"`
 	Severity string `json:"severity"`
 	Fault    string `json:"fault"`
-	RU       string `json:"ru"`
-	EN       string `json:"en"`
-	RUHint   string `json:"ru_hint"`
-	ENHint   string `json:"en_hint"`
+	// Verdict is the WORD this exit code means — ADR-141. It is read from the catalogue rather than
+	// switched on here because the switch was the defect: verdictEnum named four codes and sent every
+	// other one to `problem` through a `default`, so a run that brain had already called
+	// `tool_failure_salvaged` was recorded as `problem`. Measured 2026-08-31: exits 4, 5 and -1 all
+	// lost their word crossing this boundary. `Verdict` says WHAT happened; `Fault` says WHOSE it is.
+	Verdict string `json:"verdict"`
+	RU      string `json:"ru"`
+	EN      string `json:"en"`
+	RUHint  string `json:"ru_hint"`
+	ENHint  string `json:"en_hint"`
 }
 
 // Foreign is one boundary-classification rule for output we do not instrument (Playwright, Node,

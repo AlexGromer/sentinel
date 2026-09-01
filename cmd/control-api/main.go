@@ -51,6 +51,7 @@ import (
 	"syscall"
 	"time"
 
+	eventcatalog "github.com/AlexGromer/sentinel/brain"
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 	"github.com/AlexGromer/sentinel/internal/svclog"
 )
@@ -1270,18 +1271,25 @@ func resultVerdict(artifactVerdict string, exit int) string {
 	return verdictEnum(exit)
 }
 
-// verdictEnum maps the structured exit code to ResultRecord.verdict (proto: pass|problem|regression|integrity).
+// verdictEnum maps the structured exit code to ResultRecord.verdict, READ FROM THE CATALOGUE
+// (brain/events.json -> exit_codes[N].verdict). ADR-141.
+//
+// It used to be a switch naming 0, 2 and 3 with a `default: return "problem"`. That default is what
+// the ADR-113 consolidation missed: brain/outcome.py already produced seven words, and three of them
+// — `tool_failure` (4), `tool_failure_salvaged` (5) and `not_started` (-1) — were swallowed here and
+// recorded as `problem`. Measured 2026-08-31, all three. The Results domain therefore showed an amber
+// "the run found a problem" for a run whose own diagnosis was "OUR tool broke", which is the precise
+// confusion the `fault` axis exists to prevent.
+//
+// An undeclared code is NOT invented into a word. It becomes "unknown", which the hub renders as
+// "UNKNOWN EXIT CODE" — the same choice ExitInfoOf documents and the same one renderBuildVerdict
+// already made. Returning "problem" instead would be the old defect in a new place: it reads as a
+// finding about the application, which is exactly what an unexplainable exit is not known to be.
 func verdictEnum(exit int) string {
-	switch exit {
-	case 0:
-		return "pass"
-	case 2:
-		return "regression"
-	case 3:
-		return "integrity"
-	default:
-		return "problem" // exit 1 (or any other non-success): the run found a problem
+	if info, ok := eventcatalog.ExitInfoOf(exit); ok && info.Verdict != "" {
+		return info.Verdict
 	}
+	return "unknown"
 }
 
 // durationMs is finish-minus-start in ms from two RFC3339 stamps (second precision); 0 if unparseable/negative.
@@ -1321,10 +1329,14 @@ func (s *server) persistResult(rec *run) {
 	rr := &storepb.ResultRecord{
 		RunId: rec.ID, Mode: mode, Verdict: verdictEnum(exit), Owner: rec.Owner, // ADR-109: inherits the run
 		ExitCode: int64(exit), DurationMs: durationMs(startedAt, finishedAt),
-		// HEALTH-004: quoted from the run record, not recomputed. `verdict` says WHAT happened and is
-		// still one of the coarse four; `fault_domain` says WHOSE problem it is, which is the question
-		// a dashboard reader actually has and which exit 1 / exit 4 / exit -1 all answered with the
-		// same word until now.
+		// HEALTH-004: quoted from the run record, not recomputed. `verdict` says WHAT happened and
+		// `fault_domain` says WHOSE problem it is — two axes, neither derivable from the other.
+		// ⚠ ADR-141 CORRECTS THE SENTENCE THAT STOOD HERE. It said `verdict` "is still one of the
+		// coarse four", and that was true of this file only: brain/outcome.py had been producing seven
+		// words since ADR-131/139, and the three it added were destroyed by verdictEnum's `default` on
+		// the way in. Measured 2026-08-31: exit 4, 5 and -1 all arrived as `tool_failure`,
+		// `tool_failure_salvaged` and `not_started` and were all stored as `problem`. The vocabulary is
+		// now the catalogue's, and it is the same one on both sides of the boundary.
 		FaultDomain: fault,
 	}
 	var stepN, regN int64

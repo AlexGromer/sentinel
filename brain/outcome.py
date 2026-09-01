@@ -47,7 +47,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import agui
-from .eventlog import log
+from .eventlog import exit_codes, log
 
 # Коды выхода. Числа читают agentctl, control-api и хаб; источник правды — блок `exit_codes`
 # в `brain/events.json`, здесь только имена, чтобы литералов в коде не осталось.
@@ -57,18 +57,16 @@ EXIT_INTEGRITY = 3
 EXIT_TOOL_FAILURE = 4
 EXIT_TOOL_FAILURE_SALVAGED = 5
 
-# Слово вердикта ВЫВОДИТСЯ из числа, а не пишется рядом с ним. Таблица взята у пути `replay`
-# (`brain/replay.py`), где эта конструкция работает с самого начала: значения 0–3 совпадают
-# побайтово, поэтому смена затрагивает только кадр `explore`, который раньше говорил `ok`/`failed`.
-VERDICT_WORD = {
-    0: "pass",
-    1: "problem",
-    2: "regression",
-    3: "integrity",
-    4: "tool_failure",
-    5: "tool_failure_salvaged",
-    -1: "not_started",
-}
+# Слово вердикта ВЫВОДИТСЯ ИЗ КАТАЛОГА (ADR-141), а не переписывается здесь.
+#
+# ⚠ ЗДЕСЬ СТОЯЛ СЛОВАРЬ-ЛИТЕРАЛ, И ЕГО СОБСТВЕННЫЙ КОММЕНТАРИЙ ВЫШЕ НАЗЫВАЛ КАТАЛОГ ИСТОЧНИКОМ
+# ПРАВДЫ, КАТАЛОГ ПРИ ЭТОМ НЕ ЧИТАЯ. Это была ВОСЬМАЯ рукописная таблица кодов выхода в дереве, и
+# ни одна проверка не сверяла её с остальными семью. Замер 2026-08-31 показал, чем это кончилось на
+# другом конце провода: `cmd/control-api` держал свою копию из четырёх слов, и три слова, которые
+# рождались ЗДЕСЬ — `tool_failure` (4), `tool_failure_salvaged` (5), `not_started` (-1) — при записи
+# в хранилище превращались в `problem`. То есть прогон, про который МЫ уже знали «сломался наш
+# инструмент», доезжал до человека как «тест нашёл проблему в приложении».
+VERDICT_WORD = {int(_code): _entry["verdict"] for _code, _entry in exit_codes().items()}
 
 
 @dataclass(frozen=True)
