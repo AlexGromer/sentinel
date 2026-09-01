@@ -1,0 +1,125 @@
+[
+  {
+    "type": "change",
+    "url": "file:///s/login.html",
+    "selectorCandidates": [
+      {
+        "strategy": "role_name",
+        "locator": {
+          "role": "textbox",
+          "name": "Email"
+        }
+      },
+      {
+        "strategy": "label",
+        "locator": {
+          "label": "Email"
+        }
+      },
+      {
+        "strategy": "css",
+        "locator": {
+          "css": "#email"
+        }
+      },
+      {
+        "strategy": "xpath",
+        "locator": {
+          "xpath": "/html/body[1]/form[1]/input[1]"
+        }
+      }
+    ],
+    "value": "user@example.test",
+    "seq": 1
+  },
+  {
+    "type": "change",
+    "url": "file:///s/login.html",
+    "selectorCandidates": [
+      {
+        "strategy": "role_name",
+        "locator": {
+          "role": "textbox",
+          "name": "Password"
+        }
+      },
+      {
+        "strategy": "label",
+        "locator": {
+          "label": "Password"
+        }
+      },
+      {
+        "strategy": "css",
+        "locator": {
+          "css": "#password"
+        }
+      },
+      {
+        "strategy": "xpath",
+        "locator": {
+          "xpath": "/html/body[1]/form[1]/input[2]"
+        }
+      }
+    ],
+    "secretRef": "USER_PASSWORD",
+    "seq": 2
+  },
+  {
+    "type": "click",
+    "url": "file:///s/login.html",
+    "selectorCandidates": [
+      {
+        "strategy": "testid",
+        "locator": {
+          "testid": "login-btn"
+        }
+      },
+      {
+        "strategy": "role_name",
+        "locator": {
+          "role": "button",
+          "name": "Sign in"
+        }
+      },
+      {
+        "strategy": "text",
+        "locator": {
+          "text": "Sign in"
+        }
+      },
+      {
+        "strategy": "css",
+        "locator": {
+          "css": "#go"
+        }
+      },
+      {
+        "strategy": "xpath",
+        "locator": {
+          "xpath": "/html/body[1]/form[1]/button[1]"
+        }
+      }
+    ],
+    "seq": 3
+  },
+  {
+    "type": "submit",
+    "url": "file:///s/login.html",
+    "selectorCandidates": [
+      {
+        "strategy": "css",
+        "locator": {
+          "css": "#f"
+        }
+      },
+      {
+        "strategy": "xpath",
+        "locator": {
+          "xpath": "/html/body[1]/form[1]"
+        }
+      }
+    ],
+    "seq": 4
+  }
+]

@@ -122,6 +122,12 @@ jobs:
           echo "extension: $n *.test.ts found (${files[*]})"
           npm ci
           npm test
+          # ⚠ ADR-143: THIS STEP WAS NAMED "Build + unit-test" AND DID NOT BUILD. `npm test` runs
+          # `tsc --noEmit`, which type-checks and emits nothing, so `extension/dist` never existed in
+          # CI — and `dist/` is gitignored, so it could not arrive any other way. That single missing
+          # line is why the end-to-end check below had nothing to load: it was blocked by the absence
+          # of a build, not by anything about the check itself.
+          npm run build
 
       # The Playwright browser install used to stand here. It moved UP into the pw-executor step
       # (ADR-120): that step's own suite now drives a real page, so the browser is a precondition of
@@ -355,6 +361,75 @@ jobs:
             --out "$PWD/ui-press" || {
               echo "::error::протыкивание нашло контрол, который не нажат и не объявлен, либо нажатие сломало страницу"
               sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
+
+      - name: End-to-end check of the MV3 extension in a REAL Chromium (EXTENSION-E2E-RUNS-NOWHERE)
+        # ⚠ THIS FILE WAS RUN BY NOTHING. `extension/test/e2e/recorder.e2e.mjs` existed since M9.8 and
+        # every mention of it in the tree was prose or self-description; measured 2026-08-30 and again
+        # on 2026-09-01. Three obstacles, and none of them was the check:
+        #   1. CI never built the extension — the step above says "Build" and did not (now it does);
+        #   2. the runner installs `chromium-headless-shell`, which CANNOT load an extension: measured,
+        #      it dies with an unhandled `waitForEvent: serviceworker` timeout without printing one
+        #      PASS/FAIL line. A FULL chromium is installed here, by the SAME package that then
+        #      reports its path, so the two can never disagree about the version;
+        #   3. without CHROME_BIN the runner exits 2 by design.
+        #
+        # Measured by hand before this step existed: 9 PASS / 3 FAIL, where all three failures were
+        # the #43 block asking for a live control-api. With one running: 13/13. So the server is not
+        # a nicety — it is the difference between exercising the bearer handshake and skipping it.
+        #
+        # ⚠ ITS OWN control-api ON ITS OWN PORT, not the ui-smoke one on 8090. The recorder streams to
+        # /v1/stream and the check reads back `runs/record-<session>/events.ndjson`; pointing it at the
+        # smoke's server would mix a recording session into the artefacts of a screenshot walk, and a
+        # later reader could not tell which run wrote what.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -e
+          mkdir -p /tmp/ext-e2e
+          CONTROL_API_ADDR=127.0.0.1:8099 \
+          CONTROL_API_TOKEN=ext-e2e-token \
+          CONTROL_API_AGENTCTL="$PWD/bin/agentctl" \
+          CONTROL_API_CORS_ORIGINS= \
+          CONTROL_API_STORE_ADDR= \
+            sh -c 'cd /tmp/ext-e2e && exec "$0"' "$PWD/bin/control-api" > /tmp/ext-e2e-api.log 2>&1 &
+          for i in $(seq 1 200); do
+            curl -sf http://127.0.0.1:8099/healthz >/dev/null && break; sleep 0.1
+          done
+          curl -sf http://127.0.0.1:8099/healthz >/dev/null || {
+            echo "::error::control-api never answered /healthz on 8099"; sed -n '1,60p' /tmp/ext-e2e-api.log; exit 1; }
+
+          cd extension
+          # A FULL chromium, installed by the very playwright-core that resolves its path below.
+          npx playwright-core install --with-deps chromium
+          CHROME_BIN="$(node -e "console.log(require('playwright-core').chromium.executablePath())")"
+          [ -x "$CHROME_BIN" ] || {
+            echo "::error::playwright-core reports $CHROME_BIN, which is not executable — the install and the path disagree"
+            exit 1; }
+          echo "full chromium: $CHROME_BIN"
+
+          out=$(CHROME_BIN="$CHROME_BIN" CONTROL_API_TOKEN=ext-e2e-token SERVER_RUN_DIR=/tmp/ext-e2e \
+            npm run --silent e2e 2>&1) || {
+              echo "$out"; echo "::error::the extension e2e failed"; sed -n '1,60p' /tmp/ext-e2e-api.log; exit 1; }
+          echo "$out"
+          # A floor on the CHECK COUNT, the mandatory companion to a run that reports its own result:
+          # a harness that dies early prints fewer PASS lines and would otherwise "succeed" quietly.
+          n=$(echo "$out" | grep -c '^PASS ') || true
+          if [ "$n" -lt 14 ]; then
+            echo "::error::only $n PASS lines — the e2e stopped early (14 expected, measured 2026-09-01)"
+            exit 1
+          fi
+          echo "extension e2e: $n checks passed"
+
+          # ⚠ THE TRANSCRIPT CAN NO LONGER ROT. The e2e rewrites test/e2e/recorded-transcript.json on
+          # every run, and tests/test_record_bridge_recorder_e2e.py reads it instead of carrying a
+          # literal. If the recorder's output changes, this diff is where it becomes visible — before
+          # it becomes a green test asserting yesterday's behaviour, which is what it was for a year.
+          cd ..
+          git diff --exit-code -- extension/test/e2e/recorded-transcript.json || {
+            echo "::error::the recorder's output changed — the frozen transcript no longer matches a live run."
+            echo "::error::Review the diff above; if it is intended, commit the regenerated file."
+            exit 1; }
+          echo "transcript matches the committed artefact"
 
       - name: Upload UI smoke screenshots
         # `always()`: a failing smoke is exactly when the pictures are worth having.

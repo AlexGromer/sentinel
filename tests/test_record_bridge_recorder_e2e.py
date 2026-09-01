@@ -1,10 +1,27 @@
 """Ties the MV3 recorder's ACTUAL output (#44) to the record->scenario bridge (#46) — offline, no browser.
 
-test_record_bridge_offline.py grounds hand-authored events; this one uses a VERBATIM transcript captured
-from the real content-script running in Chromium against extension/test/e2e/login-fixture.html (the live
-e2e, extension/test/e2e/recorder.e2e.mjs). It proves the recorder and the bridge agree in practice: the
-emitted event shape grounds into real selectors, the password redaction survives end-to-end, and the
-scenario replays exit 0.
+test_record_bridge_offline.py grounds hand-authored events; this one uses the transcript the REAL
+content-script produced in Chromium against extension/test/e2e/login-fixture.html. It proves the
+recorder and the bridge agree in practice: the emitted event shape grounds into real selectors, the
+password redaction survives end-to-end, and the scenario replays exit 0.
+
+⚠ THE TRANSCRIPT USED TO BE A LITERAL IN THIS FILE, under the comment "Verbatim from
+extension/test/e2e/recorder.e2e.mjs". It was not verbatim and never had been: both files have exactly
+ONE commit (a415a80) and no diff since, so the list was hand-authored at birth and only claimed
+provenance. Measured 2026-08-30 and again 2026-09-01: it held 5 events including an `input` with the
+partial value "us", while the live recorder emits NO `input` at all. The test was green throughout —
+it verified that the bridge understands what the recorder ONCE emitted, and could not notice that the
+recorder emits something else. A hand-written transcript cannot go red for any recorder change, which
+is the entire defect (ADR-143).
+
+It is now an ARTEFACT: `extension/test/e2e/recorder.e2e.mjs` writes `recorded-transcript.json` on
+every run, CI runs that e2e and fails if the committed file moved (`git diff --exit-code`), and this
+file reads it. So the transcript can only ever say what the recorder actually produced.
+
+⚠ AND THE HARNESS STOPPED FAKING `change`. It used to `page.dispatchEvent(…,'change')` after each
+fill, so the document saw TWO change events per field — ours (isTrusted:false) and then Chromium's own
+— and the frozen literal inherited that doubling, presenting a property of the TEST as a property of
+the product. Measured after removing it: 6 events -> 4, with every e2e assertion still holding.
 
 Run:  uv run pytest tests/test_record_bridge_recorder_e2e.py
 """
@@ -22,35 +39,22 @@ from brain.store import Store                                 # noqa: E402
 
 URL = "file:///s/login.html"
 
-# Verbatim from extension/test/e2e/recorder.e2e.mjs against the login fixture: type email (input burst +
-# change), type password (redacted -> secretRef, value NEVER captured), click Sign in (ranked candidates,
-# testid first), submit the form. The literal password "hunter2-SECRET" the user typed is ABSENT by design.
-RECORDED = [
-    {"type": "input", "url": URL, "value": "us", "selectorCandidates": [
-        {"strategy": "role_name", "locator": {"role": "textbox", "name": "Email"}},
-        {"strategy": "label", "locator": {"label": "Email"}},
-        {"strategy": "css", "locator": {"css": "#email"}},
-        {"strategy": "xpath", "locator": {"xpath": "/html/body[1]/form[1]/input[1]"}}]},
-    {"type": "change", "url": URL, "value": "user@example.test", "selectorCandidates": [
-        {"strategy": "role_name", "locator": {"role": "textbox", "name": "Email"}},
-        {"strategy": "label", "locator": {"label": "Email"}},
-        {"strategy": "css", "locator": {"css": "#email"}},
-        {"strategy": "xpath", "locator": {"xpath": "/html/body[1]/form[1]/input[1]"}}]},
-    {"type": "change", "url": URL, "secretRef": "USER_PASSWORD", "selectorCandidates": [
-        {"strategy": "role_name", "locator": {"role": "textbox", "name": "Password"}},
-        {"strategy": "label", "locator": {"label": "Password"}},
-        {"strategy": "css", "locator": {"css": "#password"}},
-        {"strategy": "xpath", "locator": {"xpath": "/html/body[1]/form[1]/input[2]"}}]},
-    {"type": "click", "url": URL, "selectorCandidates": [
-        {"strategy": "testid", "locator": {"testid": "login-btn"}},
-        {"strategy": "role_name", "locator": {"role": "button", "name": "Sign in"}},
-        {"strategy": "text", "locator": {"text": "Sign in"}},
-        {"strategy": "css", "locator": {"css": "#go"}},
-        {"strategy": "xpath", "locator": {"xpath": "/html/body[1]/form[1]/button[1]"}}]},
-    {"type": "submit", "url": URL, "selectorCandidates": [
-        {"strategy": "css", "locator": {"css": "#f"}},
-        {"strategy": "xpath", "locator": {"xpath": "/html/body[1]/form[1]"}}]},
-]
+_TRANSCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "extension", "test", "e2e", "recorded-transcript.json")
+
+with open(_TRANSCRIPT, encoding="utf-8") as _fh:
+    RECORDED = json.load(_fh)
+
+# Пол на число событий. Обязательный спутник чтения из файла: пустой (или усечённый) артефакт
+# прошёл бы все утверждения ниже вакуумно — `build_scenario([])` не падает, а `_by(...)` вернул бы
+# пустые списки, и половина проверок стала бы утверждениями о пустом множестве.
+assert len(RECORDED) >= 4, (
+    f"{_TRANSCRIPT}: {len(RECORDED)} events, floor is 4 (measured 2026-09-01) — "
+    "the transcript is truncated and every assertion below would pass over nothing")
+assert not any(e.get("type") == "input" for e in RECORDED), (
+    "the transcript carries an `input` event; the recorder does not emit those, so this artefact "
+    "was not produced by a real run")
+assert "hunter2" not in json.dumps(RECORDED), "the transcript carries the typed password"
 
 
 class FakeEx:
@@ -88,7 +92,10 @@ def test_recorder_output_grounds_to_real_selectors():
     # leading navigate synthesized from the recorded page URL
     assert steps[0]["action_type"] == "navigate" and steps[0]["target"] == URL, steps[0]
 
-    # input burst + change on Email collapse into ONE fill carrying the final value; primary = role_name
+    # the Email `change` becomes ONE fill carrying the committed value; primary locator = role_name.
+    # ⚠ This used to read "input burst + change … collapse into ONE fill", describing a collapse the
+    # recorder performs but this transcript never exercised: the live recorder emits no `input` at
+    # all. The collapse itself is covered by test_record_bridge_offline.py on authored events.
     fills = _by(steps, "fill")
     email = [f for f in fills if f.get("value") == "user@example.test"]
     assert len(email) == 1, fills
