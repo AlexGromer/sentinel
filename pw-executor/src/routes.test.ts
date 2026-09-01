@@ -387,3 +387,71 @@ test('inside ONE window a repeated address is still collapsed — the ceiling gu
     await ex.close();
   }
 });
+
+test('a navigation says whether it REPLACED the document or only moved within it', async () => {
+  // ADR-145. Запись реестра [EXECUTOR-GOTO-IS-UNCONDITIONAL] говорила: «лечение должно отличать
+  // возврат-как-работу от goto-на-том-же-месте — а этого различия у исполнителя сегодня нет».
+  // Теперь есть, и вот его цена доверия.
+  //
+  // ⚠ ГЕЙТ СВЕРЯЕТ ПРИЗНАК С НЕЗАВИСИМЫМ НАБЛЮДЕНИЕМ, А НЕ ПОВТОРЯЕТ ЕГО ФОРМУЛУ. Утверждать
+  // `same_document === (status === null)` значило бы переписать реализацию в тест: он согласился бы
+  // с ней при любой ошибке. Истина берётся ИЗ СТРАНИЦЫ, и притом вербой, которая уже есть, — этот
+  // файл принципиально не заводит вербов ради теста. Журнал маршрутов живёт В СТРАНИЦЕ: замена
+  // документа перезапускает init-script и стирает накопленное, а same-document навигация — нет.
+  // Значит «пережила ли запись» и есть «тот же ли документ», и это наблюдение НЕЗАВИСИМО от того,
+  // что вернул Playwright.
+  //
+  // KILLS: `same_document: true` константой · инверсия признака · вывод его ИЗ АДРЕСА вместо ответа
+  //        браузера — адрес не говорит, что сделал браузер: идентичный адрес БЕЗ фрагмента
+  //        перезагружает, а С фрагментом не перезагружает (замерено 2026-09-01, пять случаев,
+  //        тремя независимыми способами, все три согласны).
+  type Nav = { url: string; status: number | null; same_document: boolean };
+  const ex = new Exec();
+  try {
+    await open(ex);
+
+    /** Оставить в ЖУРНАЛЕ СТРАНИЦЫ след и не сливать его: он и есть метка живого документа. */
+    const leaveMark = async () => {
+      await ex.call<Take>('browser.routes');                       // очистить, чтобы след был свой
+      await ex.call<ClickResult>('browser.click', { locator: { css: '#sync' } });
+      const seeded = await ex.call<Take>('browser.routes');
+      assert.ok(seeded.routes.some((r) => /#\/sync$/.test(r.url)),
+        'предпосылка: клик не оставил записи в журнале — метку ставить нечем');
+      // Ещё один клик, БЕЗ слива: эта запись переживёт (или не переживёт) навигацию.
+      await ex.call<ClickResult>('browser.click', { locator: { css: '#replace' } });
+    };
+    /** Пережила ли метка навигацию? */
+    const markSurvived = async () => {
+      const took = await ex.call<Take>('browser.routes');
+      return took.routes.some((r) => /#\/replaced$|#\//.test(r.url));
+    };
+
+    for (const [name, to] of [
+      ['фрагмент добавлен', `${FIXTURE}#/one`],
+      ['фрагмент изменён', `${FIXTURE}#/two`],
+    ] as const) {
+      await leaveMark();
+      const nav = await ex.call<Nav>('browser.navigate', { url: to });
+      const survived = await markSurvived();
+      assert.equal(typeof nav.same_document, 'boolean',
+        `browser.navigate не сообщает same_document («${name}») — различия у исполнителя снова нет`);
+      assert.equal(nav.same_document, survived,
+        `«${name}»: исполнитель сказал same_document=${nav.same_document}, а страница показала ` +
+        `${survived ? 'переживший' : 'заменённый'} документ — признак разошёлся с наблюдением`);
+      assert.equal(nav.same_document, true, `«${name}» обязан быть same-document`);
+    }
+
+    // ⚠ ПАРНАЯ ПОЛОВИНА, и без неё проверка выше вырождается: если бы `same_document` был константой
+    // `true`, обе итерации согласились бы с наблюдением, потому что обе — same-document.
+    await leaveMark();
+    const reload = await ex.call<Nav>('browser.navigate', { url: FIXTURE });
+    const survivedReload = await markSurvived();
+    assert.equal(reload.same_document, false,
+      'goto на идентичный адрес БЕЗ фрагмента объявлен same-document — тогда «возврат-как-работу» ' +
+      '(перезапуск приложения: +1 страница и +4 клика по замеру ADR-140) нечем отличить от шума');
+    assert.equal(survivedReload, false,
+      'журнал пережил полную перезагрузку — предпосылка наблюдения сломана, и согласие выше ничего не стоит');
+  } finally {
+    await ex.close();
+  }
+});
