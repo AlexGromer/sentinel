@@ -27,16 +27,25 @@ has to be assigned a JUnit shape deliberately:
     app faults               -> <system-err> on the SUITE            (ADR-072: they belong to the run,
                                                                      not to one step; the emitter cannot
                                                                      attribute a console error to a step)
-    plan_hash / golden HMAC  -> <error> on a synthetic case          (exit 3: nothing executed, so there
-                                                                     are no steps to attach it to, and
-                                                                     `error` — not `failure` — is JUnit's
-                                                                     word for "the harness broke")
+    an ABORTED run           -> <error> on a synthetic case          (nothing executed, or execution was
+                                                                     cut short, so there are no steps to
+                                                                     attach it to, and `error` — not
+                                                                     `failure` — is JUnit's word for
+                                                                     "the harness broke")
+
+⚠ ADR-141 WIDENED THAT LAST ROW, and the old text said `exit 3` because the code did. Exits 4, 5 and -1
+abort just as hard — our own tool crashed, salvaged what it had, or never started — and each produced a
+suite a CI server rendered as a clean report with no error at all. The set of aborting codes is now taken
+from the catalogue's `fault` axis (`test` and `tool` abort; `none` and `app` are described by the steps
+themselves), so a code added later gets the right shape without this file being edited.
 
 `errors` and `failures` on the suite are counted from the emitted children rather than from the report's
 own tallies, so the header can never disagree with the body.
 """
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+
+from .eventlog import exit_codes
 
 # JUnit has no notion of "passed with drift". A suite attribute would be ignored by every consumer, so
 # the signal rides where consumers DO look: stderr text on the case, and the suite name.
@@ -89,12 +98,24 @@ def to_junit(report: dict, *, suite: str = "sentinel") -> str:
 
     n_fail = n_err = n_skip = 0
 
-    # Integrity hard-abort: nothing executed, so there is no step to hang it on. A synthetic case with
-    # <error> is the only honest shape — reporting zero tests would read as "nothing to run".
-    if exit_code == 3:
-        tc = ET.SubElement(su, "testcase", {"name": "plan integrity", "classname": suite, "time": "0.000"})
-        ET.SubElement(tc, "error", {"type": "integrity",
-                                    "message": str(report.get("reason") or "integrity check failed")})
+    # A run that ABORTED has no step to hang the failure on. A synthetic case with <error> is the only
+    # honest shape — reporting the step count alone would read as "these ran and all was well".
+    #
+    # ⚠ ADR-141: THIS BRANCH SAID `if exit_code == 3`. Exits 4, 5 and -1 abort exactly as hard — our
+    # own tool crashed, or never started — and produced a suite whose counts a CI server renders as a
+    # clean report. Measured 2026-08-31. The set is now DERIVED from the catalogue's `fault` axis
+    # rather than named: `none` and `app` are outcomes the steps themselves describe (a pass, a found
+    # bug, a visual regression); `test` and `tool` are aborts that no step can carry. A new code
+    # inherits the right shape by declaring whose problem it is.
+    _entry = exit_codes().get(str(exit_code)) or {}
+    _aborted = _entry.get("fault") in ("test", "tool")
+    if _aborted:
+        tc = ET.SubElement(su, "testcase", {
+            "name": str(_entry.get("en") or "run aborted"), "classname": suite, "time": "0.000"})
+        ET.SubElement(tc, "error", {"type": str(_entry.get("severity") or "aborted"),
+                                    "message": str(report.get("reason")
+                                                   or _entry.get("en_hint")
+                                                   or "the run did not complete")})
         n_err += 1
 
     for s in steps:
@@ -159,7 +180,9 @@ def to_junit(report: dict, *, suite: str = "sentinel") -> str:
             parts.append(f"  (capture capped at {af.get('cap')} — the list is truncated)")
         ET.SubElement(su, "system-err").text = "\n".join(parts)
 
-    su.set("tests", str(len(steps) + (1 if exit_code == 3 else 0)))
+    # The synthetic abort case counts as a test — same condition that created it, not a second
+# copy of the rule (ADR-141: the copy is how `exit_code == 3` survived in two places).
+    su.set("tests", str(len(steps) + (1 if _aborted else 0)))
     su.set("failures", str(n_fail))
     su.set("errors", str(n_err))
     su.set("skipped", str(n_skip))

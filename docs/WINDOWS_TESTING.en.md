@@ -151,6 +151,9 @@ Exit codes (from `brain/replay.py` and `brain/__main__.py`):
 | 1 | step failure | A step failed (non-quarantined) |
 | 2 | golden regression | Divergence from the golden baseline (non-quarantined) |
 | 3 | plan integrity | `plan_hash` mismatch or a bad invocation, hard abort |
+| 4 | tool failure | WE broke (ADR-087) — not a finding about the application |
+| 5 | tool failure, salvaged | We broke, but what was found is written (ADR-131) |
+| -1 | did not start | ⚠ A synthetic control-api code; no process returns it |
 
 ## Phase 1: run against the built-in fixtures l1-l6
 

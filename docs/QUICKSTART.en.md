@@ -47,6 +47,9 @@ Artifacts land in `runs/<id>/`: `plan.json` (the frozen plan), `transcript`, `he
 | 1 | step-fail — a step did not execute |
 | 2 | golden regression — DOM drift, healing/diff required |
 | 3 | integrity — a `plan_hash`/golden-HMAC mismatch **or** budget exhaustion |
+| 4 | THE TOOL ITSELF failed — NOT a finding about your application (ADR-087) |
+| 5 | the tool failed but what it found was saved (ADR-131) |
+| -1 | could not be spawned, or killed by a signal ⚠ synthetic; no process returns it |
 
 ## 5. Optional: the native `agentctl` CLI
 

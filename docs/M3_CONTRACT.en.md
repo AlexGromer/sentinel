@@ -18,6 +18,12 @@ regression detection; **AUT-SHA-gated flake quarantine**; **GitHub Actions** CI.
 | 1 | a step failed (locator unhealable / action error) on a non-quarantined step |
 | 2 | golden-diff regression (a11y-hash or screenshot-hash differs from golden) on a non-quarantined page |
 | 3 | **integrity hard-abort** (highest priority): `plan_hash` mismatch (nothing executed) OR golden HMAC mismatch (#24 — a tampered/forged golden row at replay) OR budget |
+| 4 | **the tool itself failed** (ADR-087): our own exception, a vacuous crawl, or an artefact of ours left unwritten — fault `tool`, not `app` |
+| 5 | the tool failed but what it found was saved (ADR-131): the crawl up to the break is written to the artefact |
+| -1 | could not be spawned, or was killed by a signal. ⚠ a synthetic control-api code; no real process returns it |
+
+> The list is derived from `brain/events.json` → `exit_codes` (ADR-141); the gate is
+> `tests/test_exit_code_surfaces_offline.py`.
 
 ## plan_hash HARD-ABORT (ADR-006)
 At replay start: recompute `canonical_plan_hash(plan["steps"])`, compare to `plan["plan_hash"]`.

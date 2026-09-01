@@ -2518,6 +2518,148 @@ try {
     eq(await idPage.locator('#capitok').inputValue(), '', 'the session token stayed in the field after signing out');
   }, { allowConsole: freshConfig404 });
 
+  /* ADR-141, and this one exists because THE FIX ITSELF BROKE IT. Routing every surface through one
+     resolver made them all depend on `lgCatalog`, which `bExitPresent` reads SYNCHRONOUSLY — and only
+     the Build tab had ever awaited the fetch. Measured by driving the UI by hand: every row of the
+     runs list under Library rendered "• 0 / UNKNOWN EXIT CODE" in grey, on codes the catalogue
+     declares perfectly well. No gate caught it, including the exit-5 check below, because that one
+     drives the Build tab where the load happens. So the assertion is on the OTHER surface. */
+  await check('the runs list resolves exit codes instead of calling them unknown', async () => {
+    /* ⚠ A FRESH PAGE, AND THAT IS THE WHOLE POINT. The first version of this check reused the shared
+       `page`, and it was VACUOUS: by the time it ran, earlier checks had already visited views that
+       await the catalogue, so `lgCatalog` was populated no matter what this path did. Measured —
+       with BOTH catalogue guards deleted the gate still reported 77/77. A user reaching the runs list
+       by deep link has none of that history, which is the state the defect lives in. */
+    const rPage = await context.newPage();
+    try {
+      await rPage.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+      await rPage.evaluate(() => { location.hash = '#v=settings'; });
+      await rPage.waitForSelector('#capi', { state: 'visible', timeout: 10000 });
+      await rPage.fill('#capi', `http://127.0.0.1:${PORT}`);
+      await rPage.fill('#capitok', token);
+      await rPage.click('#cap-check');
+      await rPage.waitForFunction(
+        () => (document.getElementById('cap-status') || {}).textContent?.includes('ok'),
+        null, { timeout: 15000 });
+      await rPage.click('.rail a[data-nav="library"]');
+      await rPage.waitForTimeout(300);
+      await rPage.evaluate(() => { const t = document.querySelector('[data-subtab="runs"]'); if (t) t.click(); });
+      await rPage.evaluate(() => { const r = document.getElementById('runs-refresh'); if (r) r.click(); });
+      await rPage.waitForFunction(() => {
+        const e = document.getElementById('runs-list');
+        return e && !/загрузка|loading/.test(e.textContent) && e.textContent.trim().length > 0;
+      }, null, { timeout: 15000 });
+      const badges = await rPage.evaluate(() => {
+        const el = document.getElementById('runs-list');
+        return [...el.querySelectorAll('span[title]')].map((s) => ({
+          text: s.textContent.trim(), title: s.getAttribute('title'),
+          colour: getComputedStyle(s).color,
+        }));
+      });
+      ok(badges.length > 0, 'the runs list drew no exit-code badges — the check would be vacuous');
+      for (const b of badges) {
+        ok(!/UNKNOWN EXIT CODE|НЕИЗВЕСТНЫЙ/.test(b.title || ''),
+           `a run's badge says the code is unknown (${b.text}) — the catalogue was never fetched on this path`);
+        ok(!/<span|data-lang=/.test(b.title || ''),
+           `the badge tooltip carries markup a title attribute cannot render: ${b.title}`);
+        ok(b.colour !== 'rgb(154, 160, 176)',
+           `a run's badge is painted with the "no information" grey: ${b.text}`);
+      }
+    } finally {
+      await rPage.close();
+    }
+  });
+
+  /* ------------------------------------------------------- ADR-141: exit 5 is not a shade of grey.
+     The BEHAVIOURAL half of the exit-code contract. The structural half — that no surface keeps its
+     own code→presentation table any more — is tests/test_exit_code_surfaces_offline.py, and neither
+     replaces the other: a shape assertion agrees with code that never runs, and this one cannot see
+     a second table added elsewhere.
+
+     ⚠ THIS GATE WAS GREEN FOR THE WHOLE LIFE OF THE DEFECT, and that is the measurement that bought
+     the check. It exercised exit 0 and exit 3 only, so the two codes added since — 4 (ADR-087) and 5
+     (ADR-131, shipped 23 August) — were never asked about even once. Exit 5's severity was absent
+     from B_SEVCOL, the lookup fell through `|| 'var(--mut)'`, and a salvaged tool crash rendered in
+     the colour this page uses for "no information", next to an exit 4 rendered red.
+
+     Same harness as the two checks above, and a separate stub for the same reason: this run must end
+     the way a real salvaged crash ends — exit 5, with no report artifact, so the badge is fed by the
+     run record rather than by a fixture handed to the page. */
+  await check('a salvaged tool crash (exit 5) renders RED with the catalogue sentence, not grey', async () => {
+    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-exit5-gate-'));
+    const stub = path.join(stubDir, 'agentctl-stub.mjs');
+    fs.writeFileSync(stub, [
+      "console.log('[error|system] fatal.internal_error: the tool broke, salvaging what was found');",
+      'process.exit(5);',
+    ].join('\n'));
+    const shim = path.join(stubDir, 'agentctl');
+    fs.writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`, { mode: 0o755 });
+
+    const xPort = PORT + 5;
+    const capi4 = spawn(path.join(REPO, 'bin', 'control-api'), [], {
+      cwd: stubDir,
+      env: { ...process.env,
+             CONTROL_API_ADDR: `127.0.0.1:${xPort}`, CONTROL_API_TOKEN: 'exit5-gate-token',
+             CONTROL_API_SERVE_UI: '1', CONTROL_API_UI_DIR: path.join(REPO, 'docs'),
+             CONTROL_API_AGENTCTL: shim,
+             CONTROL_API_CORS_ORIGINS: '', CONTROL_API_STORE_ADDR: '', LLM_BASE_URL: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const xPage = await context.newPage();
+    try {
+      for (let i = 0; i < 100; i++) {
+        try { if ((await fetch(`http://127.0.0.1:${xPort}/healthz`)).ok) break; } catch { /* not up */ }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      await xPage.goto(`http://127.0.0.1:${xPort}/#v=settings`, { waitUntil: 'load' });
+      await xPage.waitForTimeout(400);
+      await xPage.fill('#capi', `http://127.0.0.1:${xPort}`);
+      await xPage.fill('#capitok', 'exit5-gate-token');
+      await xPage.click('.rail a[data-nav="run"]');
+      await xPage.fill('#b-target', 'file:///app/x.html');
+      await xPage.click('#b-run');
+      await xPage.waitForFunction(
+        () => (document.getElementById('b-verdict').textContent || '').length > 0, null, { timeout: 30000 });
+
+      const badge = await xPage.locator('#b-verdict').textContent();
+      ok(/exit 5/.test(badge), `the exit code disappeared from the badge: ${badge}`);
+      // The catalogue's own sentence, not a phrasing invented here. Asserted on the SALVAGE half,
+      // which is the only thing distinguishing 5 from 4 for a reader.
+      ok(/сохранен|saved/i.test(badge),
+        `the badge does not say the findings were salvaged — that is the whole difference from exit 4: ${badge}`);
+      ok(!/<span|data-lang=|&lt;span/i.test(badge),
+        `the verdict area is printing raw markup instead of rendering it: ${badge.slice(0, 200)}`);
+
+      // THE DEFECT ITSELF, asserted as a colour rather than as text. `--mut` is what the page paints
+      // when it has nothing to say; a tool crash is not that, and comparing against the variable's own
+      // computed value keeps the assertion true if the palette is ever retuned.
+      const colours = await xPage.evaluate(() => {
+        const head = document.getElementById('b-verdict-head');
+        const cs = getComputedStyle(document.documentElement);
+        const probe = document.createElement('span');
+        probe.style.color = cs.getPropertyValue('--mut').trim();
+        document.body.appendChild(probe);
+        const muted = getComputedStyle(probe).color;
+        probe.remove();
+        return { head: head ? getComputedStyle(head).color : '', muted };
+      });
+      ok(colours.head.length > 0, 'the verdict headline has no colour at all');
+      ok(colours.head !== colours.muted,
+        `exit 5 is painted with the "no information" grey (${colours.head}) — B_SEVCOL does not know `
+        + 'its severity, which is the ADR-141 defect exactly');
+
+      // WHOSE problem it is. Read from the attribute, so wording cannot satisfy it by coincidence.
+      const chip = xPage.locator('#b-verdict-fault');
+      ok(await chip.count() === 1, 'a salvaged tool crash drew no fault attribution');
+      eq(await chip.getAttribute('data-fault'), 'tool',
+        'a crash of OUR tool was attributed to something else');
+    } finally {
+      await xPage.close();
+      capi4.kill('SIGKILL');
+      fs.rmSync(stubDir, { recursive: true, force: true });
+    }
+  });
+
 } catch (e) {
   results.push({ name: 'harness', ok: false, err: e.message });
   console.log(`  FAIL harness\n       ${e.message}`);

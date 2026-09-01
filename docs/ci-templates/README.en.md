@@ -42,8 +42,21 @@ docker compose run --rm sentinel run --target "$TARGET" --replay --plan /config/
 | `1` | step-fail — an assertion failed / the described flow is gone | ❌ failure ("the test found a problem") |
 | `2` | golden/visual regression — accessibility-baseline drift | ❌ failure (the UI regressed) |
 | `3` | plan-integrity / config error (plan_hash mismatch, bad config) | ⚠ warning/unstable — **needs a human** (re-baseline or fix config) |
+| `4` | **Sentinel itself failed** — our bug, not a finding about your application | ⚠ warning/unstable — attach the output to a bug report |
+| `5` | Sentinel itself failed but saved what it found — the plan, map and scenario up to the break are in the artefact | ⚠ warning/unstable — same, and the artefacts are usable |
 
-Source of truth: `cmd/agentctl/main.go:10` · `docs/M3_CONTRACT.md` · `docs/TESTING.md`.
+**Why 4 and 5 do not turn the build red.** Red means "a problem was found in your application". When
+WE break, nothing has been established about your application, and a red build sends someone to debug
+the one thing that is certainly not at fault. ⚠ Before ADR-141 they were absent from this table
+entirely and the template aborted on them with "unexpected exit" — a stranger's pipeline going red
+because of our breakage, with no word about why. Measured 2026-08-31.
+
+⚠ Code `-1` is DELIBERATELY absent here: it is synthetic — control-api assigns it by pairing `state`
+with a missing code — and no real process exits with it, so a template has nothing to catch.
+
+Source of truth: `brain/events.json` → `exit_codes` (ADR-141; gate `tests/test_exit_code_surfaces_offline.py`).
+⚠ This used to say `cmd/agentctl/main.go:10`, a line that holds no codes and never did — and the
+comment in that file explicitly refuses to list them, because the duplicate had already rotted once.
 
 ## Jenkins
 

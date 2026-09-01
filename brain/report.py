@@ -8,9 +8,45 @@ import html
 import json
 import os
 
-from .eventlog import log
+from .eventlog import exit_codes, log
 
-_EXIT_COLOR = {0: "#2e7d32", 1: "#f9a825", 2: "#c62828", 3: "#6a1b9a"}
+# Цвет по РОДУ исхода (`severity`), а не по числу — ADR-141.
+#
+# ⚠ ЗДЕСЬ СТОЯЛО `{0: ..., 1: ..., 2: ..., 3: ...}` С ОТКАТОМ НА СЕРЫЙ `#555`, и этот откат был
+# ЗНАЧЕНИЕМ ПО УМОЛЧАНИЮ У `.get`, чей ключ — `rep.get("exit_code", -1)`. То есть отчёт, который не
+# удалось разобрать (кода нет вовсе → -1), и прогон, убитый сигналом (код -1), красились ОДИНАКОВО;
+# туда же уезжали 4 и 5. Замерено 2026-08-31.
+#
+# Ключ теперь `severity` из каталога: новый код наследует цвет, объявив свой род, и ни одна запись
+# не может «не попасть» в таблицу молча — `tests/test_exit_code_surfaces_offline.py` выводит нужное
+# множество ключей из каталога В ОБЕ СТОРОНЫ.
+_SEV_COLOR = {
+    "pass": "#2e7d32",
+    "finding": "#f9a825",
+    "regression": "#c62828",
+    "integrity": "#6a1b9a",
+    "not_started": "#8d6e63",
+    "tool_failure": "#c62828",
+    "tool_failure_salvaged": "#e65100",
+}
+_UNKNOWN_COLOR = "#555"
+
+
+def _exit_color(code) -> str:
+    """Цвет кода выхода. Незнакомый каталогу код — серый, и это ЕДИНСТВЕННЫЙ случай серого."""
+    entry = exit_codes().get(str(code))
+    if not entry:
+        return _UNKNOWN_COLOR
+    return _SEV_COLOR.get(entry.get("severity", ""), _UNKNOWN_COLOR)
+
+
+def _exit_meaning(code) -> str:
+    """Английская фраза каталога для кода. Пусто — если каталог кода не объявлял.
+
+    Отчёт англоязычный целиком (заголовки, колонки), поэтому берётся `en`, а не пара языков.
+    """
+    entry = exit_codes().get(str(code))
+    return str(entry.get("en", "")) if entry else ""
 
 
 def _metrics(rep: dict) -> str:
@@ -52,7 +88,7 @@ def _html(rep: dict) -> str:
             + "</td><td>" + html.escape(h) + "</td><td>" + html.escape(reg)
             + "</td><td>" + q + "</td></tr>")
     code = rep.get("exit_code", -1)
-    color = _EXIT_COLOR.get(code, "#555")
+    color = _exit_color(code)
     # ADR-071: the drift table. `healed N` never answered the question a reader actually has — WHAT moved
     # in the interface. Each row names the element, the class (re-bind = same element by another frozen
     # key, repairing the test; re-ground = a new selector chosen from the page as it is now, identity
@@ -163,12 +199,19 @@ def _html(rep: dict) -> str:
            ".healed{color:#1565c0}.ok{color:#2e7d32}.failed{color:#c62828}"
            ".rebind{color:#1565c0}.reground{color:#b26a00;font-weight:700}.unverified{color:#b26a00;font-weight:700}"
            "code{background:#f5f5f5;padding:1px 4px}h2{margin-top:1.6rem;font-size:1.05rem}"
-           ".exit{font-weight:700;color:" + color + "}")
+           ".exit{font-weight:700;color:" + color + "}"
+           ".exitmeaning{color:" + color + ";font-weight:600}")
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Sentinel report</title><style>"
         + css + "</style></head><body><h1>Sentinel run — " + html.escape(str(rep.get("mode")))
         + "</h1><p>plan: <code>" + html.escape(str(rep.get("plan_id"))) + "</code> · exit "
-        + "<span class='exit'>" + html.escape(str(code)) + "</span> · healed "
+        # ADR-141: the number alone was the whole statement, and for 4/5/-1 it was also grey. The
+        # catalogue's own sentence goes beside it — this file is the artefact a person opens when the
+        # run is over and the hub is not in front of them.
+        + "<span class='exit'>" + html.escape(str(code)) + "</span>"
+        + (" <span class='exitmeaning'>" + html.escape(_exit_meaning(code)) + "</span>"
+           if _exit_meaning(code) else "")
+        + " · healed "
         + str(rep.get("healed", 0)) + " · failed " + str(rep.get("failed", 0))
         + (" · <strong>" + html.escape(str(rep.get("verdict"))) + "</strong>"
            if rep.get("verdict") else "")

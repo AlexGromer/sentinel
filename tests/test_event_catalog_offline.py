@@ -480,10 +480,36 @@ def main() -> int:
             fail(f"`phases` disagrees with brain/graph.py nodes: "
                  f"only in catalogue {sorted(phases - nodes)}, only in graph {sorted(nodes - phases)}")
 
-    # Exit codes must match the contract comment in agentctl, which is what the UI's verdict reads.
-    for expected in ("0", "1", "2", "3", "-1"):
-        if expected not in exits:
-            fail(f"exit code {expected} missing from `exit_codes` (contract: cmd/agentctl/main.go:11)")
+    # --- exit codes: the floor is DERIVED, and every field a renderer reads is required ----------
+    #
+    # ⚠ WHAT STOOD HERE WAS `for expected in ("0", "1", "2", "3", "-1")` — a hand-written list, and it
+    # failed in the way principle 5 describes: what it CONTAINED was checked, what it OMITTED was
+    # invisible. Codes 4 and 5 were never in it. Measured by mutation 2026-08-31: deleting
+    # `exit_codes["5"]` outright left this gate GREEN (rc=0), and it printed "6 exit codes" while doing
+    # so. Code 4 only went red by accident, through the cross-reference below, because two events
+    # happen to declare `exit: 4`; no event declares 5 or -1, so neither had any anchor at all.
+    #
+    # The floor is now a COUNT, not a list of names: a list cannot show you what is missing from it,
+    # but a count notices when the set shrinks. It may only be raised deliberately — a code is a
+    # published contract and removing one breaks readers of the exit status.
+    EXIT_FLOOR = 7  # measured 2026-08-31: 0, 1, 2, 3, 4, 5, -1
+    if len(exits) < EXIT_FLOOR:
+        fail(f"`exit_codes` declares {len(exits)} codes, floor is {EXIT_FLOOR} — a code was removed, "
+             f"and an exit status is a published contract (ADR-141)")
+    if "0" not in exits:
+        fail("`exit_codes` has no `0` — success must be sayable, and it is the one code every "
+             "consumer special-cases")
+    # Every field the renderers actually consume. ⚠ The sweep further down checked only `ru`/`en`, so
+    # four of the seven fields were unconstrained: mutations stripping `ru_hint`/`en_hint` from one
+    # entry AND from all seven, deleting `icon`, and setting `severity` to an invented word ALL passed
+    # green on 2026-08-31. `faults` already required its hints (see above) — this is that asymmetry
+    # removed, and it is not cosmetic: the hub draws `{ru,en}_hint` as the badge's SECOND LINE, so a
+    # half-filled entry gives a person a verdict with no explanation under it.
+    for code, entry in cat["exit_codes"].items():
+        for field in ("icon", "severity", "fault", "verdict", "ru", "en", "ru_hint", "en_hint"):
+            if not entry.get(field):
+                fail(f"exit_codes.{code}: missing `{field}` — every renderer reads it "
+                     f"(hub badge, report.html, JUnit, the store's verdict word)")
 
     # --- foreign output: compiles, ordered, and can never leave a line unclassified -------------
     patterns = cat["foreign_patterns"]

@@ -2133,6 +2133,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var j=await r.json();
       ge('cap-status').innerHTML='<span style="color:var(--ok)">✓ ok v'+esc(j.version||'?')+' (runs='+(Number(j.runs)||0)+')</span>';
       capUnlock(true);
+      /* ADR-141: fetch the catalogue AS SOON AS there is a server, not when some view happens to need
+         it. Six surfaces now resolve an exit code through `bExitPresent`, which reads `lgCatalog`
+         SYNCHRONOUSLY — and before this line only the Build tab awaited the load. Measured by driving
+         the UI (not by any gate): the runs list under Library rendered every row as "• 0 / UNKNOWN
+         EXIT CODE" in grey, because nothing on that path had ever fetched the catalogue. The per-view
+         awaits below stay as they are — they make each path correct on its own — but this makes the
+         catalogue present for a view someone reaches by deep link, which is how the defect appeared. */
+      loadEventCatalog();
     } catch(e){
       ge('cap-status').innerHTML='<span style="color:var(--no)">✗ '+esc(e.message)+' (CORS?)</span>';
       capUnlock(false);
@@ -2670,8 +2678,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   /* Colour is the ONE thing the catalogue does not carry, because it is a property of this page and not
      of the product. Keyed by the catalogue's own `severity` vocabulary rather than by exit code, so a
      new code inherits a colour by declaring what kind of thing it is. */
+  /* ⚠ ADR-141: `tool_failure_salvaged` WAS MISSING, and its absence was invisible by construction —
+     the `|| 'var(--mut)'` below is a SILENT fallback, so exit 5 (ADR-131, shipped 23 August) rendered
+     GREY while exit 4 beside it rendered red. Grey is the colour this page uses for "no information",
+     and a salvaged tool crash is not that. Nothing could have caught it: the map was keyed by a
+     vocabulary it did not derive, so a new severity was not a missing key, it was just a lookup that
+     found nothing. tests/test_exit_code_surfaces_offline.py now derives this key set from the
+     catalogue in BOTH directions, so an uncovered severity and a stale key are each red. */
   var B_SEVCOL={pass:'var(--ok)', finding:'var(--warn)', regression:'var(--warn)',
-                integrity:'var(--no)', not_started:'var(--no)', tool_failure:'var(--no)'};
+                integrity:'var(--no)', not_started:'var(--no)', tool_failure:'var(--no)',
+                tool_failure_salvaged:'var(--no)'};
 
   /* HEALTH-004: the exit-code badge is now READ FROM THE CATALOGUE (`exit_codes`), not hardcoded here.
      That table has been in brain/events.json since ADR-087, bilingual and severity-tagged, and had no
@@ -2691,23 +2707,46 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var t = lgCatalog && lgCatalog.faults;
     return (name && t && t[name]) || null;
   }
-  function renderBuildVerdict(st, cause, report, degradations, obsHTML){
-    var code=st.exit_code, state=st.state, icon, col, head, sub;
-    /* A spawn failure leaves exit_code at its zero value in the run record, and asking the table what
-       exit 0 means would render a run that never started as PASSED. -1 is what the run.finished frame
-       carries for the same event, and what the catalogue documents as "could not be spawned, or was
-       killed by a signal" — so the special case is only about WHICH code to look up. */
-    var lookup = (state==='failed') ? -1 : code;
-    var info = bExitInfo(lookup);
-    if (info){
-      icon = info.icon; col = B_SEVCOL[info.severity] || 'var(--mut)';
-      head = bi(info.ru, info.en); sub = bi(info.ru_hint, info.en_hint);
-    } else {
+  /* ADR-141: THE ONE PLACE that turns an exit code into what a person sees on this page.
+     Six functions used to answer that question independently — renderBuildVerdict, the report card,
+     bRunLog, chFinalize, tRenderRuns and the AG-UI timeline — and only the first consulted the
+     catalogue. Measured 2026-08-31: the SAME run rendered three mutually contradictory ways. Exit 5
+     was a grey badge with the right headline in the Build tab, a muted `exit 5` in the runs list, and
+     an unstyled `exit 5` with no colour at all in Chat, while the results list said `problem` in amber
+     because the Go side had a fourth copy of the table.
+     `state==='failed'` is looked up as -1: a spawn failure leaves exit_code at its zero value, and
+     asking the table what exit 0 means would render a run that never started as PASSED. */
+  function bExitPresent(code, state){
+    var info = bExitInfo((state==='failed') ? -1 : code);
+    if (!info){
       /* An exit code the catalogue never declared. Say so plainly instead of inventing a meaning —
-         an unexplainable exit is itself the finding. */
-      icon='•'; col='var(--mut)';
-      head=bi('НЕИЗВЕСТНЫЙ КОД ЗАВЕРШЕНИЯ','UNKNOWN EXIT CODE'); sub=null;
+         an unexplainable exit is itself the finding. Same answer the Go side gives (`unknown`). */
+      return {known:false, icon:'•', col:'var(--mut)', severity:'', verdict:'unknown', fault:'',
+              head:bi('НЕИЗВЕСТНЫЙ КОД ЗАВЕРШЕНИЯ','UNKNOWN EXIT CODE'),
+              plain:biPlain('НЕИЗВЕСТНЫЙ КОД ЗАВЕРШЕНИЯ','UNKNOWN EXIT CODE'), sub:null};
     }
+    /* `head` is MARKUP (bi() wraps both languages in data-lang spans) and `plain` is not. A caller
+       putting `head` into a title= attribute would print the tags at the reader — the same mistake the
+       fault chip made once and which is written down beside it. */
+    return {known:true, icon:info.icon, col:B_SEVCOL[info.severity] || 'var(--mut)',
+            severity:info.severity||'', verdict:info.verdict||'', fault:info.fault||'',
+            head:bi(info.ru, info.en), plain:biPlain(info.ru, info.en),
+            sub:bi(info.ru_hint, info.en_hint)};
+  }
+  /* The compact form, for the places that have one line and not a panel: icon, the catalogue's own
+     headline, and the number. Everything that used to hand-write `exit N` goes through here. */
+  function bExitBadge(code, state){
+    var p = bExitPresent(code, state);
+    return '<span style="color:'+p.col+'">'+p.icon+' '+p.head
+      +' <span style="opacity:.65;font-weight:600;font-size:.85em">(exit '+esc(code==null?'?':code)+')</span></span>';
+  }
+  function renderBuildVerdict(st, cause, report, degradations, obsHTML){
+    var code=st.exit_code, state=st.state;
+    /* ADR-141: resolution moved to bExitPresent, which is now the only reader of the exit-code table
+       on this page. The special case for a refused start lives there too, so the five other renderers
+       inherit it instead of each forgetting it separately. */
+    var p = bExitPresent(code, state);
+    var icon=p.icon, col=p.col, head=p.head, sub=p.sub;
     /* The run's own word outranks the exit-code reading — but only when it is one of the four we can
        render. An unknown state from a newer brain falls back to the coarse badge rather than to a blank
        one (same rule the Logs view applies to an unknown event code, and the same whitelist the Go side
@@ -3033,8 +3072,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
        где ярлык клали в `textContent` и читателю напечатались бы теги. */
     var head=document.createElement('b'); head.style.fontSize='.9rem';
     head.innerHTML=bi('Отчёт прогона','Run report'); card.appendChild(head);
+    /* ADR-141: the number alone said nothing — this row printed a bare `5` under a bilingual label and
+       left the reader to know the table by heart. It now carries the catalogue's own headline beside
+       the digit, from the same resolver the badge uses. */
+    var repP = bExitPresent(rep.exit_code, null);
     var rows=[[bi('вердикт','verdict'), rep.verdict==null?'—':String(rep.verdict)],
-              [bi('код выхода','exit code'), rep.exit_code==null?'—':String(rep.exit_code)],
+              [bi('код выхода','exit code'),
+               rep.exit_code==null?'—':(String(rep.exit_code)+' — '+repP.plain)],
               [bi('шагов','steps'), String(steps)],
               [bi('починено','healed'), String(rep.healed==null?0:rep.healed)],
               [bi('провалено','failed'), String(rep.failed==null?0:rep.failed)],
@@ -3141,10 +3185,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       lastState=await pollStatus(base,id);
     }
     if (lastState){
+      await loadEventCatalog();  // ADR-077: the verdict resolves degradation codes to sentences
+      /* ADR-141: the status line printed `exit_code=5` and stopped. It is the line a person reads
+         while the panel is still assembling, so it now says what the number means, from the catalogue.
+         ⚠ IT MUST COME AFTER THE LOAD ABOVE. The first version of this edit sat before it and printed
+         "UNKNOWN EXIT CODE" for every run — `bExitPresent` reads `lgCatalog` synchronously, so a
+         caller that runs before the fetch resolves gets the not-declared branch. */
       bRunLog(bLogHtml+'\n● '+esc(lastState.state||'?')+
         ' · exit_code='+esc(lastState.exit_code!=null?lastState.exit_code:'?')+
+        ' ('+esc(bExitPresent(lastState.exit_code, lastState.state).plain)+')'+
         (lastState.error?' · err='+esc(lastState.error):''));
-      await loadEventCatalog();  // ADR-077: the verdict resolves degradation codes to sentences
       renderBuildVerdict(lastState, cause || (lastState.error ? esc(lastState.error) : null),
                          await bFetchReport(base, id),        // ADR-076: the run's own verdict + counts
                          await bFetchDegradations(base, id),  // ADR-077: what the run lost
@@ -3776,13 +3826,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
   async function chFinalize(base, id, st){
     if (!st){ addBubble('sys',bi('Статус неизвестен (таймаут).','Status unknown (timeout).')); return; }
-    var code=st.exit_code, state=st.state, v;
-    if      (state==='failed') v='<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+'</span>';
-    else if (code===0)         v='<span style="color:var(--ok)">✓ '+bi('пройдено (exit 0)','pass (exit 0)')+'</span>';
-    else if (code===1)         v='<span style="color:var(--warn)">⚠ '+bi('тест нашёл проблему (exit 1)','the test found a problem (exit 1)')+'</span>';
-    else if (code===2)         v='<span style="color:var(--warn)">⚠ '+bi('визуальная/golden-регрессия (exit 2) — можно зафиксировать эталон 📌','visual/golden regression (exit 2) — you can update the baseline 📌')+'</span>';
-    else if (code===3)         v='<span style="color:var(--no)">✖ '+bi('целостность/конфигурация (plan_hash/golden) — нужен человек (exit 3)','integrity/config (plan_hash/golden) — needs a human (exit 3)')+'</span>';
-    else                       v='<span>exit '+esc(code)+'</span>';
+    await loadEventCatalog();   // ADR-141: the badge below reads the catalogue synchronously
+    var code=st.exit_code, state=st.state;
+    /* ⚠ ADR-141: THIS CHAIN WAS A SECOND EXIT-CODE TABLE, hand-written, and it knew four codes.
+       Everything else — 4, 5 and -1 — fell to `else`, which printed the bare string `exit 5` with NO
+       COLOUR AT ALL (the four branches each set one; the else set none), so the one outcome that means
+       "our own tool crashed" was the one rendered as plain body text. Its wording had also rotted
+       independently: exit 3 was described here as a plan_hash/golden mismatch, while the catalogue
+       (which HEALTH-001 corrected after a screenshot) says a refusal to start lands there too.
+       Now it asks the same function the Build tab asks. */
+    var v = (state==='failed')
+      ? '<span style="color:var(--no)">✖ '+bi('прогон не запущен','run did not start')+(st.error?' — '+esc(st.error):'')+'</span>'
+      : bExitBadge(code, state);
     addBubble('sys',v);
 
     var artifacts=['scenario.json','report.json','heal-report.json','baseline-report.json'];
@@ -3813,8 +3868,31 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   /* ---- M15 (ADR-051): Results + Metrics — native inline-SVG charts (no CDN/canvas; CSP-safe).
      SVG colours go through style="fill:var(--x)" (CSS custom props do NOT resolve in the `fill`/`stroke`
      presentation attribute, only in a CSS property). Feeds: GET /v1/results, GET /v1/trends. ---- */
-  function verdictColor(v){ return v==='pass'?'var(--ok,#36d399)':v==='regression'?'var(--no,#ff4d6d)':v==='integrity'?'#9c6ade':'var(--warn,#ffb000)'; }
-  function verdictIcon(v){ return v==='pass'?'✓':v==='regression'?'▲':v==='integrity'?'✖':'⚠'; }
+  /* ⚠ ADR-141: THESE TWO WERE THE FOURTH AND FIFTH COPIES of the exit-code table on this page, and
+     the only ones keyed by the WORD rather than the number — which is why they were missed. They knew
+     three words and sent everything else to amber ⚠, the "the test found a problem" shape. Measured
+     2026-08-31: a run that exited 5 (our own tool crashed, findings salvaged) reached this list as
+     `problem` — because the Go side's verdictEnum had a `default` that rewrote it — and was then
+     painted amber here, so BOTH halves of the boundary independently told the reader that their
+     application was at fault. The Go half is fixed by reading the catalogue; this half derives the
+     word's own severity from the catalogue too, so a new verdict inherits a colour by declaring what
+     kind of thing it is, exactly as B_SEVCOL does for the badge. */
+  function verdictSeverity(v){
+    var t = lgCatalog && lgCatalog.exit_codes;
+    if (t) for (var k in t) if (t[k] && t[k].verdict === v) return t[k].severity;
+    /* The refined ADR-071/072 states are not exit codes and have no catalogue row; they are prefixed
+       by the coarse word they refine, which is what lets them inherit its colour rather than a guess. */
+    if (v && v.indexOf('pass') === 0) return 'pass';
+    if (v && v.indexOf('problem') === 0) return 'finding';
+    return '';
+  }
+  function verdictColor(v){ return B_SEVCOL[verdictSeverity(v)] || 'var(--mut)'; }
+  function verdictIcon(v){
+    var t = lgCatalog && lgCatalog.exit_codes;
+    if (t) for (var k in t) if (t[k] && t[k].verdict === v) return t[k].icon;
+    var s = verdictSeverity(v);
+    return s==='pass' ? '✓' : s==='finding' ? '⚠' : '•';
+  }
   function fmtDur(ms){ ms=+ms||0; return ms<1000?ms+'ms':(ms/1000).toFixed(ms<10000?1:0)+'s'; }
   function svgSpark(vals, opts){
     opts=opts||{}; var w=opts.w||220, h=opts.h||34, pad=3;
@@ -3876,7 +3954,17 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ge('results-charts').innerHTML=
       '<h3 style="font-size:.9rem;margin:.6rem 0 .3rem;color:var(--mut)">'+bi('Покрытие по прогонам','Coverage per run')+'</h3>'+
       svgBars(bars,{label:'coverage per run'})+
-      '<div class="libmeta" style="margin-top:.3rem">'+bi('цвет = verdict','colour = verdict')+': <span style="color:var(--ok,#36d399)">✓ pass</span> · <span style="color:var(--warn,#ffb000)">⚠ problem</span> · <span style="color:var(--no,#ff4d6d)">▲ regression</span> · <span style="color:#9c6ade">✖ integrity</span></div>';
+      /* ⚠ ADR-141: THE LEGEND WAS A NINTH COPY, and a screenshot found it, not a gate. It spelled out
+         four words with their icons and colours inline, so it went stale the moment exit 4 and 5
+         shipped — and it sat directly above rows the page was by then painting from the catalogue,
+         telling the reader that four verdicts exist while the list beside it showed a fifth. It is
+         now built from the same table the rows use, in the catalogue's own order. */
+      '<div class="libmeta" style="margin-top:.3rem">'+bi('цвет = verdict','colour = verdict')+': '
+        + Object.keys(((lgCatalog||{}).exit_codes)||{}).map(function(k){
+            var e = lgCatalog.exit_codes[k];
+            return '<span style="color:'+verdictColor(e.verdict)+'">'+e.icon+' '+esc(e.verdict)+'</span>';
+          }).join(' · ')
+        + '</div>';
     var html='';
     tResults.forEach(function(rr){
       html+='<div class="runitem"><div class="libitem-row">'+
@@ -4052,6 +4140,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   var tRunsLoaded=false, tRuns=[];
   async function tLoadRuns(){
     tRunsLoaded=true;
+    /* ADR-141: the badges below resolve through `bExitPresent`, which reads `lgCatalog`
+       SYNCHRONOUSLY. Nothing on this path had ever fetched it, so every row rendered as
+       "UNKNOWN EXIT CODE" in grey — measured by driving the UI, not caught by any gate. */
+    await loadEventCatalog();
     ge('runs-list').innerHTML='<p class="hint">'+bi('загрузка…','loading…')+'</p>';
     try {
       var r=await fetch(capiBase()+'/v1/runs',{headers:authHdr()});
@@ -4063,10 +4155,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function tRenderRuns(){
     var html='';
     tRuns.forEach(function(rn){
+      /* ⚠ ADR-141: A THIRD TABLE STOOD HERE, and it was the coarsest of them — it tested exactly
+         three things (running, exit 0, state failed) and rendered EVERY other code with the muted
+         metadata class. Measured: exits 1, 2, 3, 4 and 5 were pixel-identical in this list, differing
+         only by the digit, so the run whose tool crashed and the run that found a real bug read the
+         same at a glance. The icon and the colour now come from the catalogue like everywhere else. */
+      var pr = bExitPresent(rn.exit_code, rn.state);
       var badge = rn.state==='running' ? '<span class="libmeta">● '+bi('идёт','running')+'</span>'
-        : rn.exit_code===0 ? '<span class="pass">✓ 0</span>'
-        : rn.state==='failed' ? '<span class="fail">✖</span>'
-        : '<span class="libmeta">exit '+esc(rn.exit_code)+'</span>';
+        : '<span style="color:'+pr.col+'" title="'+esc(pr.plain)+'">'+pr.icon+' '+esc(rn.exit_code==null?'?':rn.exit_code)+'</span>';
       html+='<div class="runitem"><div class="libitem-row">'+
         '<div><code>'+esc(rn.run_id)+'</code> '+badge+' <span class="libmeta">'+esc(rn.mode||'')+' · '+esc(rn.target||'')+'</span></div>'+
         '<div class="ctl-row" style="margin:0">'+
@@ -4869,7 +4965,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
        moment the run ends — the same answer the badge gives, from the same decision, rather than a
        second one computed here. */
     if (p.type==='run.finished'){ var fd=p.data||{};
-      agAddEvent('verdict', '⏹ run.finished exit_code='+esc(fd.exit_code)+(fd.state?' ('+esc(fd.state)+')':'')
+      /* ADR-141: the live timeline's closing frame carried the raw number and the fault chip, so a
+         watcher saw WHOSE the problem was but not WHAT happened until the badge rendered afterwards. */
+      var fp = bExitPresent(fd.exit_code, fd.state);
+      agAddEvent('verdict', '⏹ run.finished <span style="color:'+fp.col+'">'+fp.icon+' '+fp.head+'</span>'
+        +' exit_code='+esc(fd.exit_code)+(fd.state?' ('+esc(fd.state)+')':'')
         +resFaultChip(fd.fault_domain)); return; }
     // run.started / state.transition / step.progress / tool.call / heal / verdict — generic timeline chip
     agAddEvent(agClassFor(p.type), '<b>'+esc(p.type)+'</b> #'+esc(p.seq!=null?p.seq:'?')+' '+esc(JSON.stringify(p.data||{})));

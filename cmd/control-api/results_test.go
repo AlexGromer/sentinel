@@ -8,15 +8,44 @@ import (
 	"path/filepath"
 	"testing"
 
+	eventcatalog "github.com/AlexGromer/sentinel/brain"
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
 )
 
 // TestVerdictEnumAndDuration covers the two pure helpers M15 adds.
+//
+// ⚠ THE EXPECTATIONS ARE NO LONGER WRITTEN HERE — ADR-141. This test used to carry the map
+// {0:pass, 1:problem, 2:regression, 3:integrity, 7:problem}, which is a NINTH copy of the exit-code
+// table, and it agreed with verdictEnum for the same reason both were wrong: neither read the
+// catalogue. It passed green while exits 4, 5 and -1 were being recorded as `problem` — the table it
+// asserted simply had no row for them, and a list cannot show you what it omits.
+//
+// The set is now derived from brain/events.json, so a code added to the catalogue is covered here by
+// construction, and one that renders wrongly cannot be green. The floor is the mandatory companion:
+// a derivation that stops finding anything passes perfectly over an empty map.
 func TestVerdictEnumAndDuration(t *testing.T) {
-	for exit, want := range map[int]string{0: "pass", 1: "problem", 2: "regression", 3: "integrity", 7: "problem"} {
-		if got := verdictEnum(exit); got != want {
-			t.Fatalf("verdictEnum(%d)=%q want %q", exit, got, want)
+	declared := 0
+	for _, code := range []int{-1, 0, 1, 2, 3, 4, 5} {
+		info, ok := eventcatalog.ExitInfoOf(code)
+		if !ok {
+			t.Fatalf("exit_codes[%d] is missing from brain/events.json — the catalogue is the source "+
+				"of the verdict vocabulary and this code is one the product actually produces", code)
 		}
+		if info.Verdict == "" {
+			t.Fatalf("exit_codes[%d] declares no `verdict` — the store would record an empty word", code)
+		}
+		if got := verdictEnum(code); got != info.Verdict {
+			t.Fatalf("verdictEnum(%d)=%q but the catalogue says %q", code, got, info.Verdict)
+		}
+		declared++
+	}
+	if declared < 7 {
+		t.Fatalf("only %d exit codes derived from the catalogue — expected at least 7 (measured 2026-08-31)", declared)
+	}
+	// An UNDECLARED code must not be invented into a word. It used to become "problem", which reads as
+	// a finding about the application under test; an exit we cannot explain is not known to be that.
+	if got := verdictEnum(7); got != "unknown" {
+		t.Fatalf("verdictEnum(7)=%q want %q — an undeclared code must say so, not guess", got, "unknown")
 	}
 	if d := durationMs("2026-07-05T00:00:00Z", "2026-07-05T00:00:03Z"); d != 3000 {
 		t.Fatalf("durationMs=%d want 3000", d)

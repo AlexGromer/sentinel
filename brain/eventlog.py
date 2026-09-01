@@ -42,6 +42,7 @@ _RANK = {"debug": 10, "info": 20, "warn": 30, "error": 40}
 _DEFAULT_LEVEL = "debug"
 
 _events: dict | None = None
+_exit_codes: dict | None = None
 _thresholds: tuple[int, dict[str, int]] | None = None
 
 
@@ -56,6 +57,26 @@ def _catalog() -> dict:
                   file=sys.stderr, flush=True)
             _events = {}
     return _events
+
+
+def exit_codes() -> dict:
+    """The `exit_codes` block of the catalogue, loaded once. ADR-141.
+
+    ⚠ THIS ONE RAISES, and the asymmetry with `_catalog()` above is deliberate. A logger that cannot
+    read its catalogue still has a useful degraded mode: print the code and lose the prose. A verdict
+    that cannot read its catalogue has none — it would silently name every outcome `problem`, which is
+    a statement ABOUT THE APPLICATION UNDER TEST and would be a lie about our own breakage. Measured
+    2026-08-31: that exact silent narrowing (`default: return "problem"`) is what destroyed the words
+    for exits 4, 5 and -1 on the Go side of the same boundary. Loud beats plausible.
+    """
+    global _exit_codes
+    if _exit_codes is None:
+        raw = json.loads(_CATALOG_PATH.read_text(encoding="utf-8")).get("exit_codes") or {}
+        if not raw:
+            raise RuntimeError(f"{_CATALOG_PATH}: `exit_codes` is missing or empty — "
+                               "the verdict vocabulary has no source")
+        _exit_codes = raw
+    return _exit_codes
 
 
 def _levels() -> tuple[int, dict[str, int]]:
