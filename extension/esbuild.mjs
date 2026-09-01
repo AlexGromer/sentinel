@@ -31,6 +31,28 @@ async function copyStatic() {
   await cp(join(root, 'public'), dist, { recursive: true });
 }
 
+// ADR-143: the SHARED PROTOCOL, additionally emitted as ESM for the end-to-end check.
+//
+// ⚠ WHY A SECOND OUTPUT OF THE SAME SOURCE. `recorder.e2e.mjs` used to hand-write the subprotocol
+// pair — `['sentinel.recorder.v1', 'bearer.' + token]` — so the one thing the #43 block exists to
+// prove (that the client half of the bearer handshake is built correctly) was proven about a COPY
+// living in the test, not about the code that ships. A copy agrees with itself forever. The e2e now
+// imports `wsSubprotocols` from here, so changing the real one turns the check red.
+//
+// It cannot import the IIFE bundles above: those are built for `chrome.scripting.executeScript` and
+// for a service worker that must not be `"type":"module"`, and neither exports anything.
+const protocolOptions = {
+  entryPoints: { protocol: join(root, 'src/shared/protocol.ts') },
+  outdir: dist,
+  outExtension: { '.js': '.mjs' },
+  bundle: true,
+  format: 'esm',
+  target: 'node20',
+  platform: 'neutral',
+  sourcemap: true,
+  logLevel: 'info',
+};
+
 const buildOptions = {
   entryPoints: Object.fromEntries(
     Object.entries(entries).map(([name, file]) => [name, join(root, file)]),
@@ -49,11 +71,14 @@ await mkdir(dist, { recursive: true });
 
 if (watch) {
   const ctx = await esbuild.context(buildOptions);
+  const pctx = await esbuild.context(protocolOptions);
   await ctx.watch();
+  await pctx.watch();
   await copyStatic();
   console.log('[esbuild] watching for changes…');
 } else {
   await esbuild.build(buildOptions);
+  await esbuild.build(protocolOptions);
   await copyStatic();
   console.log('[esbuild] build complete → dist/');
 }
