@@ -166,7 +166,19 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 6          # ⚠ may only ever go UP; today's honest number.
+    MIN_THREE_WAY = 12         # ⚠ may only ever go UP; today's honest number.
+    #                            6 -> 12 at ADR-149, the largest single move this ratchet has made,
+    #                            and it is a CATALOGUE change rather than new product surface: six
+    #                            capabilities were written as TWO records each — a "server" one and a
+    #                            "UI" one — so neither half could ever satisfy a rule about one
+    #                            capability being reachable three ways. The paths existed; the file's
+    #                            shape hid them. Merging the pairs made five of them three-way at
+    #                            once, `promote-test` a sixth once it regained the UI path that used
+    #                            to live on the deleted `ui-library`.
+    #                            ⚠ MIN_CAPABILITIES below did NOT have to move, and the registry
+    #                            entry said it would: it called the floor "satisfied only just" after
+    #                            the merge. Measured — 38 capabilities against a floor of 30, a slack
+    #                            of 8. The claim was arithmetic from an older population.
     #                            5 -> 6 at ADR-146, and unlike the catch-up below this is a NEW
     #                            claim rather than a correction: `provider-keys` is three-way from
     #                            the day it exists — the settings panel, `agentctl provider-keys

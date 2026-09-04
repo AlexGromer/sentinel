@@ -142,10 +142,10 @@
       "id": "takeover",
       "group": "Runtime",
       "severity": "high",
-      "title_ru": "Перехват живого прогона руками",
-      "title_en": "Take over a live run by hand",
-      "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление. ⚠ Требует ЗАПУЩЕННОГО сервиса orchestrator и адреса CONTROL_API_ORCH_ADDR: перехват доезжает до прогона по каналу RunControl, и без него control-api честно отвечает «no orchestrator wired». До ADR-126 этот сервис не запускался ни одной формой поставки, то есть возможность была объявлена и мертва; теперь он есть в compose и в .deb (юнит ставится выключенным).",
-      "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back. ⚠ Requires the orchestrator service to be RUNNING and CONTROL_API_ORCH_ADDR to be set: the takeover reaches the run over the RunControl channel, and without it control-api answers \"no orchestrator wired\" rather than pretending. Before ADR-126 no delivery form launched that service at all, so this capability was declared and dead; it now ships in compose and in the .deb (the unit is installed disabled).",
+      "title_ru": "Живой таймлайн и перехват прогона руками",
+      "title_en": "Live timeline and operator takeover",
+      "how_ru": "GET /v1/stream (WS) — перехватить идущий прогон, поводить руками, вернуть управление. ⚠ Требует ЗАПУЩЕННОГО сервиса orchestrator и адреса CONTROL_API_ORCH_ADDR: перехват доезжает до прогона по каналу RunControl, и без него control-api честно отвечает «no orchestrator wired». До ADR-126 этот сервис не запускался ни одной формой поставки, то есть возможность была объявлена и мертва; теперь он есть в compose и в .deb (юнит ставится выключенным). В браузере — смотреть идущий прогон пофазно и перехватить его, не останавливая.",
+      "how_en": "GET /v1/stream (WS) — take over a running run, drive by hand, hand control back. ⚠ Requires the orchestrator service to be RUNNING and CONTROL_API_ORCH_ADDR to be set: the takeover reaches the run over the RunControl channel, and without it control-api answers \"no orchestrator wired\" rather than pretending. Before ADR-126 no delivery form launched that service at all, so this capability was declared and dead; it now ships in compose and in the .deb (the unit is installed disabled). In the browser you watch the run phase by phase and take it over without stopping it.",
       "access": [
         {
           "kind": "http",
@@ -158,6 +158,10 @@
         {
           "kind": "env",
           "ref": "CONTROL_API_ORCH_ADDR"
+        },
+        {
+          "kind": "ui",
+          "ref": "live"
         }
       ],
       "reach": "capability",
@@ -184,15 +188,27 @@
     {
       "id": "chat-mode",
       "group": "Runtime",
-      "severity": "medium",
-      "title_ru": "Многоходовой чат-авторинг",
-      "title_en": "Multi-turn chat authoring",
-      "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом.",
-      "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation.",
+      "severity": "high",
+      "title_ru": "Авторинг теста диалогом",
+      "title_en": "Author a test by conversation",
+      "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом. Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048); в браузере это вкладка «Чат», по HTTP — POST /v1/runs с mode=chat.",
+      "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation. Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048); in the browser it is the Chat view, over HTTP it is POST /v1/runs with mode=chat.",
       "access": [
         {
           "kind": "mode",
           "ref": "chat"
+        },
+        {
+          "kind": "ui",
+          "ref": "chat"
+        },
+        {
+          "kind": "cli",
+          "ref": "run"
+        },
+        {
+          "kind": "http",
+          "ref": "POST /v1/runs"
         }
       ],
       "reach": "capability"
@@ -459,10 +475,10 @@
       "id": "scenarios-library",
       "group": "HTTP",
       "severity": "medium",
-      "title_ru": "Библиотека сценариев",
-      "title_en": "Scenario library",
-      "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы.",
-      "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets.",
+      "title_ru": "Библиотека сценариев и тестов",
+      "title_en": "Scenario and test library",
+      "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы. В браузере — тот же список плюс продвижение сценария в именованный тест.",
+      "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets. In the browser it is the same list, plus promoting a scenario into a named test.",
       "access": [
         {
           "kind": "http",
@@ -471,6 +487,10 @@
         {
           "kind": "cli",
           "ref": "scenarios list"
+        },
+        {
+          "kind": "ui",
+          "ref": "library"
         }
       ],
       "reach": "capability"
@@ -491,6 +511,10 @@
         {
           "kind": "cli",
           "ref": "tests promote"
+        },
+        {
+          "kind": "ui",
+          "ref": "library"
         }
       ],
       "reach": "capability"
@@ -499,10 +523,10 @@
       "id": "metrics-trends",
       "group": "HTTP",
       "severity": "medium",
-      "title_ru": "Метрики и тренды",
-      "title_en": "Metrics and trends",
-      "how_ru": "GET /v1/results, GET /v1/trends — исходы прогонов и их динамика, нативно в UI (ADR-051).",
-      "how_en": "GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051).",
+      "title_ru": "Результаты, метрики и тренды",
+      "title_en": "Results, metrics and trends",
+      "how_ru": "GET /v1/results, GET /v1/trends — исходы прогонов и их динамика, нативно в UI (ADR-051). В браузере — нативной SVG-графикой, без внешних библиотек (ADR-051).",
+      "how_en": "GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051). In the browser it is native SVG, with no external libraries (ADR-051).",
       "access": [
         {
           "kind": "http",
@@ -511,6 +535,10 @@
         {
           "kind": "cli",
           "ref": "trends"
+        },
+        {
+          "kind": "ui",
+          "ref": "results"
         }
       ],
       "reach": "capability"
@@ -518,11 +546,11 @@
     {
       "id": "log-filter",
       "group": "HTTP",
-      "severity": "medium",
-      "title_ru": "Серверная фильтрация логов",
-      "title_en": "Server-side log filtering",
-      "how_ru": "GET /v1/runs/{id}/logs — фильтр по уровню/источнику/категории/модулю/коду.",
-      "how_en": "GET /v1/runs/{id}/logs — filter by level/source/category/module/code.",
+      "severity": "high",
+      "title_ru": "Фильтрация логов прогона",
+      "title_en": "Filtering a run's logs",
+      "how_ru": "GET /v1/runs/{id}/logs — фильтр по уровню/источнику/категории/модулю/коду. В браузере выражение и элементы управления — одно и то же, а не два разных фильтра (ADR-065).",
+      "how_en": "GET /v1/runs/{id}/logs — filter by level/source/category/module/code. In the browser the expression and the controls are the same thing, not two filters (ADR-065).",
       "access": [
         {
           "kind": "http",
@@ -530,6 +558,10 @@
         },
         {
           "kind": "cli",
+          "ref": "logs"
+        },
+        {
+          "kind": "ui",
           "ref": "logs"
         }
       ],
@@ -873,22 +905,6 @@
       }
     },
     {
-      "id": "ui-chat",
-      "group": "UI",
-      "severity": "high",
-      "title_ru": "Авторинг теста диалогом",
-      "title_en": "Author a test by conversation",
-      "how_ru": "Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048).",
-      "how_en": "Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048).",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "chat"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
       "id": "ui-run",
       "group": "UI",
       "severity": "high",
@@ -900,22 +916,6 @@
         {
           "kind": "ui",
           "ref": "run"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
-      "id": "ui-live",
-      "group": "UI",
-      "severity": "high",
-      "title_ru": "Живой таймлайн и перехват прогона",
-      "title_en": "Live timeline and operator takeover",
-      "how_ru": "Смотреть идущий прогон пофазно и перехватить его руками, не останавливая (WS /v1/stream).",
-      "how_en": "Watch a run phase by phase and take it over by hand without stopping it (WS /v1/stream).",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "live"
         }
       ],
       "reach": "capability"
@@ -961,45 +961,13 @@
       "reach": "capability"
     },
     {
-      "id": "ui-library",
-      "group": "UI",
-      "severity": "medium",
-      "title_ru": "Библиотека сценариев и тестов",
-      "title_en": "Scenario and test library",
-      "how_ru": "Сохранённые сценарии как переиспользуемые активы, продвижение сценария в именованный тест.",
-      "how_en": "Saved scenarios as reusable assets; promoting a scenario into a named test.",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "library"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
-      "id": "ui-results",
-      "group": "UI",
-      "severity": "medium",
-      "title_ru": "Результаты и тренды",
-      "title_en": "Results and trends",
-      "how_ru": "Исходы прогонов и их динамика, нативной SVG-графикой без внешних библиотек (ADR-051).",
-      "how_en": "Run outcomes and how they move over time, in native SVG with no external libraries (ADR-051).",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "results"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
       "id": "service-journal",
       "group": "Observability",
       "severity": "high",
       "title_ru": "Журнал сервиса — что делал сам инструмент",
       "title_en": "Service journal — what the tool itself did",
-      "how_ru": "GET /v1/service-log — входы и неудачные входы, аккаунты, правка настроек, отказы, старт и остановка сервисов. Обычный аккаунт видит свои события, админ и машинный токен — все (HEALTH-005).",
-      "how_en": "GET /v1/service-log — sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005).",
+      "how_ru": "GET /v1/service-log — входы и неудачные входы, аккаунты, правка настроек, отказы, старт и остановка сервисов. Обычный аккаунт видит свои события, админ и машинный токен — все (HEALTH-005). В браузере — вкладка рядом с «Логи», тот же рендер и тот же каталог сообщений; частичный вид НАЗЫВАЕТ себя частичным, а не выглядит полным.",
+      "how_en": "GET /v1/service-log — sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005). In the browser it is a view beside Logs, the same renderer and the same message catalogue; a partial view SAYS it is partial rather than looking complete.",
       "access": [
         {
           "kind": "http",
@@ -1008,29 +976,13 @@
         {
           "kind": "cli",
           "ref": "service-log"
+        },
+        {
+          "kind": "ui",
+          "ref": "journal"
         }
       ],
       "reach": "capability"
-    },
-    {
-      "id": "service-journal-cli",
-      "group": "Observability",
-      "severity": "medium",
-      "title_ru": "Журнал сервиса из терминала",
-      "title_en": "The service journal from a terminal",
-      "how_ru": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — тот же журнал, тонкий клиент над тем же маршрутом.",
-      "how_en": "agentctl service-log [--lvl warn --svc control-api --actor alice --q ...] — the same journal, a thin client over the same route.",
-      "access": [
-        {
-          "kind": "code",
-          "file": "cmd/agentctl/api.go",
-          "ref": "Verb: \"service-log\""
-        }
-      ],
-      "reach": "artifact",
-      "missing": {
-        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
-      }
     },
     {
       "id": "service-journal-purge",
@@ -1044,38 +996,6 @@
         {
           "kind": "cli",
           "ref": "purge-service"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
-      "id": "ui-journal",
-      "group": "UI",
-      "severity": "high",
-      "title_ru": "Журнал сервиса в браузере",
-      "title_en": "The service journal in the browser",
-      "how_ru": "Вкладка рядом с «Логи», тот же рендер и тот же каталог сообщений; частичный вид НАЗЫВАЕТ себя частичным, а не выглядит полным.",
-      "how_en": "A view beside Logs, the same renderer and the same message catalogue; a partial view SAYS it is partial rather than looking complete.",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "journal"
-        }
-      ],
-      "reach": "capability"
-    },
-    {
-      "id": "ui-logs",
-      "group": "UI",
-      "severity": "high",
-      "title_ru": "Логи с языком фильтров",
-      "title_en": "Logs with a filter language",
-      "how_ru": "Фильтр по уровню/источнику/категории/модулю/коду; выражение и элементы управления — одно и то же, а не два разных фильтра (ADR-065).",
-      "how_en": "Filter by level/source/category/module/code; the expression and the controls are the same thing, not two filters (ADR-065).",
-      "access": [
-        {
-          "kind": "ui",
-          "ref": "logs"
         }
       ],
       "reach": "capability"
