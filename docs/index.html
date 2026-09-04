@@ -920,12 +920,20 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
       <summary><span data-lang="ru">⚙ Модель и LLM · бюджеты · auth</span><span data-lang="en">⚙ Model and LLM · budgets · auth</span></summary>
       <div class="grid g3" style="margin-top:.6rem">
         <div>
-          <label for="b-planner">Planner</label>
+          <!-- ADR-147: наружу торчит НАМЕРЕНИЕ, заземление ВЫВОДИТСЯ. Этот селектор — вторая ось
+               (каким механизмом шаги привязываются к живым элементам), и она НЕ пользовательский
+               выбор: какая стратегия лучше — вопрос замера, а не вкуса. Он остаётся ОТЛАДОЧНЫМ
+               рычагом с явным именем и умолчанием «выводится», потому что `mode` и `planner` —
+               алиасы ОДНОГО ключа PLANNER, и два независимых списка предлагали пары, которые
+               продукт объявляет ошибкой конфигурации (замерено: 5 из 9 давали exit 3). -->
+          <label for="b-planner"><span data-lang="ru">Заземление (отладка)</span><span data-lang="en">Grounding (debug)</span></label>
           <select id="b-planner">
+            <option value="" selected>— выводится из намерения / derived from the intent —</option>
             <option value="heuristic">heuristic (детерминированный · deterministic)</option>
             <option value="llm">llm (Opus / локальная · local)</option>
             <option value="goal">goal (grounded)</option>
           </select>
+          <div id="b-planner-warn" class="warnbox" style="display:none;margin-top:.35rem"></div>
         </div>
         <div>
           <label for="b-coverage">coverage_target</label>
@@ -1127,12 +1135,18 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <div id="chat3-left">
       <div class="grid g2">
         <div>
-          <label for="ch-mode"><span data-lang="ru">Режим</span><span data-lang="en">Mode</span></label>
+          <!-- ADR-147, директива Alex 2026-08-09: в чате НЕТ выбора режима на сообщение. Разговор
+               имеет ОДНО намерение: первый тёрн объявляет цель, каждый следующий — это `message`
+               (ADR-108a), поэтому смена селектора на втором тёрне меняла бы, чем правят цель,
+               заданную первым. Селектор остаётся до старта и замирает после него; «Новый разговор»
+               его возвращает. Заземление здесь и так ВЫВОДИТСЯ (planner берётся из режима). -->
+          <label for="ch-mode"><span data-lang="ru">Намерение</span><span data-lang="en">Intent</span></label>
           <select id="ch-mode">
             <option value="describe" selected>describe — описание потока → сценарий · flow → scenario</option>
             <option value="goal">goal — цель словами → сценарий · NL goal → scenario</option>
             <option value="explore">explore — авто-исследование · auto-explore</option>
           </select>
+          <div id="ch-mode-locked" class="hint" style="display:none;margin-top:.3rem"></div>
         </div>
         <div>
           <label for="ch-target">Target URL</label>
@@ -2049,11 +2063,25 @@ function loadCapabilities(){
   if (!box) return;
   fetch('capabilities.json').then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
     if (!j || !j.capabilities) return;
-    // UI first: the surface the reader is looking at while reading this is the one the catalogue was
-    // silent about, and it is the only group whose entries can be OPENED from here.
-    var order = ['UI','Integrations','CLI','HTTP','Runtime','Deployment'];
     var byGroup = {};
     j.capabilities.forEach(function(c){ (byGroup[c.group] = byGroup[c.group] || []).push(c); });
+    /* ⚠ THE ORDER IS A PREFERENCE, NOT THE LIST (ADR-147, docs/DEVELOPMENT.md §0 principle 5).
+       It used to BE the list — `['UI','Integrations','CLI','HTTP','Runtime','Deployment']` — and the
+       loop below skipped any group not in it. docs/capabilities.json has EIGHT groups, so
+       `Observability` and `Operations` were dropped, and with them SIX records the hub never showed
+       at all: service-journal, service-journal-cli, service-journal-purge, metrics-scrape,
+       health-readiness and llm-live-probe. `health-readiness` is one of the six capabilities the
+       product can reach three ways — advertised nowhere the reader can see it.
+
+       That is the failure principle 5 describes exactly: a hand-maintained list shows what is WRONG
+       in it (a stale name renders an empty heading) and cannot show what is MISSING from it, because
+       absence has no representation. So the preference below orders the groups it knows, and every
+       other group is APPENDED rather than discarded — a group added to the catalogue appears here
+       without anyone editing this file. UI stays first: it is the surface the reader is looking at,
+       and the only group whose entries can be OPENED from here. */
+    var PREFERRED = ['UI','Integrations','CLI','HTTP','Runtime','Deployment'];
+    var order = PREFERRED.filter(function(g){ return byGroup[g]; })
+      .concat(Object.keys(byGroup).filter(function(g){ return PREFERRED.indexOf(g) < 0; }).sort());
     var sev = { high:0, medium:1, low:2 };
     var html = '';
     order.forEach(function(g){
@@ -2440,13 +2468,56 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var m=bVal('b-mode');
     ge('b-goalWrap').style.display=(m==='goal')?'':'none';
     ge('b-descWrap').style.display=(m==='describe')?'':'none';
-    if (m==='goal'&&!ge('b-planner').dataset.touched) ge('b-planner').value='goal';
+    /* ADR-147. This used to read `if (m==='goal' && !touched) planner='goal'` — a partial sync that
+       covered ONE of the three intents, and only until the person touched the other select. Measured:
+       load the page (mode=goal, so planner was set to goal), pick «describe», export — the file
+       carried `mode: describe` + `planner: goal`, which brain/runconfig.py `_resolve_planner` REFUSES,
+       and the run died with exit 3 before it started. Two clicks from a fresh page.
+       Five of the nine pairs the two selects offered were unrunnable that way.
+       Now the grounding is DERIVED unless somebody deliberately overrides it, so the default path
+       cannot produce a conflicting pair at all. */
     bLlmGuard();
     renderBuild();
   }
 
+  /* The override is kept (it is how the two strategies get compared at all — MODEL-002), so the one
+     remaining way to build a refused run is to set it AGAINST the intent. That is a legitimate thing
+     to want to do and a terrible thing to discover from an exit code, so it is said here, before the
+     export is copied anywhere. The verdict comes from the SAME rule the brain applies: `explore`
+     imposes nothing, anything else must match. */
+  /* The grounding a run will ACTUALLY use, mirroring brain/planner.py make_planner: an explicit
+     override wins; otherwise `goal` implies the grounded planner and everything else the heuristic.
+     One function, so the LLM warning and any later reader cannot disagree about it. */
+  function bEffectivePlanner(){
+    var override = bVal('b-planner');
+    if (override) return override;
+    return bVal('b-mode') === 'goal' ? 'goal' : 'heuristic';
+  }
+
+  function bPlannerConflict(mode, planner){
+    if (!planner || mode === 'explore') return '';
+    return planner === mode ? '' : mode;
+  }
+  function bPlannerWarn(){
+    var el = ge('b-planner-warn'); if (!el) return;
+    var mode = bVal('b-mode'), planner = bVal('b-planner');
+    var clash = bPlannerConflict(mode, planner);
+    el.style.display = clash ? '' : 'none';
+    if (clash) {
+      el.innerHTML = bi(
+        '⚠ Намерение <b>' + esc(mode) + '</b> и заземление <b>' + esc(planner) + '</b> — это один ключ PLANNER с двумя значениями. Прогон откажется стартовать (код 3). Оставь «выводится», если не сравниваешь стратегии.',
+        '⚠ The intent <b>' + esc(mode) + '</b> and the grounding <b>' + esc(planner) + '</b> are one key, PLANNER, with two values. The run will refuse to start (exit 3). Leave it on “derived” unless you are comparing strategies.');
+    }
+  }
+
   function renderBuild(){
     var mode=bVal('b-mode'), target=bVal('b-target').trim();
+    /* Called from HERE and not from a listener on #b-planner, deliberately: the form-wide listener
+       below already drives renderBuild on every input and change, and the comment beside it records
+       why that shape was chosen — a control missing from a hand-written list is invisible, while an
+       extra one fails loudly. A warning wired to one field would have been the missing kind: measured,
+       it never appeared when the override was changed, only when the intent was. */
+    bPlannerWarn();
     /* YAML */
     /* ADR-107c: this text used to be the ONLY way the budgets and the auth block reached a run — the
        form collected them and the submit handler did not, so a person had to download this and pass
@@ -2459,7 +2530,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     lines.push('mode: '+mode);
     if (mode==='goal'&&ge('b-goal').value.trim())     lines.push('goal: '+bq(ge('b-goal').value.trim()));
     if (mode==='describe'&&ge('b-describe').value.trim()) lines.push('describe: '+bq(ge('b-describe').value.trim()));
-    lines.push('planner: '+bVal('b-planner'));
+    /* ADR-147: emitted ONLY when somebody deliberately overrode the grounding. An always-present
+       `planner:` is what made the export refusable — with the key absent, brain/runconfig.py derives
+       PLANNER from `mode` and there is no pair left to conflict. The same reasoning the observe key
+       below already used: an absent key means "the person did not choose", and the brain says which
+       default it applied. */
+    if (bVal('b-planner')) lines.push('planner: '+bVal('b-planner'));
     lines.push('coverage_target: '+(bVal('b-coverage')||'0.85'));
     lines.push('max_steps: '+(bVal('b-maxsteps')||'40'));
     lines.push('plan_budget: '+(bVal('b-planbud')||'50000'));
@@ -3661,8 +3737,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   }
   function bLlmGuard(){
     var box = ge('b-llmwarn'); if (!box) return;
-    var planner = bVal('b-planner'), be = bVal('b-backend'),
+    var be = bVal('b-backend'),
         mp = bVal('b-modelp').trim(), bu = bVal('b-baseurl').trim();
+    /* ADR-147: the EFFECTIVE grounding, not the override field. Once the field defaults to «derived»
+       an empty value stopped meaning "heuristic" and started meaning "whatever the intent implies" —
+       and reading the raw field here would have silently switched this warning off for exactly the
+       intent that needs a model most. The derivation is the brain's, not ours: brain/planner.py
+       make_planner selects GoalPlanner when GOAL is set and PLANNER is unset or heuristic. */
+    var planner = bEffectivePlanner();
     var needsLlm = (planner === 'goal' || planner === 'llm');
     // Anthropic is a legitimate choice with no base_url and a built-in default model, so "configured"
     // means: a backend is named AND (anthropic, or openai-compat with a base_url).
@@ -3673,27 +3755,36 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var adv = ge('b-adv'); if (adv) adv.open = true;
       box.style.display = '';
       box.innerHTML = bi(
-        '<strong>Планировщик «' + esc(planner) + '» требует LLM, но модель не выбрана.</strong> ' +
+        /* ADR-147: named by the INTENT, and the advice points at the intent too. This used to read
+           «выберите планировщик heuristic» — advice about a control that no longer offers itself as a
+           planner choice, since the grounding is derived and its select is a debug lever. Caught by
+           looking at the ui-smoke frame: the guard fired correctly and then told the reader to do
+           something the redesigned form discourages. */
+        '<strong>Намерение «' + esc(bVal('b-mode')) + '» требует LLM, но модель не выбрана.</strong> ' +
         'Прогон запустится и <em>молча</em> перейдёт на эвристику: brain по умолчанию идёт в Anthropic, ' +
         'не находит ключа и продолжает без модели — вердикт при этом будет обычным. ' +
         'Заполните Backend' + (be === 'openai' ? ' и LLM_BASE_URL' : '') + ' ниже, либо выберите ' +
-        'планировщик <code>heuristic</code>, если LLM не нужна.',
-        '<strong>Planner "' + esc(planner) + '" needs an LLM, but no model is selected.</strong> ' +
+        'намерение <code>explore</code>, которое модель не спрашивает.',
+        '<strong>The intent "' + esc(bVal('b-mode')) + '" needs an LLM, but no model is selected.</strong> ' +
         'The run will start and <em>silently</em> fall back to the heuristic: brain defaults to ' +
         'Anthropic, finds no key and continues without a model — and the verdict will look ordinary. ' +
-        'Fill in Backend' + (be === 'openai' ? ' and LLM_BASE_URL' : '') + ' below, or choose the ' +
-        '<code>heuristic</code> planner if you do not need an LLM.');
+        'Fill in Backend' + (be === 'openai' ? ' and LLM_BASE_URL' : '') + ' below, or pick the ' +
+        '<code>explore</code> intent, which asks no model.');
       return;
     }
     // A model without a planner that uses it is the mirror mistake, and just as quiet.
     if (!needsLlm && configured){
       box.style.display = '';
       box.innerHTML = bi(
-        '<strong>Модель выбрана, но планировщик <code>heuristic</code> её не использует.</strong> ' +
-        'Прогон пройдёт детерминированно, без LLM — если это не то, что нужно, смените планировщик.',
-        '<strong>A model is selected, but the <code>heuristic</code> planner does not use it.</strong> ' +
-        'The run will proceed deterministically, without an LLM — change the planner if that is not what ' +
-        'you want.');
+        /* ADR-147, the mirror of the message above and corrected for the same reason: the advice must
+           name the axis the person is actually offered. `explore` asks no model by construction, so
+           the honest instruction is to change the INTENT, not to hunt for a planner control. */
+        '<strong>Модель выбрана, но намерение «' + esc(bVal('b-mode')) + '» её не спрашивает.</strong> ' +
+        'Прогон пройдёт детерминированно, без LLM — если это не то, что нужно, смените намерение на ' +
+        '<code>goal</code> или <code>describe</code>.',
+        '<strong>A model is selected, but the "' + esc(bVal('b-mode')) + '" intent does not ask for it.</strong> ' +
+        'The run will proceed deterministically, without an LLM — change the intent to <code>goal</code> ' +
+        'or <code>describe</code> if that is not what you want.');
       return;
     }
     box.style.display = 'none';
@@ -3758,6 +3849,25 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   // M9.10 (ADR-048): multi-turn authoring — a stable conversation_id (in-memory) minted on the first
   // goal/describe send and resent each turn so the brain resumes the thread; "New conversation" clears it.
   var chConvId=null, chTurnN=0;
+
+  /* ADR-147. A conversation has ONE intent, and the code already assumed so: ADR-108a made the first
+     turn declare the objective and every later turn a `message`. What was missing is that the SELECT
+     stayed live, so changing it on turn two altered `mode` — and the planner derived from it — while
+     the objective it was supposedly editing had been fixed on turn one. Nothing said the two had
+     parted company. Freezing the control after the first turn is the smaller half of the directive
+     ("no per-message mode choice"); the larger half is that it was never a per-message question. */
+  function chSyncIntentLock(){
+    var sel = ge('ch-mode'), why = ge('ch-mode-locked');
+    if (!sel || !why) return;
+    var locked = !!chConvId;
+    sel.disabled = locked;
+    why.style.display = locked ? '' : 'none';
+    if (locked) {
+      why.innerHTML = bi(
+        'Намерение задано для этого разговора. Каждое следующее сообщение правит уже заданную цель — «Новый разговор», чтобы сменить намерение.',
+        'The intent is set for this conversation. Every further message refines the objective already given — press “New conversation” to change the intent.');
+    }
+  }
   function chNewConvId(){
     try { if (window.crypto && crypto.randomUUID) return 'conv-'+crypto.randomUUID(); } catch(e){}
     return 'conv-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);  // [a-z0-9-], << 128
@@ -3857,6 +3967,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (mode!=='explore'){
       if (!chConvId) chConvId=chNewConvId();
       body.conversation_id=chConvId;
+      chSyncIntentLock();   // ADR-147: the intent is now this conversation's, not this message's
       turnLabel=bi('тёрн ','turn ')+(++chTurnN)+' · ';
       convMeta=esc(target)+' · '+esc(chConvId);
     }
@@ -3864,7 +3975,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   });
   ge('ch-rerun').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'replay', from_run:chLastRunId }, '🔁 '+bi('Перепрогон','Re-run')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
   ge('ch-baseline').addEventListener('click', function(){ if (chLastRunId) chRunFlow({ mode:'baseline', from_run:chLastRunId }, '📌 '+bi('Зафиксировать эталон','Update baseline')+' <code>from_run='+esc(chLastRunId)+'</code>', ''); });
-  ge('ch-newconv').addEventListener('click', function(){ chConvId=null; chTurnN=0; addBubble('sys','— '+bi('новый разговор','new conversation')+' —'); });
+  ge('ch-newconv').addEventListener('click', function(){ chConvId=null; chTurnN=0; chSyncIntentLock(); addBubble('sys','— '+bi('новый разговор','new conversation')+' —'); });
 
   async function chFinalize(base, id, st){
     if (!st){ addBubble('sys',bi('Статус неизвестен (таймаут).','Status unknown (timeout).')); return; }
@@ -4273,6 +4384,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   ge('chats-refresh').addEventListener('click', tLoadChats);
   function tResumeChat(convId){
     chConvId = convId; chTurnN = 0;   // reuses the Chat view's own conversation_id state (M9.10, ADR-048)
+    chSyncIntentLock();   // ADR-147: a RESUMED conversation already has its intent — same lock, same reason
     setView('chat');
     addBubble('sys', '— '+bi('возобновлён разговор','resumed conversation')+' <code>'+esc(convId)+'</code> —');
   }
@@ -6681,8 +6793,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       'Читается только в режиме describe. Опишите готовый сценарий по шагам: каждый шаг привязывается к реальному элементу, а шаг, которому элемента не нашлось, попадёт в отчёт как несвязанный, а не будет выдуман.',
       'Read only in describe mode. Describe a ready scenario step by step: each step binds to a real element, and a step with no match is reported as unmatched rather than invented.'],
     'b-planner': [
-      'Кто строит план: heuristic не обращается к модели вовсе (и потому не тратит токенов), llm и goal обращаются. На heuristic бюджеты ниже неактивны.',
-      'Who builds the plan: heuristic calls no model at all (and so spends no tokens), llm and goal do. With heuristic the budgets below are inert.'],
+      'ОТЛАДОЧНЫЙ рычаг, и по умолчанию он выключен («выводится»). Это ВТОРАЯ ось: намерение говорит, ЧЕГО вы хотите, а заземление — каким механизмом шаги привязываются к живым элементам (heuristic не обращается к модели вовсе и не тратит токенов; llm и goal обращаются). Какая стратегия лучше — вопрос ЗАМЕРА, а не вкуса, поэтому обычно её выводят из намерения: brain/planner.py выбирает grounded-планировщик сам, когда задана цель. Задавайте вручную, только если сравниваете стратегии на одном сценарии; значение, противоречащее намерению, — это один ключ PLANNER с двумя значениями, и прогон откажется стартовать с кодом 3.',
+      'A DEBUG lever, off by default (“derived”). This is the SECOND axis: the intent says WHAT you want, the grounding says by which mechanism steps are bound to live elements (heuristic calls no model at all and spends no tokens; llm and goal do). Which strategy is better is a question of MEASUREMENT, not taste, so it is normally derived from the intent: brain/planner.py picks the grounded planner itself once a goal is set. Set it by hand only when comparing strategies on one scenario; a value that contradicts the intent is one key, PLANNER, with two values, and the run will refuse to start with exit 3.'],
     'b-coverage': [
       'Доля интерактивных элементов, после которой обход считается достаточным (по умолчанию 0.85). Обход завершается, когда доля достигнута И новых элементов не осталось, — поэтому большее значение удлиняет прогон, но не гарантирует, что найдётся больше.',
       'The share of interactive elements at which exploring is considered enough (0.85 by default). Exploring stops when the share is reached AND nothing new is left, so a higher value lengthens the run without guaranteeing it finds more.'],
