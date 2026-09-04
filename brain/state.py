@@ -44,6 +44,10 @@ class RunState(TypedDict, total=False):
     scenario_unmatched: list      # refs/draft-steps that could not be grounded to a real element
     # perception
     current_url: str
+    # ADR-150: ребро, наблюдённое `act` в момент клика ({from, ref, to}), — разовая передача узлу
+    # `ground`, который ведёт карту и его применяет. Подчёркивание в имени означает то же, что у
+    # `_last_ok`: это внутренняя связь между узлами одного витка, а не часть прогона.
+    _pending_edge: dict
     page_model: dict
     # exploration accounting
     exploration_plan: list
