@@ -132,7 +132,7 @@ func TestLoggingCategoriesComeFromCatalogue(t *testing.T) {
 func TestLoggingEnvPrecedence(t *testing.T) {
 	persisted := map[string]string{"SENTINEL_LOG_LEVEL": "info", "SENTINEL_LOG_LEVELS": "heal=error"}
 
-	env := resolveRunEnv([]string{"SENTINEL_LOG_LEVEL=debug"}, nil, persisted)
+	env := resolveRunEnv([]string{"SENTINEL_LOG_LEVEL=debug"}, nil, persisted, nil)
 	if got := envValue(env, "SENTINEL_LOG_LEVEL"); got != "debug" {
 		t.Fatalf("process env must win: got %q want debug", got)
 	}
@@ -141,7 +141,7 @@ func TestLoggingEnvPrecedence(t *testing.T) {
 	}
 
 	// With nothing in the process env, the persisted level applies.
-	env = resolveRunEnv([]string{"PATH=/usr/bin"}, nil, persisted)
+	env = resolveRunEnv([]string{"PATH=/usr/bin"}, nil, persisted, nil)
 	if got := envValue(env, "SENTINEL_LOG_LEVEL"); got != "info" {
 		t.Fatalf("persisted level must reach the run: got %q want info", got)
 	}

@@ -152,6 +152,14 @@ func (s *server) routes() []routeSpec {
 		{pattern: "DELETE /v1/users/{id}", access: accessAdmin, h: s.handleDeleteUser},
 		{pattern: "GET /v1/config", access: accessAuthed, h: s.handleGetConfig},
 		{pattern: "PUT /v1/config", access: accessAuthed, h: s.handlePutConfig},
+		// ADR-146. accessAdmin, not accessAuthed, and the difference is the whole point: "keys live
+		// until an ADMINISTRATOR replaces them" (Alex, 2026-08-09) makes replacing one an operation on
+		// the tool, not on the caller's own rows — the same line `llm`/`settings`/`logging` already sit
+		// on in configSectionScope. The read is admin too: `set`, `from_env` and a four-character hint
+		// describe the deployment's credentials, and a deployment's credentials are not a fact every
+		// account is entitled to enumerate.
+		{pattern: "GET /v1/provider-keys", access: accessAdmin, h: s.handleGetProviderKeys},
+		{pattern: "PUT /v1/provider-keys", access: accessAdmin, h: s.handlePutProviderKeys},
 		{pattern: "POST /v1/runs", access: accessAuthed, h: s.handleCreateRun},
 		{pattern: "POST /v1/chat/completions", access: accessAuthed, h: s.handleChatCompletions},
 		{pattern: "POST /v1/import", access: accessAuthed, h: s.handleImport},

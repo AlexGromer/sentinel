@@ -826,6 +826,29 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     </div>
   </section>
 
+  <!-- ==================== PROVIDER KEYS (ADR-146) ====================
+       Separate card, and separate from the settings above on purpose: everything in `cfg` round-trips
+       — you read what you saved. A key does not. It goes one way, and the only things that ever come
+       back are "is it set", "is the process environment overriding it" and a four-character tail.
+       Putting a write-forward field inside a form whose every other field is readable is how someone
+       ends up expecting to see their key again.
+
+       The rows are DERIVED from the `names` the server returns (docs/DEVELOPMENT.md §0 principle 5),
+       not written out here: a key added to providerKeyEnv in cmd/control-api/providerkeys.go appears
+       in this panel without anyone editing this file. -->
+  <section class="card" id="pk" data-view="settings">
+    <h2><span class="ric">🔑</span><span data-lang="ru">Ключи провайдеров</span><span data-lang="en">Provider keys</span></h2>
+    <p class="sub">
+      <span data-lang="ru">Задаются <b>один раз</b> и живут, пока администратор их не заменит. Ключ уходит на сервер и <b>никогда не читается обратно</b> — видно только, задан ли он, перекрывает ли его окружение процесса, и последние четыре символа. Проброс переменной окружения с хоста <b>остаётся и имеет приоритет</b>: это то, на чём держатся air-gapped и CI. Пустое значение — очистить. То же самое из терминала: <code>agentctl provider-keys list</code> и <code>agentctl provider-keys set --name … --value-stdin</code>.</span>
+      <span data-lang="en">Set <b>once</b>, and they live until an administrator replaces them. A key travels to the server and is <b>never read back</b> — all you see is whether it is set, whether the process environment overrides it, and the last four characters. Passing the variable through from the host <b>stays, and wins</b>: that is what air-gapped deployments and CI rely on. An empty value clears it. The same from a terminal: <code>agentctl provider-keys list</code> and <code>agentctl provider-keys set --name … --value-stdin</code>.</span>
+    </p>
+    <div id="pk-list"><p class="hint" data-lang="ru">подключитесь к control-API выше — список ключей приходит от него</p><p class="hint" data-lang="en">connect to the control-API above — the key list comes from it</p></div>
+    <div class="ctl-row" style="margin-top:.7rem">
+      <button type="button" class="btn" id="pk-reload" data-needs-api disabled>⟳ <span data-lang="ru">Перечитать</span><span data-lang="en">Reload</span></button>
+      <span id="pk-status" class="libmeta"></span>
+    </div>
+  </section>
+
   <!-- ============================ BUILD ============================ -->
   <section class="card" id="build" data-view="run">
     <h2><span class="ric">▶</span><span data-lang="ru">Новый прогон</span><span data-lang="en">New run</span></h2>
@@ -2164,6 +2187,17 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       cfgLoaded = false;
       if (typeof vwActive !== 'undefined' && vwActive === 'settings') cfgInit();
     }
+    /* ADR-146, and the same sentence applies word for word: the provider-key panel asks an
+       ADMIN-only route, so an attempt made before a credential existed came back 403 and left
+       "sign in as an administrator" on screen. Found by LOOKING at the ui-smoke frame — every gate
+       was green over it, because a panel that renders its refusal correctly is rendering correctly.
+       A refusal must not be latched as though it were an answer. */
+    /* ADR-146: only the FLAG is cleared here. Calling pkInit() from this point as well was a race —
+       cfgInit above is async, so the key panel read `cfgMayWriteGlobal` from the PREVIOUS identity
+       and asked a route that was already refused, putting a 403 in the console of the sign-in check.
+       cfgInit calls pkInit itself once the server has answered who may write; one caller, after the
+       answer, is the whole fix. */
+    if (typeof pkLoaded !== 'undefined') pkLoaded = false;
     /* ADR-109: a working credential is also the moment we can ask WHOSE it is. Without this the
        account controls would stay hidden for someone holding the machine token, and the settings view
        would have no idea whether it may offer the tool's knobs. */
@@ -2261,6 +2295,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      and one that keeps displaying the previous person's library until something happens to refresh. */
   function idReloadViews(){
     cfgLoaded=false;
+    /* ADR-146: signing in or out changes WHETHER the keys may be read at all, not merely whose rows
+       are shown — so the panel must ask again rather than keep the previous identity's refusal.
+       ⚠ And `cfgMayWriteGlobal` goes back to "not asked yet" WITH it. Leaving the old value is not a
+       cosmetic staleness: it is one identity's permission answering for another, and it measurably
+       produced two 403s in the console when a machine-token session signed in as a plain account —
+       the key panel read the stale `true` and asked a route that was now refused. */
+    if (typeof pkLoaded !== 'undefined') pkLoaded=false;
+    if (typeof cfgMayWriteGlobal !== 'undefined') cfgMayWriteGlobal=null;
     if (typeof tLibLoaded  !== 'undefined') tLibLoaded=false;
     if (typeof tRunsLoaded !== 'undefined') tRunsLoaded=false;
     if (typeof vwActive !== 'undefined' && typeof vwLoaders === 'function'){
@@ -6165,6 +6207,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
     cfgLoaded = true;
     cfgRender();
+    /* ADR-146: the key panel may only ASK once it knows it is allowed to, and `may_write_global` is
+       the server's answer, learned just above. So the panel is driven from here rather than racing
+       cfgInit from vwLoaders — ordering by hope is what produced the refusal the ui-smoke frame
+       caught. Fire-and-forget: cfgInit's own result must not depend on the key read. */
+    if (typeof pkInit === 'function' && !pkLoaded) pkInit();
   }
 
   async function cfgSave(){
@@ -6221,6 +6268,144 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      without a page reload, which is the whole point of rendering from the schema. */
   ge('cfg-reload').addEventListener('click', function(){ cfgLoaded = false; cfgInit(); });
 
+  /* =========================================================================
+     ADR-146 — PROVIDER KEYS
+     Write-forward. The page never holds a key after the request that sent it: the input is cleared on
+     success, and nothing here reads a value back, because no route returns one.
+
+     The row list is DERIVED from the `names` the server sends, so a key added server-side shows up
+     here with no edit to this file — and the floor below refuses an empty list rather than rendering
+     a tidy panel over nothing, which is the one failure a derived list cannot see by itself.
+     ========================================================================= */
+  var pkLoaded = false;
+  function pkSetStatus(html){ var el = ge('pk-status'); if (el) el.innerHTML = html; }
+
+  /* What each key is FOR, in the person's language. Absent from this map is not an error — the row
+     still renders, labelled by its own name and env var — because a key the server knows about must
+     appear even when this page has not been taught a phrase for it. */
+  var PK_LABELS = {
+    llm_api_key:       ['Ключ LLM (OpenAI-совместимый: Ollama, vLLM, роутер)', 'LLM key (OpenAI-compatible: Ollama, vLLM, a router)'],
+    anthropic_api_key: ['Ключ Anthropic',  'Anthropic key'],
+    openai_api_key:    ['Ключ OpenAI',     'OpenAI key']
+  };
+
+  function pkRow(name, st){
+    var lbl = PK_LABELS[name];
+    var title = lbl ? bi(esc(lbl[0]), esc(lbl[1])) : esc(name);
+    var badge;
+    if (st.from_env) {
+      /* Said first and said plainly: an administrator looking at "set" while the host passes the same
+         variable through would be wrong about which credential their runs actually go out with. */
+      badge = '<span class="warn">⚠ ' + bi('перекрыт окружением процесса', 'overridden by the process environment') + '</span>';
+    } else if (st.set) {
+      badge = '<span class="ok">✓ ' + bi('задан', 'set') + (st.hint ? ' · …' + esc(st.hint) : '')
+            + (st.updated_at ? ' · ' + esc(st.updated_at) : '') + '</span>';
+    } else {
+      badge = '<span class="libmeta">' + bi('не задан', 'not set') + '</span>';
+    }
+    return '<div class="pk-row" data-pk-name="' + esc(name) + '" style="margin:.5rem 0;padding:.5rem;border:1px solid var(--bd);border-radius:.4rem">'
+         + '<div><b>' + title + '</b> <code class="libmeta">' + esc(name) + '</code></div>'
+         + '<div style="margin:.25rem 0">' + badge + '</div>'
+         + '<div class="ctl-row">'
+         /* ⚠ NOT bi() here. A placeholder is an ATTRIBUTE, and bi() emits two <span>s whose visibility
+            the language switch toggles — markup an attribute cannot carry. Stripping the tags to make
+            it fit produced «…пусто = очиститьnew value · empty clears it», both languages jammed
+            together with no separator. Found by LOOKING at the ui-smoke frame; every gate was green
+            over it. The page's convention for attributes is one string, «ru / en» — as ch-text does. */
+         + '<input type="password" autocomplete="off" spellcheck="false" data-pk-input="' + esc(name) + '" '
+         + 'placeholder="новое значение · пусто = очистить / new value · empty clears it">'
+         + '<button type="button" class="btn" data-pk-save="' + esc(name) + '">💾 ' + bi('Сохранить', 'Save') + '</button>'
+         + '</div></div>';
+  }
+
+  async function pkInit(){
+    var base = capiBase(); if (!base) return;
+    /* ⚠ TWO rules copied from cfgInit above, and BOTH were learned the hard way there before this
+       panel repeated them. They are stated again because a reader who only sees this function has
+       no way to know either one.
+
+       (1) DO NOT ASK WITHOUT A CREDENTIAL THAT MAY SUCCEED. These routes are accessAdmin, so a
+       request made before a token exists — or made by a plain account — returns 403, and the browser
+       logs every one as a failed resource. cfgInit's own comment gives the reason to care: that is
+       "noise that teaches a reader to ignore the console". Measured here: firing anyway turned four
+       unrelated hub checks red, on pages that have nothing to do with keys.
+
+       (2) LATCH ONLY ON SUCCESS. `pkLoaded` is set after the read works, never before. Setting it up
+       front is what made the ui-smoke frame show "sign in as an administrator" to a machine-token
+       caller that was already connected: the first attempt raced ahead of the token, the flag said
+       "done", and nothing tried again. */
+    if (!capiTok() || cfgMayWriteGlobal !== true){
+      ge('pk-list').innerHTML = '<p class="hint">' + bi(
+        'ключами управляет администратор — войдите админским аккаунтом или машинным токеном',
+        'keys are the administrator\'s — sign in as an admin account or with the machine token') + '</p>';
+      pkSetStatus('');
+      return;   // deliberately NOT latched: the answer changes the moment a credential does
+    }
+    pkSetStatus(bi('читаю…', 'reading…'));
+    try {
+      var r = await fetch(base + '/v1/provider-keys', { headers: authHdr() });
+      if (r.status === 401 || r.status === 403){
+        /* Reachable when a credential lapses between the check above and this request. Not an error
+           to apologise for — "keys live until an ADMINISTRATOR replaces them" means a refusal here is
+           the design working — and not latched either, for the same reason. */
+        ge('pk-list').innerHTML = '<p class="hint">' + bi(
+          'ключами управляет администратор — войдите админским аккаунтом или машинным токеном',
+          'keys are the administrator\'s — sign in as an admin account or with the machine token') + '</p>';
+        pkSetStatus(''); return;
+      }
+      var j = await r.json();
+      if (!r.ok){ pkSetStatus('<span class="fail">✗ HTTP ' + r.status + '</span>'); return; }
+      pkLoaded = true;   // only now: the read worked
+      var names = j.names || [];
+      if (!names.length){
+        /* The floor. A derived list that found nothing renders perfectly over an empty set, and that
+           is the one thing deriving it cannot catch on its own. */
+        ge('pk-list').innerHTML = '<p class="fail">' + bi(
+          'сервер не назвал ни одного ключа — это дефект, а не пустая настройка',
+          'the server named no keys at all — that is a defect, not an empty setting') + '</p>';
+        pkSetStatus(''); return;
+      }
+      var html = '';
+      for (var i = 0; i < names.length; i++) html += pkRow(names[i], (j.keys || {})[names[i]] || {});
+      ge('pk-list').innerHTML = html;
+      if (j.readable === false){
+        pkSetStatus('<span class="fail">✗ ' + bi('файл ключей нечитаем: ', 'the key file is unreadable: ') + esc(j.error || '') + '</span>');
+      } else {
+        pkSetStatus('');
+      }
+      var btns = ge('pk-list').querySelectorAll('[data-pk-save]');
+      for (var b = 0; b < btns.length; b++){
+        btns[b].addEventListener('click', function(){ pkSave(this.getAttribute('data-pk-save')); });
+      }
+    } catch(e){ pkSetStatus('<span class="fail">✗ ' + esc(e.message) + '</span>'); }
+  }
+
+  async function pkSave(name){
+    var base = capiBase(); if (!base) return;
+    var input = ge('pk-list').querySelector('[data-pk-input="' + name + '"]');
+    if (!input) return;
+    var value = input.value;
+    pkSetStatus(bi('сохраняю…', 'saving…'));
+    try {
+      var hdr = { 'Content-Type': 'application/json' }, ah = authHdr();
+      if (ah.Authorization) hdr.Authorization = ah.Authorization;
+      var r = await fetch(base + '/v1/provider-keys', {
+        method: 'PUT', headers: hdr, body: JSON.stringify({ name: name, value: value })
+      });
+      var j = await r.json().catch(function(){ return {}; });
+      /* Cleared on BOTH paths, and before anything else happens. A failed save is exactly when a key
+         is most likely to sit in a field until the tab is closed. */
+      input.value = '';
+      if (!r.ok){ pkSetStatus('<span class="fail">✗ HTTP ' + r.status + (j.error ? ': ' + esc(j.error) : '') + '</span>'); return; }
+      pkLoaded = false; await pkInit();
+      pkSetStatus('<span class="ok">✓ ' + (value === ''
+        ? bi('очищено', 'cleared')
+        : bi('сохранено · действует на следующие прогоны', 'saved · applies to subsequent runs')) + '</span>');
+    } catch(e){ input.value = ''; pkSetStatus('<span class="fail">✗ ' + esc(e.message) + '</span>'); }
+  }
+
+  ge('pk-reload').addEventListener('click', function(){ pkLoaded = false; pkInit(); });
+
   function vwLoaders(view, sub){
     /* Data is fetched on first reveal, exactly as the old subtab switcher did. */
     if (view==='library' && sub==='library' && !tLibLoaded)  tLoadLibrary();
@@ -6231,6 +6416,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     if (view==='logs'    && !lgLoaded)      lgInit();
     if (view==='journal' && !svLoaded)      svInit();     // HEALTH-005 PR-B: the service journal
     if (view==='settings' && !cfgLoaded)    cfgInit();   // ADR-107c: settings are rendered from the schema
+    if (view==='settings' && !pkLoaded)     pkInit();    // ADR-146: provider keys, write-forward
   }
 
   function setView(v, opts){

@@ -138,6 +138,18 @@ var apiVerbs = []apiVerb{
 		SecretField: "password",
 		Help:        "create a local account; the password is read from stdin via --password-stdin"},
 	{Verb: "users remove", Method: "DELETE", Path: "/v1/users/{id}", Arg: "user_id", Help: "remove a local account (its rows stay, unowned)"},
+	// ADR-146. The terminal half of "keys are settings". `list` never prints a key — it prints which
+	// ones are set, whether the process environment is overriding them, and a four-character tail — so
+	// it is safe in a CI log, which is the place a machine-token holder would run it.
+	{Verb: "provider-keys list", Method: "GET", Path: "/v1/provider-keys",
+		Help: "which provider keys this deployment has stored, and whether the process env overrides them (never the values)"},
+	// SecretField, not Body, for `value` — and that is the whole reason this route takes {name, value}
+	// rather than a name->value map: a key passed as `--value sk-…` is visible to every `ps` on the
+	// host and lands in shell history, which is exactly the trade `users add --password-stdin` already
+	// refused to make.
+	{Verb: "provider-keys set", Method: "PUT", Path: "/v1/provider-keys", Body: []string{"name"},
+		SecretField: "value",
+		Help:        "store one provider key (admin); the key is read from stdin via --value-stdin, and an empty value clears it"},
 }
 
 // apiRoutesWithoutCLI names routes that deliberately have no CLI verb, each with the reason. The
