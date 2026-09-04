@@ -34,6 +34,69 @@ from . import strategies as S     # ADR-083: one vocabulary, shared with the rec
 
 
 
+def _apply_observed_edge(site_map: dict, edge: dict) -> dict:
+    """Проставить НАБЛЮДЁННОЕ ребро тому элементу, клик по которому его породил (ADR-150).
+
+    `act` — единственное место, где все три части ребра известны одновременно: элемент, страница
+    откуда и адрес приземления (исполнитель отдаёт `navigated` и `url`, см. ADR-134). Применяется
+    здесь, а не там, потому что карту ведёт `ground` — то же разделение, что у `visited_paths` и
+    фронтира, и по той же причине: у `ground` есть снимок страницы, а у `act` один адрес.
+
+    Ребро пишется В ЭЛЕМЕНТ, а не в новый объект страницы: форма `{адрес: [элемент, …]}` читается
+    семью местами продукта, и смена её ради одного поля стоила бы дороже поля.
+
+    Перезаписывает, а не дописывает: один контрол ведёт в одно место, и последнее НАБЛЮДЕНИЕ вернее
+    прежнего — приложение могло сменить маршрут под тем же контролом. Неизвестный `ref` — не ошибка:
+    карта могла ещё не увидеть страницу, и выдумывать элемент ради ребра нельзя."""
+    if not edge.get("ref") or not edge.get("to"):
+        return site_map
+    src = list(site_map.get(edge.get("from"), []))
+    for i, el in enumerate(src):
+        if el.get("semantic_id") == edge["ref"]:
+            src[i] = {**el, "leads_to": edge["to"]}
+            out = dict(site_map)
+            out[edge["from"]] = src
+            return out
+    return site_map
+
+
+def _apply_declared_edges(site_map: dict, path: str, links: list) -> dict:
+    """Проставить ОБЪЯВЛЕННЫЕ рёбра из якорей страницы (ADR-150).
+
+    Это НЕ то же, что `leads_to`. Там наблюдение — по контролу кликнули, и адрес сменился. Здесь
+    обещание разметки: якорь говорит, куда ведёт, а проверял это никто. Поля разные намеренно;
+    слить их значило бы выдать обещание за факт, и читатель потерял бы возможность решить, чему
+    верить, когда они разойдутся — а расходятся они ровно там, где интересно: перехваченный клик,
+    редирект, роутер SPA.
+
+    ⚠ Сопоставление по ТЕКСТУ — вывод, а не наблюдение, поэтому делается только когда ошибиться
+    нечем: и якорь с таким текстом, и элемент с таким именем должны быть на странице в ЕДИНСТВЕННОМ
+    числе. Иначе ребро не пишется вовсе — молчание честнее догадки, потому что пустое поле читается
+    как «неизвестно», а неверное как факт. ⚠ `browser.links` вдобавок дедуплицирует по href, так что
+    нужный якорь мог быть выброшен ещё до нас; тогда ребра просто не будет, и это тот же отказ."""
+    cur = list(site_map.get(path, []))
+    if not cur or not links:
+        return site_map
+    texts = [(l.get("text") or "").strip() for l in links]
+    names = [el.get("name") for el in cur]
+    touched = False
+    for l in links:
+        txt = (l.get("text") or "").strip()
+        href = page_identity(l.get("href") or "")
+        if not txt or not href or texts.count(txt) != 1 or names.count(txt) != 1:
+            continue
+        for i, el in enumerate(cur):
+            if el.get("name") == txt and el.get("role") == "link":
+                cur[i] = {**el, "href_to": href}
+                touched = True
+                break
+    if not touched:
+        return site_map
+    out = dict(site_map)
+    out[path] = cur
+    return out
+
+
 def summarise_site_map(site_map: dict) -> dict:
     """ADR-108c: what the tool FOUND, in the terms a person decides on.
 
@@ -459,7 +522,37 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         site_map = dict(state.get("site_map") or {})
         have = {el["semantic_id"] for el in site_map.get(path, [])}
         site_map[path] = list(site_map.get(path, [])) + [el for el in elements if el["semantic_id"] not in have]
+        # ADR-150, первая половина W13. РЕБРО — «этот контрол ведёт вон туда» — обход НАБЛЮДАЛ и
+        # выбрасывал: `act` знает и элемент, и адрес приземления (см. `_pending_edge` там же), но в
+        # состояние уходил только `current_url`. Без ребра карта отвечает на вопрос «что на странице
+        # есть» и молчит на «как отсюда попасть туда», из-за чего модель в рассуждении пишет
+        # «actions page might be page-b… but how to get there?» и уходит в логин.
+        #
+        # Применяется ЗДЕСЬ, а не в `act`, потому что карту ведёт этот узел — то же разделение, что
+        # у `visited_paths` и фронтира, и по той же причине: у `ground` есть снимок страницы, а у
+        # `act` один адрес. Ребро пишется В ЭЛЕМЕНТ, а не в новый объект страницы: форма
+        # `{адрес: [элемент, …]}` читается семью местами продукта, и смена её ради одного поля
+        # стоила бы дороже самого поля.
+        site_map = _apply_observed_edge(site_map, state.get("_pending_edge") or {})
         links = ex.call("browser.links").get("links", [])
+        # ADR-150. ВТОРОЙ вид ребра, и он НЕ тот же самый. `leads_to` выше — НАБЛЮДЕНИЕ: по контролу
+        # кликнули, и адрес сменился. `href_to` здесь — ОБЪЯВЛЕНИЕ приложения: якорь говорит, куда
+        # он ведёт, а проверял это никто. Поля разные намеренно: слить их значило бы выдать обещание
+        # разметки за факт, и читатель (а следом и вторая половина W13) потерял бы возможность
+        # решить, чему верить, когда они разойдутся — а расходятся они ровно там, где интересно:
+        # перехваченный клик, редирект, роутер SPA.
+        #
+        # Эти якоря УЖЕ добывались — и шли только во фронтир, то есть как ребро выбрасывались, хотя
+        # без них карта неполна ровно там, где модель спотыкается: в замеренной фикстуре клик увёл
+        # ОДИН раз из 14 элементов, а якорей семь, и среди них единственный путь к `page-b`.
+        #
+        # ⚠ Сопоставление по ТЕКСТУ — это вывод, а не наблюдение, поэтому оно делается только когда
+        # ошибиться нечем: и якорь с таким текстом, и элемент с таким именем должны быть на странице
+        # в ЕДИНСТВЕННОМ числе. Иначе ребро не пишется вовсе. Молчание здесь честнее догадки: пустое
+        # поле читается как «неизвестно», а неверное — как факт. ⚠ `browser.links` вдобавок
+        # дедуплицирует по href, так что нужный якорь мог быть выброшен ещё до нас — тогда ребра
+        # просто не будет, и это тот же безопасный отказ.
+        site_map = _apply_declared_edges(site_map, path, links)
         origin = state.get("base_origin", "")
         visited = set(state.get("visited_paths", []))
         frontier = list(state.get("nav_frontier", []))
@@ -520,6 +613,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         pm["buttons"] = buttons
         return {"interactive_seen": seen, "nav_frontier": frontier, "visited_paths": visited_paths,
                 "coverage_achieved": coverage, "page_model": pm, "site_map": site_map,
+                "_pending_edge": {},   # ADR-150: применено выше, дальше не живёт
                 "perception": perception, "robots_excluded": excluded}
 
     def plan(state: RunState) -> dict:
@@ -732,7 +826,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
             # текущий адрес; `visited_paths` и фронтир по-прежнему ведёт `ground`, у которого есть
             # снимок страницы, а не один URL.
             if moved and moved != page_identity(state.get("current_url", "")):
-                moved_to = {"current_url": moved}
+                # ADR-150: адрес приземления — это ПОЛОВИНА ребра, и вторая половина здесь же есть:
+                # элемент, по которому кликнули, и страница, с которой ушли. Всё трое известно ровно
+                # в этот момент и нигде больше. Отдаём состоянием; применяет `ground`, который ведёт
+                # карту (см. комментарий там). Поле разовое: следующий `ground` его гасит.
+                moved_to = {"current_url": moved,
+                            "_pending_edge": {"from": page_identity(state.get("current_url", "")),
+                                              "ref": p["semantic_id"], "to": moved}}
         elif p["action_type"] == "navigate":
             # ⚠ ПОСЕЩЁННЫМ СТАНОВИТСЯ АДРЕС, КОТОРЫЙ МЫ ЗАПРОСИЛИ, А НЕ ТОЛЬКО ТОТ, ГДЕ ПРИЗЕМЛИЛИСЬ.
             #
