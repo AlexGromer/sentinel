@@ -1982,6 +1982,132 @@ try {
     ok(view !== 'none' && view !== 'missing', `the Open button did not reach the logs view (${view}, was ${before})`);
   });
 
+  /* ADR-147. The check above asks whether the catalogue WORKS; this one asks whether it is COMPLETE,
+     and the difference is the whole finding. `>= 5 cap-open buttons` was green for a year over a hub
+     that silently dropped two entire groups: the renderer held a hand-written `order` array, and the
+     loop skipped any group not named in it. docs/capabilities.json declares EIGHT groups; the array
+     listed six. Six records were therefore invisible — service-journal, service-journal-cli,
+     service-journal-purge, metrics-scrape, health-readiness, llm-live-probe — and one of them,
+     health-readiness, is among the handful the product can reach all three ways.
+
+     The assertion is comparative on purpose: the truth comes from the CATALOGUE FILE, fetched
+     independently, not from a list this gate keeps. A gate with its own copy of the group names would
+     have had to be edited by the same person who forgot to edit the renderer. */
+  await check('the catalogue shows EVERY group it declares, not the ones the page remembered', async () => {
+    const r = await page.evaluate(async () => {
+      const j = await (await fetch('capabilities.json')).json();
+      const declared = [...new Set(j.capabilities.map((c) => c.group))].sort();
+      const box = document.getElementById('cap-list');
+      const headings = [...box.querySelectorAll('div')].map((d) => d.textContent.trim());
+      return {
+        declared,
+        missing: declared.filter((g) => !headings.includes(g)),
+        entries: j.capabilities.length,
+        // Every record must reach the DOM, not merely every group: a group heading rendered over an
+        // empty list would satisfy a group-only check.
+        shown: j.capabilities.filter((c) => box.textContent.includes(c.title_ru)).length,
+      };
+    });
+    // Floors first — a comparison between two empty sets agrees perfectly.
+    ok(r.declared.length >= 8, `only ${r.declared.length} groups declared; the catalogue has had eight since ADR-146`);
+    ok(r.entries >= 60, `only ${r.entries} entries in the catalogue — the fetch found almost nothing`);
+    ok(r.missing.length === 0,
+      `the catalogue declares ${r.declared.join(', ')} but the hub never renders: ${r.missing.join(', ')}`);
+    ok(r.shown >= r.entries,
+      `${r.entries} records declared, ${r.shown} reached the page — ${r.entries - r.shown} are invisible`);
+  });
+
+  /* ADR-147 — the run form may not offer a combination the product refuses.
+     `mode` and `planner` are ALIASES OF ONE KEY (brain/runconfig.py: "mode/planner are aliases for
+     PLANNER"), and the form presented them as two independent selects. Measured before the fix: of
+     the nine pairs on offer, FIVE made brain/runconfig.py `_resolve_planner` raise, which agentctl
+     maps to exit 3 — the run refused to start. Two clicks from a fresh page reached one of them:
+     the page loads on `goal` (which auto-set planner=goal), you pick `describe`, and the exported
+     run.yaml carries `mode: describe` + `planner: goal`. Verified end to end: exit 3,
+     `fatal.run_config_invalid`.
+
+     The intents are read FROM THE SELECT, not listed here: an intent added later must be covered by
+     this check without anyone remembering to extend it. */
+  await check('the run form cannot export a run the product will refuse to start', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.click('[data-nav="run"]');
+    await page.waitForSelector('#b-mode', { timeout: 10000 });
+
+    const intents = await page.evaluate(() =>
+      [...document.querySelectorAll('#b-mode option')].map((o) => o.value));
+    ok(intents.length >= 3, `the form offers ${intents.length} intents — the walk found nothing to check`);
+
+    for (const intent of intents) {
+      await page.selectOption('#b-mode', intent);
+      await page.waitForFunction(
+        (m) => (document.getElementById('b-yaml').textContent || '').includes('mode: ' + m),
+        intent, { timeout: 5000 });
+      const yaml = await page.textContent('#b-yaml');
+      const planner = (yaml.match(/^planner: (.+)$/m) || [])[1];
+      // Derived means ABSENT: with no `planner:` key the brain resolves PLANNER from the intent and
+      // there is no pair left to conflict. This is the assertion the old form could not satisfy.
+      ok(planner === undefined,
+        `intent ${intent} exported "planner: ${planner}" without anyone asking for it — that is the second axis leaking back out`);
+    }
+
+    /* The narrow half, and it is required: an implementation that simply never emitted `planner:`
+       would pass everything above while quietly removing the debug lever MODEL-002 needs. So the
+       override must still reach the file — and, because it is then able to contradict the intent,
+       the page must SAY SO before the file is copied anywhere. */
+    await page.selectOption('#b-mode', 'describe');
+    await page.selectOption('#b-planner', 'goal');
+    await page.waitForFunction(
+      () => (document.getElementById('b-yaml').textContent || '').includes('planner: goal'),
+      null, { timeout: 5000 });
+    const warned = await page.evaluate(() => {
+      const el = document.getElementById('b-planner-warn');
+      return { shown: el && el.style.display !== 'none', text: (el && el.textContent) || '' };
+    });
+    ok(warned.shown, 'an override that contradicts the intent is exported with nothing on screen saying the run will be refused');
+    ok(/3/.test(warned.text), `the warning does not name the exit code the person will actually get: ${warned.text.slice(0, 120)}`);
+  });
+
+  /* ADR-147 — a conversation has ONE intent, and the chat may not ask again per message.
+     ADR-108a already made the first turn declare the objective and every later turn a `message`, but
+     the select stayed live: changing it on turn two altered `mode` (and the planner derived from it)
+     while the objective it was supposedly refining had been fixed on turn one. Nothing on screen said
+     the two had parted company.
+
+     The POST is intercepted rather than allowed through, deliberately: the state this checks is set
+     CLIENT-SIDE before the request leaves, so a real run would add a minute of browser work and prove
+     nothing extra. The same technique, and the same reasoning, as the config-split check above. */
+  await check('chat: the intent is the conversation\'s, not the message\'s', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForSelector('#ch-mode', { timeout: 10000 });
+
+    ok(!(await page.locator('#ch-mode').isDisabled()),
+      'the intent is already locked before a conversation exists — then it could never be chosen at all');
+
+    await page.route('**/v1/runs', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{"run_id":"gate","state":"running"}' }));
+    await page.fill('#ch-target', 'https://app.example');
+    await page.fill('#ch-text', 'open the signup form and submit it');
+    await page.click('#ch-send');
+    await page.waitForFunction(() => document.getElementById('ch-mode').disabled, null, { timeout: 8000 });
+
+    ok(await page.locator('#ch-mode').isDisabled(), 'the intent stayed editable after the conversation began');
+    const why = await page.locator('#ch-mode-locked').innerText();
+    ok(why.trim().length > 0, 'the control is disabled with nothing on screen saying why');
+    // Disabled, not hidden: a value nobody can see is one nobody can reason about — the same rule the
+    // config split follows for the tool's settings.
+    ok(await page.locator('#ch-mode').isVisible(), 'the intent was HIDDEN rather than shown fixed');
+
+    // ...and the way back must exist, or "set once" becomes "set forever".
+    await page.click('#ch-newconv');
+    await page.waitForFunction(() => !document.getElementById('ch-mode').disabled, null, { timeout: 5000 });
+    ok(!(await page.locator('#ch-mode').isDisabled()),
+      'a new conversation did not return the choice — the intent would be fixed for the life of the tab');
+    await page.unroute('**/v1/runs');
+  });
+
   /* ------------------------------------------- ADR-107c: the UI as a projection of the schema */
 
   /* Re-establish the connection fields rather than inheriting them. Several checks above reload the
