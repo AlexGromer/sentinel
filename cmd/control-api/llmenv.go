@@ -1,18 +1,29 @@
-// Config-driven LLM for runs (ADR-063). The LLM connection a run uses is layered, highest wins:
+// Config-driven LLM for runs (ADR-063, extended by ADR-146). The LLM connection a run uses is
+// layered, highest wins:
 //
-//  1. control-API process env  (the operator's explicit choice — os.Environ())
-//  2. per-run body `llm`        (POST /v1/runs, this request only)
-//  3. persisted config          (PUT /v1/config `llm`, service tier — store-gateway only)
+//  1. control-API process env   (the operator's explicit choice — os.Environ())
+//  2. per-run body `llm`         (POST /v1/runs, this request only)
+//  3. persisted config           (PUT /v1/config `llm`, service tier — store-gateway only)
+//  4. stored provider keys       (PUT /v1/provider-keys, admin — providerkeys.go, 0600 file)
 //
-// resolveRunEnv materializes layers 2-3 into the LLM_* env of the `agentctl` subprocess WITHOUT ever
+// resolveRunEnv materializes layers 2-4 into the LLM_* env of the `agentctl` subprocess WITHOUT ever
 // overriding a variable the process env already sets (layer 1 wins). agentctl's filteredEnv() forwards
 // the LLM_ prefix to the brain, so these reach brain/llm.py make_backend unchanged.
 //
-// SECRET INVARIANT: an api_key never travels through the API or UI. The per-run body is guarded by
-// configguard.FindSecretKey (same rule as PUT /v1/config), the persisted document by configguard.Validate
-// at write time. A real cloud key stays in the process env (ANTHROPIC_API_KEY/OPENAI_API_KEY); for a local
-// OpenAI-compatible endpoint (Ollama), where the key is a non-secret placeholder, resolveRunEnv defaults
-// LLM_API_KEY=noauth so the UI need not carry one.
+// SECRET INVARIANT — REVISED BY ADR-146, and the revision is narrow. It used to read "an api_key never
+// travels through the API or UI", which is what configguard still enforces for the CONFIG domain:
+// the per-run body is guarded by configguard.FindSecretKey (same rule as PUT /v1/config) and the
+// persisted document by configguard.Validate at write time. BOTH of those stay exactly as they were —
+// a key still cannot be smuggled into a run request or into config.json, and llmRunConfig still has no
+// api_key member, because a key is not a property of a run.
+//
+// What changed is that a key now has a place to live that is NOT the config domain: layer 4, a
+// separate 0600 file an administrator writes through PUT /v1/provider-keys. The reason a key may be
+// typed at all is that it goes one way and is never read back (see providerkeys.go). Environment
+// passthrough is unaffected and still wins, which is what air-gapped deployments and CI depend on.
+//
+// For a local OpenAI-compatible endpoint (Ollama), where the key is a non-secret placeholder,
+// resolveRunEnv still defaults LLM_API_KEY=noauth so a deployment that stored no key needs none.
 package main
 
 import (
@@ -122,7 +133,11 @@ func parseRunLLM(raw json.RawMessage) (*llmRunConfig, error) {
 // EMPTY value (e.g. `LLM_BACKEND=` from an unset compose interpolation) is treated as unset — the brain reads
 // "" as falsy and would silently downgrade the backend, so a lower layer is allowed to fill it. The output
 // carries no duplicate keys.
-func resolveRunEnv(base []string, perRun *llmRunConfig, persisted map[string]string) []string {
+// `stored` is layer 4 (ADR-146): provider keys an administrator saved through PUT /v1/provider-keys.
+// It is a separate parameter rather than a merge into `persisted` so the precedence is visible in the
+// signature: a caller cannot accidentally give a stored credential the standing of a config value,
+// and a reader does not have to know which map a key arrived in to know which one wins.
+func resolveRunEnv(base []string, perRun *llmRunConfig, persisted, stored map[string]string) []string {
 	vals := make(map[string]string, len(base))
 	order := make([]string, 0, len(base))
 	for _, kv := range base {
@@ -158,6 +173,15 @@ func resolveRunEnv(base []string, perRun *llmRunConfig, persisted map[string]str
 		}
 	}
 	for k, v := range persisted {
+		set(k, v)
+	}
+	// Layer 4, last and therefore lowest: `set` never overwrites a non-empty value, so a key stored
+	// through the UI fills LLM_API_KEY only when neither the process env nor a higher layer already
+	// did. That ordering is the air-gapped/CI guarantee — a deployment passing the variable through
+	// from the host keeps using the host's key, and storing one in the UI cannot silently change which
+	// credential its runs go out with. It is also why the read model reports `from_env`: without it an
+	// administrator would see "set" and be wrong about which key is in force.
+	for k, v := range stored {
 		set(k, v)
 	}
 	// Local OpenAI-compatible endpoints (Ollama) take any non-empty key; default a placeholder so a

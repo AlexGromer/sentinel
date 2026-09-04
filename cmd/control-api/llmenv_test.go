@@ -70,7 +70,7 @@ func TestResolveRunEnvPrecedence(t *testing.T) {
 	base := []string{"PATH=/x", "LLM_BACKEND=anthropic"}
 	perRun := &llmRunConfig{Backend: "openai", BaseURL: "http://h:11434/v1", ModelPlanner: "qwen3:14b"}
 	persisted := map[string]string{"LLM_BACKEND": "openai", "LLM_MODEL_HEAL": "qwen2.5vl:7b"}
-	env := resolveRunEnv(base, perRun, persisted)
+	env := resolveRunEnv(base, perRun, persisted, nil)
 
 	if got := envValue(env, "LLM_BACKEND"); got != "anthropic" {
 		t.Errorf("LLM_BACKEND = %q, want anthropic (process env wins over per-run and persisted)", got)
@@ -92,17 +92,17 @@ func TestResolveRunEnvPrecedence(t *testing.T) {
 
 func TestResolveRunEnvNoauthDefault(t *testing.T) {
 	// openai backend via per-run, no key anywhere → placeholder noauth
-	env := resolveRunEnv([]string{"PATH=/x"}, &llmRunConfig{Backend: "openai", BaseURL: "http://h/v1"}, nil)
+	env := resolveRunEnv([]string{"PATH=/x"}, &llmRunConfig{Backend: "openai", BaseURL: "http://h/v1"}, nil, nil)
 	if got := envValue(env, "LLM_API_KEY"); got != "noauth" {
 		t.Errorf("LLM_API_KEY = %q, want noauth", got)
 	}
 	// a real key in the process env is never shadowed by the placeholder
-	env2 := resolveRunEnv([]string{"LLM_API_KEY=sk-real"}, &llmRunConfig{Backend: "openai"}, nil)
+	env2 := resolveRunEnv([]string{"LLM_API_KEY=sk-real"}, &llmRunConfig{Backend: "openai"}, nil, nil)
 	if got := envValue(env2, "LLM_API_KEY"); got != "sk-real" {
 		t.Errorf("LLM_API_KEY = %q, want sk-real (process env wins)", got)
 	}
 	// a real OPENAI_API_KEY (no LLM_API_KEY) is the documented fallback — noauth must NOT shadow it
-	env3 := resolveRunEnv([]string{"LLM_BACKEND=openai", "OPENAI_API_KEY=sk-cloud"}, nil, nil)
+	env3 := resolveRunEnv([]string{"LLM_BACKEND=openai", "OPENAI_API_KEY=sk-cloud"}, nil, nil, nil)
 	if got := envValue(env3, "LLM_API_KEY"); got != "" {
 		t.Errorf("LLM_API_KEY = %q, want empty (OPENAI_API_KEY present -> no noauth placeholder)", got)
 	}
@@ -115,7 +115,7 @@ func boolPtr(b bool) *bool { return &b }
 func TestResolveRunEnvPerRunBeatsPersisted(t *testing.T) {
 	env := resolveRunEnv([]string{"PATH=/x"},
 		&llmRunConfig{ModelPlanner: "from-per-run"},
-		map[string]string{"LLM_MODEL_PLANNER": "from-persisted"})
+		map[string]string{"LLM_MODEL_PLANNER": "from-persisted"}, nil)
 	if got := envValue(env, "LLM_MODEL_PLANNER"); got != "from-per-run" {
 		t.Errorf("LLM_MODEL_PLANNER = %q, want from-per-run (per-run > persisted)", got)
 	}
@@ -125,7 +125,7 @@ func TestResolveRunEnvPerRunBeatsPersisted(t *testing.T) {
 func TestResolveRunEnvPerRunBoolOverridesPersisted(t *testing.T) {
 	env := resolveRunEnv([]string{"PATH=/x"},
 		&llmRunConfig{Vision: boolPtr(false)},
-		map[string]string{"LLM_VISION": "1"})
+		map[string]string{"LLM_VISION": "1"}, nil)
 	if got := envValue(env, "LLM_VISION"); got == "1" {
 		t.Errorf("LLM_VISION = %q, want not \"1\" (per-run vision:false overrides persisted true)", got)
 	}
@@ -134,7 +134,7 @@ func TestResolveRunEnvPerRunBoolOverridesPersisted(t *testing.T) {
 // TestResolveRunEnvEmptyEnvIsOverridable: a present-but-empty process var (compose interpolation of an unset
 // value) must NOT block a lower layer — else the brain reads "" as falsy and silently downgrades the backend.
 func TestResolveRunEnvEmptyEnvIsOverridable(t *testing.T) {
-	env := resolveRunEnv([]string{"LLM_BACKEND=", "PATH=/x"}, &llmRunConfig{Backend: "openai"}, nil)
+	env := resolveRunEnv([]string{"LLM_BACKEND=", "PATH=/x"}, &llmRunConfig{Backend: "openai"}, nil, nil)
 	if got := envValue(env, "LLM_BACKEND"); got != "openai" {
 		t.Errorf("LLM_BACKEND = %q, want openai (empty env var must be overridable)", got)
 	}

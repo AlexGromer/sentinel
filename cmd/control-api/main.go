@@ -887,9 +887,11 @@ func (s *server) spawnRun(req runRequest) *run {
 	}
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
-	// ADR-063: layer the LLM connection into the spawn env — process env > per-run > persisted config.
-	// os.Environ() (operator-controlled) still wins; resolveRunEnv only fills LLM_* it does not already set.
-	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.mergedPersistedEnv())
+	// ADR-063 + ADR-146: layer the LLM connection into the spawn env — process env > per-run >
+	// persisted config > stored provider keys. os.Environ() (operator-controlled) still wins;
+	// resolveRunEnv only fills LLM_* it does not already set, so a key saved through the UI is the
+	// last resort and never displaces one the host passed in.
+	cmd.Env = resolveRunEnv(os.Environ(), req.llm, s.mergedPersistedEnv(), s.providerKeyEnvLayer())
 	// ONE store for the whole deployment. agentctl starts its own gateway over repo/state/locators.db
 	// when it inherits no address, so a run launched from here used to persist into a database this
 	// process never reads — the `chats` projection the brain writes landed there, and GET /v1/chats

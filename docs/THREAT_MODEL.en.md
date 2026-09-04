@@ -304,6 +304,35 @@ keys" and "storage of {name,value} pairs" are silently incompatible.
 
 ---
 
+### 4.18 Boundary ⓲ — provider credentials held by the TOOL (ADR-146)
+
+> **The boundary is new, and it arrived with the reversal of the posture.** Before ADR-146 the product
+> declared the invariant "an api_key never travels through the API or UI"
+> (`cmd/control-api/llmenv.go`), and the consequence was that there was no way to set a key at all:
+> the wizard printed `export LLM_API_KEY=...` as a PLACEHOLDER, no key field existed, and
+> `docs/index.html:3231` said outright "No api_key — secrets stay in the server env". Alex's directive
+> (2026-08-07, 2026-08-09) requires the TOOL to manage keys, and BOTH storage paths to exist at once.
+>
+> ⚠ **The key does NOT enter the config domain, and that is what this boundary is about.** The config
+> domain is guarded by `internal/configguard`, whose own package comment gives the reason: the
+> store-gateway socket is "reachable by any same-UID process holding STORE_TOKEN". Persisting a
+> credential behind that boundary would DEFEAT the guard rather than relax it. So the key lives in a
+> separate `state/provider-keys.json` at 0600, written atomically via temp+rename, and `configguard`
+> is untouched: `Secretish` keeps its three callers (two of them redactors in `internal/redact`, which
+> must never be loosened), `Validate` still refuses secret-shaped members in config, and both
+> enforcement points are intact.
+
+| Threat | Boundary | STRIDE | Rating | Mitigation | GAP | Status |
+|---|---|---|---|---|---|---|
+| **The key is handed back to whoever stored it.** The shape the registry entry feared: the value lives in the DOM and the clipboard again, and anyone who opens the tab has it. | UI/API → administrator | **I** | Lik: M / Imp: H | **MITIGATED:** read-forward only. No route returns a value; `providerKeyStatus` has no member capable of carrying one, so a later edit cannot leak a key by filling a field. What goes out is `set`, `from_env` and the last 4 characters when the value is ≥12 long (a short value gets no hint at all: four characters of six IS the value). The gate searches for a canary in the RAW response bytes rather than comparing fields | — | ADR-146 ✅ |
+| **The key reaches argv and shell history.** `--value sk-…` is visible to every `ps` on the host. | CLI → process | **I** | Lik: H / Imp: H | **MITIGATED:** `agentctl provider-keys set --value-stdin` reads the value from stdin through the existing `apiVerb.SecretField` — the very mechanism `users add --password-stdin` introduced for this reason. The `{name, value}` body shape was chosen PRECISELY for it: a name→value map has no fixed member for `SecretField` to name | — | ADR-146 ✅ |
+| **A stored key silently displaces the host's.** A deployment passes `LLM_API_KEY` through from the host, an administrator saves their own in the UI — and runs go out with a DIFFERENT key while the screen says "set". | process env ↔ storage | **T** (Tampering) | Lik: M / Imp: H | **MITIGATED:** the stored value is layer 4, the LOWEST in `resolveRunEnv`; `set()` never overwrites a non-empty value, so the process environment always wins. That is also the air-gapped/CI guarantee. On top of it the `from_env` flag is reported as its own line in the interface: the administrator sees that the stored key is OVERRIDDEN, not merely "set" | — | ADR-146 ✅ |
+| **The key leaks into an observation channel:** the service journal, the run log, `trace.zip`, artefacts, the `collect-live-run.sh` export. | process → artefacts | **I** | Lik: M / Imp: H | **MITIGATED (verified live, not by reading):** the value passes through neither the config domain nor a run body (`llmRunConfig` still has no `api_key`), and reaches the subprocess only as an environment variable — the same path the host's key always took, under the same `internal/redact` redactors (ADR-098) | — | ADR-146 ✅ |
+| **The key is replaced by the wrong person.** "Lives until an ADMINISTRATOR replaces it" is an access decision. | route → identity plane | **E** (Elevation) | Lik: M / Imp: H | **MITIGATED:** both routes are declared `accessAdmin` in the `routes()` table (ADR-109) — the machine token or an admin account; the read is admin too, because a deployment's set of credentials is not a fact every account is entitled to enumerate. The gate DERIVES the check from the table rather than restating it | — | ADR-146 ✅ |
+| **A corrupt file is overwritten and a key with no copy is lost.** | process → disk | **D** (DoS) | Lik: L / Imp: M | **MITIGATED:** an unreadable document is not overwritten — `PUT` answers 409 and NAMES the path; `GET` reports `readable: false` rather than "not set" (the latter reads as "nothing was ever saved" and invites writing over it) | — | ADR-146 ✅ |
+
+---
+
 ## 5. GAP Tracking Summary Table
 
 > **Vocabulary for the Status column.** Until 2026-08-10 there was none — the "Legend" block in §4

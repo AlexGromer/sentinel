@@ -2511,6 +2511,78 @@ try {
        'an admin cannot edit the tool\'s settings either — then the lock is not about permission at all');
   }, { allowConsole: freshConfig404 });
 
+  /* ADR-146 — provider keys. Driven as an ADMIN, because that is who may hold them.
+     The canary is saved for real rather than intercepted: the property under test is what comes BACK,
+     and an aborted PUT can only show what left. It is cleared again at the end of the second check,
+     so the gate leaves no credential in the deployment it drove. */
+  // Deliberately not credential-shaped — see the note on canaryKey in
+  // cmd/control-api/providerkeys_test.go: a realistic-looking literal trips the secret scanner
+  // and the fix for that is an allowlist entry, i.e. a hole opened for a fake.
+  const pkCanary = 'GATE-CANARY-NOT-A-KEY-8f3e1d0c5b7a';
+
+  await check('provider keys: the panel is derived from the server, not written into the page', async () => {
+    await idPage.click('#pk-reload');
+    await idPage.waitForFunction(() => document.querySelectorAll('#pk-list .pk-row').length > 0, null, { timeout: 5000 });
+    const rows = await idPage.locator('#pk-list .pk-row').count();
+    /* The floor. A list derived from the server renders perfectly over an empty response, and that is
+       exactly the failure deriving it cannot notice on its own (docs/DEVELOPMENT.md §0 principle 5). */
+    ok(rows >= 3, `the key panel rendered ${rows} rows; the backends this product ships need at least three`);
+    /* Derived, and provably so: the names on screen must be the names the API returned, not a list
+       this page keeps. A row the server does not declare is as wrong as a missing one. */
+    const served = await idPage.evaluate(async () => {
+      const r = await fetch(document.getElementById('capi').value.replace(/\/+$/, '') + '/v1/provider-keys',
+                            { headers: { Authorization: 'Bearer ' + document.getElementById('capitok').value } });
+      return (await r.json()).names || [];
+    });
+    ok(served.length === rows, `the server declares ${served.length} keys and the panel shows ${rows}`);
+    for (const n of served) {
+      ok(await idPage.locator(`#pk-list [data-pk-name="${n}"]`).count() === 1,
+         `the server declares ${n} and the panel does not show it`);
+    }
+  }, { allowConsole: freshConfig404 });
+
+  await check('provider keys: a saved key never comes back, and the field does not keep it', async () => {
+    await idPage.fill('#pk-list [data-pk-input="llm_api_key"]', pkCanary);
+    await idPage.click('#pk-list [data-pk-save="llm_api_key"]');
+    await idPage.waitForFunction(() => /✓|✗/.test(document.getElementById('pk-status').textContent), null, { timeout: 5000 });
+
+    const status = await idPage.locator('#pk-status').innerText();
+    ok(/✓/.test(status), `saving the key failed: ${status}`);
+
+    /* (1) The page must not still be holding it. A failed save is exactly when a key sits in a field
+       until the tab is closed, so the field is cleared on BOTH paths and this asserts the one taken. */
+    eq(await idPage.locator('#pk-list [data-pk-input="llm_api_key"]').inputValue(), '',
+       'the key stayed in the input after saving');
+
+    /* (2) The independent observation, and the reason this check exists: whatever the implementation
+       does internally, the TEXT THE PAGE SHOWS must not contain the key. Asserted on the whole panel
+       rather than on one field, because a leak through some other element is what a field-by-field
+       check misses. */
+    const shown = await idPage.locator('#pk').innerText();
+    ok(!shown.includes(pkCanary), `the key panel is displaying the stored key: ${shown.slice(0, 300)}`);
+
+    /* (3) ...and it really was stored, so (2) is not passing vacuously over a save that did nothing.
+       The row must now say "set" and carry the last four characters — enough to recognise the key,
+       and the most the API will ever give back. */
+    const row = await idPage.locator('#pk-list [data-pk-name="llm_api_key"]').innerText();
+    ok(/…/.test(row) && row.includes(pkCanary.slice(-4)),
+       `the row does not report the key as set with its four-character tail: ${row}`);
+
+    /* (4) Nor may the raw HTTP response carry it — the panel could be masking a value the API handed
+       over, and then any other client would have it. */
+    const raw = await idPage.evaluate(async () => {
+      const r = await fetch(document.getElementById('capi').value.replace(/\/+$/, '') + '/v1/provider-keys',
+                            { headers: { Authorization: 'Bearer ' + document.getElementById('capitok').value } });
+      return await r.text();
+    });
+    ok(!raw.includes(pkCanary), `GET /v1/provider-keys returned the key itself: ${raw.slice(0, 300)}`);
+
+    /* Leave nothing behind: clear the canary from the deployment this gate drove. */
+    await idPage.fill('#pk-list [data-pk-input="llm_api_key"]', '');
+    await idPage.click('#pk-list [data-pk-save="llm_api_key"]');
+    await idPage.waitForTimeout(600);
+  }, { allowConsole: freshConfig404 });
+
   await check('identity: signing out returns the hub to no identity', async () => {
     await idPage.click('#id-logout');
     await idPage.waitForTimeout(500);

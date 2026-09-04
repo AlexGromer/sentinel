@@ -1097,6 +1097,30 @@
       "reach": "capability"
     },
     {
+      "id": "provider-keys",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Ключи провайдеров как настройка",
+      "title_en": "Provider keys as a setting",
+      "how_ru": "Ключ задаётся ОДИН раз и живёт, пока администратор его не заменит: панель «Ключи провайдеров» в настройках, `agentctl provider-keys set --name … --value-stdin` из терминала (значение читается со stdin, а не с argv — иначе его видит любой `ps` и запоминает история команд), либо PUT /v1/provider-keys. Хранится отдельным файлом 0600 под state/, а НЕ в домене конфига: сокет store-gateway доступен любому процессу того же UID с STORE_TOKEN, и класть туда учётные данные означало бы обойти configguard, а не ослабить его. Читается только вперёд — наружу отдаются признак «задан», признак «перекрыт окружением процесса» и последние четыре символа, никогда значение. Проброс переменной с хоста остаётся и ИМЕЕТ ПРИОРИТЕТ: на этом держатся air-gapped и CI (ADR-146).",
+      "how_en": "A key is set ONCE and lives until an administrator replaces it: the “Provider keys” panel in settings, `agentctl provider-keys set --name … --value-stdin` from a terminal (the value is read from stdin, not argv — on argv every `ps` on the host can see it and shell history keeps it), or PUT /v1/provider-keys. Stored as a separate 0600 file under state/ and NOT in the config domain: the store-gateway socket is reachable by any same-UID process holding STORE_TOKEN, so persisting a credential behind it would defeat configguard rather than relax it. Read-forward only — the API reports “set”, “overridden by the process environment” and the last four characters, never the value. Passing the variable through from the host stays, and WINS: that is what air-gapped deployments and CI depend on (ADR-146).",
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "settings"
+        },
+        {
+          "kind": "cli",
+          "ref": "provider-keys set"
+        },
+        {
+          "kind": "http",
+          "ref": "PUT /v1/provider-keys"
+        }
+      ],
+      "reach": "capability"
+    },
+    {
       "id": "ui-settings",
       "group": "UI",
       "severity": "medium",

@@ -166,7 +166,15 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 5          # ⚠ may only ever go UP; today's honest number.
+    MIN_THREE_WAY = 6          # ⚠ may only ever go UP; today's honest number.
+    #                            5 -> 6 at ADR-146, and unlike the catch-up below this is a NEW
+    #                            claim rather than a correction: `provider-keys` is three-way from
+    #                            the day it exists — the settings panel, `agentctl provider-keys
+    #                            set`, and PUT /v1/provider-keys — because the completeness gate in
+    #                            cmd/agentctl (ADR-107) refused the HTTP routes until the terminal
+    #                            path existed. The floor moves in the SAME commit as the capability:
+    #                            a ratchet raised later is a ratchet that would not have noticed the
+    #                            surface never arriving.
     #                            HEALTH-006 PR-B moved it off ZERO for the first time in the
     #                            project's life: readiness is reachable as GET /readyz, as
     #                            `agentctl health`, and as the `health` view. The number was 0
