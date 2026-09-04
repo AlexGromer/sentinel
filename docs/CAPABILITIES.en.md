@@ -35,9 +35,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 
 | Capability | How to reach it |
 |---|---|
-| **Service journal ⭐** | GET /v1/service-log — what the tool itself did: sign-ins and failed sign-ins, accounts, configuration changes, refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees the deployment's (HEALTH-005). |
-| **The service journal in the browser** | A "Service journal" view beside Logs — the same renderer and the same message catalogue; a partial view says it is partial rather than looking complete. |
-| **The service journal from a terminal** | agentctl service-log [--lvl warn --svc control-api --actor alice] — a thin client over the same route. |
+| **Service journal ⭐** | What the tool itself did: sign-ins and failed sign-ins, accounts, configuration changes, access refusals, services starting and stopping. An account sees its own events; an admin or the machine token sees all of them (HEALTH-005). Three ways: GET /v1/service-log · `agentctl service-log [--lvl warn --svc control-api --actor alice]` · a "Service journal" view beside Logs — the same renderer and the same message catalogue, and a partial view says it is partial rather than looking complete. |
 | **Destroying journal records** | agentctl purge-service --yes [--older-than 720h] — counts, never content; nothing is swept automatically, and the purge records itself (service.log_purged). |
 | **Aggregate Prometheus scrape across runs** | GET /metrics — an aggregate over the caller's own runs (the machine token / an accounts-less deployment sees every run), a run label on every series, # HELP/# TYPE per family, honest runs_included/runs_omitted; agentctl metrics is the same scrape from a terminal (ADR-119, replaces the removed cmd/report-service). |
 

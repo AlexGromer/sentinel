@@ -2010,7 +2010,14 @@ try {
     });
     // Floors first — a comparison between two empty sets agrees perfectly.
     ok(r.declared.length >= 8, `only ${r.declared.length} groups declared; the catalogue has had eight since ADR-146`);
-    ok(r.entries >= 60, `only ${r.entries} entries in the catalogue — the fetch found almost nothing`);
+    // ⚠ 60 -> 50 at ADR-149, and a floor moving DOWN needs its reason recorded or it is just a gate
+    // being argued with. It went down because SEVEN records were deliberately removed: six
+    // capabilities were written as two records each (a "server" one and a "UI" one) and were merged
+    // into one, plus a duplicate CLI entry for the service journal. The catalogue lost entries and
+    // GAINED coverage — three-way reachability went 6 -> 12 in the same commit. This floor never
+    // measured coverage; it guards against the fetch returning nothing, and 50 still does that.
+    // Coverage is guarded by MIN_THREE_WAY in tests/test_capabilities_offline.py, which only rises.
+    ok(r.entries >= 50, `only ${r.entries} entries in the catalogue — the fetch found almost nothing`);
     ok(r.missing.length === 0,
       `the catalogue declares ${r.declared.join(', ')} but the hub never renders: ${r.missing.join(', ')}`);
     ok(r.shown >= r.entries,
