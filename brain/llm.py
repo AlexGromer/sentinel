@@ -167,6 +167,23 @@ class OpenAICompatBackend:
         kwargs["api_key"] = api_key or "noauth"
         self._client = openai.OpenAI(**kwargs)
 
+    def _seed(self) -> dict:
+        """ADR-148: `seed` as a REQUEST, never a guarantee, and only where it exists.
+
+        Determinism was measured to be the wrong lever for the failure it was proposed against — the
+        input was byte-identical and the divergence came from the provider counting the prompt
+        differently under load — so this is measurement HYGIENE, not a fix: with a seed asked for, two
+        runs of the same prompt differ for fewer reasons, which is what makes a comparison worth
+        making at all.
+
+        Only the OpenAI-compatible path has the parameter. Anthropic's messages API has no `seed`,
+        and inventing one there would be a kwarg the SDK rejects — so the Anthropic backend does not
+        carry this method rather than carrying a version that silently does nothing. Even here it is a
+        request: providers may ignore it, and some refuse it alongside `response_format`, which is why
+        an unset SENTINEL_LLM_SEED sends nothing at all instead of a default value nobody chose.
+        """
+        return {"seed": _SEED} if _SEED is not None else {}
+
     def _result(self, resp) -> LLMResult:
         choice = resp.choices[0]
         text = (getattr(choice.message, "content", None) or "").strip()
@@ -179,7 +196,7 @@ class OpenAICompatBackend:
     def complete(self, prompt: str, *, max_tokens: int, temperature: float) -> LLMResult:
         resp = self._client.chat.completions.create(
             model=self.model, max_tokens=max_tokens, temperature=temperature,
-            messages=[{"role": "user", "content": prompt}])
+            messages=[{"role": "user", "content": prompt}], **self._seed())
         return self._result(resp)
 
     def complete_chat(self, messages: list, *, max_tokens: int, temperature: float,
@@ -188,7 +205,8 @@ class OpenAICompatBackend:
         one place the two providers genuinely differ in shape rather than in spelling."""
         msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
         return self._result(self._client.chat.completions.create(
-            model=self.model, max_tokens=max_tokens, temperature=temperature, messages=msgs))
+            model=self.model, max_tokens=max_tokens, temperature=temperature, messages=msgs,
+            **self._seed()))
 
     def complete_vision(self, prompt: str, image_b64: str, *, max_tokens: int,
                         temperature: float) -> LLMResult:
@@ -197,7 +215,7 @@ class OpenAICompatBackend:
             messages=[{"role": "user", "content": [
                 {"type": "image_url",
                  "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-                {"type": "text", "text": prompt}]}])
+                {"type": "text", "text": prompt}]}], **self._seed())
         return self._result(resp)
 
     def complete_json(self, prompt: str, *, schema: dict, max_tokens: int,
@@ -209,7 +227,7 @@ class OpenAICompatBackend:
             model=self.model, max_tokens=max_tokens, temperature=temperature,
             response_format={"type": "json_schema",
                              "json_schema": {"name": "out", "schema": schema}},
-            messages=[{"role": "user", "content": prompt}])
+            messages=[{"role": "user", "content": prompt}], **self._seed())
         r = self._result(resp)
         try:
             r.data = json.loads(r.text) if r.text else None
@@ -364,14 +382,57 @@ def make_backend(role: str) -> Optional[LLMBackend]:
         return None
 
 
+_THINK_CLOSE = "</think>"
+_THINK_OPEN = "<think>"
+
+
+def strip_reasoning(text: str) -> str:
+    """Drop a reasoning model's `<think>…</think>` block, returning only the ANSWER (ADR-148).
+
+    A reasoning model emits its deliberation before the reply, and that deliberation contains
+    rejected drafts. `extract_json` below scans for the first balanced `{…}` in the whole string, so
+    a draft inside the reasoning wins over the answer that follows it. Both failure modes were
+    measured on the real shapes qwen3 produces:
+
+      "<think>Maybe {"index": 99} would work? No.</think>{"index": 2}"  -> returned index 99,
+          the model's own REJECTED draft, and 99 is exactly the out-of-range selector GoalPlanner
+          carries a guard for. The guard fires on a value the model never proposed.
+      "<think>The schema wants {"ref": ...}</think>{"ref": "abc"}"      -> RAISED, because the
+          brace mentioned in prose is not valid JSON — and every caller degrades to the heuristic on
+          an exception, so a perfectly good answer was thrown away.
+
+    Both are silent. Neither is visible in any artifact: the transcript records the parsed result,
+    not the text it was parsed from.
+
+    Everything after the LAST `</think>` is the answer — last, not first, because nothing forbids a
+    model from opening a second block.
+
+    ⚠ An OPEN block that never closes is a reply that is all reasoning, which is what a truncation
+    looks like, and it returns the empty string rather than the scratchpad. The first version of this
+    function returned the text untouched there and its docstring claimed the caller "fails the way it
+    already fails" — measured, it did not: `<think>I am still thinking {"index": 42}` yielded 42, the
+    same defect this function exists to remove, merely in the truncated case. The docstring was
+    describing an intention, and the body did something else.
+    """
+    close = text.rfind(_THINK_CLOSE)
+    if close >= 0:
+        return text[close + len(_THINK_CLOSE):]
+    if _THINK_OPEN in text:
+        return ""
+    return text
+
+
 def extract_json(text: str) -> dict:
     """Parse the first complete JSON object out of a (possibly noisy) model reply.
 
     Robust replacement for the fragile `text[text.find("{"): text.rfind("}") + 1]` slice: scans
     balanced braces (string-aware) from the first `{` to its matching `}`, so a markdown code fence,
     trailing commentary, or a stray `}` in prose no longer corrupts the parse. Raises on a missing or
-    invalid object — every caller already degrades to heuristic/empty on exception."""
-    s = text.strip()
+    invalid object — every caller already degrades to heuristic/empty on exception.
+
+    ADR-148: a reasoning block is removed FIRST (see `strip_reasoning`); without that the scan
+    happily returns a draft the model itself rejected."""
+    s = strip_reasoning(text).strip()
     start = s.find("{")
     if start < 0:
         raise ValueError("no JSON object in text")
@@ -430,6 +491,27 @@ _learned_cache: Optional[dict] = None
 # existing caller/test); appends one JSON line per attempt, best-effort (a measurement probe must
 # never break a run).
 _ATTEMPT_LOG = os.environ.get("SENTINEL_LLM_ATTEMPT_LOG", "").strip()
+
+# ADR-148: an integer seed asked of OpenAI-compatible endpoints. Unset by default — a seed nobody
+# chose is still a choice, and one that would change every existing run's output without being asked
+# for. `_int_or_none` rather than _int_env: "" and a malformed value both mean "not set", because
+# defaulting a malformed seed to 0 would silently pin every run to one sample.
+def _int_or_none(name: str):
+    """Parse an integer env var; unset and MALFORMED both mean "no seed" — but they are not the same
+    thing to say. An unset variable is a choice not made. A malformed one is a choice the operator
+    DID make and will not get: they asked for reproducibility, and swallowing it would let them
+    believe two runs were comparable when nothing was pinned. So the second case is announced."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        log("llm.seed_malformed", raw=raw)
+        return None
+
+
+_SEED = _int_or_none("SENTINEL_LLM_SEED")
 
 
 def _record_attempt(model: Optional[str], role: Optional[str], attempt: int, cap: int,
@@ -514,7 +596,21 @@ def complete_structured(backend, prompt: str, schema: dict, *, max_tokens: int,
     model = getattr(backend, "model", None)
     cap = max_tokens
     if _ADAPTIVE:
-        cap = min(max(cap, _learned_budgets().get(model, 0)), _TOKEN_HARD_MAX)
+        learned = _learned_budgets().get(model, 0)
+        cap = min(max(cap, learned), _TOKEN_HARD_MAX)
+        # ADR-148. The learned ceiling is a deliberate feature — it pays the escalation once instead
+        # of on every run — but until now a run never SAID which ceiling it started with, and only
+        # spoke if that ceiling was reached. So a run inherits a number learned by another run,
+        # possibly weeks earlier, and nothing in any artifact records it. Measured on this repository:
+        # state/llm-budget.json held {"qwen3:8b": 16384} — _TOKEN_HARD_MAX — written on 2026-08-16 and
+        # silently applied to every qwen3:8b run since, including the live runs of W12.
+        #
+        # That is what makes two runs of the "same" prompt incomparable: identical input, different
+        # max_tokens, and no way to tell from the outside. Announcing it does not remove the coupling
+        # (that is what SENTINEL_LLM_BUDGET_FILE is for) — it makes the coupling VISIBLE, which is the
+        # half a measurement actually needs.
+        if learned > max_tokens:
+            log("llm.budget_inherited", model=model, cap=cap, source=_BUDGET_FILE)
     total_pt = total_ct = 0
     attempt = 0
     while True:

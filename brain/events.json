@@ -838,6 +838,24 @@
         "llm"
       ]
     },
+    "llm.budget_inherited": {
+      "lvl": "info",
+      "cat": "llm",
+      "ru": "Потолок токенов для {model} взят из прошлых прогонов: {cap} (файл {source})",
+      "en": "The token ceiling for {model} came from earlier runs: {cap} (file {source})",
+      "modules": [
+        "llm"
+      ]
+    },
+    "llm.seed_malformed": {
+      "lvl": "warn",
+      "cat": "llm",
+      "ru": "SENTINEL_LLM_SEED={raw} — не целое число; сид не запрашивается, прогон невоспроизводим",
+      "en": "SENTINEL_LLM_SEED={raw} is not an integer; no seed is requested and the run is not reproducible",
+      "modules": [
+        "llm"
+      ]
+    },
     "llm.output_truncated_retry": {
       "lvl": "info",
       "cat": "llm",

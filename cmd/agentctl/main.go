@@ -86,6 +86,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "               [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
 	fmt.Fprintln(os.Stderr, "               [--run-config <run.yaml>] [--scenario <name>] [--coverage-target <0..1>]")
 	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--ignore-robots] [--artifact-dir <dir>]")
+	fmt.Fprintln(os.Stderr, "               [--isolate-llm-budget]      # keep the learned token ceiling in THIS run (comparable measurements)")
 	fmt.Fprintln(os.Stderr, "                                                                    (all flags: agentctl run --help)")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--message <text>] [--goal <g>|--describe <d>]")
 	fmt.Fprintln(os.Stderr, "                                             # (M9.10 multi-turn) --message is this turn; --goal/--describe pin the objective")
@@ -113,6 +114,23 @@ func boolEnv(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// isolatedBudgetPath appends the per-run learned-ceiling file to `extra` when isolation was asked
+// for, and appends NOTHING otherwise.
+//
+// ⚠ The first version emitted `SENTINEL_LLM_BUDGET_FILE=""` in the non-isolated case, reasoning that
+// an empty value is falsy in brain/llm.py and keeps every run's env the same shape. That was wrong,
+// and the way it was wrong is the point: `extra` is appended AFTER filteredEnv(), so it WINS — an
+// empty value would have overwritten a path the operator set themselves. The one caller that does
+// exactly that is scripts/model_convergence.py, whose whole purpose is isolating this file per
+// attempt (tests/test_model_convergence_offline.py asserts it). The "consistent shape" version would
+// have silently un-isolated the only harness that was already doing this correctly.
+func appendBudgetIsolation(extra []string, dir string, isolate bool) []string {
+	if !isolate {
+		return extra
+	}
+	return append(extra, "SENTINEL_LLM_BUDGET_FILE="+filepath.Join(dir, "llm-budget.json"))
 }
 
 func mkArtifactDir(repo, runID, override string) string {
@@ -546,6 +564,7 @@ func runWithStore(repo, runID string, extra []string) int {
 type runFlags struct {
 	target         *string
 	artifactDir    *string
+	isolateBudget  *bool
 	mode           *string
 	planner        *string
 	goal           *string
@@ -577,6 +596,15 @@ func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	f.mode = fs.String("mode", "explore", "run mode")
 	_ = fs.Bool("explore", false, "explore mode (default; accepted for convenience)")
 	f.planner = fs.String("planner", "heuristic", "planner: heuristic|llm|goal")
+	// ADR-148. The learned token ceiling (brain/llm.py) is shared across runs ON PURPOSE — it pays the
+	// escalation once instead of on every run. That is a feature for working, and a defect for
+	// MEASURING: two runs of the same prompt go out with different max_tokens, and which one you get
+	// depends on what some earlier run learned. Measured here: state/llm-budget.json held
+	// {"qwen3:8b": 16384} — the hard maximum — written on 2026-08-16 and silently applied for weeks.
+	// This flag keeps the ceiling inside the run's own artifact dir, so a comparison starts from the
+	// same place every time. Default OFF: the amortisation is worth keeping for ordinary runs.
+	f.isolateBudget = fs.Bool("isolate-llm-budget", false,
+		"keep the learned LLM token ceiling in this run's artifact dir instead of sharing it across runs (for comparable measurements)")
 	f.goal = fs.String("goal", "", "NL goal -> goal-mode authoring (GoalPlanner, M9.2a); empty = explore")
 	// ADR-108a: this turn's text, distinct from the objective. Before it existed, control-api sent
 	// every turn AS --goal, so a follow-up and a new objective were the same field and "one goal per
@@ -684,11 +712,13 @@ func cmdRun(repo string, args []string) int {
 		"SENTINEL_OBSERVE=" + *observe,
 		"AUT_VERSION=" + *autVersion,
 		"CI=" + boolEnv(*ci),
+
 		"FORCE_REPLAY=" + boolEnv(*force),
 		// M9.10 (ADR-048): chat-mode conversation thread key. Run-var (appended after filteredEnv), so it
 		// always reaches the brain; only read when RUN_MODE=chat. The SENTINEL_ prefix is allowlisted too.
 		"SENTINEL_CONVERSATION_ID=" + *conversationID,
 	}
+	extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)
 	if runNeedsStore(*mode, *replay) {
 		return runWithStore(repo, runID, extra)
 	}
