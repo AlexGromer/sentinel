@@ -149,7 +149,8 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
                 draft = scenario_head.draft()
                 sc, unmatched = reconcile(draft.get("draft", []), site_map, start_id=len(steps) + 1)
             _write_scenario(out, run_id, target, sc, unmatched, bool(describe),
-                            author_model=getattr(scenario_head, "model", None), crawl_complete=False)
+                            author_model=getattr(scenario_head, "model", None), crawl_complete=False,
+                            site_map=site_map)
         except Exception as e:
             log("explore.salvage_failed", error=e)
     # Пустой словарь означает ровно одно: спасать было нечем ИЛИ записать не удалось. Вызывающий
@@ -159,7 +160,7 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
 
 
 def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None,
-                    crawl_complete=True) -> dict:
+                    crawl_complete=True, site_map=None) -> dict:
     """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
     (describe). Возвращает ФАКТЫ авторинга: `{"grounded": int, "unmatched": int}`.
 
@@ -241,6 +242,26 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
                            for u in unmatched[:5]))
     print(f"SCENARIO — {len(sc)} grounded steps, {len(unmatched)} unmatched -> {out}/scenario.json"
           " + reconcile-report.json")
+    # ADR-151. Отдельным блоком ПОСЛЕ цепочки выше, и это не стиль, а исправленный дефект: первая
+    # редакция стояла МЕЖДУ `if sc and unmatched:` и `elif unmatched:`, разрывая их. `elif` начинал
+    # относиться к НОВОМУ условию, и при пустой карте прогон печатал ОБА кода сразу — и «заземлено
+    # частично», и «не заземлено ничего», которые означают разные вещи. Поймал это
+    # tests/test_grounding_gate_offline.py, чья проверка существует ровно затем: «два провала с одним
+    # сообщением — это два провала, которых никто не различит».
+    #
+    # Заземление отвечает «нашлись ли элементы» и молчит о том, СОГЛАСОВАН ли сценарий сам с собой.
+    # Рёбра (ADR-150) позволяют это сказать: замерено на живом goal-прогоне — ЗЕЛЁНОМ, unmatched=0,
+    # вердикт pass — один лишний переход и один прыжок туда, куда со страницы пути нет.
+    #
+    # Объявление, а не приговор: провалить за телепорт нельзя, потому что цель — направление, а не
+    # спецификация (HEALTH-004), и приложение может законно не иметь ссылки туда, куда пользователь
+    # попадает закладкой. Судит человек; продукт обязан сказать.
+    if sc and site_map:
+        from .scenario import route_consistency
+        rc = route_consistency(sc, site_map)
+        if rc["redundant_navigations"] or rc["teleports"]:
+            log("plan.route_not_followed", redundant=len(rc["redundant_navigations"]),
+                teleports=len(rc["teleports"]))
     return {"grounded": len(sc), "unmatched": len(unmatched)}
 
 
@@ -435,7 +456,8 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
             authored = _write_scenario(out, run_id, target, scenario_steps, scenario_unmatched,
                                         bool(describe),
                                        author_model=getattr(scenario_head, "model", None),
-                                       crawl_complete=bool((final.get("completeness") or {}).get("complete", True)))
+                                       crawl_complete=bool((final.get("completeness") or {}).get("complete", True)),
+                                       site_map=final.get("site_map"))
             o = decide(facts_from(final, mode=_mode, grounded=authored["grounded"],
                                   unmatched=authored["unmatched"]))
         else:
@@ -864,7 +886,8 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                            scenario_unmatched, bool(describe),
                                            author_model=getattr(scenario_head, "model", None),
                                            crawl_complete=bool(
-                                               (final.get("completeness") or {}).get("complete", True)))
+                                               (final.get("completeness") or {}).get("complete", True)),
+                                           site_map=final.get("site_map"))
                 return announce(decide(facts_from(
                     final, mode=("describe" if describe else "goal"),
                     grounded=authored["grounded"], unmatched=authored["unmatched"])), run_id)

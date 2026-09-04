@@ -134,6 +134,56 @@ def ground_scenario(llm_refs: list, site_map: dict, start_page: str = "", start_
     return _emit(bound, start_page, start_id, trust_observed), unmatched
 
 
+def route_consistency(steps: list, site_map: dict) -> dict:
+    """Сходится ли сценарий сам с собой — то есть следует ли он за собственными действиями (ADR-151).
+
+    ⚠ ЭТО НЕ ПРОВЕРКА СВЯЗНОСТИ, и попытка сделать её первой была замером отменена: `_nav_step`
+    вставляется АВТОМАТИЧЕСКИ между шагами на разных страницах, поэтому сценарий связен ПО
+    ПОСТРОЕНИЮ и такая проверка не поймала бы ничего. Рёбра (ADR-150) дают другое — видно, что
+    сценарий делает ПОСЛЕ клика, о котором уже известно, куда он ведёт:
+
+      ИЗБЫТОЧНЫЙ navigate — предыдущий клик уже привёл на этот адрес, а сценарий идёт туда снова.
+          Не ошибка исполнения (replay пройдёт), но лишний шаг в тесте, который человек будет читать.
+      ТЕЛЕПОРТ — сценарий переходит на адрес, до которого от текущего положения ребра НЕТ. Значит
+          это не маршрут пользователя, а прыжок по адресной строке: тест «работает» и при этом не
+          проверяет тот путь, которым пользователь ходит.
+
+    Замерено на живом goal-прогоне (зелёном, unmatched=0): один избыточный navigate и один телепорт.
+    То есть дефект есть в сценарии, который продукт объявляет безупречным.
+
+    ⚠ Возвращает ФАКТЫ, а не приговор. Провалить прогон за телепорт нельзя: цель — направление, а не
+    спецификация (HEALTH-004), и приложение может законно не иметь ссылки туда, куда пользователь
+    попадает закладкой. Судит человек, а продукт обязан сказать.
+
+    Положение считается ТОЛЬКО по известным рёбрам. Клик, про который карта ничего не знает, делает
+    положение НЕИЗВЕСТНЫМ — и тогда следующий navigate не обвиняется ни в чём: обвинение по незнанию
+    хуже молчания."""
+    edges = {}
+    for pg, els in (site_map or {}).items():
+        for el in els or []:
+            to = el.get("leads_to") or el.get("href_to")
+            if to:
+                edges[(pg, el.get("role"), el.get("name"))] = to
+    known = {t for t in edges.values()}
+    cur, redundant, teleports = None, [], []
+    for st in steps or []:
+        if st.get("action_type") == "navigate":
+            tgt = page_identity(st.get("target") or "")
+            if cur is not None and tgt:
+                if tgt == cur:
+                    redundant.append(st.get("step_id"))
+                elif cur in known or any(p == cur for p, _r, _n in edges):
+                    # Обвиняем только когда про ТЕКУЩУЮ страницу вообще что-то известно: иначе
+                    # «ребра нет» означает лишь, что мы её не обходили.
+                    if not any(p == cur and to == tgt for (p, _r, _n), to in edges.items()):
+                        teleports.append(st.get("step_id"))
+            cur = tgt or cur
+        else:
+            loc = st.get("locator") or {}
+            cur = edges.get((cur, loc.get("role"), loc.get("name")), None) if cur else None
+    return {"redundant_navigations": redundant, "teleports": teleports}
+
+
 def _match(draft_target: dict, flat_map: list):
     """Deterministic, CONSERVATIVE match of a draft target to ONE real element (else None)."""
     role = (draft_target.get("role") or "").strip().lower()

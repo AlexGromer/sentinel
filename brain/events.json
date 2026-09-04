@@ -892,6 +892,16 @@
       "ru_verdict": "сценарий заземлён НЕ ПОЛНОСТЬЮ: {unmatched} из {total} шагов не привязались к элементам — тест проверяет меньше, чем вы просили",
       "en_verdict": "the scenario is only PARTLY grounded: {unmatched} of {total} steps bound to no element — the test checks less than you asked for"
     },
+    "plan.route_not_followed": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Сценарий не следует за собственными действиями: {redundant} лишних переходов, {teleports} прыжков туда, куда со страницы нет пути",
+      "en": "The scenario does not follow its own actions: {redundant} redundant navigation(s), {teleports} jump(s) to a page with no route from where it stood",
+      "modules": [
+        "__main__"
+      ]
+    },
     "plan.budget_exhausted_heuristic": {
       "lvl": "warn",
       "cat": "plan",
