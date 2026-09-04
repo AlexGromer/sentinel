@@ -2521,7 +2521,12 @@ try {
   const pkCanary = 'GATE-CANARY-NOT-A-KEY-8f3e1d0c5b7a';
 
   await check('provider keys: the panel is derived from the server, not written into the page', async () => {
-    await idPage.click('#pk-reload');
+    /* ⚠ NO manual reload here, and that is deliberate. The first version of this check began with a
+       click on #pk-reload and was VACUOUS against the defect the ui-smoke frame actually caught:
+       the panel asks an admin-only route, so an attempt made before a credential existed returned
+       403, and `pkLoaded` latched that refusal — leaving "sign in as an administrator" on screen
+       for an administrator who had just signed in. Forcing a reload hides exactly that. The panel
+       must recover BY ITSELF when identity changes, so the assertion is on the natural path. */
     await idPage.waitForFunction(() => document.querySelectorAll('#pk-list .pk-row').length > 0, null, { timeout: 5000 });
     const rows = await idPage.locator('#pk-list .pk-row').count();
     /* The floor. A list derived from the server renders perfectly over an empty response, and that is
@@ -2581,6 +2586,35 @@ try {
     await idPage.fill('#pk-list [data-pk-input="llm_api_key"]', '');
     await idPage.click('#pk-list [data-pk-save="llm_api_key"]');
     await idPage.waitForTimeout(600);
+  }, { allowConsole: freshConfig404 });
+
+  /* The CLASS, not the one case. `bi()` renders two <span>s the language switch toggles, which an
+     ATTRIBUTE cannot carry; stripping the tags to make it fit silently concatenates both languages.
+     Measured on the provider-key panel: «…пусто = очиститьnew value · empty clears it». Every gate
+     was green over it — a jammed placeholder is a perfectly valid attribute — and it was caught by
+     looking at a screenshot. A check aimed at that one input would be walked past by the next one,
+     so this walks the RENDERED DOM: the defect lives in markup built by JavaScript, which a scan of
+     index.html cannot see (verified: scanning the file finds 76 attributes and none of them this). */
+  await check('bilingual: no attribute has the two languages jammed together', async () => {
+    const found = await idPage.evaluate(() => {
+      const out = [];
+      let n = 0;
+      for (const el of document.querySelectorAll('[placeholder], [title], [aria-label]')) {
+        for (const a of ['placeholder', 'title', 'aria-label']) {
+          const v = el.getAttribute(a);
+          if (v === null) continue;
+          n++;
+          // Cyrillic ABUTTING Latin with no separator. A legitimate bilingual attribute uses " / ",
+          // and a legitimate mixed phrase ("Ollama, vLLM, роутер", "OpenAI-совместимый") has a space
+          // or a hyphen between the scripts.
+          if (/[а-яё][A-Za-z]/i.test(v) || /[A-Za-z][а-яё]/i.test(v)) out.push(`${a}="${v.slice(0, 90)}"`);
+        }
+      }
+      return { bad: out, scanned: n };
+    });
+    // The floor: a walk that found nothing to inspect passes perfectly over an empty set.
+    ok(found.scanned >= 20, `only ${found.scanned} attributes were inspected — the walk found nothing to check`);
+    ok(found.bad.length === 0, `attributes carrying both languages with no separator:\n  ${found.bad.join('\n  ')}`);
   }, { allowConsole: freshConfig404 });
 
   await check('identity: signing out returns the hub to no identity', async () => {

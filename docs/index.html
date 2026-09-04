@@ -2187,6 +2187,17 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       cfgLoaded = false;
       if (typeof vwActive !== 'undefined' && vwActive === 'settings') cfgInit();
     }
+    /* ADR-146, and the same sentence applies word for word: the provider-key panel asks an
+       ADMIN-only route, so an attempt made before a credential existed came back 403 and left
+       "sign in as an administrator" on screen. Found by LOOKING at the ui-smoke frame — every gate
+       was green over it, because a panel that renders its refusal correctly is rendering correctly.
+       A refusal must not be latched as though it were an answer. */
+    /* ADR-146: only the FLAG is cleared here. Calling pkInit() from this point as well was a race —
+       cfgInit above is async, so the key panel read `cfgMayWriteGlobal` from the PREVIOUS identity
+       and asked a route that was already refused, putting a 403 in the console of the sign-in check.
+       cfgInit calls pkInit itself once the server has answered who may write; one caller, after the
+       answer, is the whole fix. */
+    if (typeof pkLoaded !== 'undefined') pkLoaded = false;
     /* ADR-109: a working credential is also the moment we can ask WHOSE it is. Without this the
        account controls would stay hidden for someone holding the machine token, and the settings view
        would have no idea whether it may offer the tool's knobs. */
@@ -2284,6 +2295,14 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      and one that keeps displaying the previous person's library until something happens to refresh. */
   function idReloadViews(){
     cfgLoaded=false;
+    /* ADR-146: signing in or out changes WHETHER the keys may be read at all, not merely whose rows
+       are shown — so the panel must ask again rather than keep the previous identity's refusal.
+       ⚠ And `cfgMayWriteGlobal` goes back to "not asked yet" WITH it. Leaving the old value is not a
+       cosmetic staleness: it is one identity's permission answering for another, and it measurably
+       produced two 403s in the console when a machine-token session signed in as a plain account —
+       the key panel read the stale `true` and asked a route that was now refused. */
+    if (typeof pkLoaded !== 'undefined') pkLoaded=false;
+    if (typeof cfgMayWriteGlobal !== 'undefined') cfgMayWriteGlobal=null;
     if (typeof tLibLoaded  !== 'undefined') tLibLoaded=false;
     if (typeof tRunsLoaded !== 'undefined') tRunsLoaded=false;
     if (typeof vwActive !== 'undefined' && typeof vwLoaders === 'function'){
@@ -6188,6 +6207,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
     cfgLoaded = true;
     cfgRender();
+    /* ADR-146: the key panel may only ASK once it knows it is allowed to, and `may_write_global` is
+       the server's answer, learned just above. So the panel is driven from here rather than racing
+       cfgInit from vwLoaders — ordering by hope is what produced the refusal the ui-smoke frame
+       caught. Fire-and-forget: cfgInit's own result must not depend on the key read. */
+    if (typeof pkInit === 'function' && !pkLoaded) pkInit();
   }
 
   async function cfgSave(){
@@ -6283,21 +6307,47 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
          + '<div><b>' + title + '</b> <code class="libmeta">' + esc(name) + '</code></div>'
          + '<div style="margin:.25rem 0">' + badge + '</div>'
          + '<div class="ctl-row">'
+         /* ⚠ NOT bi() here. A placeholder is an ATTRIBUTE, and bi() emits two <span>s whose visibility
+            the language switch toggles — markup an attribute cannot carry. Stripping the tags to make
+            it fit produced «…пусто = очиститьnew value · empty clears it», both languages jammed
+            together with no separator. Found by LOOKING at the ui-smoke frame; every gate was green
+            over it. The page's convention for attributes is one string, «ru / en» — as ch-text does. */
          + '<input type="password" autocomplete="off" spellcheck="false" data-pk-input="' + esc(name) + '" '
-         + 'placeholder="' + bi('новое значение · пусто = очистить', 'new value · empty clears it').replace(/<[^>]+>/g, '') + '">'
+         + 'placeholder="новое значение · пусто = очистить / new value · empty clears it">'
          + '<button type="button" class="btn" data-pk-save="' + esc(name) + '">💾 ' + bi('Сохранить', 'Save') + '</button>'
          + '</div></div>';
   }
 
   async function pkInit(){
     var base = capiBase(); if (!base) return;
-    pkLoaded = true;
+    /* ⚠ TWO rules copied from cfgInit above, and BOTH were learned the hard way there before this
+       panel repeated them. They are stated again because a reader who only sees this function has
+       no way to know either one.
+
+       (1) DO NOT ASK WITHOUT A CREDENTIAL THAT MAY SUCCEED. These routes are accessAdmin, so a
+       request made before a token exists — or made by a plain account — returns 403, and the browser
+       logs every one as a failed resource. cfgInit's own comment gives the reason to care: that is
+       "noise that teaches a reader to ignore the console". Measured here: firing anyway turned four
+       unrelated hub checks red, on pages that have nothing to do with keys.
+
+       (2) LATCH ONLY ON SUCCESS. `pkLoaded` is set after the read works, never before. Setting it up
+       front is what made the ui-smoke frame show "sign in as an administrator" to a machine-token
+       caller that was already connected: the first attempt raced ahead of the token, the flag said
+       "done", and nothing tried again. */
+    if (!capiTok() || cfgMayWriteGlobal !== true){
+      ge('pk-list').innerHTML = '<p class="hint">' + bi(
+        'ключами управляет администратор — войдите админским аккаунтом или машинным токеном',
+        'keys are the administrator\'s — sign in as an admin account or with the machine token') + '</p>';
+      pkSetStatus('');
+      return;   // deliberately NOT latched: the answer changes the moment a credential does
+    }
     pkSetStatus(bi('читаю…', 'reading…'));
     try {
       var r = await fetch(base + '/v1/provider-keys', { headers: authHdr() });
       if (r.status === 401 || r.status === 403){
-        /* Not an error to apologise for: "keys live until an ADMINISTRATOR replaces them" means a
-           non-admin seeing a refusal here is the design working. Say which credential is needed. */
+        /* Reachable when a credential lapses between the check above and this request. Not an error
+           to apologise for — "keys live until an ADMINISTRATOR replaces them" means a refusal here is
+           the design working — and not latched either, for the same reason. */
         ge('pk-list').innerHTML = '<p class="hint">' + bi(
           'ключами управляет администратор — войдите админским аккаунтом или машинным токеном',
           'keys are the administrator\'s — sign in as an admin account or with the machine token') + '</p>';
@@ -6305,6 +6355,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       }
       var j = await r.json();
       if (!r.ok){ pkSetStatus('<span class="fail">✗ HTTP ' + r.status + '</span>'); return; }
+      pkLoaded = true;   // only now: the read worked
       var names = j.names || [];
       if (!names.length){
         /* The floor. A derived list that found nothing renders perfectly over an empty set, and that
