@@ -1,6 +1,8 @@
 """Sentinel — run report generators (M4, ADR-014).
 
-Pure functions over a `heal-report.json` dict: a self-contained HTML report, a machine-readable
+Pure functions over a run-report dict — `heal-report.json` on the replay path,
+`baseline-report.json` on the baseline path (`report_path` finds whichever the run wrote):
+a self-contained HTML report, a machine-readable
 JSON mirror, and a Prometheus textfile (`metrics.prom`, node_exporter textfile-collector format).
 No browser, no external assets. The Go report-service is the eventual home post-M2b.
 """
@@ -239,8 +241,29 @@ def push_metrics(report: dict, gateway: str, job: str = "sentinel") -> None:
                     grouping_key={"run_id": str(report.get("plan_id", ""))})
 
 
+def report_path(run_dir: str):
+    """Отчёт прогона — под ТЕМ именем, под которым его записал прогон. Или None, если его нет.
+
+    ⚠ ИМЁН ДВА, И ЭТО ЗНАЛА ТОЛЬКО ОДНА СТОРОНА. `brain/replay.py` пишет `baseline-report.json` в
+    режиме baseline и `heal-report.json` в остальных (одна строка, `name = ... if mode == "baseline"`),
+    а читатели держали ЖЁСТКО `heal-report.json`: и `generate` здесь, и страж `_run_report` в
+    `brain/__main__.py`. Замерено: после baseline-прогона `agentctl report` возвращал **exit 3**
+    (`fatal.heal_report_missing`), то есть `integrity` — «прогон попросили запустить неправильно».
+    Инструмент обвинял ОПЕРАТОРА в том, что сам же назвал файл иначе.
+
+    Поэтому имя ищется здесь, в ОДНОМ месте, а не перечисляется у каждого читателя: второй список
+    разошёлся бы с первым ровно так же, как разошлись эти два.
+    """
+    for name in ("heal-report.json", "baseline-report.json"):
+        p = os.path.join(run_dir, name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def generate(run_dir: str) -> dict:
-    """Read <run_dir>/heal-report.json and write report.json, report.html, metrics.prom, junit.xml.
+    """Read the run's report (heal-report.json / baseline-report.json) and write report.json,
+    report.html, metrics.prom, junit.xml.
 
     ADR-097: `plan.json` is read too, for the page-visibility block. The two artefacts are written by
     different paths — the audit runs during explore, the heal report during replay — so a report built
@@ -248,7 +271,10 @@ def generate(run_dir: str) -> dict:
     coverage number beside it. Absent or unreadable plan.json is not an error: a replay of an imported
     plan legitimately has no audit, and the report says "not measured" rather than inventing a figure.
     """
-    rep = json.loads(open(os.path.join(run_dir, "heal-report.json")).read())
+    src = report_path(run_dir)
+    if src is None:
+        raise FileNotFoundError(f"no heal-report.json / baseline-report.json in {run_dir}")
+    rep = json.loads(open(src).read())
     try:
         plan = json.loads(open(os.path.join(run_dir, "plan.json")).read())
         if isinstance(plan.get("perception"), dict):

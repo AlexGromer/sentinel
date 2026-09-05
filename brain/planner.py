@@ -283,7 +283,30 @@ class GoalPlanner:
     `candidates[idx]` or `done` — an invalid/OOB index degrades to `done`, never a fabricated action.
 
     Falls back to the heuristic when there's no goal / no backend (no key/SDK) or the plan budget is
-    exhausted. Best-effort — not plan_hash-stable (like LLMPlanner; replay stays deterministic)."""
+    exhausted. Best-effort — not plan_hash-stable (like LLMPlanner; replay stays deterministic).
+
+    ⚠ `propose` СЕГОДНЯ НЕ ВЕДЁТ НИ ОДНОГО ОБХОДА, И ЭТО РЕШЕНИЕ, А НЕ ЗАБЫТЫЙ КОД (ADR-154, W14).
+    `--goal` жёстко ставит обходчиком `HeuristicPlanner` (`brain/__main__.py`, ветка `if goal:`),
+    поэтому в goal-режиме работает только `build_scenario` — ОДИН выстрел по УЖЕ СОБРАННОЙ карте.
+    Так записано в ADR-028 дословно: «LLM **не ведёт walk** (фаза-1 детерминирована); per-step
+    `propose` сохранён для **M9.4 live/co-pilot**», и там же ОТКЛОНЁН «per-step goal-планировщик над
+    all-pages меню». Причина — контракт продукта: explore-once → replay-many. Обход, который ведёт
+    модель, даёт на одном и том же сайте разные планы, а вместе с ними разный `plan_hash`, и
+    воспроизводимость — то, ради чего этот инструмент существует, — исчезает.
+
+    ⚠ ПОЭТОМУ ЭТОТ КОД НЕЛЬЗЯ «ПОЧИНИТЬ» НИ В ОДНУ СТОРОНУ, не заместив ADR-028 новым решением:
+    подключить его к обходу значит откатить принятое решение, а удалить — выбросить половину
+    co-pilot'а, за которую уже заплачено (интерфейс, заземление по индексу ADR-022, деградация
+    вне-диапазонного индекса в `done`, откат на эвристику при отсутствии модели или бюджета).
+
+    НАЗВАННЫЙ ПОТРЕБИТЕЛЬ НЕ ПРИШЁЛ. M9.4 состоялся 2026-06-27, но привёз восприятие вкладок
+    (`[role=tab]`) и multi-page (`browser.tabs`/`switchTab`) — не live-co-pilot. Тот режим, где
+    человек СМОТРИТ живой прогон (дуга LIVE: `/live/*`, VNC, своя вкладка) и агент ведёт браузер к
+    цели при нём, до сих пор не построен; там детерминизм не нужен и даже мешает, потому что вся
+    ценность в том, что агент подстраивается на ходу. Это тот же класс, что уже дважды записан в
+    реестре: `[NAVIGATE-SAME-DOCUMENT-HAS-NO-CONSUMER]` и `[MAP-READY-FRAME-HAS-NO-CONSUMER]` —
+    механизм есть, адресата нет. Здесь адресат ещё и НАЗВАН, поэтому запись живёт рядом с кодом:
+    следующий читатель, померивший достижимость, обязан прочесть это раньше, чем «починит»."""
 
     name = "goal"
 
@@ -529,6 +552,19 @@ def make_planner(env=None):
     env = os.environ if env is None else env
     planner_name = (env.get("PLANNER") or "heuristic").strip().lower()
     goal = (env.get("GOAL") or "").strip()
+    # ⚠ `PLANNER=goal` БЕЗ `GOAL` ОТДАЁТ `GoalPlanner(goal="")`, и прогон печатает «planner goal» над
+    # обходом, все решения которого приняла эвристика (`propose` без цели откатывается на неё на
+    # КАЖДОМ шаге). Замерено живым прогоном 2026-09-05 и найдено ГЛАЗАМИ в выводе.
+    #
+    # ⚠ И ЭТО НЕ ЧИНИТСЯ ЗДЕСЬ. Первая редакция возвращала тут эвристику явно — «чтобы ярлык не
+    # врал», — и её отверг ЧУЖОЙ тест: `tests/test_m9_2_offline.py::test_make_planner_routing`
+    # пиннит строку `make_planner({"PLANNER": "goal"}).name == "goal"` с пометкой «explicit». Это
+    # НАМЕРЕННЫЙ контракт маршрутизации (M9.2a, ADR-027): функция отвечает на вопрос «какой
+    # планировщик выбран по окружению», и на него ответ именно такой. Тест прав, правка была неверна.
+    #
+    # Честность доставляется ОБЪЯВЛЕНИЕМ, а не переименованием: `brain/__main__.py` печатает
+    # `plan.goal_walker_reserved` строкой ВЫШЕ конфига прогона и говорит, что обход остаётся
+    # детерминированным и почему (ADR-028). Дефектом было молчание, а не имя.
     if planner_name == "goal" or (goal and planner_name in ("", "heuristic")):
         return GoalPlanner(goal=goal)
     if planner_name == "llm":
