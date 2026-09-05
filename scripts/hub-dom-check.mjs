@@ -1729,6 +1729,45 @@ try {
     const none = await page.evaluate(() => window.__gate.completenessBlock({}));
     ok(none === '', 'a run with no completeness block must render nothing at all');
   });
+  await check('goal: the run says whether it got where it was going, and three outcomes stay three', async () => {
+    // ADR-152. Гоняется НАСТОЯЩЕЙ функцией страницы (`__gate.goalBlock`), чистой от scenario.json,
+    // поэтому прогон ей не нужен — и это единственный способ увидеть блок вообще: смоук goal-прогона
+    // с живой моделью не делает, а инлайном внутри `renderRunPhases` блок был недосягаем ни для
+    // какого гейта. Замер, ради которого он существует: три живых прогона, два из них до цели не
+    // дошли, и этап «Составление сценария» у всех трёх выглядел ОДИНАКОВО.
+    const reached = await page.evaluate(() => window.__gate.goalBlock({
+      goal_reached: 'reached', goal_page: 'file:///s/page-b.html',
+      pages_visited: ['file:///s/index.html', 'file:///s/page-b.html'] }));
+    ok(/✓/.test(reached), 'a reached goal must read as achieved, not as a neutral note');
+    ok(/page-b\.html/.test(reached), 'the destination page must be NAMED — "reached" without where is not information');
+    ok(!/⚠/.test(reached), 'a reached goal must not carry a warning');
+
+    const missed = await page.evaluate(() => window.__gate.goalBlock({
+      goal_reached: 'not_reached', goal_page: 'file:///s/page-b.html',
+      pages_visited: ['file:///s/index.html', 'file:///s/page-a.html'] }));
+    ok(/⚠/.test(missed), 'a goal that was NOT reached must warn — this is the whole point of the block');
+    ok(/page-b\.html/.test(missed), 'the destination must be named on the miss too');
+    ok(/page-a\.html/.test(missed), 'and where it DID go, otherwise the reader cannot tell what the test checks');
+
+    // Третий исход рисуется ТОЧКОЙ. Если бы `unknown` носил ⚠, «сказать нечего» читалось бы как
+    // «плохо» — обвинение по незнанию, ровно то, ради отказа от которого исходов три, а не два.
+    const unknown = await page.evaluate(() => window.__gate.goalBlock({
+      goal_reached: 'unknown', goal_reached_reason: 'goal_page_not_named', goal_page: '', pages_visited: [] }));
+    ok(!/⚠/.test(unknown) && !/✓/.test(unknown), 'an undetermined goal must be neither a warning nor a tick');
+    ok(/не дошёл|did not get there/.test(unknown), 'it must say plainly that this is not "did not get there"');
+    // ⚠ Найдено ГЛАЗАМИ на снимке, гейт был зелёным: причина не показывалась вовсе (она лежала
+    // только в reconcile-report, которого интерфейс не читает), а «неизвестно» без причины
+    // неотличимо от «не спрашивали». Каждая из трёх причин обязана иметь свою фразу.
+    ok(/не назвала|named no destination/.test(unknown), 'the REASON it is undetermined must be shown');
+    const noTrail = await page.evaluate(() => window.__gate.goalBlock({
+      goal_reached: 'unknown', goal_reached_reason: 'no_page_trail', goal_page: '', pages_visited: [] }));
+    ok(/перехода|page trail/.test(noTrail), 'a different reason must read differently, not collapse into one phrase');
+    ok(noTrail !== unknown, 'two different reasons must not render identically');
+
+    // Встречное: артефакт без поля (describe, старые прогоны) рисует НИЧЕГО, а не пустую рамку.
+    const none = await page.evaluate(() => window.__gate.goalBlock({ run_mode: 'scenario', steps: [] }));
+    ok(none === '', 'a scenario with no goal verdict must render nothing at all');
+  });
   await check('perception: three categories, and they add up to what the audit measured', async () => {
     // ADR-097. Exercised through the real `perceptionBlock` in the real page — it is a pure function
     // of plan.json, so it needs no run, and asserting the rendered HTML is what an operator sees.

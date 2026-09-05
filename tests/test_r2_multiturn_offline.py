@@ -43,6 +43,13 @@ class QueuedFakeBackend:
 
     def complete(self, prompt, *, max_tokens, temperature):
         self.prompts.append(prompt)
+        # ADR-152: у головы сценария теперь ДВА разных вопроса, и очередь моделирует ответы только
+        # на АВТОРИНГ. Вопрос о целевой странице обслуживается отдельно и очередь НЕ трогает —
+        # иначе ход-1 съедал бы ответ, приготовленный ходу-2, и тест ловил бы пустой сценарий
+        # вместо refine (замерено: ровно так он и падал). Пустая страница -> исход `unknown`,
+        # который к утверждениям этих тестов отношения не имеет.
+        if '"goal_page"' in prompt:
+            return LLMResult('{"goal_page": ""}', self._pt, self._ct)
         reply = self.replies.pop(0) if self.replies else '{"steps": []}'
         return LLMResult(reply, self._pt, self._ct)
 
@@ -145,7 +152,11 @@ def test_two_turn_resume_skips_explore_and_refines():
     assert contents[0] == "log in" and contents[2] == "set username to bob", contents
 
     # the turn-2 authoring prompt carried the PRIOR conversation (turn-1 goal) as refine context.
-    assert "prior conversation" in fb.prompts[-1] and "log in" in fb.prompts[-1], fb.prompts[-1]
+    # ADR-152: выбор промпта ПО СМЫСЛУ, а не по позиции — голове задают два вопроса за ход, и
+    # контекст рефайна по построению живёт только в промпте авторинга.
+    _authoring = [x for x in fb.prompts if '"steps"' in x]
+    assert _authoring and "prior conversation" in _authoring[-1] and "log in" in _authoring[-1], \
+        _authoring[-1] if _authoring else fb.prompts
     budget.reset()
 
 

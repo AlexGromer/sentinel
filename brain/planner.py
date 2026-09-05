@@ -42,6 +42,10 @@ def _tok_budget(env_key: str, default: int) -> int:
 # starve 4 of 6 fixtures at 800. Ceilings below are reasoning-aware; env-tunable for exotic models.
 _PICK_TOKENS = _tok_budget("LLM_MAX_TOKENS_PICK", 1024)       # per-action index pick (small output)
 _SCENARIO_TOKENS = _tok_budget("LLM_MAX_TOKENS_SCENARIO", 3072)  # whole-scenario / draft authoring
+# ADR-152: ответ — одно имя страницы и одна фраза, но потолок НЕ микроскопический: рассуждающая
+# модель тратит основную часть на `<think>`, и обрезанный ответ доезжает без закрывающей скобки.
+# Замерено на `qwen3:8b`: 2000 хватает на все девять пробных прогонов.
+_GOAL_PAGE_TOKENS = _tok_budget("LLM_MAX_TOKENS_GOAL_PAGE", 2048)
 
 # --- ADR-136: сколько символов перечня элементов уезжает в промпт ---------------------------------
 #
@@ -160,6 +164,16 @@ _SCHEMA_STEPS = {"type": "object", "properties": {"steps": {"type": "array", "it
                       "for a SECRET (password/token/card): the NAME of an environment variable holding "
                       "it, never the value itself. fill verb only. Use INSTEAD of value."}},
     "required": ["ref", "verb"]}}}, "required": ["steps"]}
+# ADR-152. Отдельная схема ОТДЕЛЬНОГО вызова, а не поле в `_SCHEMA_STEPS`: намерение и шаги обязаны
+# приходить из разных ответов, иначе модель отчитывается о конце собственного списка (см.
+# `GoalPlanner.name_goal_page`). Побочная выгода — форма шага не меняется, поэтому `plan_hash`,
+# считающийся по ЦЕЛЫМ словарям шагов (`state.canonical_plan_hash`), не двигается ни на один план.
+_SCHEMA_GOAL_PAGE = {"type": "object", "properties": {
+    "goal_page": {"type": "string",
+                  "description": "one page value from the given pages — the DESTINATION where the "
+                                 "goal is fulfilled, not the route to it"},
+    "why": {"type": "string", "description": "one short sentence"}},
+    "required": ["goal_page"]}
 _SCHEMA_DRAFT = {"type": "object", "properties": {"steps": {"type": "array", "items": {
     "type": "object", "properties": {
         "verb": {"type": "string", "enum": _VERBS},
@@ -384,6 +398,67 @@ class GoalPlanner:
         except Exception as e:
             log("plan.scenario_error_empty", error=e)
             return {"refs": [], "tokens": None}
+
+    def name_goal_page(self, flat_map: list, goal: str = None) -> dict:
+        """ADR-152: назвать СТРАНИЦУ, на которой цель считается выполненной. Отдельный вызов.
+
+        Возвращает `{"goal_page": <адрес страницы из карты или "">, "why": str, "tokens": ...}`.
+        Пусто на no-goal/no-backend/бюджете/ошибке — вызывающий тогда объявляет `unknown`, и это
+        честнее, чем догадка.
+
+        ⚠ ПОЧЕМУ ОТДЕЛЬНЫМ ВЫЗОВОМ, А НЕ ПОЛЕМ В ОТВЕТЕ `build_scenario`. Поле в том же ответе было
+        бы КОПИЕЙ, СОГЛАШАЮЩЕЙСЯ САМА С СОБОЙ: модель, только что выписавшая список шагов, назвала бы
+        конец этого же списка, и проверка «дошёл ли сценарий до цели» подтверждалась бы при ЛЮБОЙ
+        ошибке — ровно та болезнь, которую в этом дереве уже ловили (W11 PR-4). Здесь модель видит
+        цель и страницы, но НЕ ВИДИТ собственных шагов, поэтому её ответ — независимое наблюдение,
+        с которым есть что сверять.
+
+        ⚠ И ЗАМЕР ГОВОРИТ, ЧТО ЭТО РАБОТАЕТ ИМЕННО В ТАКОЙ ФОРМЕ (`qwen3:8b`, `testdata/site`,
+        2026-09-04): раздельная форма отвечает верно **9 из 9** — «View the actions page» → `page-b`
+        ×3, «Open the page C» → `page-c` ×3, «Log in» → `page-a` ×3, — тогда как ШАГИ по цели «View
+        the actions page» дважды из двух уходили в логин на `page-a`. Намерение формулируется
+        правильно, исполняется неправильно; ради этого разрыва вызов и заведён.
+
+        Страницы подаются ТЕМИ ЖЕ значениями, что и в меню `build_scenario` (поле `page` элемента),
+        чтобы ответ заземлялся против карты без обратного перевода имён."""
+        goal = (goal or self.goal or "").strip()
+        if not goal or not self._backend:
+            return {"goal_page": "", "why": "", "tokens": None}
+        from . import budget
+        if budget.tracker().exceeded("plan"):
+            log("plan.goal_page_empty", reason="budget")
+            return {"goal_page": "", "why": "", "tokens": None}
+        try:
+            pages = {}
+            for e in _spread_by_page(flat_map):
+                pages.setdefault(e.get("page") or "", []).append(
+                    f"{e.get('role')} '{e.get('name')}'")
+            pages_text, dropped = fit_json_list(
+                [{"page": p, "elements": els} for p, els in pages.items()], MAP_CHARS)
+            prompt = (
+                "You are given a website's pages and the interactive elements on each. Name the ONE "
+                "page on which the following GOAL is fulfilled — the DESTINATION, not the route to "
+                "it.\n"
+                f"goal: {goal}\n"
+                + partial_note(len(pages), dropped)
+                + f"pages: {pages_text}\n"
+                'Reply with ONLY JSON: {"goal_page": "<one page value from pages>", '
+                '"why": "<one short sentence>"}.'
+            )
+            result = complete_structured(self._backend, prompt, _SCHEMA_GOAL_PAGE,
+                                         max_tokens=_GOAL_PAGE_TOKENS, temperature=0, role="plan")
+            budget.tracker().add("plan", result)
+            j = result.data
+            if j is None:
+                _log_unparsed("GoalPlanner.name_goal_page", result)
+                return {"goal_page": "", "why": "", "tokens": None}
+            return {"goal_page": (j.get("goal_page") or "").strip(),
+                    "why": (j.get("why") or "").strip(),
+                    "tokens": {"prompt": result.prompt_tokens,
+                               "completion": result.completion_tokens}}
+        except Exception as e:
+            log("plan.goal_page_empty", reason=f"error: {e}")
+            return {"goal_page": "", "why": "", "tokens": None}
 
 
 class DescribePlanner:

@@ -42,6 +42,10 @@ class RunState(TypedDict, total=False):
     phase: str                    # "explore" | "scenario"
     scenario_steps: list          # the grounded authored steps (appended to exploration_plan)
     scenario_unmatched: list      # refs/draft-steps that could not be grounded to a real element
+    # ADR-152: страница, которую модель назвала ЦЕЛЕВОЙ, — спрошена ОТДЕЛЬНЫМ вызовом, где модель не
+    # видит собственных шагов. Достижение считает `scenario.goal_reached`, сверяя это НАМЕРЕНИЕ со
+    # следом страниц (НАБЛЮДЕНИЕМ). Пусто = сказать нечего, и тогда исход `unknown`, а не «не дошёл».
+    scenario_goal_page: str
     # perception
     current_url: str
     # ADR-150: ребро, наблюдённое `act` в момент клика ({from, ref, to}), — разовая передача узлу
