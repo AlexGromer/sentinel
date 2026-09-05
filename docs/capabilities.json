@@ -15,6 +15,14 @@
     "  env     : an environment variable read by non-test product code",
     "  code    : a token present in a named source file",
     "  file    : a path that exists in the repo",
+    "  service : a docker-compose service in the DEFAULT stack (started by `docker compose up`)",
+    "  ui      : a hub view — data-view=\"<ref>\" in docs/index.html AND <ref> in the hub's own VIEWS",
+    "",
+    "  ⚠ `service` and `ui` were MISSING from this list until 2026-09-05 (W14 PR-3) while both were",
+    "  live and both were resolved by the gate — `ui` is the SECOND most common kind in this file",
+    "  (16 uses). The gate's own docstring was stale in a different way: it named eight kinds and",
+    "  omitted `ui`. Two descriptions of the same set, each wrong on its own, and a reader checking",
+    "  against either would have called a working access path non-existent.",
     "",
     "access is a LIST of paths, not one. A single path could only ever answer 'reachable somewhere',",
     "and was read as 'covered' — measured 2026-08-07: of 50 entries, ZERO could be shown reachable",
@@ -40,7 +48,8 @@
       ],
       "reach": "capability",
       "missing": {
-        "cli": "the OpenAI-compat shim exists for foreign clients; `agentctl run --mode chat --conversation-id` is the local form"
+        "cli": "the OpenAI-compat shim exists for foreign clients; `agentctl run --mode chat --conversation-id` is the local form",
+        "ui": "интерфейса у этого эндпоинта нет намеренно: он существует для ЧУЖИХ клиентов (Open WebUI, SDK, curl). Та же способность из хаба — запись `chat-mode` (панель «Чат»), и она трёхспособна"
       }
     },
     {
@@ -377,6 +386,10 @@
       "how_ru": "POST /v1/import — загрузить файлы тестов и получить тот же отчёт о переписывании (канал UI-загрузки, ADR-105).",
       "how_en": "POST /v1/import — upload test files and get the same rewrite report (the UI-upload channel, ADR-105).",
       "access": [
+        {
+          "kind": "ui",
+          "ref": "run"
+        },
         {
           "kind": "http",
           "ref": "POST /v1/import"
@@ -901,7 +914,8 @@
       ],
       "reach": "capability",
       "missing": {
-        "cli": "local `agentctl revisions list` reads the store directly — no server required"
+        "cli": "local `agentctl revisions list` reads the store directly — no server required",
+        "ui": "истории ревизий в хабе нет: во `VIEWS` нет такого раздела и слово `revisions` в docs/index.html не встречается ни разу. Дыра настоящая, а не переадресованная — заведена как находка, а не объявлена закрытой"
       }
     },
     {

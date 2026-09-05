@@ -16,6 +16,13 @@ So every entry carries an ACCESS ref, and this gate verifies that ref RESOLVES i
   env     -> an environment variable read by non-test product code
   code    -> a token present in a named source file
   file    -> a path that exists
+  ui      -> a hub view: `data-view="<ref>"` in docs/index.html AND `<ref>` in the hub's own VIEWS
+
+⚠ `ui` СТОЯЛО В ТЕЛЕ ГЕЙТА И ОТСУТСТВОВАЛО В ЭТОМ ПЕРЕЧНЕ (16 употреблений в каталоге, вторая по
+частоте разновидность после `cli`), а шапка самого `docs/capabilities.json` не называла ни `ui`, ни
+`service`. То есть ОБА описания видов доступа — и docstring гейта, и заголовок каталога — протухли,
+и каждое по-своему: читатель, сверявшийся с любым из них, считал бы живой вид доступа несуществующим.
+Ровно тот класс, что уже записан в этом дереве: докстринг — ЗАЯВЛЕНИЕ О ПОКРЫТИИ, и оно бывает ложным.
 
 This is behavioural, not a claim about the page's prose: rename a subcommand, drop a route, remove a
 profile, and the gate breaks instead of the page misleading a reader.
@@ -204,9 +211,47 @@ def main() -> int:
     #                            been three-way for some time, and `run-video` joined at ADR-125,
     #                            while the floor sat where HEALTH-006 left it. A ratchet that lags
     #                            the truth is a ratchet that would not notice a fall back to it.
-    assert MIN_THREE_WAY >= 0, (
-        "the ratchet floor is negative, which makes it unsatisfiable-proof rather than a floor — a "
-        "regression would pass by lowering the number instead of being fixed")
+    # ПЕРЕЧЕНЬ ВИДОВ ДОСТУПА ВЫВОДИТСЯ ИЗ ЗАПИСЕЙ И СВЕРЯЕТСЯ С ОБОИМИ ОПИСАНИЯМИ.
+    #
+    # ⚠ ЗАВЕДЕНО ПОТОМУ, ЧТО ОБА ОПИСАНИЯ УЖЕ ПРОТУХЛИ, И КАЖДОЕ ПО-СВОЕМУ (замерено 2026-09-05):
+    # шапка `docs/capabilities.json` называла СЕМЬ видов и не знала ни `service`, ни `ui`; докстринг
+    # ЭТОГО файла называл ВОСЕМЬ и не знал `ui`. При этом `ui` — вторая по частоте разновидность в
+    # каталоге (16 употреблений), и обе она обходила стороной. Разовая правка обоих списков не
+    # лечит класс: через месяц появится десятый вид, и всё повторится. Поэтому истина берётся из
+    # ЗАПИСЕЙ, а описания обязаны её покрывать — рукописный список показывает лишнее, но не
+    # показывает пропущенное, потому что у отсутствия нет представления, на которое можно смотреть
+    # (`docs/DEVELOPMENT.md` §0, принцип 5).
+    kinds_used = {a["kind"] for c in caps for a in c["access"]}
+    header_kinds = set(re.findall(r"^\s{2}([a-z]+)\s+:", "\n".join(cat.get("_", [])), re.M))
+    doc_kinds = set(re.findall(r"^\s{2}([a-z]+)\s+->", __doc__ or "", re.M))
+    assert kinds_used <= header_kinds, (
+        f"docs/capabilities.json header does not declare access kind(s) {sorted(kinds_used - header_kinds)}, "
+        f"which entries actually use — a reader checking against the header would call a working "
+        f"access path non-existent")
+    assert kinds_used <= doc_kinds, (
+        f"this gate's own docstring does not name access kind(s) {sorted(kinds_used - doc_kinds)}, "
+        f"which entries actually use. A docstring is a CLAIM ABOUT COVERAGE and it can be false — "
+        f"already measured twice in this repository")
+
+    # ⚠ ЗДЕСЬ СТОЯЛО `assert MIN_THREE_WAY >= 0`, И ЭТО БЫЛА ЕДИНСТВЕННАЯ ПРОВЕРКА САМОГО ПОЛА.
+    # «Ратчет только растёт» жило КОММЕНТАРИЕМ, а не утверждением: ничто в дереве не сравнивало пол
+    # с прошлым значением, поэтому регресс чинился правкой числа — ровно тем способом, который
+    # соседняя строка объявляла недопустимым. ЗАМЕРЕНО 2026-09-05 на настоящем гейте: понижение
+    # 13 → 11 прошло ЗЕЛЁНЫМ.
+    #
+    # ЧТО ЗАМЕРЕНО ЕЩЁ, И ЭТО ХУЖЕ. Утверждался СЧЁТ три-способных, а не ДОЛЯ, поэтому новая
+    # возможность с ОДНИМ путём доступа проходила зелёной: `caps_only` 39 → 40, `three_way`
+    # остаётся 13, оба `>=` выполнены, а печатаемая доля молча ухудшается (замерено: 13/40).
+    # То есть гейт, заведённый ради принципа «каждая возможность достижима тремя способами», был
+    # зелёным ровно над его нарушением.
+    #
+    # ЛЕЧЕНИЕ — РАВЕНСТВО, А НЕ ПОРОГ, и обе стороны сразу. Число три-способных и число НЕ
+    # три-способных фиксируются ТОЧНО, поэтому любое движение каталога — и потеря поверхности, и
+    # появление недостижимой возможности — требует ОСОЗНАННОЙ правки числа в ТОМ ЖЕ коммите, где
+    # менялся каталог, и правка видна в диффе строкой. Порог этого не даёт: он пропускает движение
+    # «в хорошую сторону» молча, а именно там и прячется разбавление доли.
+    THREE_WAY_TODAY = 13       # ⚠ равенство, не порог: менять ТОЛЬКО вместе с каталогом и с причиной
+    NOT_THREE_WAY_TODAY = 26   # ⚠ и это тоже равенство — иначе доля падает молча
     MIN_CAPABILITIES = 30      # a floor on the walk itself: classifying everything as `artifact`
     #                            would make the ratchet vacuous, so the population is bounded too
     caps_only = [c for c in caps if c.get("reach") == "capability"]
@@ -216,17 +261,63 @@ def main() -> int:
     assert len(caps_only) >= MIN_CAPABILITIES, (
         f"only {len(caps_only)} entries are classified as a product capability — the rest as artifacts. "
         f"That makes the three-way ratchet measure almost nothing; check the `reach` values.")
-    assert len(three_way) >= MIN_THREE_WAY, (
-        f"three-way reachability fell to {len(three_way)} from a recorded floor of {MIN_THREE_WAY}. "
-        f"A capability lost a surface: {[c['id'] for c in partial][:8]}")
+    assert MIN_THREE_WAY == THREE_WAY_TODAY, (
+        f"the historical ratchet floor ({MIN_THREE_WAY}) and today's recorded number "
+        f"({THREE_WAY_TODAY}) disagree — they describe the same fact and must move together")
+    assert len(three_way) == THREE_WAY_TODAY, (
+        f"three-way reachability is {len(three_way)}, recorded as {THREE_WAY_TODAY}. "
+        f"If it FELL, a capability lost a surface: {[c['id'] for c in partial][:8]}. If it ROSE, say "
+        f"so by editing the number in this commit — a ratchet that lags the truth would not notice a "
+        f"fall back to it.")
+    assert len(partial) == NOT_THREE_WAY_TODAY, (
+        f"{len(partial)} capabilities are short of three ways, recorded as {NOT_THREE_WAY_TODAY}. "
+        f"A NEW capability that ships fewer than three surfaces lands here — give it the missing "
+        f"paths, or raise this number deliberately with the reason next to it. Asserting the count "
+        f"of three-way entries alone would have passed this silently, which is measured, not feared.")
 
     # Every capability short of three ways must SAY which surface is missing, or the gap is invisible
-    # again. The reason itself is not demanded yet — that is the next ratchet — but naming the hole is.
-    unexplained = [c["id"] for c in partial
-                   if not (THREE - {p["kind"] for p in c["access"]}) <= set(c.get("missing", {}))
-                   and not c.get("missing")]
+    # again.
+    #
+    # ⚠ ПРЕДИКАТ БЫЛ НЕВЕРЕН, И ОШИБАЛСЯ В СТОРОНУ СНИСХОЖДЕНИЯ. Хвост `and not c.get("missing")`
+    # означал, что запись, объявившая ХОТЬ ОДНУ дыру, считается объяснённой — даже когда дыр две.
+    # Замерено 2026-09-05: `openai-shim`, `import-http` и `revisions-http` имели дыры {cli, ui} и
+    # объявляли только `cli`, то есть печатаемое число было занижено на три (19 вместо 22) и
+    # занижалось ТЕМ СИЛЬНЕЕ, чем аккуратнее выглядела запись. Теперь объяснённой считается только
+    # та, у которой объявлены ВСЕ дыры.
+    #
+    # ⚠ И ЭТО БЫЛ `print`, А НЕ `assert`. Требование «назови дыру» вычислялось и печаталось —
+    # то есть его нельзя было нарушить. Теперь это ратчет вниз: число неназванных дыр может только
+    # УБЫВАТЬ. Требовать ноль сегодня нельзя (их 19), и гейт, который стоит красным с первого дня,
+    # выключают в первую неделю — но каждая новая запись обязана называть свои дыры, иначе число
+    # вырастет и гейт покраснеет.
+    def _holes_unnamed(c):
+        """Остались ли у записи НЕОБЪЯВЛЕННЫЕ дыры. ВСЕ дыры, а не хотя бы одна."""
+        return not (THREE - {p["kind"] for p in c["access"]}) <= set(c.get("missing", {}))
+
+    # ⚠ ПРАВИЛО ПРИБИТО ОТДЕЛЬНО ОТ КАТАЛОГА, И ЭТО ОТВЕТ НА ВЫЖИВШУЮ МУТАЦИЮ. Замерено: возврат
+    # предиката к прежней снисходительной форме (`… and not c.get("missing")`) проходил ЗЕЛЁНЫМ —
+    # не потому, что правило не важно, а потому, что после починки трёх записей каталог стал чистым
+    # и обе формы давали одно число. То есть правило проверялось ТОЛЬКО через сегодняшние данные и
+    # исчезло бы вместе с ними. Здесь оно проверяется на синтетике — ТОЙ ЖЕ функцией, которой
+    # считается каталог, а не её копией.
+    _two_holes = {"access": [{"kind": "http", "ref": "x"}], "missing": {"cli": "есть причина"}}
+    assert _holes_unnamed(_two_holes), (
+        "a capability with holes {cli, ui} that names only `cli` must count as UNEXPLAINED — naming "
+        "one hole of two is how a gap stays invisible while looking documented")
+    _two_holes_named = {"access": [{"kind": "http", "ref": "x"}],
+                        "missing": {"cli": "причина", "ui": "причина"}}
+    assert not _holes_unnamed(_two_holes_named), "naming every hole must count as explained"
+    _all_three = {"access": [{"kind": k, "ref": "x"} for k in THREE]}
+    assert not _holes_unnamed(_all_three), "a three-way capability has no holes to name"
+
+    unexplained = [c["id"] for c in partial if _holes_unnamed(c)]
+    MAX_UNEXPLAINED = 19       # ⚠ может только УБЫВАТЬ; сегодняшнее честное число
+    assert len(unexplained) <= MAX_UNEXPLAINED, (
+        f"{len(unexplained)} capabilities name no missing surface (recorded ceiling "
+        f"{MAX_UNEXPLAINED}): {sorted(unexplained)[:8]}. A capability short of three ways must say "
+        f"WHICH surface it lacks — an unnamed gap is invisible, and invisible is how it stays.")
     print(f"    three ways: {len(three_way)}/{len(caps_only)} capabilities; "
-          f"{len(unexplained)} name no missing surface at all")
+          f"{len(unexplained)} name no missing surface at all (потолок {MAX_UNEXPLAINED})")
 
     # The high-severity features the audit called out by name must be present — a catalogue that
     # quietly dropped the Helm chart or the OpenAI shim would pass every per-entry check above while
