@@ -1125,6 +1125,30 @@
       }
     },
     {
+      "id": "goal-reached",
+      "group": "Runtime",
+      "severity": "high",
+      "title_ru": "Прогон говорит, достиг ли он цели",
+      "title_en": "A run says whether it reached its goal",
+      "how_ru": "Прогон с `--goal` объявляет ТРИ исхода: цель достигнута · НЕ достигнута · сказать нечего. Целевую страницу называет сама модель ОТДЕЛЬНЫМ вызовом, где она не видит собственных шагов, а дошёл ли до неё сценарий — считает наш код по следу страниц; сверяются две независимые величины, а не формула с самой собой. Поля `goal`, `goal_page`, `goal_reached`, `pages_visited` лежат в `scenario.json` и `reconcile-report.json` (терминал печатает их строкой прогона, HTTP отдаёт артефактом, хаб показывает в разделе «Результаты»). Цель, достижимая несколькими путями, засчитывается при ЛЮБОМ: важен результат, а не маршрут. Это ОБЪЯВЛЕНИЕ, а не приговор — код выхода не меняется, потому что цель есть направление, а не спецификация (HEALTH-004). Замер, ради которого заведено: три живых прогона `qwen3:8b`, два из них до цели не дошли, и вердикт у всех трёх был побайтово одинаков (ADR-152).",
+      "how_en": "A `--goal` run announces THREE outcomes: goal reached · NOT reached · nothing to say. The destination page is named by the model in a SEPARATE call where it cannot see its own steps, while whether the scenario got there is computed by our code from the page trail — two independent quantities checked against each other, not a formula agreeing with itself. The fields `goal`, `goal_page`, `goal_reached` and `pages_visited` live in `scenario.json` and `reconcile-report.json` (the terminal prints them on the run line, HTTP serves them as an artifact, the hub shows them under “Results”). A goal reachable by several routes counts as reached by ANY of them: the result matters, not the route. It is an ANNOUNCEMENT, not a verdict — the exit code does not change, because a goal is a direction rather than a specification (HEALTH-004). The measurement it exists for: three live `qwen3:8b` runs, two of which never reached the goal, and all three carried a byte-identical verdict (ADR-152).",
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "results"
+        },
+        {
+          "kind": "cli",
+          "ref": "run"
+        },
+        {
+          "kind": "http",
+          "ref": "GET /v1/runs/{id}/artifact"
+        }
+      ],
+      "reach": "capability"
+    },
+    {
       "id": "observe-mode",
       "group": "Runtime",
       "severity": "high",

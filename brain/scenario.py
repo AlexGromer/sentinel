@@ -184,6 +184,109 @@ def route_consistency(steps: list, site_map: dict) -> dict:
     return {"redundant_navigations": redundant, "teleports": teleports}
 
 
+# Исходы достижения цели. ТРИ, а не два, и третий — не осторожность, а урок W13: положение,
+# посчитанное по неизвестному, обвиняет на пустом месте, и такую проверку научаются игнорировать.
+GOAL_REACHED, GOAL_NOT_REACHED, GOAL_UNKNOWN = "reached", "not_reached", "unknown"
+
+
+def pages_visited(steps: list, site_map: dict) -> list:
+    """След страниц сценария — в порядке появления, без повторов. ДВА источника, и оба нужны.
+
+    1. Цель каждого `navigate`. Эти шаги синтезирует `_emit` при КАЖДОЙ смене страницы, а адрес
+       берёт из поля `page` РЕАЛЬНОГО элемента карты — то есть строит его наш код, а не текст
+       модели. `start_page` в продукте нигде не задаётся непустым (все три места вызова
+       `ground_scenario`), поэтому сценарий всегда начинается с `navigate`, и дыр в начале нет.
+    2. РЕБРО элемента, по которому шаг действует (ADR-150), найденное по `semantic_id` шага.
+
+    ⚠ ВТОРОЙ ИСТОЧНИК ЗАВЕДЁН НЕ ДЛЯ ПОЛНОТЫ, А ПО ЗАМЕРУ — первая редакция без него ОШИБАЛАСЬ,
+    и ошибалась в самую опасную сторону. Живой прогон с целью «Open the page C» (`qwen3:8b`,
+    2026-09-04) дал сценарий `navigate index · click 'Alpha' · navigate page-a · click 'To C'` —
+    цель ДОСТИГНУТА, «To C» ведёт на `page-c`. Но `_emit` вставляет `navigate` только когда СЛЕДУЮЩИЙ
+    шаг лежит на другой странице, а следующего шага здесь нет: сценарий заканчивается кликом.
+    Страница, до которой сценарий дошёл ПОСЛЕДНИМ действием, в след по одним `navigate` не попадала
+    НИКОГДА, и проверка объявляла `not_reached` над прогоном, который цели достиг. Ложное обвинение
+    ровно того класса, ради предотвращения которого заводился третий исход.
+
+    ⚠ ПОЧЕМУ НЕ ОБХОД `route_consistency`, хотя он уже ведёт `cur`. Замерено на настоящем
+    логин-сценарии: `cur` обнуляется на ПЕРВОМ же не-навигирующем шаге (`cur = edges.get(...) if cur
+    else None`), а это шаг 4 — `fill` поля «User». Проверка на нём отвечала бы «неизвестно» почти
+    всегда, то есть была бы вакуумной. Здесь ребро читается ПО `semantic_id` шага и положение
+    вообще не ведётся — терять нечего.
+
+    ⚠ ЕДИНСТВЕННАЯ ДЫРА, И ОНА ВНЕ ЭТОГО ПУТИ. При `trust_observed and extra["route_arrived"]`
+    (`_emit`) переход НЕ синтезируется — страница меняется молча. Этот режим включает ровно один
+    вызывающий, `record_bridge`, и он ЗАПИСЫВАЕТ действия человека, а не авторит по цели; на
+    goal-пути `trust_observed` оставлен False НАМЕРЕННО (докстринг `ground_scenario`: модель,
+    вернувшая `route_arrived`, иначе стирала бы переход из собственного плана)."""
+    idx = _index_by_id(site_map)
+    seen, out = set(), []
+
+    def _add(u: str) -> None:
+        pg = page_identity(u or "")
+        if pg and pg not in seen:
+            seen.add(pg)
+            out.append(pg)
+
+    for st in steps or []:
+        if st.get("action_type") == "navigate":
+            _add(st.get("target") or "")
+            continue
+        el = idx.get(st.get("semantic_id")) or {}
+        # Наблюдённое ребро перекрывает объявленное — тот же порядок, что в `route_consistency`.
+        _add(el.get("leads_to") or el.get("href_to") or "")
+    return out
+
+
+def goal_reached(steps: list, goal_page: str, site_map: dict) -> dict:
+    """Дошёл ли сценарий до страницы, которую модель назвала целевой (ADR-152).
+
+    ДВЕ НЕЗАВИСИМЫЕ ВЕЛИЧИНЫ, и в этом весь смысл проверки. `goal_page` — НАМЕРЕНИЕ: модель
+    спрашивают о нём ОТДЕЛЬНЫМ вызовом, где она видит цель и страницы, но НЕ ВИДИТ собственных
+    шагов. `pages_visited` — НАБЛЮДЕНИЕ: след, выведенный из шагов нашим кодом. Спросить и то и
+    другое одним ответом было бы «копией, соглашающейся сама с собой»: модель отчиталась бы о конце
+    своего же списка, и проверка соглашалась бы с ней при любой ошибке.
+
+    ⚠ ЗАМЕР, КОТОРЫЙ ЭТО КУПИЛ (qwen3:8b, `testdata/site`, 2026-09-04). Раздельная форма отвечает
+    верно 9 из 9: «View the actions page» → `page-b` ×3, «Open the page C» → `page-c` ×3, «Log in» →
+    `page-a` ×3. При этом ШАГИ по той же цели «View the actions page» дважды из двух уходили в логин
+    на `page-a`. То есть намерение модель формулирует правильно, а исполняет неправильно, и разрыв
+    между двумя величинами — ровно тот дефект, который продукт до сих пор не произносил: три живых
+    прогона, из них два не дошли до цели, и у всех трёх вердикт был побайтово одинаков.
+
+    ВАЖЕН РЕЗУЛЬТАТ, А НЕ МАРШРУТ (решение Alex): цель, достижимая несколькими путями, засчитывается
+    при любом — поэтому спрашивается ПРИНАДЛЕЖНОСТЬ следу, а не совпадение с его концом. Сценарий,
+    побывавший на целевой странице и ушедший дальше, цели достиг.
+
+    ⚠ ЭТО ОБЪЯВЛЕНИЕ, А НЕ ПРИГОВОР. Код выхода не трогается: цель — направление, а не спецификация
+    (HEALTH-004), и `Facts`/`decide` про достижение цели ничего не знают. Тот же выбор, что у
+    ADR-151: судит человек, продукт обязан сказать.
+
+    `unknown` (а не `not_reached`) во всех трёх случаях, когда сказать НЕЧЕГО: модель не назвала
+    страницу · назвала не из карты (заземление намерения — та же дисциплина, что у `ref`, ADR-022) ·
+    следа нет вовсе. Обвинение по незнанию хуже молчания."""
+    trail = pages_visited(steps, site_map)
+    known = {page_identity(p) for p in (site_map or {}) if p}
+    for pg, els in (site_map or {}).items():
+        for el in els or []:
+            if el.get("page"):
+                known.add(page_identity(el["page"]))
+    tgt = page_identity(goal_page or "")
+    if not tgt:
+        return {"verdict": GOAL_UNKNOWN, "reason": "goal_page_not_named",
+                "goal_page": "", "pages_visited": trail}
+    if tgt not in known:
+        # Модель назвала страницу, которой в карте нет. Это НЕ «не дошёл» — это «мы не знаем, куда
+        # она нас послала», и молча приравнять одно к другому значило бы обвинить сценарий за
+        # промах авторинга намерения.
+        return {"verdict": GOAL_UNKNOWN, "reason": "goal_page_not_in_map",
+                "goal_page": tgt, "pages_visited": trail}
+    if not trail:
+        return {"verdict": GOAL_UNKNOWN, "reason": "no_page_trail",
+                "goal_page": tgt, "pages_visited": trail}
+    return {"verdict": (GOAL_REACHED if tgt in trail else GOAL_NOT_REACHED), "reason": "",
+            "goal_page": tgt, "pages_visited": trail}
+
+
 def _match(draft_target: dict, flat_map: list):
     """Deterministic, CONSERVATIVE match of a draft target to ONE real element (else None)."""
     role = (draft_target.get("role") or "").strip().lower()

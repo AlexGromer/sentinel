@@ -142,15 +142,21 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
     if scenario_head is not None and site_map:
         try:
             from .scenario import flatten_site_map, ground_scenario, reconcile
+            goal_page = ""
             if getattr(scenario_head, "name", "") == "goal":
                 built = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"))
                 sc, unmatched = ground_scenario(built.get("refs", []), site_map, start_id=len(steps) + 1)
+                # ADR-152: спрашиваем и здесь, СИММЕТРИЧНО обычному пути. Спасённый сценарий — такой
+                # же отдаваемый человеку артефакт, и «достижение цели неизвестно всегда» было бы у
+                # него не свойством прогона, а нашей ленью на этой ветке.
+                goal_page = scenario_head.name_goal_page(
+                    flatten_site_map(site_map), state.get("goal")).get("goal_page") or ""
             else:
                 draft = scenario_head.draft()
                 sc, unmatched = reconcile(draft.get("draft", []), site_map, start_id=len(steps) + 1)
             _write_scenario(out, run_id, target, sc, unmatched, bool(describe),
                             author_model=getattr(scenario_head, "model", None), crawl_complete=False,
-                            site_map=site_map)
+                            site_map=site_map, goal=state.get("goal") or "", goal_page=goal_page)
         except Exception as e:
             log("explore.salvage_failed", error=e)
     # Пустой словарь означает ровно одно: спасать было нечем ИЛИ записать не удалось. Вызывающий
@@ -160,7 +166,7 @@ def _salvage_explore(app, cfg, out, run_id, target, crash, *, scenario_head=None
 
 
 def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe, author_model=None,
-                    crawl_complete=True, site_map=None) -> dict:
+                    crawl_complete=True, site_map=None, goal="", goal_page="") -> dict:
     """M9.2b (ADR-028): freeze scenario.json (standalone, renumbered from 1) + reconcile-report.json
     (describe). Возвращает ФАКТЫ авторинга: `{"grounded": int, "unmatched": int}`.
 
@@ -173,7 +179,9 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
     deliverable of a goal/describe run — and one that cannot say which model authored it, at what token
     cost, is not reproducible by whoever receives it. It carried neither until now."""
     from .state import canonical_plan_hash
-    from . import budget
+    from .scenario import goal_reached
+    from .replay import _basename          # адрес в СТРОКЕ ЖУРНАЛА сокращается до имени страницы;
+    from . import budget                   # полное значение при этом лежит в артефакте, не теряется
     sc = [{**s, "step_id": i + 1} for i, s in enumerate(scenario_steps)]
     obj = {"plan_id": f"{run_id}-scenario", "plan_hash": canonical_plan_hash(sc), "target_url": target,
            "run_mode": "scenario", "mode": ("describe" if is_describe else "goal"),
@@ -183,6 +191,25 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
            # ради снятия которого оно заводится.
            "crawl_complete": bool(crawl_complete),
            "models": {"author": author_model}, "tokens": budget.tracker().summary()}
+    # ADR-152. Цель и её достижение — ТОЛЬКО в goal-режиме, и это не экономия полей. В `describe`
+    # цели нет вовсе, поэтому `goal_reached: "unknown"` там читалось бы как «мы не смогли измерить»
+    # вместо «вопрос не задавали». Отсутствие здесь однозначно, потому что `mode` лежит в том же
+    # объекте строкой выше — читателю не нужно догадываться.
+    #
+    # ⚠ ВЕРХНИЙ УРОВЕНЬ, А НЕ ПОЛЕ ШАГА, И ЭТО ЗАМЕР. `canonical_plan_hash` (brain/state.py) считает
+    # SHA-256 по ЦЕЛЫМ словарям шагов — «every field is included; nothing is excluded», — поэтому
+    # поле в шаге сдвинуло бы ДВА хеша goal-прогона (`scenario.json` и `plan.json`: шаги сценария
+    # дописываются в `exploration_plan`) и покрасило бы четыре замороженных `plan_hash_portable` в
+    # `tests/test_crawl_measured_offline.py`, если бы то же поле однажды доехало до explore-шага.
+    # Здесь же не двигается НИ ОДИН хеш в дереве: аргумент `canonical_plan_hash(sc)` — только `sc`.
+    gr = None if is_describe else goal_reached(sc, goal_page, site_map or {})
+    if gr is not None:
+        obj.update({"goal": goal, "goal_page": gr["goal_page"], "goal_reached": gr["verdict"],
+                    # ⚠ ПРИЧИНА ЕДЕТ И СЮДА, а не только в reconcile-report, и это правка ПО КАДРУ:
+                    # на снимке блока строка `unknown` читалась «достижение цели не определено —
+                    # сказать нечего», и почему именно — сказать было нечем, потому что интерфейс
+                    # читает `scenario.json`. «Неизвестно» без причины неотличимо от «не спрашивали».
+                    "goal_reached_reason": gr["reason"], "pages_visited": gr["pages_visited"]})
     with open(out / "scenario.json", "w") as f:
         json.dump(obj, f, indent=2)
     # PROD-VERSIONING (ADR-106): when this scenario is a NAMED test (SENTINEL_TEST_ID set — the CI or
@@ -211,9 +238,16 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
     # успела собраться, и та же цифра означает противоположное — что виноват не автор, а обрыв. Две
     # разные новости одним числом; теперь рядом сказано, какая именно.
     with open(out / "reconcile-report.json", "w") as f:
-        json.dump({"target_url": target, "mode": ("describe" if is_describe else "goal"),
-                   "grounded": len(sc), "unmatched": unmatched,
-                   "crawl_complete": bool(crawl_complete)}, f, indent=2)
+        rep = {"target_url": target, "mode": ("describe" if is_describe else "goal"),
+               "grounded": len(sc), "unmatched": unmatched,
+               "crawl_complete": bool(crawl_complete)}
+        if gr is not None:
+            # ADR-152: тот же ответ и здесь, потому что этот файл — то, что человек открывает, когда
+            # спрашивает «а почему». `reason` объясняет ИМЕННО `unknown`: не названа · названа не из
+            # карты · следа нет. Без него «неизвестно» неотличимо от «не спрашивали».
+            rep.update({"goal": goal, "goal_page": gr["goal_page"], "goal_reached": gr["verdict"],
+                        "goal_reached_reason": gr["reason"], "pages_visited": gr["pages_visited"]})
+        json.dump(rep, f, indent=2)
     log("test.scenario_authored", grounded=len(sc), unmatched=len(unmatched))
     # HEALTH-004: a goal run that grounded 3 of 10 exits 0, reports a counter, and is over. That is the
     # exact shape `degrades` exists for — green, and quietly worth less than it looks. Describe mode
@@ -262,6 +296,23 @@ def _write_scenario(out, run_id, target, scenario_steps, unmatched, is_describe,
         if rc["redundant_navigations"] or rc["teleports"]:
             log("plan.route_not_followed", redundant=len(rc["redundant_navigations"]),
                 teleports=len(rc["teleports"]))
+
+    # ADR-152 — ОТДЕЛЬНЫМ блоком, и это не стиль, а уже допущенная в этом файле ошибка: первая
+    # редакция соседнего блока встала МЕЖДУ `if` и `elif` выше, разорвав цепочку, и при пустой карте
+    # печатались ОБА взаимоисключающих кода сразу. Здесь цепочки нет вовсе — три исхода, один `if`.
+    #
+    # Заземление отвечает «нашлись ли элементы», согласованность (ADR-151) — «следует ли сценарий за
+    # собственными действиями». Ни то, ни другое не отвечает на вопрос, ради которого прогон
+    # запускали: ПРИШЛИ ЛИ МЫ ТУДА, КУДА ШЛИ. Замерено на трёх живых прогонах: два не дошли до цели,
+    # и вердикт у всех трёх был побайтово одинаков — `pass`, exit 0, `unmatched=0`.
+    if gr is not None:
+        if gr["verdict"] == "reached":
+            log("plan.goal_reached", goal_page=_basename(gr["goal_page"]))
+        elif gr["verdict"] == "not_reached":
+            log("plan.goal_not_reached", goal_page=_basename(gr["goal_page"]),
+                visited=", ".join(_basename(p) for p in gr["pages_visited"]) or "—")
+        else:
+            log("plan.goal_unknown", reason=gr["reason"])
     return {"grounded": len(sc), "unmatched": len(unmatched)}
 
 
@@ -457,7 +508,9 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
                                         bool(describe),
                                        author_model=getattr(scenario_head, "model", None),
                                        crawl_complete=bool((final.get("completeness") or {}).get("complete", True)),
-                                       site_map=final.get("site_map"))
+                                       site_map=final.get("site_map"),
+                                       goal=final.get("goal") or "",
+                                       goal_page=final.get("scenario_goal_page") or "")
             o = decide(facts_from(final, mode=_mode, grounded=authored["grounded"],
                                   unmatched=authored["unmatched"]))
         else:
@@ -887,7 +940,9 @@ def _run_chat(run_id, out, conversation_id, target, coverage_target, max_steps) 
                                            author_model=getattr(scenario_head, "model", None),
                                            crawl_complete=bool(
                                                (final.get("completeness") or {}).get("complete", True)),
-                                           site_map=final.get("site_map"))
+                                           site_map=final.get("site_map"),
+                                           goal=final.get("goal") or "",
+                                           goal_page=final.get("scenario_goal_page") or "")
                 return announce(decide(facts_from(
                     final, mode=("describe" if describe else "goal"),
                     grounded=authored["grounded"], unmatched=authored["unmatched"])), run_id)

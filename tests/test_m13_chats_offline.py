@@ -57,7 +57,13 @@ def test_refine_history_capped_in_prompt():
         budget.reset(plan_limit=10**6, heal_limit=10**6)
         app.invoke({"messages": [{"role": "user", "content": f"turn-{i} refine step {i}"}],
                     "goal": f"turn-{i} refine step {i}"}, config=cfg)
-    p = fb.prompts[-1]
+    # ADR-152: голове задают ДВА вопроса за ход, поэтому «последний промпт» — уже не промпт
+    # авторинга. Утверждение здесь про КОНТЕКСТ РЕФАЙНА, а он живёт только в промпте авторинга,
+    # опознаваемом по схеме ответа; выбор по смыслу, а не по позиции, заодно перестаёт зависеть от
+    # того, сколько ещё вопросов появится у головы завтра.
+    authoring = [x for x in fb.prompts if '"steps"' in x]
+    assert authoring, "the authoring prompt is missing entirely"
+    p = authoring[-1]
     assert "[earlier:" in p, "a long conversation must cap older turns into a summary prefix"
     assert "1 turn(s)" in p, "7 prior turns - keep 6 = 1 older turn summarised"
     budget.reset()

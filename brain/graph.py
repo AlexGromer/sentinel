@@ -992,9 +992,27 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         # M9.10: prior user turns (all but the current — which IS this turn's goal/describe) = refine context.
         # GAP-M9-20: cap to the last N turns + a rolling-summary prefix so the prompt stays bounded.
         prior = _capped_history(_user_turns(state.get("messages"))[:-1])
+        goal_page = ""
         if scenario_head.name == "goal":
             out = scenario_head.build_scenario(flatten_site_map(site_map), state.get("goal"), history=prior)
             steps, unmatched = ground_scenario(out.get("refs", []), site_map, start_id=base_id + 1)
+            # ADR-152: ВТОРОЙ, ОТДЕЛЬНЫЙ вопрос модели — куда, по её пониманию цели, надо прийти.
+            # Порядок «после шагов» не важен (модель шагов не видит), а вот РАЗДЕЛЬНОСТЬ важна: в
+            # одном ответе это была бы копия, соглашающаяся сама с собой. Достижение считает уже
+            # наш код, сверяя это намерение со следом страниц (`scenario.goal_reached`).
+            # ⚠ `getattr`, А НЕ ПРЯМОЙ ВЫЗОВ, и это не осторожность впрок — так уже отказало.
+            # Голова сценария здесь утиная: `scenario_head` опознаётся по полю `name`, и головой
+            # бывает не только `GoalPlanner` (в сьюте — двойники). Прямой вызов рушил ВЕСЬ прогон
+            # `AttributeError` там, где честный ответ — «эта голова не умеет называть цель», то есть
+            # `unknown`. Тот же приём, что у `getattr(scenario_head, "model", None)` рядом.
+            namer = getattr(scenario_head, "name_goal_page", None)
+            gp = namer(flatten_site_map(site_map), state.get("goal")) if callable(namer) else {}
+            goal_page = gp.get("goal_page") or ""
+            gtok = gp.get("tokens") or {}
+            tx_write({"step": "goal_page", "planner": scenario_head.name, "model": scenario_head.model,
+                      "decision": "goal_page", "reason": f"{goal_page or '—'}: {gp.get('why') or ''}",
+                      "prompt_tokens": gtok.get("prompt"), "completion_tokens": gtok.get("completion")})
+            rc.report(state.get("run_id", ""), "plan", gtok.get("prompt"), gtok.get("completion"))
         else:  # describe: LLM draft -> deterministic reconcile against the real map
             out = scenario_head.draft(history=prior)
             steps, unmatched = reconcile(out.get("draft", []), site_map, start_id=base_id + 1)
@@ -1008,7 +1026,7 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
                    "content": f"authored {len(steps)} grounded step(s), {len(unmatched)} unmatched"}
         return {"exploration_plan": list(state.get("exploration_plan", [])) + steps,
                 "scenario_steps": steps, "scenario_unmatched": unmatched, "phase": "scenario",
-                "messages": [summary]}
+                "scenario_goal_page": goal_page, "messages": [summary]}
 
     def report(state: RunState) -> dict:
         """Freeze plan.json with a deterministic plan_hash over the ordered steps."""

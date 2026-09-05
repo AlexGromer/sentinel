@@ -166,7 +166,14 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 12         # ⚠ may only ever go UP; today's honest number.
+    MIN_THREE_WAY = 13         # ⚠ may only ever go UP; today's honest number.
+    #                            12 -> 13 at ADR-152: `goal-reached` ships with all three surfaces
+    #                            from the start (terminal run line · artifact over HTTP · the hub's
+    #                            Results view), so the floor rises WITH the feature rather than
+    #                            later. Raising it here is the cheap half; the expensive half —
+    #                            that this gate asserts a COUNT and not a SHARE, so a one-surface
+    #                            capability would have passed green — is [CAPABILITIES-THREE-WAY-
+    #                            NOT-GATED], fixed in its own PR with its own mutations.
     #                            6 -> 12 at ADR-149, the largest single move this ratchet has made,
     #                            and it is a CATALOGUE change rather than new product surface: six
     #                            capabilities were written as TWO records each — a "server" one and a

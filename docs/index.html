@@ -1642,6 +1642,11 @@ function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
 function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
+/* ADR-152: имя страницы из её адреса — адреса прогонов по `file://` длиной в полпути к репозиторию,
+   и целиком они делают строку нечитаемой. Сокращается ТОЛЬКО показ: полное значение лежит в
+   `scenario.json`, который тут же рядом отдаётся артефактом. Пустой хвост (адрес кончается слэшем)
+   возвращает адрес как есть, а не пустоту. */
+function base_name(u){ var s=String(u||'').split('?')[0].split('#')[0]; var b=s.split('/').pop(); return b || s; }
 /* biPlain: bilingual text for NATIVE dialogs (prompt/confirm/alert) — those render plain OS text and
    cannot carry data-lang spans, so both languages are shown together (RU / EN) instead of toggled. */
 function biPlain(ru, en){ return ru + ' / ' + en; }
@@ -3068,6 +3073,55 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      llm-transcript.jsonl: факт есть, читателя нет.
      ⚠ Покрытие тут не помощник и сказано об этом прямо: оно считается ДОЛЕЙ ОТ УВИДЕННОГО, поэтому
      оборванный обход спокойно показывает 100% — замерено на живой цели. */
+  /* Строка «этапа прогона». Вынесена из `renderRunPhases` в область модуля вместе с ADR-152: гейт
+     обязан рисовать ТЕМ ЖЕ кодом, что и страница, иначе он проверяет копию, а копия соглашается
+     сама с собой. */
+  function phaseRow(n, ok, title, detail){
+    var mark=ok===true?'<span style="color:var(--ok)">✓</span>':ok==='warn'?'<span style="color:var(--warn)">⚠</span>':'<span style="color:var(--mut)">•</span>';
+    return '<div style="display:flex;gap:.5rem;align-items:baseline;padding:.15rem 0">'
+      +'<span style="flex:none;color:var(--mut);font-variant-numeric:tabular-nums">'+n+'</span>'
+      +'<span style="flex:none">'+mark+'</span>'
+      +'<span style="min-width:0"><b>'+title+'</b>'+(detail?' <span style="color:var(--mut);font-size:.9em">— '+detail+'</span>':'')+'</span></div>';
+  }
+
+  /* ADR-152 — ТРЕТИЙ этап прогона, отвечающий на вопрос, ради которого прогон запускали: ПРИШЛИ ЛИ
+     МЫ ТУДА, КУДА ШЛИ. Заземление («нашлись ли элементы») и согласованность ADR-151 («следует ли
+     сценарий за собственными действиями») на него не отвечают — замерено на трёх живых прогонах,
+     где два до цели НЕ дошли, а этап 2 у всех трёх выглядел одинаково.
+
+     ЧИСТАЯ функция от `scenario.json` и потому проверяемая БЕЗ прогона — тот же приём, что у
+     `completenessBlock`/`perceptionBlock` рядом, и заведена она здесь по той же причине: инлайном
+     внутри `renderRunPhases` этот блок был недосягаем для гейта, а смоук goal-прогона с живой
+     моделью не делает, поэтому новый блок остался бы НЕУВИДЕННЫМ.
+
+     `unknown` рисуется точкой, а НЕ предупреждением: «сказать нечего» — это не «плохо». Прогон без
+     поля (старые артефакты, режим describe) не рисует НИЧЕГО — пустая рамка была бы враньём. */
+  function goalBlock(sc, row){
+    if (!sc || !sc.goal_reached) return '';
+    var gp = sc.goal_page ? base_name(sc.goal_page) : null;
+    var been = (sc.pages_visited || []).map(base_name).join(', ');
+    var code = function(s){ return '<code style="font-size:.85em">' + esc(s) + '</code>'; };
+    if (sc.goal_reached === 'reached'){
+      return row('3', true, bi('Цель достигнута','Goal reached'),
+                 gp ? bi('целевая страница: ','destination: ') + code(gp) : '');
+    }
+    if (sc.goal_reached === 'not_reached'){
+      return row('3', 'warn', bi('Цель НЕ достигнута','Goal NOT reached'),
+                 [ (gp ? bi('целевая: ','destination: ') + code(gp) : null),
+                   (been ? bi('побывал: ','visited: ') + esc(been) : null) ].filter(Boolean).join(' · '));
+    }
+    /* ⚠ ПРАВКА ПО КАДРУ. Строка читалась «не определено — сказать нечего — это не «не дошёл»»:
+       два тире подряд склеивали пояснение в кашу, и ПОЧЕМУ не определено не говорилось вовсе —
+       причина лежала только в `reconcile-report.json`, которого интерфейс не читает. Гейт был
+       зелёным над обоими дефектами; их видно ровно глазами на снимке. */
+    var why = { goal_page_not_named: bi('модель не назвала целевую страницу','the model named no destination'),
+                goal_page_not_in_map: bi('названной страницы нет в карте','the named page is not in the map'),
+                no_page_trail: bi('у сценария нет ни одного перехода','the scenario has no page trail') }[sc.goal_reached_reason]
+             || bi('сказать нечего','nothing to say');
+    return row('3', null, bi('Достижение цели не определено','Goal achievement undetermined'),
+               why + ' · ' + bi('это не то же, что «не дошёл»','which is not the same as "did not get there"'));
+  }
+
   function completenessBlock(plan){
     var c = plan && plan.completeness; if (!c) return '';
     var stopped=c.stopped_at_step, max=c.max_steps, left=c.frontier_left;
@@ -3114,13 +3168,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var plan; try { plan=JSON.parse(planRaw); } catch(e){ return; }
     var scRaw=await fetchArtifact(base,id,'scenario.json'); var sc=null;
     if (scRaw){ try { sc=JSON.parse(scRaw); } catch(e){} }
-    function row(n, ok, title, detail){
-      var mark=ok===true?'<span style="color:var(--ok)">✓</span>':ok==='warn'?'<span style="color:var(--warn)">⚠</span>':'<span style="color:var(--mut)">•</span>';
-      return '<div style="display:flex;gap:.5rem;align-items:baseline;padding:.15rem 0">'
-        +'<span style="flex:none;color:var(--mut);font-variant-numeric:tabular-nums">'+n+'</span>'
-        +'<span style="flex:none">'+mark+'</span>'
-        +'<span style="min-width:0"><b>'+title+'</b>'+(detail?' <span style="color:var(--mut);font-size:.9em">— '+detail+'</span>':'')+'</span></div>';
-    }
+    var row = phaseRow;
     var seen=plan.interactive_seen, cov=plan.coverage_achieved;
     var steps=Array.isArray(plan.steps)?plan.steps.length:plan.steps;  // plan.json .steps is the array of explore steps
     var covPct=(cov!=null)?Math.round(cov*100)+'%':null;
@@ -3144,6 +3192,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
               (unm!=null?(unm>0?'<span style="color:var(--warn)">'+unm+' unmatched</span>':'0 unmatched'):null) ].filter(Boolean).join(' · ');
       html+=row('2', ok, bi('Составление сценария (LLM)','Scenario authoring (LLM)'), d
         + (g===0?' — <span style="color:var(--warn)">'+bi('LLM не составил ни одного шага','the LLM produced no steps')+'</span>':''));
+      html+=goalBlock(sc, row);
     }
     box.innerHTML='<div style="background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.55rem .8rem;font-size:.9rem">'
       +'<div style="font-size:.78rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem">'+bi('Этапы прогона','Run pipeline')+'</div>'
@@ -6659,7 +6708,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   // a box, where what matters is the WORDING — specifically that a file the server refused to import
   // is NAMED rather than folded into a count. Driving the upload path to assert that would test the
   // file input and the fetch, not the sentence. It holds no state.
-  window.__gate = { perceptionBlock: perceptionBlock, completenessBlock: completenessBlock, renderImportReport: renderImportReport };
+  window.__gate = { perceptionBlock: perceptionBlock, completenessBlock: completenessBlock, renderImportReport: renderImportReport,
+                    /* ADR-152: чистая функция от scenario.json — гейт рисует ЕЮ, а не копией. */
+                    goalBlock: function(sc){ return goalBlock(sc, phaseRow); } };
 
   /* ---- PROD-IMPORT (ADR-105): the UI-upload channel to POST /v1/import ---- */
   (function importPanel(){

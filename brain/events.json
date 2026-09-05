@@ -902,6 +902,49 @@
         "__main__"
       ]
     },
+    "plan.goal_reached": {
+      "lvl": "info",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Цель достигнута: сценарий доходит до страницы {goal_page}",
+      "en": "Goal reached: the scenario gets to {goal_page}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "plan.goal_not_reached": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Цель НЕ достигнута: целевая страница {goal_page}, а сценарий побывал на: {visited}",
+      "en": "Goal NOT reached: the destination is {goal_page}, but the scenario only visited: {visited}",
+      "modules": [
+        "__main__"
+      ],
+      "degrades": true,
+      "ru_verdict": "прогон зелёный, но цели он НЕ достиг: тест не доходит до {goal_page} — он проверяет не то, о чём вы просили",
+      "en_verdict": "the run is green but did NOT reach the goal: the test never gets to {goal_page} — it checks something other than what you asked for"
+    },
+    "plan.goal_unknown": {
+      "lvl": "info",
+      "cat": "plan",
+      "phase": "report",
+      "ru": "Достижение цели не определено ({reason}) — это «сказать нечего», а не «не дошёл»",
+      "en": "Goal achievement undetermined ({reason}) — this means \"nothing to say\", not \"did not get there\"",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "plan.goal_page_empty": {
+      "lvl": "warn",
+      "cat": "plan",
+      "phase": "scenario",
+      "ru": "Целевую страницу у модели спросить не удалось ({reason}) — достижение цели измерено не будет",
+      "en": "Could not ask the model for the destination page ({reason}) — goal achievement will not be measured",
+      "modules": [
+        "planner"
+      ]
+    },
     "plan.budget_exhausted_heuristic": {
       "lvl": "warn",
       "cat": "plan",
