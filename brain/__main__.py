@@ -364,6 +364,19 @@ def _run_explore(ex, run_id, out, target, coverage_target, max_steps) -> int:
         # его не отличил бы от возвращённой рядом единицы.
         return announce(decide(Facts(mode="explore", config_conflict=True)), run_id)
     from .planner import HeuristicPlanner, GoalPlanner, DescribePlanner
+    # ⚠ `--planner goal` НЕ ДЕЛАЕТ НИЧЕГО, И ДО СИХ ПОР МОЛЧАЛ ОБ ЭТОМ. Обе комбинации ведут к
+    # детерминированному обходу: с `--goal` выигрывает ветка ниже и жёстко ставит `HeuristicPlanner`,
+    # а без `--goal` `make_planner` отдаёт `GoalPlanner(goal="")`, чей `propose` первой же строкой
+    # откатывается на эвристику. То есть оператор, попросивший `goal`, получал эвристику и НЕ УЗНАВАЛ
+    # об этом — ровно тот класс «прогон сделал не то, о чём просили, и промолчал», который в этой
+    # волне уже чинили для достижения цели.
+    #
+    # Отвергать комбинацию У ДВЕРИ (как `GOAL`⊕`DESCRIBE` → exit 3) было бы неверно: прогон
+    # ПРАВИЛЬНЫЙ — детерминированный обход и есть то, что предписывает ADR-028. Ошибочно не
+    # поведение, а молчание. Поэтому это ОБЪЯВЛЕНИЕ, а не отказ, и `degrades` у кода нет: ничего не
+    # потеряно, обход именно такой, каким он задуман.
+    if (os.environ.get("PLANNER") or "").strip().lower() == "goal":
+        log("plan.goal_walker_reserved")
     if goal:
         planner, scenario_head = HeuristicPlanner(), GoalPlanner(goal)
     elif describe:
@@ -1436,8 +1449,11 @@ def _run_import(out, import_dir) -> int:
 
 def _run_report(run_dir) -> int:
     """M4: generate report.html + report.json + metrics.prom from a run's heal-report.json."""
-    from .report import generate
-    if not (pathlib.Path(run_dir) / "heal-report.json").exists():
+    from .report import generate, report_path
+    # ⚠ ИМЯ ОТЧЁТА СПРАШИВАЕТСЯ У ТОГО, КТО ЕГО ПИШЕТ, а не пишется здесь во второй раз: baseline
+    # кладёт `baseline-report.json`, и этот страж, знавший одно имя, возвращал на таком прогоне
+    # exit 3 `integrity` — то есть инструмент обвинял ОПЕРАТОРА в собственном расхождении имён.
+    if report_path(run_dir) is None:
         log("fatal.heal_report_missing", dir=run_dir)
         return 3
     generate(run_dir)
@@ -1445,7 +1461,7 @@ def _run_report(run_dir) -> int:
     if gw:
         from .report import push_metrics
         try:
-            rep = json.loads((pathlib.Path(run_dir) / "heal-report.json").read_text())
+            rep = json.loads(pathlib.Path(report_path(run_dir)).read_text())
             push_metrics(rep, gw)
             log("system.metrics_pushed", gateway=gw)
         except Exception as e:

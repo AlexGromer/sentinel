@@ -935,6 +935,16 @@
         "__main__"
       ]
     },
+    "plan.goal_walker_reserved": {
+      "lvl": "info",
+      "cat": "plan",
+      "phase": "plan",
+      "ru": "Запрошен планировщик обхода `goal`, но обход остаётся ДЕТЕРМИНИРОВАННЫМ: пошаговый goal-планировщик сохранён под live/co-pilot и намеренно не подключён (ADR-028). Цель работает на этапе составления сценария по собранной карте",
+      "en": "The `goal` walk planner was requested, but the crawl stays DETERMINISTIC: the per-step goal planner is reserved for live/co-pilot and deliberately not wired (ADR-028). The goal takes effect when the scenario is authored over the collected map",
+      "modules": [
+        "__main__"
+      ]
+    },
     "plan.goal_page_empty": {
       "lvl": "warn",
       "cat": "plan",
