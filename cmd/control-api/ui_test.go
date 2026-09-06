@@ -329,12 +329,31 @@ func TestBootstrapExchangesTheTokenExactlyOnce(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("first exchange = %d, want 200 (%s)", rec.Code, rec.Body.String())
 	}
-	var body map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["token"] != s.token {
-		t.Fatalf("first exchange returned %q, want the bearer token (err=%v)", rec.Body.String(), err)
+	// ⚠ ЭТА ПРОВЕРКА ПОКРАСНЕЛА НА ОСОЗНАННОЙ ПРАВКЕ И ПЕРЕПИСАНА, А НЕ ОБОЙДЕНА (ADR-156).
+	//
+	// Она утверждала `body["token"] == s.token` — то есть ровно то поведение, которое и оказалось
+	// дефектом: первый запуск вручал БРАУЗЕРУ машинный кредентиал, незаскоупленный («видит каждую
+	// строку»), постоянный, общий с CI и неотзываемый поштучно. Обмен теперь отдаёт ОДНОРАЗОВОЕ ПРАВО
+	// завести первого администратора, и утверждение стало СИЛЬНЕЕ прежнего: не «отдаётся то, что
+	// ожидали», а «машинный токен не отдаётся НИКОГДА и ни под каким ключом».
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("first exchange returned %q (err=%v)", rec.Body.String(), err)
+	}
+	grant, _ := body["setup"].(string)
+	if len(grant) != 2*uiNonceBytes {
+		t.Fatalf("setup grant is %q, want %d hex chars", body["setup"], 2*uiNonceBytes)
+	}
+	if grant == s.token {
+		t.Fatal("the setup grant IS the machine token — the whole point of ADR-156 is that it is not")
+	}
+	for k, v := range body {
+		if sv, ok := v.(string); ok && s.token != "" && sv == s.token {
+			t.Errorf("field %q carries the machine token — the browser must never receive it", k)
+		}
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("Cache-Control = %q, want no-store — the token must never be cached", cc)
+		t.Errorf("Cache-Control = %q, want no-store — the grant must never be cached", cc)
 	}
 
 	if rec := get(t, h, "/v1/ui-token?nonce="+nonce); rec.Code != http.StatusForbidden {
