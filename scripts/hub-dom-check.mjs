@@ -246,8 +246,16 @@ try {
     eq(fields, 1, 'more than one token field exists — the second would need pasting again');
     await page.click('.rail a[data-nav="settings"]');
     await page.waitForTimeout(200);
+    // ⚠ УТВЕРЖДЕНИЕ ИНВЕРТИРОВАНО ОСОЗНАННО (ADR-156), а не ослаблено.
+    // Здесь требовалось `val.length > 0` — то есть ровно то поведение, которое и оказалось дефектом:
+    // обмен нонса клал в браузер МАШИННЫЙ токен (незаскоупленный, постоянный, общий с CI). Теперь
+    // обмен отдаёт одноразовое ПРАВО завести первого администратора, оно живёт в памяти вкладки и в
+    // поле кредентиала не попадает. Новое утверждение СИЛЬНЕЕ прежнего: не «поле заполнено», а
+    // «машинный секрет в браузер не попал ВООБЩЕ».
     const val = await page.locator('#capitok').inputValue();
-    ok(val.length > 0, 'the single token field is empty after bootstrap');
+    ok(val.length === 0, `the credential field holds ${val.length} chars after bootstrap — the machine token must never reach the browser`);
+    ok(await page.evaluate(() => window.__gate.hasSetupGrant()),
+      'the page holds no setup grant, so the first-run flow cannot create an administrator');
   });
 
   // ADR-074. The wizard is a separate page and the bootstrap nonce can only ever be redeemed once, so a
@@ -258,8 +266,16 @@ try {
   await check('the wizard is reachable from the app and inherits the token from an open tab', async () => {
     await page.click('.rail a[data-nav="settings"]');
     await page.waitForTimeout(200);
-    const hubTok = await page.locator('#capitok').inputValue();
-    ok(hubTok.length > 0, 'the hub holds no token, so there is nothing to relay');
+    // ⚠ ПРЕМИСА ПЕРЕПИСАНА ВСЛЕД ЗА ADR-156. Она гласила «после бутстрапа у хаба есть токен» — с
+    // тех пор как обмен перестал выдавать машинный секрет, это неверно, и проверка падала не на
+    // реле, а на своём собственном допущении. Само реле при этом кредентиал-агностично: оно несёт
+    // ТО, ЧТО ЛЕЖИТ В ПОЛЕ, будь то машинный токен или сессия после входа. Здесь кредентиал кладётся
+    // явно — так же, как его кладёт оператор или вход, — и проверяется ровно свойство реле.
+    const hubTok = fs.readFileSync(path.join(REPO, 'state', 'control-api.token'), 'utf8').trim();
+    ok(hubTok.length > 0, 'the deployment has no machine token to relay');
+    // Кредентиал кладётся В ПОЛЕ и только: реле читает поле, а не состояние подключения, и лишний
+    // клик по «Проверить» тянул бы за собой запросы, к свойству реле отношения не имеющие.
+    await page.fill('#capitok', hubTok);
     ok(await page.locator('#connect a[href="./setup/"]:visible').count() === 1,
       'exactly one visible link to the wizard must sit beside the token it needs');
 

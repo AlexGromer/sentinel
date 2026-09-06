@@ -140,7 +140,7 @@ func (s *server) routes() []routeSpec {
 		// LIVE-VNC (ADR-127). `open` at the guard and authenticated INSIDE the handler, deliberately: a
 		// browser WebSocket cannot send an Authorization header, and the guard's check reads only that
 		// header (session.go::bearerOf). The credential rides in Sec-WebSocket-Protocol as
-		// `bearer.<token>` and is compared constant-time by wsAuthed — the same arrangement /v1/stream
+		// `bearer.<token or session>` and is resolved by wsCaller — the same arrangement /v1/stream
 		// has, stated here rather than inherited from `legacyOpen`, whose real meaning is "no accounts
 		// exist yet" and which therefore stops relaxing the moment identity is switched on.
 		{pattern: "GET /v1/live/screen", access: accessOpen, h: s.handleLiveScreen,
@@ -173,7 +173,19 @@ func (s *server) routes() []routeSpec {
 		// for the guard to resolve); the guard supplies the credential requirement it never had.
 		{pattern: "GET /v1/runs", access: accessAuthed, legacyOpen: true, h: s.handleListRuns},
 		{pattern: "GET /v1/runs/{id}", access: accessAuthed, legacyOpen: true, domain: domainRun, h: s.handleGetRun},
-		{pattern: "GET /v1/stream", access: accessAuthed, legacyOpen: true, h: s.handleStream},
+		// ⚠ `open` У СТРАЖА, КАК И У /v1/live/screen ВЫШЕ, И ЭТО ИСПРАВЛЕНИЕ, А НЕ ОСЛАБЛЕНИЕ.
+		// Здесь стояло `accessAuthed + legacyOpen`, а комментарий у соседа утверждал, что у обоих
+		// маршрутов «the same arrangement» — ЛОЖНОЕ ЗАЯВЛЕНИЕ: схемы были разные. Следствие замерено
+		// живьём 2026-09-06 на работающем развёртывании: как только заводится ПЕРВЫЙ аккаунт,
+		// `legacyOpen` перестаёт послаблять, страж требует заголовок Authorization — которого браузерный
+		// WebSocket выставить не может в принципе, — и отвечает 403 ДО обработчика, ДАЖЕ держателю
+		// машинного токена. Замер: тот же handshake с заголовком → 101, только подпротоколом → 403.
+		// Кредентиал проверяет обработчик (`wsCaller`) и он же скоупит по владельцу прогона
+		// (`wsMayStream`), поэтому дверь у стража открыта РОВНО в том же смысле, что у соседа.
+		{pattern: "GET /v1/stream", access: accessOpen, h: s.handleStream,
+			why: "the bearer travels in the WebSocket subprotocol, not in a header the guard can read; " +
+				"the handler resolves it with wsCaller and refuses with 403 before hijacking, then scopes " +
+				"the run to its owner with wsMayStream"},
 		{pattern: "GET /v1/runs/{id}/events", access: accessAuthed, domain: domainRun, h: s.handleRunEvents},
 		{pattern: "GET /v1/runs/{id}/logs", access: accessAuthed, domain: domainRun, h: s.handleRunLogs},
 		// HEALTH-005 PR-B. `authed` and NOT `admin`: an account must be able to read the record of its
@@ -220,11 +232,28 @@ func (s *server) guard(sp routeSpec) http.HandlerFunc {
 		if sp.legacyOpen && !s.accountsExist() {
 			needsCredential = false
 		}
+		// ADR-156: ПРАВО ПЕРВИЧНОЙ НАСТРОЙКИ — третий способ удовлетворить `accessAdmin`, и ровно на
+		// одном маршруте.
+		//
+		// Оно существует, чтобы первый запуск НЕ отдавал браузеру машинный токен. Границы выписаны
+		// здесь, а не в обработчике, потому что это вопрос ДОСТУПА, а решать его в двух местах — та
+		// самая болезнь, от которой лечит таблица маршрутов:
+		//   · только `POST /v1/users` — завести администратора и ничего больше;
+		//   · только пока аккаунтов НЕТ, поэтому окно закрывается первым же созданным аккаунтом;
+		//   · только same-origin, как и сам обмен нонса: право живёт в памяти вкладки, и запрос с
+		//     чужого сайта не имеет к нему отношения.
+		// ⚠ Право НЕ заменяет кредентиал нигде больше: `setupGranted` не влияет ни на `authed`, ни на
+		// `callerOf`, поэтому обладатель права не становится ни машиной, ни пользователем.
+		setupGranted := sp.pattern == "POST /v1/users" && !s.accountsExist() &&
+			sameOriginRequest(r) && s.ui.checkGrant(r.Header.Get(setupGrantHeader))
+		if setupGranted {
+			needsCredential = false
+		}
 		if needsCredential && !s.authed(r) {
 			s.denyCredential(w)
 			return
 		}
-		if sp.access == accessAdmin {
+		if sp.access == accessAdmin && !setupGranted {
 			c, _ := s.callerOf(r)
 			if !c.machine && !c.admin {
 				writeJSON(w, http.StatusForbidden, map[string]string{

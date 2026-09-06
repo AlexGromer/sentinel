@@ -29,7 +29,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha1"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -76,20 +75,50 @@ func wsAccept(key string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-// wsAuthed validates the bearer token carried in the Sec-WebSocket-Protocol list (constant-time).
 // Fail-closed: no configured token → never authed (mirrors s.authed).
-func (s *server) wsAuthed(r *http.Request) bool {
-	if s.token == "" {
-		return false
-	}
+// wsCredOf pulls the credential out of the WebSocket handshake. A browser CANNOT set an
+// Authorization header on a WebSocket — the API has no header parameter at all — which is the entire
+// reason the credential rides in `Sec-WebSocket-Protocol: bearer.<cred>`.
+func wsCredOf(r *http.Request) string {
 	for _, proto := range strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
-		proto = strings.TrimSpace(proto)
-		if tok, ok := strings.CutPrefix(proto, wsTokenProto); ok {
-			if subtle.ConstantTimeCompare([]byte(tok), []byte(s.token)) == 1 {
-				return true
-			}
+		if tok, ok := strings.CutPrefix(strings.TrimSpace(proto), wsTokenProto); ok {
+			return tok
 		}
 	}
+	return ""
+}
+
+// wsCaller answers WHO is on the other end of a WebSocket handshake, by the same rule the HTTP path
+// uses (session.go: resolveCred) rather than a second copy of it.
+//
+// ⚠ THIS FUNCTION USED TO COMPARE AGAINST THE MACHINE TOKEN AND NOTHING ELSE, and the consequence was
+// measured live 2026-09-06 against a running deployment: a SESSION got 403 on both /v1/stream and
+// /v1/live/screen, so signing in cost the page its live view. The fix is not "also check sessions
+// here" — that would be a third copy — it is to ask the one resolver.
+func (s *server) wsCaller(r *http.Request) (caller, bool) {
+	return s.resolveCred(wsCredOf(r))
+}
+
+// wsMayStream scopes a WebSocket to the caller's own run, and it is NOT optional politeness: accepting
+// sessions without it would have turned an outage into a LEAK — any signed-in person could have
+// streamed anyone's run.
+//
+// ⚠ `mayTouch` cannot be reused: it reads the row id from r.PathValue("id"), and these two routes take
+// the run in the QUERY string. Measured — declaring a domain on them in the route table would have
+// scoped nothing at all, silently.
+//
+// Empty run id means "not about one run" (the live screen of whatever is open) and stays unscoped, as
+// it is today; a machine caller and an account-less deployment stay unscoped for the same reason
+// mayTouch lets them through.
+func (s *server) wsMayStream(w http.ResponseWriter, c caller, runID string) bool {
+	if c.machine || c.owner() == "" || runID == "" {
+		return true
+	}
+	owner, found := s.ownerOfRow(domainRun, runID)
+	if !found || owner == "" || owner == c.owner() {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "not your run"})
 	return false
 }
 
@@ -207,8 +236,12 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad handshake (need Sec-WebSocket-Key + Version 13)"})
 		return
 	}
-	if !s.wsAuthed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer subprotocol (Sec-WebSocket-Protocol: bearer.<token>)"})
+	c, credOK := s.wsCaller(r)
+	if !credOK {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer subprotocol (Sec-WebSocket-Protocol: bearer.<token or session>)"})
+		return
+	}
+	if !s.wsMayStream(w, c, r.URL.Query().Get("run_id")) {
 		return
 	}
 	// CSWSH defense (R3-hardening, M13): reject a cross-origin handshake unless the origin is explicitly

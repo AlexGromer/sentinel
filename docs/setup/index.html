@@ -132,6 +132,22 @@ details a{color:var(--acc2)}
 </div></header>
 
 <main class="wrap">
+  <!-- ADR-156: ПЕРВЫЙ ЗАПУСК. Раньше бутстрап клал сюда МАШИННЫЙ токен, и мастер работал «сам собой»;
+       теперь обмен отдаёт одноразовое право завести администратора, а кредентиал появляется только
+       после входа. Блок скрыт всегда, кроме единственного случая — право на руках, то есть в этом
+       развёртывании ещё нет ни одного аккаунта. -->
+  <div id="firstadmin" hidden style="margin-top:.6rem;padding:.6rem;border:1px solid var(--line,#333);border-radius:8px">
+    <p class="mut" style="margin-top:0">
+      <span data-lang="ru"><b>Первый запуск.</b> В этом развёртывании ещё нет ни одного аккаунта. Заведите администратора — дальше вход по логину, а машинный токен останется машинам (CI, agentctl).</span>
+      <span data-lang="en"><b>First run.</b> This deployment has no accounts yet. Create an administrator — from here it is login, and the machine token stays with machines (CI, agentctl).</span>
+    </p>
+    <div class="grid">
+      <div><label for="fa-name"><span data-lang="ru">Имя администратора</span><span data-lang="en">Administrator name</span></label><input id="fa-name" autocomplete="off" placeholder="admin"></div>
+      <div><label for="fa-pass"><span data-lang="ru">Пароль</span><span data-lang="en">Password</span></label><input id="fa-pass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="row" style="margin-top:.5rem"><button id="fa-create"><span data-lang="ru">Завести и войти</span><span data-lang="en">Create and sign in</span></button><span id="fa-status" class="mut"></span></div>
+  </div>
+
 
 <p class="sub">
   <span data-lang="ru">Пошаговый мастер: собирает валидный <code>RunConfig YAML</code> + env-блок + команду запуска.
@@ -1692,6 +1708,59 @@ document.querySelectorAll('.dl').forEach(function (b) {
      the full rationale. Fails silently on Pages / file:// / a Mode-2 split deploy. #capi carries
      data-draft (a restored draft wins); #capitok deliberately does not, so the token stays in
      tab memory only. */
+  /* ADR-156: одноразовое право первичной настройки. Живёт только в памяти вкладки. */
+  var setupGrant = '';
+
+  /* Завести первого администратора и сразу войти им. ⚠ Два шага, а не один: право умеет только
+     СОЗДАТЬ аккаунт (`POST /v1/users`), кредентиалом оно не является и запросы им не подписать.
+     Вход отдаёт СЕССИЮ, и вот она уже ложится в поле — то же поле, откуда её берут все остальные
+     запросы страницы, чтобы кредентиал в интерфейсе был ровно один. */
+  (function firstAdmin(){
+    var btn = document.getElementById('fa-create');
+    if (!btn) return;
+    btn.addEventListener('click', async function(){
+      var st = document.getElementById('fa-status');
+      /* ⚠ ПЕРВИЧНАЯ НАСТРОЙКА ИДЁТ ТОЛЬКО В СВОЙ ORIGIN, и это НЕ предпочтение, а единственный
+         адрес, по которому запрос может сработать: право первичной настройки признаётся сервером
+         лишь при `sameOriginRequest(r)` (`access.go:247-248`). То есть любой другой адрес
+         назначения не «менее удобен», он НЕВОЗМОЖЕН — и остаётся только утечкой.
+
+         Здесь стояло `$('capi').value`. Поле несёт `data-draft` (:335) и восстанавливается из
+         черновика, а бутстрап подставляет свой origin ТОЛЬКО в пустое поле (:1757) — значит
+         восстановленный черновик ПОБЕЖДАЛ. Замерено живьём: с черновиком, указывающим на чужой
+         хост, туда уходил `POST /v1/users` с заголовком `X-Setup-Grant` И телом
+         `{"name":…,"password":…}`, следом `POST /v1/login` с тем же паролем ещё раз. То есть
+         пароль администратора и право уезжали на адрес, выбранный прошлой сессией. */
+      var base = location.origin.replace(/\/+$/, '');
+      var name = (document.getElementById('fa-name').value || '').trim();
+      var pass = document.getElementById('fa-pass').value || '';
+      if (!setupGrant) { st.textContent = tr('нет права первичной настройки', 'no setup grant'); return; }
+      if (!name || !pass) { st.textContent = tr('нужны имя и пароль', 'name and password required'); return; }
+      st.textContent = '\u2026';
+      try {
+        var r = await fetch(base + '/v1/users', { method: 'POST', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'X-Setup-Grant': setupGrant },
+          body: JSON.stringify({ name: name, password: pass }) });
+        var j = await r.json().catch(function(){ return {}; });
+        if (!r.ok) { st.textContent = (j && j.error) || ('HTTP ' + r.status); return; }
+        var lg = await fetch(base + '/v1/login', { method: 'POST', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, password: pass }) });
+        var lj = await lg.json().catch(function(){ return {}; });
+        if (!lg.ok || !lj.session) {
+          st.textContent = tr('администратор заведён, но вход не удался',
+                              'the administrator was created, but signing in failed');
+          return;
+        }
+        setupGrant = '';
+        $('capitok').value = lj.session;
+        document.getElementById('firstadmin').hidden = true;
+        st.textContent = '';
+        checkCapi();
+      } catch (e) { st.textContent = String(e && e.message || e); }
+    });
+  })();
+
   (async function adr064Bootstrap() {
     try {
       if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
@@ -1704,8 +1773,10 @@ document.querySelectorAll('.dl').forEach(function (b) {
       var m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
       if (m) {
         try {
+          /* ADR-156: приходит ПРАВО первичной настройки, не машинный токен. В поле кредентиала оно
+             не кладётся: это не кредентиал личности, им нельзя ни войти, ни что-либо прочитать. */
           var t = await fetch(origin + '/v1/ui-token?nonce=' + m[1], { cache: 'no-store' });
-          if (t.ok) { var b = await t.json(); if (b && b.token) $('capitok').value = b.token; }
+          if (t.ok) { var b = await t.json(); if (b && b.setup) { setupGrant = b.setup; $('firstadmin').hidden = false; } }
         } finally {
           history.replaceState({}, '', location.pathname + location.hash);
         }

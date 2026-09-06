@@ -142,7 +142,22 @@ func bearerOf(r *http.Request) string {
 // callerOf identifies the requester, or reports false when the credential is neither the machine token
 // nor a live session.
 func (s *server) callerOf(r *http.Request) (caller, bool) {
-	tok := bearerOf(r)
+	return s.resolveCred(bearerOf(r))
+}
+
+// resolveCred maps a RAW credential to a caller. It is the ONE author of "who is this", and it exists
+// because there used to be two.
+//
+// ⚠ THE SECOND ONE WAS `wsAuthed`, AND IT KNEW ONLY THE MACHINE TOKEN. Measured live 2026-09-06 on a
+// running deployment: after POST /v1/login the hub puts the SESSION into the very field it signs
+// requests with (docs/index.html:2308), and both WebSocket call sites send that field as the
+// `bearer.<cred>` subprotocol — so signing in returned 403 on the live screen AND the live timeline.
+// Logging in LOWERED what the page could do. A second resolver did not drift from this one over time;
+// it answered a different question from the day it was written.
+//
+// The credential now arrives from two places — the Authorization header (callerOf) and the WebSocket
+// subprotocol (wsCaller) — and the RULE lives here once.
+func (s *server) resolveCred(tok string) (caller, bool) {
 	if tok == "" {
 		return caller{}, false
 	}
@@ -308,7 +323,16 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not hash the password"})
 		return
 	}
-	u := &storepb.User{UserId: newRunID(), Name: name, PwHash: hash, IsAdmin: req.IsAdmin}
+	// ADR-156: аккаунт, заводимый ПРАВОМ ПЕРВИЧНОЙ НАСТРОЙКИ, — всегда администратор.
+	//
+	// ⚠ Не «по умолчанию», а ПРИНУДИТЕЛЬНО, и это единственное место, где право вообще влияет на
+	// содержание запроса. Иначе первый запуск мог бы завести обычного пользователя, окно настройки
+	// закрылось бы (аккаунт появился), и развёртывание осталось бы БЕЗ администратора — то есть без
+	// возможности завести второго иначе как машинным токеном. Ровно тот тупик, ради ухода от
+	// которого право и заводилось.
+	bySetup := s.ui.checkGrant(r.Header.Get(setupGrantHeader))
+	isAdmin := req.IsAdmin || bySetup
+	u := &storepb.User{UserId: newRunID(), Name: name, PwHash: hash, IsAdmin: isAdmin}
 	if !s.store.upsertUser(u) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the store did not accept the account"})
 		return
@@ -318,6 +342,13 @@ func (s *server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// very next request rather than up to accountsMemoTTL later — a window in which a just-created
 	// account's rows would still be readable by an anonymous caller.
 	s.forgetAccounts()
+	// ⚠ Право гасится ЗДЕСЬ, а не при проверке: одного администратора заводят одним запросом, но
+	// запрос может не долететь, и сжигать право до успеха значило бы требовать перезапуск сервера
+	// из-за оборвавшейся сети. Окно закрывается и само — `accountsExist()` теперь истинно, — но
+	// оставлять годное право в памяти после того, как оно сделало свою работу, незачем.
+	if bySetup {
+		s.ui.burnGrant()
+	}
 	creator, _ := s.actorOf(r)
 	s.journalSubject("service.account_created", "info", map[string]string{
 		"actor": creator, "account": u.Name, "admin": strconv.FormatBool(u.IsAdmin),

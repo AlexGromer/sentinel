@@ -1266,8 +1266,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
     <!-- ---- Live AG-UI timeline (M14 W2/§2): WS /v1/stream?run_id=, hitl_needed + takeover/return ---- -->
     <div class="subpanel" data-subpanel="live" data-view="live">
       <p class="sub">
-        <span data-lang="ru">Живой таймлайн событий прогона (WS <code>/v1/stream?run_id=</code>). Запусти прогон во вкладке «Авторинг» (run_id подставится сюда автоматически) или впиши его вручную.</span>
-        <span data-lang="en">Live per-run event timeline (WS <code>/v1/stream?run_id=</code>). Launch a run in the "Author" tab (its run_id is auto-filled here) or enter one manually.</span>
+        <span data-lang="ru">Живой таймлайн событий прогона (WS <code>/v1/stream?run_id=</code>). Запусти прогон в разделе «Новый прогон» (run_id подставится сюда автоматически) или впиши его вручную.</span>
+        <span data-lang="en">Live per-run event timeline (WS <code>/v1/stream?run_id=</code>). Launch a run in the "New run" view (its run_id is auto-filled here) or enter one manually.</span>
       </p>
       <div class="ctl-row">
         <input id="live-runid" type="text" placeholder="run_id" style="max-width:14rem">
@@ -1642,6 +1642,9 @@ function runsFmt(r){ return r === Infinity ? '∞' : grp(r); }
 function minutesOf(tokens, tps){ if (!tps) return null; return Math.round(tokens / tps / 60); }
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 function bi(ru, en){ return '<span data-lang="ru">' + ru + '</span><span data-lang="en">' + en + '</span>'; }
+/* ADR-156: одноразовое право первичной настройки. Живёт ТОЛЬКО в памяти вкладки и только до
+   создания первого администратора; в поле кредентиала не кладётся никогда. */
+var setupGrant = '';
 /* ADR-152: имя страницы из её адреса — адреса прогонов по `file://` длиной в полпути к репозиторию,
    и целиком они делают строку нечитаемой. Сокращается ТОЛЬКО показ: полное значение лежит в
    `scenario.json`, который тут же рядом отдаётся артефактом. Пустой хвост (адрес кончается слэшем)
@@ -5239,8 +5242,16 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var m = /[?&]bootstrap=([0-9a-fA-F]+)/.exec(location.search);
       if (m) {
         try {
+          /* ADR-156: обмен отдаёт ПРАВО ПЕРВИЧНОЙ НАСТРОЙКИ, а не машинный токен.
+             ⚠ Здесь стояло `b.token` → поле кредентиала. То есть первый запуск клал в браузер
+             машинный секрет: незаскоуплённый, постоянный, общий с CI. Теперь приходит одноразовое
+             право завести ПЕРВОГО администратора, оно живёт в памяти вкладки и в поле кредентиала
+             НЕ попадает — иначе страница подписывала бы им обычные запросы, а он не кредентиал
+             личности и ими подписываться не должен.
+             При существующих аккаунтах обмен отвечает 409 и говорит войти — это не ошибка
+             первого запуска, а нормальный ответ второму. */
           var t = await fetch(origin + '/v1/ui-token?nonce=' + m[1], {cache:'no-store'});
-          if (t.ok) { var b = await t.json(); if (b && b.token) ge('capitok').value = b.token; }
+          if (t.ok) { var b = await t.json(); if (b && b.setup) setupGrant = b.setup; }
         } finally {
           history.replaceState({}, '', location.pathname + location.hash);
         }
@@ -6710,7 +6721,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   // file input and the fetch, not the sentence. It holds no state.
   window.__gate = { perceptionBlock: perceptionBlock, completenessBlock: completenessBlock, renderImportReport: renderImportReport,
                     /* ADR-152: чистая функция от scenario.json — гейт рисует ЕЮ, а не копией. */
-                    goalBlock: function(sc){ return goalBlock(sc, phaseRow); } };
+                    goalBlock: function(sc){ return goalBlock(sc, phaseRow); },
+                    /* ADR-156: гейту нужен ФАКТ «право получено», а не само право. Значение наружу
+                       не отдаётся: это одноразовый кредентиал, и выставлять его на window означало бы
+                       завести второй канал его распространения ради удобства проверки. */
+                    hasSetupGrant: function(){ return typeof setupGrant === 'string' && setupGrant.length > 0; } };
 
   /* ---- PROD-IMPORT (ADR-105): the UI-upload channel to POST /v1/import ---- */
   (function importPanel(){

@@ -123,7 +123,13 @@ async function startControlAPI(port, corsOrigin, storeAddr, cwd) {
 // allowlist. It must generate its own token and print a one-time bootstrap nonce — which is the only
 // place that nonce ever appears, so we scrape it from stderr exactly like an operator reads their log.
 // cwd is the temp dir on purpose: state/control-api.token must not land in the repo during CI.
-async function startModeThreeAPI(port, cwd) {
+//
+// storeAddr picks the TIER, and the two tiers are genuinely different products of the same binary:
+// '' is the standalone tier (configfile.go:13 — "the operator chose the standalone tier and the file
+// IS the config"), where local accounts are impossible because session.go:313 answers 503 without a
+// store. Anything else is the account-bearing tier. Both are shipped, so both are measured — see the
+// pair of mode-3 checks below.
+async function startModeThreeAPI(port, cwd, storeAddr = '') {
   const proc = spawn(path.join(REPO, 'bin', 'control-api'), [], {
     cwd,
     env: { ...process.env,
@@ -131,7 +137,7 @@ async function startModeThreeAPI(port, cwd) {
            CONTROL_API_TOKEN: '', CONTROL_API_AUTOTOKEN: '', CONTROL_API_TOKEN_FILE: '',
            CONTROL_API_CORS_ORIGINS: '',   // mode 3 is same-origin — no allowlist needed at all
            CONTROL_API_SERVE_UI: '1', CONTROL_API_UI_DIR: '',
-           CONTROL_API_STORE_ADDR: '', LLM_BASE_URL: '' },
+           CONTROL_API_STORE_ADDR: storeAddr, LLM_BASE_URL: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -215,6 +221,10 @@ async function launchBrowser() {
 // chromium.launch() skipped the only capi.kill() in the script, orphaning a live process on a live port.
 let staticSrv = null, capi = null, store = null, browser = null, tmp = null, base = '', capiURL = '';
 let capi3 = null;
+// Второй стенд режима 3 — ярус С хранилищем (проверка 9b). Объявлен здесь, а не внутри проверки, по
+// той же причине, что и всё остальное в этом списке: упавшая проверка обязана быть прибрана в
+// `finally`, иначе гейт оставляет живой процесс на живом порту.
+let capi3b = null, store3b = null, tmp3b = null;
 try {
   staticSrv = await startStatic();
   base = `http://127.0.0.1:${staticSrv.port}`;
@@ -706,10 +716,24 @@ try {
     }
   });
 
-  /* 9 — ADR-064 mode 3: one process, one port, same-origin, self-bootstrapping token */
-  await check('mode 3: control-api serves the UI, auto-generates its token, bootstraps it once', async () => {
+  /* 9a — ADR-064 mode 3 on the STANDALONE tier (no store-gateway), ADR-156 exchange.
+   *
+   * ⚠ ЭТА ПРОВЕРКА БЫЛА ОДНОЙ И ТРЕБОВАЛА НЕВОЗМОЖНОГО. Она поднимала стенд БЕЗ хранилища
+   * (`CONTROL_API_STORE_ADDR: ''`) и ждала, что на нём завершится заведение администратора — а
+   * `session.go:313` на таком стенде отвечает 503 `local accounts need a store-gateway`, и это НЕ
+   * дефект, а объявленное свойство яруса. Тот же довод записан в самом ADR-156 (право безопасно
+   * выдавать там, где аккаунт завести негде, ИМЕННО потому что создание ответит 503) — то есть
+   * проверка противоречила тексту, который её же правка и написала. Замер: обмен→200 с `setup`,
+   * `POST /v1/users`→503, поле кредентиала пусто, `#fa-status` называет причину; гейт при этом
+   * падал по таймауту ожидания поля, ВЫБРАСЫВАЯ сообщение, которым страница объясняет отказ.
+   *
+   * Поэтому проверок теперь ДВЕ, по одной на ярус, и утверждают они разное. Здесь — что ярус без
+   * хранилища НЕ МОЛЧИТ: право выдано, машинный секрет в браузер не попал, а человеку НАЗВАНА
+   * причина, по которой дальше хода нет. Молчаливый отказ и есть тот дефект, ради которого
+   * заводился [UI-FIRST-RUN-BOOTSTRAP-DEAD-END]. */
+  await check('mode 3, standalone tier: the grant is issued, no machine token reaches the browser, and the page NAMES why it can go no further', async () => {
     const port3 = await freePort();
-    capi3 = await startModeThreeAPI(port3, tmp);
+    capi3 = await startModeThreeAPI(port3, tmp);      // storeAddr omitted — standalone on purpose
     const ui = `http://127.0.0.1:${port3}`;
 
     // The pages come from the binary's embedded FS, not from the static server used above.
@@ -722,33 +746,176 @@ try {
     page.on('pageerror', (e) => pageErrors.push(e.message));
     await page.goto(`${ui}/setup/?bootstrap=${capi3.nonce}`, { waitUntil: 'load' });
     await settled(page);
-    await page.waitForFunction(() => document.getElementById('capitok').value.length > 0, null, { timeout: 10000 });
 
-    const tok = await page.inputValue('#capitok');
-    ok(/^[0-9a-f]{64}$/.test(tok), `bootstrapped token has the wrong shape: ${tok}`);
+    // ⚠ ПРОВЕРКА ПЕРЕПИСАНА ПОД ADR-156, А НЕ ОСЛАБЛЕНА. Она ждала, что бутстрап ЗАПОЛНИТ поле
+    // кредентиала — то есть ровно то поведение, которое и оказалось дефектом: обмен вручал странице
+    // МАШИННЫЙ токен (незаскоупленный, постоянный, общий с CI). Теперь обмен отдаёт одноразовое
+    // право завести первого администратора; поле обязано остаться ПУСТЫМ, а мастер — предложить
+    // создание администратора. Утверждение стало сильнее: не «поле заполнено ожидаемым», а
+    // «машинный секрет в браузер не попал вообще».
+    await page.waitForSelector('#firstadmin:not([hidden])', { timeout: 10000 });
+    eq(await page.inputValue('#capitok'), '', 'the machine token must never reach the browser');
     eq(await page.inputValue('#capi'), ui, 'control-API URL prefilled with the serving origin');
     ok(!page.url().includes('bootstrap='), `the nonce was left in the URL: ${page.url()}`);
 
-    // Same invariant as check 5, now for a token the page was GIVEN rather than typed.
-    const blob = await page.evaluate(() => JSON.stringify(localStorage));
-    ok(!blob.includes(tok), `the bootstrapped token leaked into localStorage: ${blob}`);
+    // Попытка довести первый запуск до конца ЗДЕСЬ ОБЯЗАНА УПЕРЕТЬСЯ — и упереться ВСЛУХ.
+    // Утверждается не «кнопка не сработала», а три разных свойства отказа: причина НАЗВАНА и
+    // называет виновника (store-gateway), кредентиал так и не появился, форма осталась на экране.
+    // Проверка «поле пусто» сама по себе прошла бы и над страницей, которая молча ничего не делает.
+    await page.fill('#fa-name', 'wizadmin');
+    await page.fill('#fa-pass', 'a-long-enough-passphrase');
+    await page.click('#fa-create');
+    // ⚠ Ждать «непустой статус» НЕЛЬЗЯ: обработчик СНАЧАЛА ставит многоточие «…» как признак работы
+    // (docs/setup/index.html, firstAdmin), и такое ожидание выигрывает гонку у самого ответа —
+    // проверка читала бы «…» и падала с ним же в сообщении. Ждём статус, ОТЛИЧНЫЙ от многоточия.
+    await page.waitForFunction(() => {
+      const t = (document.getElementById('fa-status').textContent || '').trim();
+      return t.length > 0 && t !== '…';
+    }, null, { timeout: 15000 });
+    const status = (await page.textContent('#fa-status')).trim();
+    ok(/store-gateway/.test(status),
+      `the page must NAME the component whose absence blocks the first run, got: ${JSON.stringify(status)}`);
+    eq(await page.inputValue('#capitok'), '', 'a credential appeared on a tier that cannot have accounts');
+    ok(await page.locator('#firstadmin').isVisible(),
+      'the first-run block hid itself even though no administrator was created');
 
     // Single-use: replaying the nonce an operator may still have in their scrollback buys nothing.
+    // 403 and not 409 — this deployment still has no accounts, so it is the NONCE that is spent.
+    // The 409 branch belongs to the account-bearing tier and is asserted in the next check.
     eq((await fetch(`${ui}/v1/ui-token?nonce=${capi3.nonce}`)).status, 403, 'replayed nonce');
+    await ctx.close();
+  });
+
+  /* 9b — the SAME binary and the SAME first run, on the tier that HAS a store-gateway: this is the
+   * default deployment (docker-compose.yml:207 sets CONTROL_API_STORE_ADDR), so it is the path an
+   * operator actually walks. Here the first run must COMPLETE — grant → administrator → session —
+   * and the machine token must still never reach the browser. Measured live before it was written:
+   * exchange → 200 with `setup`, POST /v1/users → 201 `is_admin:true`, login → 64-hex session with
+   * expires_in_seconds 43200, replayed nonce → 409 (not 403: once an account exists the deployment
+   * state is checked BEFORE the nonce, so the answer names signing in instead of the spent nonce). */
+  await check('mode 3, account tier: the first run completes — grant becomes an administrator, then a session, and never the machine token', async () => {
+    const port3b = await freePort();
+    tmp3b = await mkdtemp(path.join(tmpdir(), 'sentinel-domgate-tier2-'));
+    store3b = await startStoreGateway(tmp3b);
+    capi3b = await startModeThreeAPI(port3b, tmp3b, store3b.addr);
+    const ui = `http://127.0.0.1:${port3b}`;
+
+    // ⚠ ВЕСЬ ПЕРВЫЙ ЗАПУСК ГОНЯЕТСЯ ПОД ВРАЖДЕБНЫМ ЧЕРНОВИКОМ, и это не украшение проверки.
+    // Замерено на этом самом гейте: обработчик слал первичную настройку по адресу из поля `#capi`,
+    // которое несёт `data-draft` и восстанавливается из прошлой сессии, а бутстрап подставляет свой
+    // origin ТОЛЬКО в пустое поле — то есть черновик побеждал. С черновиком на чужой хост туда
+    // уходили `X-Setup-Grant` и `{"name":…,"password":…}`, а следом тот же пароль ещё раз в
+    // `POST /v1/login`. Право признаётся сервером лишь при `sameOriginRequest` (`access.go:247`),
+    // поэтому чужой адрес не может СРАБОТАТЬ — он может только утечь.
+    //
+    // Ловушка слушает по-настоящему: утверждать «поле равно origin» было бы утверждением о ФОРМЕ
+    // страницы, а не о том, куда ушёл запрос. Здесь наблюдается сам адресат.
+    const trapped = [];
+    const trap = createServer((req, res) => {
+      let b = ''; req.on('data', (c) => { b += c; });
+      req.on('end', () => {
+        trapped.push({ method: req.method, url: req.url, grant: req.headers['x-setup-grant'] || null, body: b });
+        res.writeHead(200, { 'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' });
+        res.end('{"user_id":"trap","name":"trap","is_admin":true,"session":"trap"}');
+      });
+    });
+    await new Promise((r) => trap.listen(0, '127.0.0.1', r));
+    const trapURL = `http://127.0.0.1:${trap.address().port}`;
+
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    try {
+      await page.goto(`${ui}/setup/`, { waitUntil: 'load' });
+      await page.evaluate((u) => localStorage.setItem('sentinel_setup_draft', JSON.stringify({ capi: u })), trapURL);
+      await page.goto(`${ui}/setup/?bootstrap=${capi3b.nonce}`, { waitUntil: 'load' });
+      await settled(page);
+      eq(await page.inputValue('#capi'), trapURL, 'the hostile draft did not survive — the trap would measure nothing');
+
+    await page.waitForSelector('#firstadmin:not([hidden])', { timeout: 10000 });
+    eq(await page.inputValue('#capitok'), '', 'the machine token must never reach the browser');
+    // Утверждения «#capi равен origin» здесь НЕТ намеренно: черновик победил, и именно это условие
+    // проверка и создаёт. Прежнее поведение поля живёт в проверке 9a, где черновика нет.
+    ok(!page.url().includes('bootstrap='), `the nonce was left in the URL: ${page.url()}`);
+
+    await page.fill('#fa-name', 'wizadmin');
+    await page.fill('#fa-pass', 'a-long-enough-passphrase');
+    await page.click('#fa-create');
+    await page.waitForFunction(() => document.getElementById('capitok').value.length > 0, null, { timeout: 15000 });
+
+    // ⚠ ЛОВУШКА СПРАШИВАЕТСЯ ПЕРВОЙ, И ПОРЯДОК ЗДЕСЬ — ЧАСТЬ ПРОВЕРКИ. Утечка проявляется и ниже
+    // (в поле оказывается поддельная сессия чужого хоста, и утверждение о ФОРМЕ краснеет), но
+    // сообщение получилось бы «the session has the wrong shape: trap» — то есть про форму строки,
+    // а не про то, что пароль администратора уехал на чужой адрес. Замерено мутацией: именно так
+    // гейт и падал, пока эти три строки стояли в конце. Диагноз обязан называть дефект.
+    const leaked = trapped.filter((t) => /\/v1\/(users|login)/.test(t.url));
+    eq(leaked.length, 0, `first-run credentials went to the address from the draft: ${JSON.stringify(leaked)}`);
+    ok(!trapped.some((t) => t.grant), `the setup grant was sent off-origin: ${JSON.stringify(trapped)}`);
+    ok(!trapped.some((t) => /a-long-enough-passphrase/.test(t.body || '')),
+      `the administrator password was sent off-origin: ${JSON.stringify(trapped)}`);
+
+    const tok = await page.inputValue('#capitok');
+    ok(/^[0-9a-f]{64}$/.test(tok), `the session has the wrong shape: ${tok}`);
+    // Читаем машинный токен со стенда: утверждение «это НЕ он» стоит ровно столько, сколько стоит
+    // сравнение с настоящим значением, а не с догадкой о его форме (обе строки — 64 hex-символа).
+    const machineTok = fs.readFileSync(path.join(tmp3b, 'state', 'control-api.token'), 'utf8').trim();
+    ok(tok !== machineTok, 'the field holds the MACHINE token, not a session');
+    ok(await page.locator('#firstadmin').isHidden(), 'the first-run block stayed visible after the admin was created');
+
+    // Заводимый первым запуском аккаунт обязан быть АДМИНИСТРАТОРОМ, хотя форма этого не просила
+    // (ADR-156): иначе окно закрылось бы обычным пользователем и развёртывание осталось без админа.
+    // Спрашиваем сервер, а не страницу — страница о роли не знает и знать не должна.
+    // ⚠ Форма ответа: `{machine, scoped, user:{is_admin,…}}` — признак лежит ПОД `user`, и первая
+    // редакция этой строки читала его с верхнего уровня, то есть утверждала бы `undefined === true`
+    // над совершенно исправным сервером. Поймано прогоном, а не чтением.
+    const me = await (await fetch(`${ui}/v1/me`, { headers: { Authorization: `Bearer ${tok}` } })).json();
+    ok(me && me.user && me.user.is_admin === true,
+      `the first account is not an administrator: ${JSON.stringify(me)}`);
+    // Сессия человека обязана быть ЗАСКОУПЛЕНА — незаскоупленной бывает только машина. Если бы
+    // первый запуск выдал машинный кредентиал (дефект, ради которого писался ADR-156), здесь стояло
+    // бы `machine:true, scoped:false`, и одна эта строка отличает починку от её видимости.
+    eq([me.machine, me.scoped], [false, true], 'the first-run credential is a machine token, not a human session');
+
+    // Same invariant as check 5, now for a credential the page was GIVEN rather than typed.
+    const blob = await page.evaluate(() => JSON.stringify(localStorage));
+    ok(!blob.includes(tok), `the session leaked into localStorage: ${blob}`);
+
+    // Нонс потрачен И аккаунты уже есть. Ответ обязан быть 409 и НАЗЫВАТЬ путь входа: 403 сказал бы
+    // «нонс просрочен», то есть предложил бы перезапустить сервер там, где надо просто войти.
+    const replay = await fetch(`${ui}/v1/ui-token?nonce=${capi3b.nonce}`);
+    eq(replay.status, 409, 'replayed nonce once accounts exist');
+    const replayBody = await replay.json();
+    ok(/login/i.test(replayBody.error || ''),
+      `the refusal must name the way in, got: ${JSON.stringify(replayBody)}`);
 
     // …and the token it handed over really is the one that authorises mutations.
     const authed = await fetch(`${ui}/v1/config`, { headers: { Authorization: `Bearer ${tok}` } });
-    ok(authed.status !== 403, `the bootstrapped token was rejected by the API (HTTP ${authed.status})`);
+    ok(authed.status !== 403, `the session the wizard obtained was rejected by the API (HTTP ${authed.status})`);
     eq((await fetch(`${ui}/v1/config`)).status, 403, 'unauthenticated /v1/config');
+
+    // Ловушку спрашиваем ЕЩЁ РАЗ, уже в конце: выше она отвечала сразу после первичной настройки, а
+    // здесь ловится всё, что страница послала ПОСЛЕ входа — например `checkCapi()`. `/healthz` и
+    // `/v1/config-schema` туда ходить ВПРАВЕ: это проба связи с control-API, ради которой поле и
+    // существует, и кредентиала она не несёт. Запрещено ровно то, что несёт право или пароль.
+    ok(!trapped.some((t) => t.grant), `the setup grant reached the draft address: ${JSON.stringify(trapped)}`);
+    ok(!trapped.some((t) => /a-long-enough-passphrase/.test(t.body || '')),
+      `the administrator password reached the draft address: ${JSON.stringify(trapped)}`);
     await ctx.close();
+    } finally {
+      trap.close();
+    }
   });
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (capi) capi.kill('SIGTERM');
   if (capi3) capi3.proc.kill('SIGTERM');
+  if (capi3b) capi3b.proc.kill('SIGTERM');
   if (store) store.proc.kill('SIGTERM');
+  if (store3b) store3b.proc.kill('SIGTERM');
   if (staticSrv) staticSrv.srv.close();
   if (tmp) await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  if (tmp3b) await rm(tmp3b, { recursive: true, force: true }).catch(() => {});
 }
 
 const failed = results.filter((r) => !r.ok);

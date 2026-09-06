@@ -37,6 +37,9 @@ const (
 	uiBootstrapDefaultTTL = 5 * time.Minute
 	uiBootstrapMaxTries   = 5 // a wrong nonce is either a typo or a probe; burn after a handful
 	uiNonceBytes          = 32
+	// ADR-156: заголовок, которым страница предъявляет право первичной настройки. Отдельный от
+	// Authorization намеренно: это НЕ кредентиал личности, им нельзя ни войти, ни что-либо прочитать.
+	setupGrantHeader = "X-Setup-Grant"
 )
 
 // envEnabled is the positive counterpart to envDisabled (token.go): unset/empty stays OFF, so every
@@ -89,6 +92,16 @@ type uiServer struct {
 	nonce   string // "" once burned (used, expired, or too many wrong guesses)
 	expires time.Time
 	tries   int
+
+	// ADR-156: право ПЕРВИЧНОЙ НАСТРОЙКИ, во что нонс обменивается вместо машинного токена.
+	//
+	// ⚠ ЗАЧЕМ ОНО ПОЯВИЛОСЬ. Обмен отдавал странице `{"token": s.token}` — МАШИННЫЙ кредентиал,
+	// про который `access.go` говорит «машина проходит всё, mayTouch освобождает её от скоупинга».
+	// То есть первый запуск вручал браузеру незаскоупленный секрет, общий с CI, постоянный и
+	// неотзываемый. Механика самого нонса при этом хороша и НЕ меняется — меняется то, во ЧТО он
+	// обменивается: в одноразовое право завести ПЕРВОГО администратора, и ни во что больше.
+	grant        string
+	grantExpires time.Time
 }
 
 func newUIServer() *uiServer {
@@ -156,6 +169,64 @@ func (u *uiServer) redeem(got string) bool {
 	return false
 }
 
+// definitelyHasAccounts отвечает «аккаунт ТОЧНО существует» — по положительному знанию, а не по
+// осторожному умолчанию. Отличается от `accountsExist()` ровно в одном случае: хранилища нет или оно
+// не ответило. Там страж обязан быть осторожным, а первый запуск — нет (см. handleUIToken).
+func (s *server) definitelyHasAccounts() bool {
+	if s.store == nil {
+		return false
+	}
+	list, ok := s.store.listUsers()
+	return ok && list != nil && len(list.Users) > 0
+}
+
+// armGrant минтит одноразовое право первичной настройки. Живёт столько же, сколько нонс: это тот же
+// шаг того же первого запуска, и второй срок жизни был бы вторым числом, которое нечем объяснить.
+func (u *uiServer) armGrant(ttl time.Duration) string {
+	if u == nil || ttl <= 0 {
+		return ""
+	}
+	b := make([]byte, uiNonceBytes)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.grant = hex.EncodeToString(b)
+	u.grantExpires = time.Now().Add(ttl)
+	return u.grant
+}
+
+// checkGrant сверяет право, НЕ сжигая его: одного администратора заводят одним запросом, но запрос
+// может не долететь, и сжигать право до успеха значило бы требовать перезапуск сервера из-за
+// оборвавшейся сети. Сжигает `burnGrant`, и только после того, как аккаунт действительно создан.
+//
+// ⚠ Счётчика попыток здесь нет намеренно, в отличие от нонса: право живёт ТОЛЬКО пока в
+// развёртывании нет ни одного аккаунта (`access.go`), поэтому окно, в котором его вообще есть смысл
+// подбирать, закрывается первым же успешным созданием — включая создание тем, кто подобрал.
+func (u *uiServer) checkGrant(got string) bool {
+	if u == nil || got == "" {
+		return false
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.grant == "" || time.Now().After(u.grantExpires) {
+		u.grant = ""
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(u.grant)) == 1
+}
+
+// burnGrant гасит право. Зовётся ПОСЛЕ успешного создания администратора.
+func (u *uiServer) burnGrant() {
+	if u == nil {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.grant = ""
+}
+
 // sameOriginRequest rejects a cross-site browser caller. Only the host is compared: a TLS-terminating
 // reverse proxy leaves r.TLS nil while the browser reports an https Origin, and treating that as
 // cross-site would break a legitimate deployment. A genuinely cross-SITE page always carries a
@@ -189,13 +260,51 @@ func (s *server) handleUIToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin bootstrap refused"})
 		return
 	}
+	// ⚠ СОСТОЯНИЕ РАЗВЁРТЫВАНИЯ ПРОВЕРЯЕТСЯ ДО ОБМЕНА, И ЭТО НЕ ПОРЯДОК РАДИ ПОРЯДКА: нонс
+	// одноразовый, и сжечь его в ответ на запрос, который всё равно нечем удовлетворить, значит
+	// заставить оператора перезапустить сервер из-за нашей же очерёдности проверок.
+	// ⚠ СПРАШИВАЕМ «АККАУНТЫ ТОЧНО ЕСТЬ», А НЕ `accountsExist()`, И ЭТО РАЗНЫЕ ВОПРОСЫ.
+	//
+	// `accountsExist()` при НЕДОСТУПНОМ хранилище отвечает «есть» намеренно: иначе сбой транспорта
+	// переоткрывал бы все `legacyOpen`-маршруты, то есть отказ сети становился бы решением о доступе.
+	// Для стража это верно. Для ПЕРВОГО ЗАПУСКА — наоборот: развёртывание без хранилища (обычный
+	// headless-запуск) никогда не смогло бы загрузиться, потому что «неизвестно» читалось бы как
+	// «занято». Замерено на гейте хаба, чей стенд поднят без store-gateway.
+	//
+	// Отказывать здесь можно только по ПОЛОЖИТЕЛЬНОМУ знанию. И это безопасно: право умеет ровно одно
+	// — завести аккаунт, а без хранилища `handleCreateUser` всё равно отвечает 503. То есть право,
+	// выданное там, где аккаунт завести негде, не может сделать ничего.
+	if s.definitelyHasAccounts() {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "this deployment already has accounts: sign in at POST /v1/login, or read the " +
+				"machine token from state/control-api.token if you need the unscoped credential"})
+		return
+	}
 	if !s.ui.redeem(r.URL.Query().Get("nonce")) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "invalid, expired or already-used bootstrap nonce — restart control-api or read the token file",
 		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": s.token})
+	// ⚠ ЗДЕСЬ ОТДАВАЛСЯ `{"token": s.token}` — МАШИННЫЙ кредентиал целиком (ADR-156).
+	//
+	// Он незаскоуплен («видит каждую строку»), постоянен, общий с CI и неотзываем поштучно; первый
+	// запуск вручал его БРАУЗЕРУ. Механика нонса при этом не виновата и не менялась: она одноразова
+	// по построению, сравнивается constant-time, сгорает при успехе, при истечении и после пяти
+	// промахов, закрыта same-origin-гейтом и печатается только в терминал оператора. Менялось то, во
+	// ЧТО она обменивается — теперь в одноразовое право завести ПЕРВОГО администратора и ни во что
+	// больше. Дальше человек входит логином и получает СЕССИЮ, а машинный токен остаётся машинам.
+	grant := s.ui.armGrant(bootstrapTTL())
+	if grant == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not mint a setup grant — read the machine token from state/control-api.token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"setup":              grant,
+		"expires_in_seconds": int(bootstrapTTL().Seconds()),
+		"next":               "POST /v1/users with header X-Setup-Grant to create the first administrator",
+	})
 }
 
 // handleV1NotFound keeps unknown /v1/* paths answering JSON 404 instead of falling through to the

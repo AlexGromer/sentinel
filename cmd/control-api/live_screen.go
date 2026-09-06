@@ -262,7 +262,7 @@ func (s *server) screenState() map[string]any {
 //
 // Access is `accessOpen` at the guard and authenticated HERE, deliberately: a browser WebSocket cannot
 // send an Authorization header, and the guard reads only that header. The credential rides in
-// Sec-WebSocket-Protocol as `bearer.<token>` and is compared constant-time by wsAuthed — the same
+// Sec-WebSocket-Protocol as `bearer.<token or session>` and is resolved by wsCaller — the same
 // arrangement /v1/stream has, stated here rather than inherited from `legacyOpen`, whose real meaning
 // is "no accounts exist yet" and which therefore stops relaxing the moment identity is switched on.
 func (s *server) handleLiveScreen(w http.ResponseWriter, r *http.Request) {
@@ -276,8 +276,12 @@ func (s *server) handleLiveScreen(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad handshake (need Sec-WebSocket-Key + Version 13)"})
 		return
 	}
-	if !s.wsAuthed(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer subprotocol (Sec-WebSocket-Protocol: bearer.<token>)"})
+	c, credOK := s.wsCaller(r)
+	if !credOK {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing/invalid bearer subprotocol (Sec-WebSocket-Protocol: bearer.<token or session>)"})
+		return
+	}
+	if !s.wsMayStream(w, c, r.URL.Query().Get("run_id")) {
 		return
 	}
 	if origin := r.Header.Get("Origin"); origin != "" && !sameOriginRequest(r) {
