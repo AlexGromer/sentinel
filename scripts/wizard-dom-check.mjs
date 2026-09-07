@@ -152,13 +152,30 @@ async function startModeThreeAPI(port, cwd, storeAddr = '') {
       if (r.ok) {
         const m = /[?&]bootstrap=([0-9a-f]+)/.exec(log);
         if (!m) { proc.kill('SIGKILL'); throw new Error(`no bootstrap nonce in the startup log:\n${log}`); }
-        return { proc, nonce: m[1] };
+        // ADR-159: первый администратор заводится сам, и его пароль печатается ровно один раз — в
+        // этот самый поток. Гейт снимает его ОТТУДА ЖЕ, откуда его читает человек, поднявший
+        // сервис: другого места нет по построению, и проверка, придумавшая себе другое, мерила бы
+        // не первый запуск. Отсутствие строки — не «нечего снять», а провал: администратор обязан
+        // появиться, и молчание об этом есть ровно тот дефект, который здесь стерегут.
+        const a = /created the first administrator "([^"]+)" with a generated password: (\S+)/.exec(log);
+        if (!a) { proc.kill('SIGKILL'); throw new Error(`no first-administrator line in the startup log:\n${log}`); }
+        return { proc, nonce: m[1], adminName: a[1], adminPassword: a[2] };
       }
-    } catch (e) { if (String(e.message).startsWith('no bootstrap')) throw e; }
+    } catch (e) {
+      // Ошибки РАЗБОРА лога пробрасываются, ошибки СОЕДИНЕНИЯ — нет: сервер имеет право ещё не
+      // слушать, но не имеет права молчать о том, что обязан напечатать. Здесь стояло только
+      // `no bootstrap`, и мутацией замерено, что отсутствие строки об администраторе давало
+      // «did not become healthy within 5s» — диагноз про порт вместо диагноза про поведение.
+      if (/^no (bootstrap|first-administrator)/.test(String(e.message))) throw e;
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
   proc.kill('SIGKILL');
   throw new Error('mode-3 control-api did not become healthy within 5s');
+}
+
+function machineTokenOf(dir) {
+  return fs.readFileSync(path.join(dir, 'state', 'control-api.token'), 'utf8').trim();
 }
 
 function freePort() {
@@ -751,31 +768,28 @@ try {
     await page.goto(`${ui}/setup/?bootstrap=${capi3.nonce}`, { waitUntil: 'load' });
     await settled(page);
 
-    // ⚠ ПРОВЕРКА ПЕРЕПИСАНА ПОД ADR-156, А НЕ ОСЛАБЛЕНА. Она ждала, что бутстрап ЗАПОЛНИТ поле
-    // кредентиала — то есть ровно то поведение, которое и оказалось дефектом: обмен вручал странице
-    // МАШИННЫЙ токен (незаскоупленный, постоянный, общий с CI). Теперь обмен отдаёт одноразовое
-    // право завести первого администратора; поле обязано остаться ПУСТЫМ, а мастер — предложить
-    // создание администратора. Утверждение стало сильнее: не «поле заполнено ожидаемым», а
-    // «машинный секрет в браузер не попал вообще».
-    await page.waitForSelector('#firstadmin:not([hidden])', { timeout: 10000 });
+    // ⚠ ПРОВЕРКА ПЕРЕПИСАНА В ТРЕТИЙ РАЗ, И КАЖДЫЙ РАЗ ЗА ПРОДУКТОМ, А НЕ РАДИ ЗЕЛЁНОГО.
+    // ADR-156 инвертировал её («поле кредентиала обязано остаться пустым»), ADR-158 снял требование
+    // упереться на ярусе без шлюза, а ADR-159 убрал сам повод показывать форму: администратор
+    // ЗАВОДИТСЯ ПРИ СТАРТЕ, поэтому аккаунты есть с первой секунды, окно первичной настройки закрыто,
+    // и мастер обязан предлагать ВХОД, а не заведение. Утверждение снова стало сильнее: меряется не
+    // «форма показалась», а «развёртывание уже имеет администратора, и напечатанным паролем в него
+    // можно войти».
+    ok(await page.locator('#firstadmin').isHidden(),
+      'мастер предлагает завести администратора, хотя он уже заведён при старте');
     eq(await page.inputValue('#capitok'), '', 'the machine token must never reach the browser');
     eq(await page.inputValue('#capi'), ui, 'control-API URL prefilled with the serving origin');
     ok(!page.url().includes('bootstrap='), `the nonce was left in the URL: ${page.url()}`);
 
-    // ⚠ ЭТА ПОЛОВИНА ПРОВЕРКИ ИНВЕРТИРОВАНА ОСОЗНАННО (ADR-158), А НЕ ОСЛАБЛЕНА, И УТВЕРЖДЕНИЕ
-    // СТАЛО СИЛЬНЕЕ. Она требовала, чтобы первый запуск здесь УПЁРСЯ и НАЗВАЛ виновника
-    // («local accounts need a store-gateway»). Это было верно ровно до тех пор, пока отсутствие
-    // внешнего хранилища означало отсутствие хранилища вообще. Теперь control-api поднимает его
-    // в своём процессе, и упираться больше не во что: ярус без `CONTROL_API_STORE_ADDR` — тот же
-    // ПРОДУКТ, а не урезанный. Утверждается именно это, и оно строже прежнего: не «отказ вежлив»,
-    // а «отказа НЕТ, потому что ярусы не различаются».
-    await page.fill('#fa-name', 'wizadmin');
-    await page.fill('#fa-pass', 'a-long-enough-passphrase');
-    await page.click('#fa-create');
-    await page.waitForFunction(() => document.getElementById('capitok').value.length > 0, null, { timeout: 15000 });
-    const soloTok = await page.inputValue('#capitok');
+    // Пароль берётся ИЗ ЛОГА СТАРТА — оттуда же, откуда его читает человек. Проверка утверждает, что
+    // напечатанное действительно работает: строка, которую нельзя использовать, хуже её отсутствия.
+    const soloLogin = await fetch(`${ui}/v1/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: capi3.adminName, password: capi3.adminPassword }),
+    });
+    eq(soloLogin.status, 200, 'the printed first-administrator credential does not sign in');
+    const soloTok = (await soloLogin.json()).session || '';
     ok(/^[0-9a-f]{64}$/.test(soloTok), `the session has the wrong shape: ${soloTok}`);
-    ok(await page.locator('#firstadmin').isHidden(), 'the first-run block stayed visible after the admin was created');
 
     // Тот же вопрос СЕРВЕРУ: кредентиал — человек, заскоуплен, и он администратор. Без этого
     // проверка утверждала бы только «в поле появились 64 шестнадцатеричных знака».
@@ -790,12 +804,9 @@ try {
     // что скоупится владельцем). Конфиг к этому не относится: у него файловый ярус ADR-075 с
     // паритетом, и файл — единственный из двух носителей, который оператор может прочитать и
     // поправить. Замерено до выпуска: посчитав встроенное хранилище хранилищем, развёртывание
-    // отвечало «no config stored» поверх ЖИВОГО `state/config.json`. Здесь утверждается, что
-    // ярус конфига остался ФАЙЛОВЫМ.
-    const cfgResp = await fetch(`${ui}/v1/config`, { headers: { Authorization: `Bearer ${soloTok}` } });
-    const cfgBody = await cfgResp.json();
-    eq(cfgBody.tier, 'file',
-      `the embedded store displaced the ADR-075 file tier: ${JSON.stringify(cfgBody)}`);
+    // отвечало «no config stored» поверх ЖИВОГО `state/config.json`.
+    const cfgBody = await (await fetch(`${ui}/v1/config`, { headers: { Authorization: `Bearer ${soloTok}` } })).json();
+    eq(cfgBody.tier, 'file', `the embedded store displaced the ADR-075 file tier: ${JSON.stringify(cfgBody)}`);
 
     // Нонс потрачен И аккаунт теперь есть — значит 409, как и на ярусе со шлюзом. Совпадение
     // ответов и есть «одна версия»: 403 здесь означало бы, что ярусы снова разошлись.
@@ -844,6 +855,22 @@ try {
     const page = await ctx.newPage();
     page.on('pageerror', (e) => pageErrors.push(e.message));
     try {
+      // ⚠ ADR-159 ЗАКРЫЛ ОКНО ПЕРВИЧНОЙ НАСТРОЙКИ НА СТАРТЕ, И ЭТА ПРОВЕРКА ОТКРЫВАЕТ ЕГО ОБРАТНО —
+      // не ради зелёного, а потому что путь никуда не делся, он лишь ПЕРЕЕХАЛ. Право выдаётся, пока
+      // аккаунтов НЕТ; после ADR-159 это состояние наступает не при первом старте (администратор
+      // заводится сам), а при ВОССТАНОВЛЕНИИ — когда аккаунты удалили и заводить их больше некому.
+      // Именно там теперь живёт трап ADR-157 (право и пароль администратора уезжали на адрес из
+      // черновика), и измерять его надо там, а не объявлять, что мерить стало нечего. Замерено:
+      // после удаления последнего аккаунта обмен снова отдаёт `setup`.
+      const mt = machineTokenOf(tmp3b);
+      const before = await (await fetch(`${ui}/v1/users`, { headers: { Authorization: `Bearer ${mt}` } })).json();
+      for (const acc of (before.users || [])) {
+        await fetch(`${ui}/v1/users/${acc.user_id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${mt}` } });
+      }
+      const after = await (await fetch(`${ui}/v1/users`, { headers: { Authorization: `Bearer ${mt}` } })).json();
+      eq((after.users || []).length, 0,
+        'the recovery path needs an account-less deployment, and this one still has accounts');
+
       await page.goto(`${ui}/setup/`, { waitUntil: 'load' });
       await page.evaluate((u) => localStorage.setItem('sentinel_setup_draft', JSON.stringify({ capi: u })), trapURL);
       await page.goto(`${ui}/setup/?bootstrap=${capi3b.nonce}`, { waitUntil: 'load' });

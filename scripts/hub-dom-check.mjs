@@ -254,8 +254,15 @@ try {
     // «машинный секрет в браузер не попал ВООБЩЕ».
     const val = await page.locator('#capitok').inputValue();
     ok(val.length === 0, `the credential field holds ${val.length} chars after bootstrap — the machine token must never reach the browser`);
-    ok(await page.evaluate(() => window.__gate.hasSetupGrant()),
-      'the page holds no setup grant, so the first-run flow cannot create an administrator');
+    // ⚠ И ЕЩЁ РАЗ ИНВЕРТИРОВАНО, ТЕПЕРЬ ПОД ADR-159. Здесь требовалось `hasSetupGrant()` — право
+    // первичной настройки на руках у страницы. Верно ровно до тех пор, пока первый запуск НЕ ИМЕЛ
+    // администратора: теперь он заводится при старте, аккаунты есть с первой секунды, и обмен нонса
+    // отвечает 409, называя вход. Требовать право здесь значило бы требовать состояния, которого у
+    // исправного развёртывания не бывает. Утверждается противоположное и более сильное: секрета в
+    // браузере НЕТ ни в каком виде — ни машинного токена в поле, ни права в памяти вкладки.
+    ok(!(await page.evaluate(() => window.__gate.hasSetupGrant())),
+      'the page holds a setup grant although the deployment already has an administrator — the ' +
+      'first-run window must be closed from the first second');
   });
 
   // ADR-074. The wizard is a separate page and the bootstrap nonce can only ever be redeemed once, so a
@@ -2803,6 +2810,46 @@ try {
     // The floor: a walk that found nothing to inspect passes perfectly over an empty set.
     ok(found.scanned >= 20, `only ${found.scanned} attributes were inspected — the walk found nothing to check`);
     ok(found.bad.length === 0, `attributes carrying both languages with no separator:\n  ${found.bad.join('\n  ')}`);
+  }, { allowConsole: freshConfig404 });
+
+  /* ADR-159: смена СВОЕГО пароля. Проверка живёт здесь, а не в мастере, потому что здесь есть то,
+     чего мастеру не нужно, — ВОШЕДШИЙ ЧЕЛОВЕК: блок показывается только ему, а машинному токену
+     менять нечего. Утверждается не «кнопка есть», а весь круг: смена удалась, СТАРЫЙ пароль больше
+     не пускает, а НОВЫЙ пускает. Без последних двух половин проверка была бы зелёной над формой,
+     которая ничего не меняет. */
+  await check('identity: a signed-in person changes their own password, and the old one stops working', async () => {
+    await openSettings();
+    await signIn('gate-user', 'gate-user-pass1');
+    ok(await idPage.locator('#id-pw').isVisible(),
+      'the change-password block is hidden from a signed-in person');
+
+    await idPage.fill('#pw-cur', 'gate-user-pass1');
+    await idPage.fill('#pw-new', 'gate-user-pass2');
+    await idPage.click('#pw-save');
+    await idPage.waitForFunction(
+      () => /✓|✗/.test(document.getElementById('pw-status').textContent || ''), null, { timeout: 15000 });
+    const st = (await idPage.textContent('#pw-status')).trim();
+    ok(/✓/.test(st), `changing the password failed: ${JSON.stringify(st)}`);
+
+    // Спрашиваем СЕРВЕР, а не страницу: страница показала бы галочку и в том случае, если бы ответ
+    // пришёл, а пароль не сменился.
+    const base = `http://127.0.0.1:${PORT2}`;
+    const oldPw = await fetch(`${base}/v1/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'gate-user', password: 'gate-user-pass1' }) });
+    eq(oldPw.status, 401, 'the OLD password still signs in after the change');
+    const newPw = await fetch(`${base}/v1/login`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'gate-user', password: 'gate-user-pass2' }) });
+    eq(newPw.status, 200, 'the NEW password does not sign in after the change');
+
+    // Возвращаем стенд в прежнее состояние: следующие проверки заводились под старый пароль, и
+    // оставить его изменённым значило бы уронить их по причине, к ним не относящейся.
+    const sess = (await newPw.json()).session;
+    const back = await fetch(`${base}/v1/me/password`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sess}` },
+      body: JSON.stringify({ current_password: 'gate-user-pass2', new_password: 'gate-user-pass1' }) });
+    eq(back.status, 200, 'could not restore the stand password');
   }, { allowConsole: freshConfig404 });
 
   await check('identity: signing out returns the hub to no identity', async () => {

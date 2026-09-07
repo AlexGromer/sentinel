@@ -2143,6 +2143,30 @@
       "en": "Sign-in FAILED for «{actor}»: {reason}",
       "emitter": "control-api"
     },
+    "service.default_admin_created": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Заведён первый администратор «{actor}»; пароль напечатан в терминал один раз",
+      "en": "Created the first administrator «{actor}»; the password was printed once to the terminal",
+      "emitter": "control-api"
+    },
+    "service.password_changed": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Пароль изменён: {actor}; остальные сессии этого аккаунта закрыты",
+      "en": "Password changed: {actor}; the account's other sessions were closed",
+      "emitter": "control-api"
+    },
+    "service.password_change_refused": {
+      "lvl": "warn",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Смена пароля отклонена для «{actor}»: {reason}",
+      "en": "Password change refused for «{actor}»: {reason}",
+      "emitter": "control-api"
+    },
     "service.logout": {
       "lvl": "info",
       "cat": "service",

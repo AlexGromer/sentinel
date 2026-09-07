@@ -163,6 +163,14 @@ var apiRoutesWithoutCLI = map[string]string{
 	"GET /v1/ui-token":          "hands a browser tab its token during bootstrap; a CLI already has the token it would be asking for",
 	"POST /v1/login":            "a CLI already holds the machine token, which is strictly more powerful than any session, so logging in from a terminal buys nothing — and would put a password on an argv that every `ps` on the host can read",
 	"POST /v1/logout":           "there is no CLI session to end (see POST /v1/login)",
+	// ADR-159. Отсутствие глагола здесь — СЛЕДСТВИЕ двух строк выше, а не отдельное решение: маршрут
+	// принимает только сессию (машинному токену он отвечает 403 — у машины нет аккаунта, значит нет и
+	// пароля), а сессии у CLI нет и заводить её отказались там же и по той же причине. Глагол,
+	// который может предъявить лишь машинный токен, получал бы 403 при любом вызове — это не путь, а
+	// его видимость. Смена пароля живёт в интерфейсе и по HTTP; из терминала её эквивалент —
+	// `users add`/`users remove` машинным токеном, то есть заведение учётки заново.
+	"POST /v1/me/password": "the route accepts only a session, and the CLI deliberately has none (see POST /v1/login); " +
+		"a verb able to present only the machine token would be refused 403 on every call",
 	"GET /v1/":                  "the catch-all 404 for unknown /v1 paths, not a capability",
 	"GET /v1/live/screen":       "a WebSocket carrying RFB — PIXELS, not text. There is nothing for a terminal to render, and a verb that dumped a framebuffer would be a file nobody asked for; `agentctl live status` answers what a CLI can actually use (whether there IS a screen, why not, and at which in-network address)",
 
