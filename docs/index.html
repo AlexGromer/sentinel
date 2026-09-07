@@ -756,6 +756,34 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <span id="id-status" style="font-size:.88rem;color:var(--mut)"></span>
       </div>
       <p class="hint" id="id-who" style="margin-top:.5rem"></p>
+
+      <!-- ADR-159: смена СВОЕГО пароля. Блок показывается только вошедшему — предлагать сменить
+           пароль тому, кто ещё не назвался, нечего, а машинному токену менять нечего в принципе.
+           Первый администратор заводится с СГЕНЕРИРОВАННЫМ паролем, напечатанным в терминал один
+           раз, поэтому это первое, что человек захочет здесь сделать. -->
+      <div id="id-pw" hidden style="margin-top:.75rem;border-top:1px solid var(--brd);padding-top:.75rem">
+        <h4 style="margin:0 0 .35rem;font-size:.95rem">
+          <span data-lang="ru">Сменить свой пароль</span><span data-lang="en">Change your password</span>
+        </h4>
+        <p class="sub" style="margin:0 0 .5rem">
+          <span data-lang="ru">Текущий пароль спрашивается, хотя вы уже вошли: открытая вкладка иначе позволяла бы перехватить аккаунт. Остальные ваши сессии после смены закроются.</span>
+          <span data-lang="en">The current password is asked although you are signed in: otherwise an open tab would be enough to take the account over. Your other sessions are closed on change.</span>
+        </p>
+        <div class="grid g2">
+          <div>
+            <label for="pw-cur"><span data-lang="ru">Текущий пароль</span><span data-lang="en">Current password</span></label>
+            <input id="pw-cur" type="password" placeholder="—" autocomplete="current-password">
+          </div>
+          <div>
+            <label for="pw-new"><span data-lang="ru">Новый пароль</span><span data-lang="en">New password</span></label>
+            <input id="pw-new" type="password" placeholder="—" autocomplete="new-password">
+          </div>
+        </div>
+        <div class="ctl-row" style="margin-top:.5rem">
+          <button type="button" class="btn" id="pw-save" data-needs-api disabled><span data-lang="ru">Сменить пароль</span><span data-lang="en">Change password</span></button>
+          <span id="pw-status" style="font-size:.88rem;color:var(--mut)"></span>
+        </div>
+      </div>
     </div>
 
     <!-- Account management, revealed only to an admin (or the machine token). Rendered from
@@ -2280,6 +2308,10 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (out) out.style.display='';
     }
     if (adm) adm.style.display = idIsAdmin() ? '' : 'none';
+    /* ADR-159: сменить пароль может только тот, у кого он есть — то есть вошедший ЧЕЛОВЕК.
+       Признак берётся тот же, которым красится вся панель, поэтому расходиться им негде. */
+    var pw = ge('id-pw');
+    if (pw) pw.hidden = !(idMe && !idMe.machine);
   }
 
   function idIsAdmin(){ return !!(idMe && (idMe.machine || (idMe.user && idMe.user.is_admin))); }
@@ -2320,6 +2352,29 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       capUnlock(true);
       idReloadViews();
     } catch(e){ idSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
+  });
+
+  /* ADR-159: смена своего пароля. Ответ несёт СВЕЖУЮ сессию, и её надо положить в поле: сервер
+     гасит все сессии этого аккаунта, включая ту, которой сделан этот самый запрос, — без подстановки
+     человек оказался бы выброшен ровно тем действием, которое только что удалось. */
+  ge('pw-save').addEventListener('click', async function(){
+    var base=capiBase(), st=ge('pw-status');
+    if (!base){ st.innerHTML=bi('укажите URL control-API','set the control-API URL'); return; }
+    var cur=ge('pw-cur').value||'', next=ge('pw-new').value||'';
+    if (!cur || !next){ st.innerHTML=bi('заполните оба поля','fill both fields'); return; }
+    st.innerHTML=bi('меняю…','changing…');
+    try {
+      var r=await fetch(base+'/v1/me/password',{method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},authHdr()),
+        body:JSON.stringify({current_password:cur,new_password:next})});
+      var j=await r.json().catch(function(){ return {}; });
+      if (!r.ok){ st.innerHTML='<span class="fail">✗ '+esc(j.error||('HTTP '+r.status))+'</span>'; return; }
+      ge('capitok').value=j.session||'';
+      ge('pw-cur').value=''; ge('pw-new').value='';
+      st.innerHTML='<span class="ok">✓ '+bi('пароль изменён, остальные сессии закрыты',
+                                             'password changed, your other sessions were closed')+'</span>';
+      await idRefresh();
+    } catch(e){ st.innerHTML='<span class="fail">✗ '+esc(e.message)+'</span>'; }
   });
 
   ge('id-logout').addEventListener('click', async function(){

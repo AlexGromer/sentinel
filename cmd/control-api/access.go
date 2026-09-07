@@ -126,6 +126,12 @@ func (s *server) routes() []routeSpec {
 		{pattern: "POST /v1/logout", access: accessOpen, h: s.handleLogout,
 			why: "ends whatever token was sent. Requiring a live one would make logging out fail exactly when it matters — on an expired or already-dropped session"},
 		{pattern: "GET /v1/me", access: accessAuthed, h: s.handleMe},
+		// ADR-159: смена СВОЕГО пароля. `accessAuthed`, а не `accessAdmin`, и это не послабление:
+		// глагол принадлежит владельцу пароля, а не администратору. Скоупинг по домену здесь не
+		// нужен и был бы неверен — предмет не строка в таблице, а сам вызывающий, и обработчик
+		// берёт его из кредентиала (`callerOf`), а не из тела и не из пути. Тело, называющее ЧУЖОЕ
+		// имя, не может ничего: оно там просто не читается.
+		{pattern: "POST /v1/me/password", access: accessAuthed, h: s.handleChangePassword},
 		// ADR-111: the live video mode, proxied from the browser service. `authed`, not `open`: the
 		// browser service's live port has no credential of its own (same as its CDP port — internal
 		// network is the whole control), so this route IS the credential. A screencast shows whatever

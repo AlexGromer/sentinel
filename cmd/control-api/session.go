@@ -278,6 +278,91 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type changePasswordReq struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// handleChangePassword: a signed-in person replaces THEIR OWN password. Not an admin verb — an admin
+// changing someone else's password would be a different capability with a different threat model, and
+// it does not exist here.
+//
+// ⚠ ПОЧЕМУ МАШИННОМУ ТОКЕНУ ОТКАЗЫВАЕМ ЯВНО, А НЕ МОЛЧА. Машина проходит `accessAuthed` (access.go:
+// «машина проходит всё»), поэтому без этой ветки она дошла бы до тела и упёрлась в пустой `userID` —
+// то есть в 404 или, хуже, в поиск аккаунта с пустым именем. У машинного кредентиала аккаунта НЕТ,
+// менять ему нечего, и сказать это прямо дешевле, чем оставить читателю гадать по коду ошибки.
+//
+// ⚠ ТЕКУЩИЙ ПАРОЛЬ СПРАШИВАЕТСЯ, ХОТЯ СЕССИЯ УЖЕ ДОКАЗАЛА ЛИЧНОСТЬ. Сессия живёт 12 часов и лежит в
+// памяти вкладки; украденная или просто оставленная открытой вкладка иначе давала бы бесшумный
+// перехват аккаунта — смену пароля без знания старого. Это то же рассуждение, по которому
+// `handleLogin` не различает «нет такого имени» и «неверный пароль»: цена ошибки здесь не в удобстве.
+func (s *server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	c, _ := s.callerOf(r)
+	if c.machine {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "the machine token has no account, so it has no password to change; sign in with " +
+				"POST /v1/login as the person whose password you mean"})
+		return
+	}
+	var req changePasswordReq
+	if json.NewDecoder(r.Body).Decode(&req) != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed JSON body"})
+		return
+	}
+	if len(req.NewPassword) < minPasswordLen {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "the new password must be at least " + strconv.Itoa(minPasswordLen) + " characters"})
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "local accounts need a store-gateway: this deployment has none"})
+		return
+	}
+	u, ok := s.store.getUser(&storepb.UserRef{UserId: c.userID})
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the store did not answer"})
+		return
+	}
+	if !u.Found {
+		// Сессия есть, а аккаунта нет: его удалили, пока вкладка была открыта. Это не «неверный
+		// пароль» — говорим, что произошло, иначе человек будет перебирать пароли к тому, чего нет.
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "this account no longer exists; sign in again"})
+		return
+	}
+	if !identity.Verify(u.PwHash, req.CurrentPassword) {
+		s.journalSubject("service.password_change_refused", "warn",
+			map[string]string{"actor": u.Name, "reason": "current password did not match"}, nil, u.UserId)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the current password is not correct"})
+		return
+	}
+	h, err := identity.Hash(req.NewPassword)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not hash the password"})
+		return
+	}
+	u.PwHash = h
+	if !s.store.upsertUser(u) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the store did not accept the new password"})
+		return
+	}
+	// ⚠ ОСТАЛЬНЫЕ СЕССИИ ЭТОГО АККАУНТА ГАСЯТСЯ, И ЭТО СУТЬ СМЕНЫ ПАРОЛЯ. Меняют пароль обычно
+	// потому, что старый мог утечь; сессия, выданная под старым паролем, переживи она смену, оставила
+	// бы ровно тот доступ, ради закрытия которого пароль и меняли. Текущая вкладка получает свежую
+	// сессию в ответе, поэтому человек не оказывается выброшенным из своего же действия.
+	s.sessions.dropUser(u.UserId)
+	tok := s.sessions.mint(u.UserId, u.Name, u.IsAdmin, sessionTTL())
+	if tok == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not mint a session"})
+		return
+	}
+	s.journalSubject("service.password_changed", "info", map[string]string{"actor": u.Name}, nil, u.UserId)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "changed", "session": tok, "expires_in_seconds": int(sessionTTL().Seconds()),
+	})
+}
+
 type createUserReq struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`

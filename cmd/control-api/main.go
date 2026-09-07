@@ -2505,6 +2505,15 @@ func main() {
 			}
 		}
 	}
+	// ADR-159: первый администратор заводится САМ, пока оператор ещё смотрит в терминал.
+	//
+	// ⚠ СИНХРОННО И ДО `ListenAndServe`, в отличие от соседних строк. Две причины, и обе про порядок,
+	// а не про скорость: строка с паролем обязана оказаться в выводе РЯДОМ с адресом интерфейса, а не
+	// после первых запросов, иначе она утонет; и появление аккаунта закрывает `legacyOpen`, поэтому
+	// сделать это надо ДО того, как первый запрос получит ответ по правилам, которых через миг не
+	// будет. Стоимость — один вызов `listUsers` и, единожды за жизнь развёртывания, один KDF.
+	s.ensureDefaultAdmin()
+
 	// M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe. ADR-075 moved it out of the
 	// store branch — the standalone tier has a config to report too, and the configured-but-down case has
 	// a warning worth printing at the moment the operator is still looking at the terminal.

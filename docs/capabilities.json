@@ -1071,6 +1071,29 @@
       "reach": "capability"
     },
     {
+      "id": "own-password",
+      "group": "UI",
+      "severity": "high",
+      "title_ru": "Смена своего пароля",
+      "title_en": "Change your own password",
+      "how_ru": "POST /v1/me/password — вошедший человек меняет СВОЙ пароль; в браузере это раздел «Настройки», блок «Вход в аккаунт». Текущий пароль спрашивается, хотя личность уже доказана сессией: иначе оставленная открытой вкладка позволяла бы перехватить аккаунт. Остальные сессии этого аккаунта после смены закрываются, а вкладка получает свежую. Первый администратор заводится с СГЕНЕРИРОВАННЫМ паролем, напечатанным в терминал оператора один раз (ADR-159), поэтому смена — первое, что здесь делают.",
+      "how_en": "POST /v1/me/password — a signed-in person changes THEIR OWN password; in the browser it is the Settings view, “Sign in” block. The current password is asked although the session already proved identity: otherwise a tab left open would be enough to take the account over. The account's other sessions are closed and the tab is given a fresh one. The first administrator is created with a GENERATED password printed once to the operator's terminal (ADR-159), so changing it is the first thing done here.",
+      "access": [
+        {
+          "kind": "ui",
+          "ref": "settings"
+        },
+        {
+          "kind": "http",
+          "ref": "POST /v1/me/password"
+        }
+      ],
+      "reach": "capability",
+      "missing": {
+        "cli": "маршрут принимает ТОЛЬКО сессию — машинному токену он отвечает 403, потому что у машины нет аккаунта и, значит, пароля. Сессии у CLI нет и заводить её отказались отдельным решением (`POST /v1/login` в apiRoutesWithoutCLI: терминал уже держит машинный токен, который сильнее любой сессии, а логин с argv кладёт пароль туда, где его читает всякий `ps`). Глагол, способный предъявить только машинный токен, получал бы 403 при каждом вызове — это не путь, а его видимость"
+      }
+    },
+    {
       "id": "health-readiness",
       "group": "Operations",
       "severity": "high",
