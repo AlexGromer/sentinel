@@ -2167,6 +2167,22 @@
       "en": "Password change refused for «{actor}»: {reason}",
       "emitter": "control-api"
     },
+    "service.machine_token_issued": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Выдан машинный токен «{actor}»; значение показано один раз и хранится хешем",
+      "en": "Machine token «{actor}» issued; the value was shown once and is stored as a hash",
+      "emitter": "control-api"
+    },
+    "service.machine_token_revoked": {
+      "lvl": "info",
+      "cat": "service",
+      "phase": "report",
+      "ru": "Машинный токен «{actor}» отозван; остальные продолжают работать",
+      "en": "Machine token «{actor}» revoked; the others keep working",
+      "emitter": "control-api"
+    },
     "service.logout": {
       "lvl": "info",
       "cat": "service",

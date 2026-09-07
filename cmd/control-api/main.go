@@ -2401,6 +2401,19 @@ func main() {
 	// resolveToken reuses (or creates, 0600) state/control-api.token. CONTROL_API_TOKEN still wins, and
 	// CONTROL_API_AUTOTOKEN=0 keeps the pre-ADR-064 fail-closed read-only instance. See token.go.
 	tok, tokSrc, tokPath, tokWarnings := resolveToken(repo)
+	// ⚠ ОТКАЗ ЗДЕСЬ, ДО ВСЕГО ОСТАЛЬНОГО (ADR-160, решение Alex). Непригодный `CONTROL_API_TOKEN` —
+	// единственный случай, когда запуск прерывается из-за кредентиала, и прерывается он ГРОМКО:
+	// оператор задал секрет, секрет не защищает, и продолжить значило бы поднять развёртывание,
+	// которое ВЫГЛЯДИТ защищённым. Предупредить и запуститься — тот же дефект с отсрочкой:
+	// предупреждение листают, а слабый токен остаётся жить.
+	//
+	// Печатаем в stderr сами: до `s` ещё нет журнала, а причина обязана оказаться на экране.
+	if tokSrc == tokenRefused {
+		for _, w := range tokWarnings {
+			fmt.Fprintf(os.Stderr, "control-api: FATAL — %s\n", w)
+		}
+		os.Exit(2)
+	}
 	s := &server{
 		repo:       repo,
 		agentctl:   envOr("CONTROL_API_AGENTCTL", filepath.Join(repo, "bin", "agentctl")),

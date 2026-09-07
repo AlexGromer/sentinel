@@ -164,6 +164,16 @@ func (s *server) routes() []routeSpec {
 		// on in configSectionScope. The read is admin too: `set`, `from_env` and a four-character hint
 		// describe the deployment's credentials, and a deployment's credentials are not a fact every
 		// account is entitled to enumerate.
+		// ADR-160: именованные отзываемые машинные токены. `accessAdmin`, и это тот же довод, что у
+		// ключей провайдеров: выдать машине доступ — распорядительное действие, а не настройка своего
+		// рабочего места. ⚠ Держатель именованного токена САМ проходит `accessAdmin` (он машина, а
+		// машина проходит всё), то есть CI может выдать себе второй и отозвать первый. Это НЕ
+		// повышение прав: он уже имеет всё, что даёт машинный кредентиал, и единственное, что он
+		// приобретает, — возможность заменить свой собственный. Ограничить это значило бы завести
+		// третий класс кредентиала ради случая, которого модель доступа не различает.
+		{pattern: "GET /v1/machine-tokens", access: accessAdmin, h: s.handleListMachineTokens},
+		{pattern: "POST /v1/machine-tokens", access: accessAdmin, h: s.handleIssueMachineToken},
+		{pattern: "DELETE /v1/machine-tokens/{id}", access: accessAdmin, h: s.handleRevokeMachineToken},
 		{pattern: "GET /v1/provider-keys", access: accessAdmin, h: s.handleGetProviderKeys},
 		{pattern: "PUT /v1/provider-keys", access: accessAdmin, h: s.handlePutProviderKeys},
 		{pattern: "POST /v1/runs", access: accessAuthed, h: s.handleCreateRun},

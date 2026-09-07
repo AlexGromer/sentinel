@@ -2741,6 +2741,97 @@ try {
     }
   }, { allowConsole: freshConfig404 });
 
+  /* ADR-160: именованные машинные токены. Три свойства, и порознь каждое выглядит работающим:
+     значение показано ОДИН раз · отозванный ПЕРЕСТАЁТ пускать · отзыв одного НЕ трогает остальных.
+     Проверка идёт через ИНТЕРФЕЙС, потому что серверная половина уже покрыта Go-гейтом, а здесь
+     измеряется ровно то, чего тот не видит: что кнопка делает объявленное. */
+  await check('machine tokens: issued through the UI, shown once, and revoking one leaves the rest', async () => {
+    const base = `http://127.0.0.1:${PORT2}`;
+    const authed = (path, init) => idPage.evaluate(async ([p, i]) => {
+      const r = await fetch(document.getElementById('capi').value.replace(/\/+$/, '') + p,
+        Object.assign({ headers: { Authorization: 'Bearer ' + document.getElementById('capitok').value } }, i || {}));
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    }, [path, init]);
+
+    // ⚠ ПРОВЕРКА ПРИБИРАЕТ ЗА СОБОЙ ДО, А НЕ ТОЛЬКО ПОСЛЕ, И ЭТО КУПЛЕНО СОБСТВЕННЫМ ПРОГОНОМ.
+    // Стенд поднят с `cwd: REPO`, поэтому `state/machine-tokens.json` — файл РЕПОЗИТОРИЯ и переживает
+    // прогон. Первая редакция этой проверки упала на своём же остатке («a machine token named
+    // "gate-ci" already exists»), то есть повторила ровно тот дефект, что заведён как
+    // [HUB-GATE-POISONS-ITS-OWN-FIXTURE]. Снимаем свои имена ПЕРЕД работой: проверка, зависящая от
+    // того, чем кончился её прошлый запуск, меряет историю, а не продукт.
+    const stale = await authed('/v1/machine-tokens');
+    for (const t of (stale.body.tokens || [])) {
+      if (t.name === 'gate-ci' || t.name === 'gate-laptop') {
+        await authed(`/v1/machine-tokens/${t.id}`, { method: 'DELETE' });
+      }
+    }
+    await idPage.click('#mt-reload');
+    await idPage.waitForTimeout(300);
+
+    await idPage.fill('#mt-name', 'gate-ci');
+    await idPage.click('#mt-issue');
+    // ⚠ ЖДЁМ СТАТУС, А НЕ ЗНАЧЕНИЕ. Ожидание непустого поля молчит о причине: при отказе оно просто
+    // не наступает, и диагноз получается «таймаут» вместо «сервер ответил вот это». Статус пишется
+    // обработчиком на ОБОИХ исходах, поэтому он и есть сигнал этого действия.
+    await idPage.waitForFunction(
+      () => /✓|✗/.test(document.getElementById('mt-status').textContent || ''), null, { timeout: 15000 });
+    const issueStatus = (await idPage.textContent('#mt-status')).trim();
+    ok(/✓/.test(issueStatus), `issuing a machine token failed: ${JSON.stringify(issueStatus)}`);
+    const shown = await idPage.inputValue('#mt-value');
+    ok(/^[0-9a-f]{64}$/.test(shown), `the issued value has the wrong shape: ${shown}`);
+
+    // ⚠ ЗНАЧЕНИЕ НЕ ПОПАДАЕТ НИ В ХРАНИЛИЩЕ БРАУЗЕРА, НИ В ПОЛЕ КРЕДЕНТИАЛА ЭТОЙ ВКЛАДКИ: токен
+    // выдан ДРУГОЙ машине, и подставить его себе значило бы молча сменить, чем подписана страница.
+    const blob = await idPage.evaluate(() => JSON.stringify(localStorage));
+    ok(!blob.includes(shown), `the issued token leaked into localStorage: ${blob}`);
+    ok((await idPage.inputValue('#capitok')) !== shown, 'the issued token replaced the tab own credential');
+
+    // Он РАБОТАЕТ — иначе «показан один раз» описывало бы бесполезную строку.
+    const asNew = await idPage.evaluate(async ([b, t]) => {
+      const r = await fetch(b + '/v1/me', { headers: { Authorization: 'Bearer ' + t } });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    }, [base, shown]);
+    eq(asNew.status, 200, 'the freshly issued token does not authenticate');
+    ok(asNew.body.machine === true, `the issued token is not a machine credential: ${JSON.stringify(asNew.body)}`);
+
+    // И второй, чтобы было ЧТО не сломать отзывом первого.
+    await idPage.fill('#mt-name', 'gate-laptop');
+    await idPage.click('#mt-issue');
+    await idPage.waitForFunction(
+      (prev) => (document.getElementById('mt-value').value || '') !== prev, shown, { timeout: 15000 });
+    const second = await idPage.inputValue('#mt-value');
+
+    const list = await authed('/v1/machine-tokens');
+    const target = (list.body.tokens || []).find((t) => t.name === 'gate-ci');
+    ok(target, `the list does not carry the token just issued: ${JSON.stringify(list.body)}`);
+    // Список не несёт ни значения, ни хеша — ни одного, ни другого.
+    ok(!JSON.stringify(list.body).includes(shown), 'the list carries the token value');
+
+    await idPage.click(`#mt-list [data-mt-revoke="${target.id}"]`);
+    await idPage.waitForFunction(
+      (id) => !document.querySelector(`#mt-list [data-mt-revoke="${id}"]`), target.id, { timeout: 10000 });
+
+    const afterRevoke = await idPage.evaluate(async ([b, t]) => {
+      const r = await fetch(b + '/v1/me', { headers: { Authorization: 'Bearer ' + t } });
+      return r.status;
+    }, [base, shown]);
+    eq(afterRevoke, 403, 'the REVOKED token still authenticates — the revoke did not revoke');
+    const survivor = await idPage.evaluate(async ([b, t]) => {
+      const r = await fetch(b + '/v1/me', { headers: { Authorization: 'Bearer ' + t } });
+      return r.status;
+    }, [base, second]);
+    eq(survivor, 200, 'revoking one token broke ANOTHER — which is the whole point of naming them');
+    // И убираем уцелевший: следующий прогон обязан начинать с того же места, что и этот.
+    const left = await authed('/v1/machine-tokens');
+    for (const t of (left.body.tokens || [])) {
+      if (t.name === 'gate-ci' || t.name === 'gate-laptop') {
+        await authed(`/v1/machine-tokens/${t.id}`, { method: 'DELETE' });
+      }
+    }
+    // ⚠ 403 В КОНСОЛИ ЗДЕСЬ ОЖИДАЕМ И ОБЪЯВЛЕН: его вызывает САМА проверка, спрашивая отозванным
+    // токеном. Без объявления гейт краснел бы на доказательстве того, что отзыв сработал.
+  }, { allowConsole: /404 \(Not Found\)|403 \(Forbidden\)/ });
+
   await check('provider keys: a saved key never comes back, and the field does not keep it', async () => {
     await idPage.fill('#pk-list [data-pk-input="llm_api_key"]', pkCanary);
     await idPage.click('#pk-list [data-pk-save="llm_api_key"]');
