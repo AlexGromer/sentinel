@@ -223,8 +223,11 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if ok && u.Found {
 		valid = identity.Verify(u.PwHash, req.Password)
 	} else {
-		identity.Verify("pbkdf2-sha256$"+strconv.Itoa(identity.DefaultIterations)+"$AAAAAAAAAAAAAAAAAAAAAA$"+
-			"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", req.Password)
+		// ⚠ ХЕШ БЕРЁТСЯ У ПАКЕТА, А НЕ СОБИРАЕТСЯ ЗДЕСЬ. Собранный тут, он был привязан к схеме
+		// (`pbkdf2-sha256$…`) и пережил бы её смену: после перехода на Argon2id (ADR-161) настоящая
+		// проверка стоит 182 мс, а этот двойник стоил бы 432 мс — канал по времени открылся бы заново,
+		// только наоборот, и несуществующее имя стало бы отличимо по ЗАДЕРЖКЕ.
+		identity.Verify(identity.DummyHash(), req.Password)
 	}
 	if !valid {
 		// HEALTH-005: recorded at `warn`, with the name that was TRIED and never the password. The
