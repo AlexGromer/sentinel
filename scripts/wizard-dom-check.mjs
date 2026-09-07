@@ -124,11 +124,15 @@ async function startControlAPI(port, corsOrigin, storeAddr, cwd) {
 // place that nonce ever appears, so we scrape it from stderr exactly like an operator reads their log.
 // cwd is the temp dir on purpose: state/control-api.token must not land in the repo during CI.
 //
-// storeAddr picks the TIER, and the two tiers are genuinely different products of the same binary:
-// '' is the standalone tier (configfile.go:13 — "the operator chose the standalone tier and the file
-// IS the config"), where local accounts are impossible because session.go:313 answers 503 without a
-// store. Anything else is the account-bearing tier. Both are shipped, so both are measured — see the
-// pair of mode-3 checks below.
+// storeAddr picks the DEPLOYMENT, and since ADR-158 that is all it picks. '' is the standalone tier:
+// no external gateway, so control-api hosts the store in its own process — local accounts, sign-in
+// and owner scoping all work there, and the config domain deliberately stays on its ADR-075 FILE
+// (embedstore.go says why). Anything else points at a gateway an operator deployed. Both are
+// shipped and both are measured below, and what the pair asserts is that they are ONE PRODUCT.
+//
+// ⚠ This comment used to say local accounts were impossible without a store, citing the 503 in
+// session.go. That was true until ADR-158 and is recorded here because the sentence outlived the
+// behaviour once already.
 async function startModeThreeAPI(port, cwd, storeAddr = '') {
   const proc = spawn(path.join(REPO, 'bin', 'control-api'), [], {
     cwd,
@@ -731,7 +735,7 @@ try {
    * хранилища НЕ МОЛЧИТ: право выдано, машинный секрет в браузер не попал, а человеку НАЗВАНА
    * причина, по которой дальше хода нет. Молчаливый отказ и есть тот дефект, ради которого
    * заводился [UI-FIRST-RUN-BOOTSTRAP-DEAD-END]. */
-  await check('mode 3, standalone tier: the grant is issued, no machine token reaches the browser, and the page NAMES why it can go no further', async () => {
+  await check('mode 3, standalone tier: with NO external gateway the first run still completes — the tiers are one product', async () => {
     const port3 = await freePort();
     capi3 = await startModeThreeAPI(port3, tmp);      // storeAddr omitted — standalone on purpose
     const ui = `http://127.0.0.1:${port3}`;
@@ -758,31 +762,44 @@ try {
     eq(await page.inputValue('#capi'), ui, 'control-API URL prefilled with the serving origin');
     ok(!page.url().includes('bootstrap='), `the nonce was left in the URL: ${page.url()}`);
 
-    // Попытка довести первый запуск до конца ЗДЕСЬ ОБЯЗАНА УПЕРЕТЬСЯ — и упереться ВСЛУХ.
-    // Утверждается не «кнопка не сработала», а три разных свойства отказа: причина НАЗВАНА и
-    // называет виновника (store-gateway), кредентиал так и не появился, форма осталась на экране.
-    // Проверка «поле пусто» сама по себе прошла бы и над страницей, которая молча ничего не делает.
+    // ⚠ ЭТА ПОЛОВИНА ПРОВЕРКИ ИНВЕРТИРОВАНА ОСОЗНАННО (ADR-158), А НЕ ОСЛАБЛЕНА, И УТВЕРЖДЕНИЕ
+    // СТАЛО СИЛЬНЕЕ. Она требовала, чтобы первый запуск здесь УПЁРСЯ и НАЗВАЛ виновника
+    // («local accounts need a store-gateway»). Это было верно ровно до тех пор, пока отсутствие
+    // внешнего хранилища означало отсутствие хранилища вообще. Теперь control-api поднимает его
+    // в своём процессе, и упираться больше не во что: ярус без `CONTROL_API_STORE_ADDR` — тот же
+    // ПРОДУКТ, а не урезанный. Утверждается именно это, и оно строже прежнего: не «отказ вежлив»,
+    // а «отказа НЕТ, потому что ярусы не различаются».
     await page.fill('#fa-name', 'wizadmin');
     await page.fill('#fa-pass', 'a-long-enough-passphrase');
     await page.click('#fa-create');
-    // ⚠ Ждать «непустой статус» НЕЛЬЗЯ: обработчик СНАЧАЛА ставит многоточие «…» как признак работы
-    // (docs/setup/index.html, firstAdmin), и такое ожидание выигрывает гонку у самого ответа —
-    // проверка читала бы «…» и падала с ним же в сообщении. Ждём статус, ОТЛИЧНЫЙ от многоточия.
-    await page.waitForFunction(() => {
-      const t = (document.getElementById('fa-status').textContent || '').trim();
-      return t.length > 0 && t !== '…';
-    }, null, { timeout: 15000 });
-    const status = (await page.textContent('#fa-status')).trim();
-    ok(/store-gateway/.test(status),
-      `the page must NAME the component whose absence blocks the first run, got: ${JSON.stringify(status)}`);
-    eq(await page.inputValue('#capitok'), '', 'a credential appeared on a tier that cannot have accounts');
-    ok(await page.locator('#firstadmin').isVisible(),
-      'the first-run block hid itself even though no administrator was created');
+    await page.waitForFunction(() => document.getElementById('capitok').value.length > 0, null, { timeout: 15000 });
+    const soloTok = await page.inputValue('#capitok');
+    ok(/^[0-9a-f]{64}$/.test(soloTok), `the session has the wrong shape: ${soloTok}`);
+    ok(await page.locator('#firstadmin').isHidden(), 'the first-run block stayed visible after the admin was created');
 
-    // Single-use: replaying the nonce an operator may still have in their scrollback buys nothing.
-    // 403 and not 409 — this deployment still has no accounts, so it is the NONCE that is spent.
-    // The 409 branch belongs to the account-bearing tier and is asserted in the next check.
-    eq((await fetch(`${ui}/v1/ui-token?nonce=${capi3.nonce}`)).status, 403, 'replayed nonce');
+    // Тот же вопрос СЕРВЕРУ: кредентиал — человек, заскоуплен, и он администратор. Без этого
+    // проверка утверждала бы только «в поле появились 64 шестнадцатеричных знака».
+    const soloMe = await (await fetch(`${ui}/v1/me`, { headers: { Authorization: `Bearer ${soloTok}` } })).json();
+    ok(soloMe && soloMe.user && soloMe.user.is_admin === true,
+      `the first account on the storeless tier is not an administrator: ${JSON.stringify(soloMe)}`);
+    eq([soloMe.machine, soloMe.scoped], [false, true],
+      'the storeless tier handed out a machine credential instead of a human session');
+
+    // ⚠ ГРАНИЦА ADR-158, И ОНА ГЕЙТИТСЯ ЗДЕСЬ, ПОТОМУ ЧТО ЕЁ УЖЕ ОДИН РАЗ ПЕРЕШЛИ. Встроенное
+    // хранилище восстанавливает то, у чего БЕЗ шлюза не было реализации вовсе (аккаунты и всё,
+    // что скоупится владельцем). Конфиг к этому не относится: у него файловый ярус ADR-075 с
+    // паритетом, и файл — единственный из двух носителей, который оператор может прочитать и
+    // поправить. Замерено до выпуска: посчитав встроенное хранилище хранилищем, развёртывание
+    // отвечало «no config stored» поверх ЖИВОГО `state/config.json`. Здесь утверждается, что
+    // ярус конфига остался ФАЙЛОВЫМ.
+    const cfgResp = await fetch(`${ui}/v1/config`, { headers: { Authorization: `Bearer ${soloTok}` } });
+    const cfgBody = await cfgResp.json();
+    eq(cfgBody.tier, 'file',
+      `the embedded store displaced the ADR-075 file tier: ${JSON.stringify(cfgBody)}`);
+
+    // Нонс потрачен И аккаунт теперь есть — значит 409, как и на ярусе со шлюзом. Совпадение
+    // ответов и есть «одна версия»: 403 здесь означало бы, что ярусы снова разошлись.
+    eq((await fetch(`${ui}/v1/ui-token?nonce=${capi3.nonce}`)).status, 409, 'replayed nonce once an account exists');
     await ctx.close();
   });
 

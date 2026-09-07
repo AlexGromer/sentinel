@@ -1491,10 +1491,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
         <dt class="hz-ok"><span data-lang="ru">поднят</span><span data-lang="en">up</span></dt>
         <dd><span data-lang="ru">проба дошла и получила ответ</span><span data-lang="en">the probe reached it and got an answer</span></dd>
         <dt class="hz-skipped"><span data-lang="ru">не поднят</span><span data-lang="en">not up</span></dt>
+        <!-- ADR-158: «без хранилища» УБРАНО из примера, и это правка по факту, а не по стилю.
+             Хранилища без развёртывания больше не бывает: если внешний store-gateway не задан,
+             control-api поднимает его в своём процессе, и строка `store` отвечает «поднят». Пример,
+             называющий несуществующее состояние законным, учит читателя ждать того, чего он не
+             увидит, — а строкой ниже он видит ровно обратное. -->
         <dd><span data-lang="ru">компонента в этом развёртывании нет или он ещё не настроен. Это не поломка:
-          развёртывание без модели, без хранилища и без браузера — законное и рабочее</span>
+          развёртывание без модели, без оркестратора и без браузера — законное и рабочее</span>
           <span data-lang="en">the component is absent from this deployment, or not configured yet. Not a fault:
-          a deployment with no model, no store and no browser is legitimate and works</span></dd>
+          a deployment with no model, no orchestrator and no browser is legitimate and works</span></dd>
         <dt class="hz-error"><span data-lang="ru">ОТКАЗ</span><span data-lang="en">FAILING</span></dt>
         <dd><span data-lang="ru">компонент настроен и не отвечает. Почти никогда не намеренно</span>
           <span data-lang="en">configured and not answering. Almost never intentional</span></dd>
