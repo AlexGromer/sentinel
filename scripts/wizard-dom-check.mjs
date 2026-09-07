@@ -31,7 +31,9 @@ const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(path.join(REPO, 'pw-executor', 'package.json'));
 const { chromium } = require('playwright');
 
-const TOKEN = 'dom-gate-token';
+// ⚠ 16+ знаков ОБЯЗАТЕЛЬНО (ADR-160): control-api отказывается стартовать с непригодным
+// CONTROL_API_TOKEN, а прежнее значение 'dom-gate-token' было 14-значным и уронило бы этот стенд.
+const TOKEN = 'dom-gate-token-16plus';
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',

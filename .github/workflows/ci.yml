@@ -331,7 +331,7 @@ jobs:
           for i in $(seq 1 100); do [ -S "$SOCK" ] && break; sleep 0.1; done
           [ -S "$SOCK" ] || { echo "::error::store-gateway socket never appeared"; exit 1; }
           CONTROL_API_ADDR=127.0.0.1:8090 \
-          CONTROL_API_TOKEN=ui-smoke-token \
+          CONTROL_API_TOKEN=ui-smoke-token-16plus \
           CONTROL_API_AGENTCTL="$PWD/bin/agentctl" \
           CONTROL_API_SERVE_UI=1 \
           CONTROL_API_UI_DIR="$PWD/docs" \
@@ -343,7 +343,7 @@ jobs:
           done
           curl -sf http://127.0.0.1:8090/healthz >/dev/null || {
             echo "::error::control-api never answered /healthz"; sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
-          node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token \
+          node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token-16plus \
             --out "$PWD/ui-smoke" || {
               echo "::error::the UI smoke failed — see the screenshots artifact"; sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1; }
 
@@ -357,7 +357,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          node scripts/ui-press.mjs --base http://127.0.0.1:8090 --token ui-smoke-token \
+          node scripts/ui-press.mjs --base http://127.0.0.1:8090 --token ui-smoke-token-16plus \
             --out "$PWD/ui-press" || {
               echo "::error::протыкивание нашло контрол, который не нажат и не объявлен, либо нажатие сломало страницу"
               sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
@@ -387,7 +387,7 @@ jobs:
           set -e
           mkdir -p /tmp/ext-e2e
           CONTROL_API_ADDR=127.0.0.1:8099 \
-          CONTROL_API_TOKEN=ext-e2e-token \
+          CONTROL_API_TOKEN=ext-e2e-token-16plus \
           CONTROL_API_AGENTCTL="$PWD/bin/agentctl" \
           CONTROL_API_CORS_ORIGINS= \
           CONTROL_API_STORE_ADDR= \
@@ -407,7 +407,7 @@ jobs:
             exit 1; }
           echo "full chromium: $CHROME_BIN"
 
-          out=$(CHROME_BIN="$CHROME_BIN" CONTROL_API_TOKEN=ext-e2e-token SERVER_RUN_DIR=/tmp/ext-e2e \
+          out=$(CHROME_BIN="$CHROME_BIN" CONTROL_API_TOKEN=ext-e2e-token-16plus SERVER_RUN_DIR=/tmp/ext-e2e \
             npm run --silent e2e 2>&1) || {
               echo "$out"; echo "::error::the extension e2e failed"; sed -n '1,60p' /tmp/ext-e2e-api.log; exit 1; }
           echo "$out"

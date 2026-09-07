@@ -173,7 +173,7 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 13         # ⚠ may only ever go UP; today's honest number.
+    MIN_THREE_WAY = 14         # ⚠ may only ever go UP; today's honest number. 13 -> 14: ADR-160.
     #                            12 -> 13 at ADR-152: `goal-reached` ships with all three surfaces
     #                            from the start (terminal run line · artifact over HTTP · the hub's
     #                            Results view), so the floor rises WITH the feature rather than
@@ -250,7 +250,10 @@ def main() -> int:
     # появление недостижимой возможности — требует ОСОЗНАННОЙ правки числа в ТОМ ЖЕ коммите, где
     # менялся каталог, и правка видна в диффе строкой. Порог этого не даёт: он пропускает движение
     # «в хорошую сторону» молча, а именно там и прячется разбавление доли.
-    THREE_WAY_TODAY = 13       # ⚠ равенство, не порог: менять ТОЛЬКО вместе с каталогом и с причиной
+    # 13 -> 14: ADR-160 добавил `machine-tokens` СРАЗУ тремя путями — карточка в «Настройках»,
+    # три глагола `agentctl` и три маршрута. Ратчет РАСТЁТ, то есть это тот случай, ради
+    # которого он и заведён; понижение обратно теперь красное.
+    THREE_WAY_TODAY = 14       # ⚠ равенство, не порог: менять ТОЛЬКО вместе с каталогом и с причиной
     # 26 -> 27: ADR-159 добавил `own-password` (смена своего пароля) с ДВУМЯ путями, ui и http.
     # Третьего быть не может, и это замер, а не недоделка: маршрут принимает только сессию (машинному
     # токену — 403, у машины нет аккаунта), а сессии у CLI нет и заводить её отказались отдельным

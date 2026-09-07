@@ -46,6 +46,10 @@ const (
 	tokenGenerated     tokenSource = "generated"
 	tokenGeneratedMem  tokenSource = "generated (in-memory)"
 	tokenGeneratedOnly tokenSource = "generated (not persisted)"
+	// tokenRefused: оператор задал `CONTROL_API_TOKEN`, но значение непригодно. Отдельный исход, а
+	// НЕ `tokenDisabled`: «выключено» — это осознанный выбор оператора, а здесь выбор сделан и
+	// отвергнут, и вызыватель обязан различать их, чтобы сказать разное.
+	tokenRefused       tokenSource = "refused (unusable CONTROL_API_TOKEN)"
 )
 
 // envDisabled reports whether an env var carries an explicit "off" value. Anything else — including
@@ -126,6 +130,22 @@ func resolveToken(repo string) (tok string, src tokenSource, path string, warnin
 	path = tokenFilePath(repo)
 
 	if v := strings.TrimSpace(os.Getenv("CONTROL_API_TOKEN")); v != "" {
+		// ⚠ ПОЛ ПРИМЕНЯЕТСЯ И ЗДЕСЬ (ADR-160, решение Alex 2026-09-07). Замерено: эта ветка
+		// возвращала значение ДОСЛОВНО и до всякой проверки, тогда как `tokenMinLen` стоял только на
+		// ветке чтения файла ниже. То есть `CONTROL_API_TOKEN=x` — токен в ОДИН символ — принимался и
+		// защищал развёртывание ровно ничем, а реестр при этом утверждал, что пол есть у обеих
+		// веток. Ошибка описания в опасную сторону: она успокаивала.
+		//
+		// Отказ, а не предупреждение (решение Alex): предупреждение о слабом кредентиале листают, и
+		// развёртывание остаётся слабым — молча и надолго. Отказ громкий, случается один раз и в тот
+		// момент, когда оператор ещё смотрит в терминал.
+		if !usableToken(v) {
+			warnings = append(warnings, fmt.Sprintf(
+				"CONTROL_API_TOKEN is set but unusable (%d characters; needs %d-%d printable ASCII "+
+					"without spaces) — refusing to start with a credential that protects nothing. "+
+					"Unset it to have one generated, or supply a longer value.", len(v), tokenMinLen, tokenMaxLen))
+			return "", tokenRefused, path, warnings
+		}
 		return v, tokenFromEnv, path, nil
 	}
 	if envDisabled("CONTROL_API_AUTOTOKEN") {

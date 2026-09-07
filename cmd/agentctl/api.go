@@ -141,6 +141,16 @@ var apiVerbs = []apiVerb{
 	// ADR-146. The terminal half of "keys are settings". `list` never prints a key — it prints which
 	// ones are set, whether the process environment is overriding them, and a four-character tail — so
 	// it is safe in a CI log, which is the place a machine-token holder would run it.
+	// ADR-160. Терминальная половина именованных машинных токенов. `issue` — единственный глагол во
+	// всей таблице, чей ответ НЕСЁТ секрет, и это не послабление, а суть одноразовости: сервер хранит
+	// только SHA-256 и показать значение второй раз физически не может. Поэтому же `list` его не
+	// печатает — там имя, подсказка из четырёх знаков и время выдачи.
+	{Verb: "machine-tokens list", Method: "GET", Path: "/v1/machine-tokens",
+		Help: "named machine tokens this deployment has issued — names, four-character hints and dates, never values"},
+	{Verb: "machine-tokens issue", Method: "POST", Path: "/v1/machine-tokens", Body: []string{"name"},
+		Help: "issue a named machine token (admin); the value is printed ONCE and stored only as a hash"},
+	{Verb: "machine-tokens revoke", Method: "DELETE", Path: "/v1/machine-tokens/{id}", Arg: "id",
+		Help: "revoke one machine token by id; the others keep working, which is the whole point of naming them"},
 	{Verb: "provider-keys list", Method: "GET", Path: "/v1/provider-keys",
 		Help: "which provider keys this deployment has stored, and whether the process env overrides them (never the values)"},
 	// SecretField, not Body, for `value` — and that is the whole reason this route takes {name, value}
