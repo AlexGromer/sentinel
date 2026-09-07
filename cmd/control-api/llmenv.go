@@ -265,27 +265,13 @@ func persistedLLMEnv(cfg map[string]any) map[string]string {
 // configuration saved through the wizard could never reach a run there — which made ADR-063's "persisted
 // config is layer 3" true only where a store-gateway happened to be wired.
 func (s *server) getPersistedLLM() map[string]string {
-	if s.configTier() == tierFile {
-		doc, ok, err := s.readConfigFile()
-		if err != nil || !ok {
-			return nil
-		}
-		var fdoc map[string]any
-		if json.Unmarshal(doc.ValueJson, &fdoc) != nil {
-			return nil
-		}
-		return persistedLLMEnv(fdoc)
-	}
-	if s.store == nil {
-		return nil
-	}
-	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
-	if err != nil || rec == nil {
-		return nil
-	}
-	var doc map[string]any
-	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+	// ADR-158: the tier decision and the document read moved into `persistedConfigDoc`, so all three
+	// readers of the stored config answer from ONE place. This function's own file branch was the
+	// correct one — the other two lacked it — and it is kept, not dropped, by being the shared one.
+	doc := s.persistedConfigDoc()
+	if doc == nil {
 		return nil
 	}
 	return persistedLLMEnv(doc)
 }
+

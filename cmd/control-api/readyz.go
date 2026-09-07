@@ -509,21 +509,36 @@ func (s *server) probeAll() (map[string]readyCheck, bool) {
 	checks := map[string]readyCheck{}
 	var cfg map[string]any
 
-	if s.store == nil {
+	// ⚠ WHICH MEDIUM SERVES CONFIG IS ASKED OF `configTier()`, NOT RE-DERIVED FROM `s.store`.
+	// It used to be derived here a second time, and ADR-158 made the two answers disagree: with an
+	// embedded store `s.store != nil`, so this probe went down the store branch and reported "no
+	// config stored" for a deployment whose config was sitting in the file the OTHER author had just
+	// correctly chosen. Two authors for one decision is the disease the tier function exists to cure.
+	if s.configTier() != tierStore {
 		// ADR-075: the standalone tier really does keep the config in a file now, so the probe reads it.
 		// A MISSING file stays "skipped" rather than "error": with no store configured, running purely
 		// from the process env is a legitimate deployment, and flipping /readyz to 503 would call it
 		// broken. The service tier treats `rec == nil` as an error for the opposite reason — pointing at
 		// a gateway is an explicit declaration that a stored config is expected.
-		if s.storeAddr != "" {
+		switch {
+		case s.storeEmbedded:
+			// ADR-158: this process hosts the store itself, so there is no transport to be down and
+			// nothing for an operator to deploy. It is reported rather than skipped because a
+			// component that answers must not be invisible to the health view (principle 7).
+			checks["store"] = readyCheck{Status: "ok",
+				Detail:   "embedded store (no CONTROL_API_STORE_ADDR; hosted in this process)",
+				DetailRU: "встроенное хранилище (CONTROL_API_STORE_ADDR не задан; работает внутри этого процесса)"}
+		case s.storeAddr != "":
 			checks["store"] = readyCheck{Status: "error",
 				Detail:   "store-gateway " + s.storeAddr + " did not answer at startup",
 				DetailRU: "хранилище store-gateway " + s.storeAddr + " не ответило при старте"}
 			checks["config"] = readyCheck{Status: "error", Detail: storeUnavailableMsg, DetailRU: storeUnavailableMsgRU}
-		} else {
+		default:
 			checks["store"] = readyCheck{Status: "skipped",
 				Detail:   "CONTROL_API_STORE_ADDR unset (standalone tier)",
 				DetailRU: "CONTROL_API_STORE_ADDR не задан — автономный режим без хранилища"}
+		}
+		if s.configTier() == tierFile {
 			doc, ok, ferr := s.readConfigFile()
 			switch {
 			case ferr != nil:

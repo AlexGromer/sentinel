@@ -44,11 +44,25 @@ const (
 )
 
 // configTier reports which tier serves config right now.
+//
+// ⚠ AN EMBEDDED STORE (ADR-158) IS NOT A STORE FOR THIS DOMAIN, and the reason is a REGRESSION THIS
+// LINE ALREADY CAUSED ONCE, measured before it shipped: with the embedded store counted as a store,
+// a standalone deployment that had been configured through the wizard answered `{"error":"no config
+// stored"}` on the next start — its `state/config.json` was still on disk, and the empty embedded
+// database won. That is precisely the silent degradation ADR-075 exists to close, reintroduced from
+// the other side.
+//
+// The rule that keeps both ADRs true: the embedded store exists to restore features that had NO
+// implementation without a gateway — local accounts, and everything scoped by an owner. Config is
+// not one of them. ADR-075 already gave this domain parity across tiers ("the document, the
+// validation and the key are the SAME in both tiers — only the medium differs"), and of the two
+// media the file is the one an operator can read, diff and edit. Displacing it would take a
+// capability away in exchange for a uniformity the domain already had.
 func (s *server) configTier() configTier {
 	switch {
-	case s.store != nil:
+	case s.store != nil && !s.storeEmbedded:
 		return tierStore
-	case s.storeAddr != "":
+	case s.storeAddr != "" && !s.storeEmbedded:
 		return tierUnavailable
 	default:
 		return tierFile
@@ -57,6 +71,44 @@ func (s *server) configTier() configTier {
 
 func (s *server) configFilePath() string {
 	return filepath.Join(s.repo, "state", configFileName)
+}
+
+// persistedConfigDoc reads the stored configuration document from whichever medium serves THIS
+// deployment, or nil when there is none. Fail-open throughout: a run must never fail because the
+// stored config is unreachable, so every error path is a nil document rather than an error.
+//
+// ⚠ IT EXISTS BECAUSE THE THREE READERS OF THAT DOCUMENT HAD DISAGREED. `getPersistedLLM` asked
+// `configTier()` and therefore served both tiers (ADR-075). `getPersistedLogging` and
+// `getPersistedSettings` asked `s.store == nil` instead, so on the standalone tier they returned nil
+// unconditionally: a `logging` or `settings` section saved through the wizard reached a run where a
+// gateway happened to be wired and NOWHERE ELSE — and it did so silently, since all three are merged
+// into one env layer by `mergedPersistedEnv` and a missing layer looks exactly like an unset value.
+// ADR-158 made the disagreement worse rather than better: with an embedded store present those two
+// readers would consult it and find an empty database, arriving at the same nil by a wronger route.
+// One reader, one answer.
+func (s *server) persistedConfigDoc() map[string]any {
+	var raw []byte
+	if s.configTier() == tierFile {
+		doc, ok, err := s.readConfigFile()
+		if err != nil || !ok {
+			return nil
+		}
+		raw = doc.ValueJson
+	} else {
+		if s.store == nil {
+			return nil
+		}
+		rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
+		if err != nil || rec == nil {
+			return nil
+		}
+		raw = []byte(rec.ValueJson)
+	}
+	var doc map[string]any
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	return doc
 }
 
 // configFileDoc is the on-disk envelope. It carries the same three things as the store's ConfigRecord —

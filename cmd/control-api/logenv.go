@@ -135,15 +135,8 @@ func validateLoggingSection(body []byte) error {
 // layer, alongside getPersistedLLM. Fail-open for the same reason: a run must never fail because the
 // stored config is unreachable.
 func (s *server) getPersistedLogging() map[string]string {
-	if s.store == nil {
-		return nil
-	}
-	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
-	if err != nil || rec == nil {
-		return nil
-	}
-	var doc map[string]any
-	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+	doc := s.persistedConfigDoc()
+	if doc == nil {
 		return nil
 	}
 	return persistedLoggingEnv(doc)
@@ -230,15 +223,8 @@ func persistedSettingsEnv(cfg map[string]any) map[string]string {
 }
 
 func (s *server) getPersistedSettings() map[string]string {
-	if s.store == nil {
-		return nil
-	}
-	rec, err := s.store.getConfig(setupConfigKey, "", storeCallTimeout)
-	if err != nil || rec == nil {
-		return nil
-	}
-	var doc map[string]any
-	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+	doc := s.persistedConfigDoc()
+	if doc == nil {
 		return nil
 	}
 	return persistedSettingsEnv(doc)

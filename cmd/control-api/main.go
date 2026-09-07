@@ -214,6 +214,10 @@ type server struct {
 	corsAllow map[string]bool
 	orchAddr  string       // M9.8 F4 (ADR-054): RunControl orchestrator gRPC target for takeover/return forwarding ("" = not wired)
 	store     *storeClient // M13 (ADR-050): persistent store-gateway client (nil = in-memory only)
+	// storeEmbedded marks a store this process hosts itself (ADR-158) rather than one an operator
+	// deployed. Domains that ALREADY had a non-store implementation must keep it — see configTier,
+	// where treating the embedded store as a store silently orphaned an existing state/config.json.
+	storeEmbedded bool
 	// storeAddr is CONTROL_API_STORE_ADDR as configured, kept even when the dial failed. It is what
 	// separates "the operator chose the standalone tier" from "the operator chose a store and it is
 	// down" — two situations a nil `store` alone cannot tell apart, and which the config domain must
@@ -2472,6 +2476,33 @@ func main() {
 			s.journalEvent("service.store_unreachable", "warn", map[string]string{"addr": sa, "reason": err.Error()}, nil)
 		} else {
 			fmt.Fprintf(os.Stderr, "control-api: persisting runs to store-gateway at %s\n", sa)
+		}
+	} else {
+		// ADR-158: no external gateway configured — host one IN PROCESS rather than run without a
+		// store. This is what makes the standalone tier the same PRODUCT as the multi-user one
+		// (Alex's «одна версия» directive): local accounts, sign-in and per-account scoping stop
+		// depending on whether an operator started a second process. See embedstore.go for why this
+		// is the same implementation rather than a second one.
+		if es, err := startEmbeddedStore(s.repo); err != nil {
+			fmt.Fprintf(os.Stderr, "control-api: WARNING — could not start the embedded store: %v "+
+				"(runs stay in memory and local accounts are unavailable)\n", err)
+			s.journalEvent("service.store_unreachable", "warn",
+				map[string]string{"addr": "embedded", "reason": err.Error()}, nil)
+		} else {
+			defer es.stop()
+			sc, err := newEmbeddedStoreClient(es)
+			if sc != nil {
+				s.store = sc
+				s.storeEmbedded = true
+				defer sc.close()
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "control-api: WARNING — the embedded store did not answer: %v\n", err)
+				s.journalEvent("service.store_unreachable", "warn",
+					map[string]string{"addr": "embedded", "reason": err.Error()}, nil)
+			} else {
+				fmt.Fprintf(os.Stderr, "control-api: persisting runs to the embedded store at %s\n", es.path)
+			}
 		}
 	}
 	// M11.5 PR-5 (ADR-062): informational log; must not delay ListenAndServe. ADR-075 moved it out of the
