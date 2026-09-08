@@ -439,6 +439,32 @@ async function main() {
         'недостижим (docs/PR_ACCEPTANCE.md §2). Запустите с --llm-base, чтобы проверка исполнилась.');
     }
 
+    // W15 (группа C): СОХРАНЁННАЯ настройка действует и БЕЗ поля в теле. До этой волны секции `run` и
+    // `auth` сохранялись, подтверждались интерфейсом и не читались НИКЕМ — человек настраивал и не
+    // получал ничего. Проверяется живьём, потому что гейт мерит функцию, а это — доставку через всю
+    // цепочку: хранилище → обработчик → argv → план.
+    await check('сохранённая настройка действует БЕЗ поля в теле, и ответ её НАЗЫВАЕТ', async () => {
+      const u = users[0];
+      const r = await api(u.tok, '/v1/runs', {
+        method: 'POST',
+        body: JSON.stringify({ target: TARGET, mode: 'explore' }),   // ⚠ max_steps НЕ шлём
+      });
+      eq(r.status, 202, `прогон без max_steps не принят: ${JSON.stringify(r.body).slice(0, 200)}`);
+      const named = r.body.inherited_defaults || [];
+      ok(named.includes('run.max_steps'),
+        `ответ не назвал унаследованное: ${JSON.stringify(named)}. Умолчание, применённое молча, делает ` +
+        '«я не выбирал» и «я выбрал ровно это» одним актом — ровно то, что запрещает довод в коде');
+      const { state } = await waitForRun(u.tok, r.body.run_id, 180_000);
+      ok(state !== 'running', `прогон ${r.body.run_id} не дошёл до исхода`);
+      const plan = path.join(REPO, 'runs', `control-${r.body.run_id}`, 'plan.json');
+      ok(fs.existsSync(plan), `нет плана у прогона с унаследованным потолком (${plan})`);
+      const n = JSON.parse(fs.readFileSync(plan, 'utf8')).steps.length;
+      console.log(`       унаследован потолок ${u.steps}, шагов в плане ${n}`);
+      eq(n, Number(u.steps),
+        `сохранённый потолок ${u.steps} не обрезал прогон (шагов ${n}) — настройка сохранена, ` +
+        'подтверждена и не действует, то есть дефект вернулся');
+    });
+
     await check('изоляция по API: чужой прогон невидим — включая АДМИНИСТРАТОРА', async () => {
       const [a, b] = users;
       const own = await api(a.tok, '/v1/runs');

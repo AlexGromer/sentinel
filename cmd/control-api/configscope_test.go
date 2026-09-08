@@ -274,3 +274,72 @@ func TestSplitPreservesTheCallersBytes(t *testing.T) {
 		t.Error("re-serialising the same document produced different bytes")
 	}
 }
+
+// TestSavedPersonalSettingsActuallyReachARun — ЗАМЕРЕННЫЙ ДЕФЕКТ: секции `run` и `auth` объявлялись
+// настраиваемыми, мастер их сохранял, `GET /v1/config` их отдавал — и НИКТО их не читал. В окружение
+// прогона материализуются только глобальные секции, а личные, по замыслу, были «умолчаниями формы,
+// которые заполняет интерфейс»; интерфейс их не заполнял: обращений к `cfgDoc.run` в хабе не было ни
+// одного. Человек сохранял настройку, получал подтверждение — и не действовало ничего.
+//
+// Утверждаются ТРИ свойства, и второе не менее важно первого: умолчание не спорит с выбором.
+func TestSavedPersonalSettingsActuallyReachARun(t *testing.T) {
+	s, _, bob, carol := storeBackedServer(t)
+	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config",
+		[]byte(`{"run":{"max_steps":7,"target":"http://saved.example/","planner":"llm"}}`), bob); rec.Code != http.StatusOK {
+		t.Fatalf("сохранение личной секции: %d", rec.Code)
+	}
+
+	// 1. ПУСТОЕ ПОЛЕ ЗАПОЛНЯЕТСЯ СОХРАНЁННЫМ — и заполненное НАЗЫВАЕТСЯ.
+	req := runRequest{owner: ownerOfToken(t, s, bob)}
+	used := s.applyPersonalRunDefaults(&req)
+	if req.MaxSteps != "7" || req.Target != "http://saved.example/" || req.Planner != "llm" {
+		t.Errorf("сохранённые умолчания не доехали до запроса: %+v", req)
+	}
+	if len(used) != 3 {
+		t.Errorf("применено %v — ответ обязан НАЗВАТЬ унаследованное поимённо, иначе прогон уходит по адресу, "+
+			"которого человек в этом запросе не видел", used)
+	}
+	// Число 7 приходит из JSON как float64, и «7» здесь — не косметика: «7.000000» доехало бы до
+	// agentctl мусором, и прогон упал бы по причине, к настройке не относящейся.
+	if req.MaxSteps != "7" {
+		t.Errorf("число приведено к строке неверно: %q", req.MaxSteps)
+	}
+
+	// 2. ЯВНЫЙ ВЫБОР ПОБЕЖДАЕТ. Без этого «я не выбирал» и «я выбрал ровно это» стали бы одним актом —
+	// ровно то, что запрещает довод у runRequest.Observe.
+	req2 := runRequest{owner: req.owner, MaxSteps: "3", Target: "http://asked.example/"}
+	used2 := s.applyPersonalRunDefaults(&req2)
+	if req2.MaxSteps != "3" || req2.Target != "http://asked.example/" {
+		t.Errorf("умолчание перебило явный выбор: %+v", req2)
+	}
+	for _, u := range used2 {
+		if u == "run.max_steps" || u == "run.target" {
+			t.Errorf("в списке унаследованного оказалось поле, которое человек задал сам: %v", used2)
+		}
+	}
+
+	// 3. ЧУЖОЕ УМОЛЧАНИЕ НЕ ПРИМЕНЯЕТСЯ. Личный слой на то и личный; иначе настройка одного человека
+	// молча меняла бы прогоны другого — дефект строго хуже того, который здесь чинится.
+	req3 := runRequest{owner: ownerOfToken(t, s, carol)}
+	if used3 := s.applyPersonalRunDefaults(&req3); len(used3) != 0 || req3.MaxSteps != "" {
+		t.Errorf("аккаунту достались чужие умолчания: %v %+v", used3, req3)
+	}
+
+	// 4. БЕЗ ВЛАДЕЛЬЦА — БЕЗ УМОЛЧАНИЙ. Машинный кредентиал и развёртывание без аккаунтов имеют
+	// владельца "", и «нет субъекта — нет скоупинга» здесь действует так же, как везде в ADR-109.
+	req4 := runRequest{}
+	if used4 := s.applyPersonalRunDefaults(&req4); len(used4) != 0 {
+		t.Errorf("безвладельческому прогону достались чьи-то умолчания: %v", used4)
+	}
+}
+
+// ownerOfToken — id аккаунта по его сессии; тесту он нужен затем же, зачем обработчику: умолчания
+// адресуются владельцу, а не токену.
+func ownerOfToken(t *testing.T, s *server, tok string) string {
+	t.Helper()
+	c, ok := s.resolveCred(tok)
+	if !ok {
+		t.Fatalf("кредентиал не разобрался")
+	}
+	return c.owner()
+}

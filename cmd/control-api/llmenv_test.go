@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -166,5 +169,97 @@ func TestPersistedLLMEnv(t *testing.T) {
 	// no llm → nil
 	if persistedLLMEnv(map[string]any{"run": map[string]any{}}) != nil {
 		t.Errorf("persistedLLMEnv with no llm should be nil")
+	}
+}
+
+// TestEveryDeclaredRoleReachesARun — ОБХОД, а не перечень, и заведён он по измеренному дефекту.
+//
+// Роль `chat` реальна в мозге с ADR-108b, схема её публикует, мастер настройки рисует на неё поле и
+// сохраняет его — а проекция сохранённого документа читала из карты моделей ровно две роли двумя
+// жёсткими `if`. Значение доезжало до хранилища и не доезжало никуда дальше: интерфейс подтверждал
+// сохранение, человек считал, что настроил, и не узнавал обратного.
+//
+// Перечень ролей здесь НЕ ПИШЕТСЯ: он берётся из `llmRoles` — того же источника, из которого его
+// берут схема и обе проекции. Тест, написанный перечнем, был бы написан тем же пониманием, что
+// породило дыру, и четвёртая роль повторила бы судьбу третьей молча.
+//
+// Утверждаются ОБА пути, потому что они независимы и разошлись поодиночке: сохранённый документ и
+// пер-ранное тело. Плюс пол: обход над пустым множеством ролей прошёл бы идеально.
+func TestEveryDeclaredRoleReachesARun(t *testing.T) {
+	if len(llmRoles) < 3 {
+		t.Fatalf("ролей объявлено %d — обход стал бы вакуумным; пол здесь не формальность", len(llmRoles))
+	}
+
+	// 1. СОХРАНЁННЫЙ документ -> окружение прогона.
+	models := map[string]any{}
+	for _, role := range llmRoles {
+		models[role] = "model-for-" + role
+	}
+	cfg := map[string]any{"llm": map[string]any{"model": models}}
+	got := persistedLLMEnv(cfg)
+	for _, role := range llmRoles {
+		key := llmModelEnv(role)
+		if got[key] != "model-for-"+role {
+			t.Errorf("сохранённая модель роли %q не доезжает до прогона: %s = %q, ожидалось %q. "+
+				"Роль объявлена в llmRoles и публикуется схемой, значит настройка предлагается и не действует",
+				role, key, got[key], "model-for-"+role)
+		}
+	}
+
+	// 2. ПЕР-РАННОЕ тело -> окружение прогона, той же карте ролей.
+	perRun := &llmRunConfig{Model: map[string]string{}}
+	for _, role := range llmRoles {
+		perRun.Model[role] = "run-" + role
+	}
+	env := resolveRunEnv([]string{"PATH=/x"}, perRun, nil, nil)
+	seen := map[string]string{}
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			seen[kv[:i]] = kv[i+1:]
+		}
+	}
+	for _, role := range llmRoles {
+		key := llmModelEnv(role)
+		if seen[key] != "run-"+role {
+			t.Errorf("пер-ранная модель роли %q не доезжает: %s = %q, ожидалось %q",
+				role, key, seen[key], "run-"+role)
+		}
+	}
+
+	// 3. СТАРАЯ ФОРМА ЖИВА. Ломать `model_planner`/`model_heal` ради новой карты значило бы ломать
+	// работающие вызовы ради формы; поэтому обе принимаются, и именованная роль побеждает — она
+	// точнее, потому что называет себя.
+	old := &llmRunConfig{ModelPlanner: "p-old", ModelHeal: "h-old"}
+	if old.modelFor("planner") != "p-old" || old.modelFor("heal") != "h-old" {
+		t.Errorf("старая форма перестала приниматься: %+v", old)
+	}
+	both := &llmRunConfig{ModelPlanner: "p-old", Model: map[string]string{"planner": "p-new"}}
+	if both.modelFor("planner") != "p-new" {
+		t.Errorf("при обеих формах победила безымянная: %q", both.modelFor("planner"))
+	}
+	if old.modelFor("chat") != "" {
+		t.Errorf("старая форма выдумала модель для роли, которой в ней нет: %q", old.modelFor("chat"))
+	}
+}
+
+// TestSchemaRolesComeFromTheSameSource — схема обязана публиковать ТУ ЖЕ тройку, что доезжает до
+// прогона. До этой правки список стоял литералом в трёх местах и разошёлся в двух из трёх.
+func TestSchemaRolesComeFromTheSameSource(t *testing.T) {
+	s := &server{}
+	rec := httptest.NewRecorder()
+	s.handleConfigSchema(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	var body struct {
+		Roles []string `json:"roles"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("схема не разобралась: %v", err)
+	}
+	if len(body.Roles) != len(llmRoles) {
+		t.Fatalf("схема публикует %v, а до прогона доезжают %v", body.Roles, llmRoles)
+	}
+	for i, r := range llmRoles {
+		if body.Roles[i] != r {
+			t.Errorf("роль %d: схема говорит %q, доставка знает %q", i, body.Roles[i], r)
+		}
 	}
 }

@@ -98,7 +98,7 @@ func TestBudgetAndAuthFieldsReachAgentctl(t *testing.T) {
 	dir := t.TempDir()
 	req := runRequest{
 		Target: "http://example.test", PlanBudget: "111", HealBudget: "222", TotalBudget: "333",
-		StorageState: "/tmp/state.json", LoginPlan: "/tmp/login.json", PWNoTrace: true,
+		StorageState: "/tmp/state.json", LoginPlan: "/tmp/login.json", PWNoTrace: boolPtr(true),
 	}
 	path, err := writeRunConfig(dir, &req)
 	if err != nil {
@@ -118,6 +118,31 @@ func TestBudgetAndAuthFieldsReachAgentctl(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("run.yaml is missing %q\n--- file ---\n%s", want, body)
+		}
+	}
+
+	// ⚠ ЯВНЫЙ `false` ТОЖЕ ОБЯЗАН ДОЕЗЖАТЬ, и до W15 не доезжал: поле было простым bool, поэтому
+	// «снят» и «не указан» были одним байтом, а строка писалась только для истины. Как только у
+	// секции `auth` появился сохранённый слой, отменить сохранённое `true` на один прогон стало
+	// нечем — строка, которую не пишут, ничего не отменяет.
+	{
+		req2 := runRequest{Target: "http://example.test", PlanBudget: "1", PWNoTrace: boolPtr(false)}
+		p2, err := writeRunConfig(t.TempDir(), &req2)
+		if err != nil || p2 == "" {
+			t.Fatalf("writeRunConfig для явного false: path=%q err=%v", p2, err)
+		}
+		b2, _ := os.ReadFile(p2)
+		if !strings.Contains(string(b2), "pw_no_trace: false") {
+			t.Errorf("явный false не доехал до run.yaml — отменить сохранённое true нечем\n--- file ---\n%s", b2)
+		}
+	}
+	// А «не выбирал» по-прежнему не пишет НИЧЕГО: без этого nil и false слились бы обратно.
+	{
+		req3 := runRequest{Target: "http://example.test", PlanBudget: "1"}
+		p3, _ := writeRunConfig(t.TempDir(), &req3)
+		b3, _ := os.ReadFile(p3)
+		if strings.Contains(string(b3), "pw_no_trace") {
+			t.Errorf("«не выбирал» породило строку в run.yaml — выбор выдуман за человека\n--- file ---\n%s", b3)
 		}
 	}
 
@@ -271,5 +296,76 @@ func TestCIAndForceReplayRejectedTogether(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "mutually exclusive") {
 		t.Errorf("the 400 does not say why: %s", rec.Body.String())
+	}
+}
+
+// TestEverySchemaFieldCoversRunRequest — ЗЕРКАЛО существующей сверки, и заведено оно потому, что
+// односторонний гейт был зелёным и слепым одновременно.
+//
+// TestRunRequestCoversEverySchemaField утверждает «каждое поле схемы принимается телом прогона».
+// Обратное — «каждое поле, которое тело принимает, названо схемой» — не утверждал никто, и замерено:
+// пять экспортированных тегов `runRequest` меняли прогон и не были видны из схемы. Среди них
+// `message` (текст хода в чате) и `planner` (выбор планировщика) — то есть не мелочь на краю, а
+// величины, ради которых человек в схему и смотрит.
+//
+// Перечень тегов ВЫВОДИТСЯ рефлексией, а не пишется: список, написанный руками, был бы написан тем
+// же пониманием, что породило дыру (довод записан в шапке этого файла), и шестой тег появился бы в
+// нём молча.
+func TestEverySchemaFieldCoversRunRequest(t *testing.T) {
+	// Теги, у которых дескриптора НЕТ НАМЕРЕННО, — с причиной рядом. Список закрытый: он равен числу
+	// принятых решений, и добавление шестого требует решения, а не правки списка.
+	noDescriptor := map[string]string{
+		"from_run": "не настройка, а ССЫЛКА на прошлый прогон: значение осмысленно только внутри одного " +
+			"развёртывания и берётся из списка прогонов, а не задаётся человеком. Дескриптор с умолчанием " +
+			"обещал бы обратное.",
+		"llm": "не поле, а ВЛОЖЕННЫЙ документ: его состав публикуется отдельным блоком `llm` схемы, " +
+			"вместе с перечнем провайдеров и ролей. Дескриптор поля дублировал бы блок и разошёлся бы с ним.",
+	}
+	fields := map[string]bool{}
+	s := &server{}
+	rec := httptest.NewRecorder()
+	s.handleConfigSchema(rec, httptest.NewRequest(http.MethodGet, "/v1/config-schema", nil))
+	var body struct {
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("схема не разобралась: %v", err)
+	}
+	for k := range body.Fields {
+		fields[k] = true
+	}
+	if len(fields) < 20 {
+		t.Fatalf("полей в схеме %d — обход стал бы вакуумным", len(fields))
+	}
+	rt := reflect.TypeOf(runRequest{})
+	seen := 0
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue // неэкспортируемое поле: owner/plan/llm — сервер решает их сам
+		}
+		name := strings.Split(tag, ",")[0]
+		seen++
+		if fields[name] {
+			continue
+		}
+		if why, ok := noDescriptor[name]; ok {
+			if strings.TrimSpace(why) == "" {
+				t.Errorf("тег %q объявлен исключением с пустой причиной", name)
+			}
+			continue
+		}
+		t.Errorf("тело прогона принимает %q, а схема его не называет — величина, меняющая прогон, "+
+			"невидима из того, что обещает назвать «every knob the product has»", name)
+	}
+	if seen < 20 {
+		t.Fatalf("экспортированных тегов %d — рефлексия сломалась, и утверждение стало бы вакуумным", seen)
+	}
+	// Исключение для тега, который схема ВСЁ-ТАКИ называет, — протухшая запись: она читается как
+	// решение, а решения больше нет.
+	for name := range noDescriptor {
+		if fields[name] {
+			t.Errorf("%q объявлен исключением, но дескриптор у него есть — запись протухла", name)
+		}
 	}
 }

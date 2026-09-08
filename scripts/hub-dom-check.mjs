@@ -2246,6 +2246,45 @@ try {
     eq(missing.length, 0, `schema fields with no control: ${missing.join(', ')}`);
   }, { allowConsole: freshConfig404 });
 
+  await check('каждый преселект режима совпадает с умолчанием СВОЕГО контекста из схемы', async () => {
+    // ⚠ ЭТОТ ГЕЙТ ЗАВЕДЁН ПОТОМУ, ЧТО СВЕРЯТЬ БЫЛО НЕ С ЧЕМ. У `modes` и `planner` схема публиковала
+    // голые перечни без умолчания, поэтому «ничего не трогал и запустил» из терминала и из
+    // интерфейса были РАЗНЫМИ прогонами, и ни одна проверка не могла этого заметить: расхождение
+    // требует двух величин, а вторая отсутствовала.
+    //
+    // Умолчание поконтекстное (решение Alex, W15): терминал начинает с explore, форма прогона — с
+    // goal, чат — с describe. Три разные задачи, а не дрейф трёх копий одного числа. Гейт сверяет
+    // КАЖДЫЙ преселект с умолчанием ЕГО контекста, а не все со всеми — последнее потребовало бы
+    // свести три начала к одному и отняло бы удобство у двух из трёх.
+    //
+    // Наблюдение НЕЗАВИСИМОЕ: схема читается по HTTP, значения — из живого DOM браузером. Гейт не
+    // повторяет формулу страницы, поэтому мутация «поменять selected в разметке» его красит.
+    const res = await page.evaluate(async () => {
+      const r = await fetch('/v1/config-schema');
+      const sc = await r.json();
+      const ctx = sc.mode_contexts || {};
+      const pctx = sc.planner_contexts || {};
+      const sel = (id) => { const e = document.getElementById(id); return e ? e.value : null; };
+      return {
+        schema: { modeDefault: sc.mode_default, ctx, plannerDefault: sc.planner_default, pctx },
+        dom: { run: sel('b-mode'), chat: sel('ch-mode'), runPlanner: sel('b-planner'), chatPlanner: sel('ch-planner') },
+      };
+    });
+    const { schema, dom } = res;
+    ok(schema.modeDefault, 'схема не публикует умолчание режима — сверять по-прежнему не с чем');
+    ok(schema.plannerDefault, 'схема не публикует умолчание планировщика');
+    const wantRun = schema.ctx.run || schema.modeDefault;
+    const wantChat = schema.ctx.chat || schema.modeDefault;
+    eq(dom.run, wantRun, `форма прогона открывается в режиме ${dom.run}, а схема объявляет для неё ${wantRun}`);
+    eq(dom.chat, wantChat, `чат открывается в режиме ${dom.chat}, а схема объявляет для него ${wantChat}`);
+    // Форма прогона планировщик НЕ преселектит — и это записанное отсутствие: контекста `run` в
+    // planner_contexts нет намеренно. Утверждаем пустоту, иначе «нет записи» и «есть скрытый выбор»
+    // остались бы неразличимы.
+    ok(!schema.pctx.run, 'у формы прогона появился преселект планировщика — запишите причину или снимите его');
+    ok(!dom.runPlanner || dom.runPlanner === '' || dom.runPlanner === 'heuristic',
+      `форма прогона молча преселектит планировщик ${dom.runPlanner}`);
+  }, { allowConsole: freshConfig404 });
+
   await check('the Run button SENDS the budgets and the auth block, not just renders them', async () => {
     // The behavioural half. Before ADR-107 every one of these values was collected by the form and
     // dropped by the handler, which no assertion about the DOM could have noticed.

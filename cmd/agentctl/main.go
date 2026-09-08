@@ -404,7 +404,13 @@ func filteredEnv() []string {
 		"STORAGE_STATE": true, "STORAGE_STATE_SAVE": true, "MCP_TRANSPORT": true,
 		"ORCH_ADDR": true, "STORE_ADDR": true, "BRAIN_PYTHON": true, "PYTHONPATH": true,
 		// M11.3 (ADR-035): metrics push, visual-heal toggle, corporate TLS trust + proxy.
-		"PROM_PUSHGATEWAY": true, "HEAL_VISUAL": true,
+		// ⚠ `HEAL_LLM` СТОИТ РЯДОМ С `HEAL_VISUAL` С W15, и до этого его отсутствие было не решением,
+		// а пропуском: обе — булевы переключатели самопочинки, обе объявлены настройками развёртывания
+		// в схеме, и обе сохраняются интерфейсом. Но сохранённый `HEAL_LLM` до мозга не доезжал ВООБЩЕ
+		// — ни точного имени, ни подходящего префикса, — то есть настройку предлагали задать, она
+		// принималась, подтверждалась и не делала ничего. Граница безопасности этим не тратится:
+		// переносится признак поведения, а не кредентиал, и сосед по строке — тот же случай.
+		"PROM_PUSHGATEWAY": true, "HEAL_VISUAL": true, "HEAL_LLM": true,
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 		"http_proxy": true, "https_proxy": true, "no_proxy": true,
@@ -655,7 +661,11 @@ func cmdRun(repo string, args []string) int {
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 	var explicit []string
-	for _, n := range []string{"planner", "coverage-target", "max-steps", "goal", "describe", "scenario"} {
+	// ⚠ ПЕРЕЧЕНЬ ПАРЕН таблице `_EXPLICIT_FLAG` в brain/runconfig.py: она читает `SENTINEL_EXPLICIT`,
+	// который наполняется ЗДЕСЬ. Имя, отсутствующее тут, делает запись там инертной — то есть человек,
+	// снявший соблюдение robots.txt флагом, получил бы его обратно из случайно лежащего рядом
+	// run.yaml, и "флаг > файл" перестало бы быть правдой ровно для той ручки, где цена ошибки внешняя.
+	for _, n := range []string{"planner", "coverage-target", "max-steps", "goal", "describe", "scenario", "ignore-robots"} {
 		if setFlags[n] {
 			explicit = append(explicit, n)
 		}
@@ -707,7 +717,6 @@ func cmdRun(repo string, args []string) int {
 		"RUN_CONFIG=" + *runConfig,
 		"SENTINEL_EXPLICIT=" + strings.Join(explicit, ","),
 		"PLAN_FILE=" + *planFile,
-		"HEAL_LLM=" + boolEnv(*healLLM),
 		"IGNORE_ROBOTS=" + boolEnv(*ignoreRobots),
 		"SENTINEL_OBSERVE=" + *observe,
 		"AUT_VERSION=" + *autVersion,
@@ -717,6 +726,18 @@ func cmdRun(repo string, args []string) int {
 		// M9.10 (ADR-048): chat-mode conversation thread key. Run-var (appended after filteredEnv), so it
 		// always reaches the brain; only read when RUN_MODE=chat. The SENTINEL_ prefix is allowlisted too.
 		"SENTINEL_CONVERSATION_ID=" + *conversationID,
+	}
+	// ⚠ `HEAL_LLM` ПИШЕТСЯ ТОЛЬКО ПО ФЛАГУ, и это половина той же починки, что и запись в аллоулисте
+	// выше. Run-var дописывается ПОСЛЕ унаследованного окружения, а os/exec берёт ПОСЛЕДНЕЕ значение,
+	// поэтому безусловная строка затирала сохранённую настройку нулём — впустить её в аллоулист и
+	// оставить безусловную запись значило бы починить одну половину и оставить вторую.
+	//
+	// ⚠ ТОТ ЖЕ РЕЦЕПТ НЕЛЬЗЯ ПРИМЕНЯТЬ К `SENTINEL_OBSERVE`: там безусловная перезапись — НАМЕРЕННЫЙ
+	// контракт, закреплённый тестом (observe_flag_test.go), потому что наблюдение приходит флагом и
+	// унаследованное значение до мозга доезжать не должно. Разница в том, что у наблюдения нет
+	// сохранённого слоя, а у самопочинки он есть.
+	if setFlags["heal-llm"] {
+		extra = append(extra, "HEAL_LLM="+boolEnv(*healLLM))
 	}
 	extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)
 	if runNeedsStore(*mode, *replay) {

@@ -43,6 +43,11 @@ _KEY_ENV = {
     # guard `pw_no_trace` DOES reach the exported file, so the export was selective in a way nobody
     # had written down.
     "observe": "SENTINEL_OBSERVE",
+    # ADR-133 (W15): экспорт из хаба ПИСАЛ `ignore_robots`, а загрузчик его выбрасывал — ключа не было
+    # ни здесь, ни в `_ALLOWED`. Кнопка экспорта обещает «повторить ТОТ ЖЕ прогон в CI или из
+    # терминала», и обещание нарушалось МОЛЧА: повтор шёл С СОБЛЮДЕНИЕМ robots.txt, ничего об этом не
+    # сказав. Тот же класс, что `observe` строкой выше, и найден он тем же способом.
+    "ignore_robots": "IGNORE_ROBOTS",
 }
 # M9.2b (ADR-028): structured keys handled specially (not a single env var).
 # M9.7 (ADR-123): the declarative ADAPTER blocks (`auth:`, `deploy:`) are DERIVED from the SPI's
@@ -53,11 +58,29 @@ _ALLOWED = set(_KEY_ENV) | {"mode", "scenarios"} | set(adapters.DEFAULTS)
 # Numeric keys are validated/coerced at load so a bad scalar fails as a config error (exit 3).
 _NUMERIC = {"coverage_target": float, "max_steps": int,
             "plan_budget": int, "heal_budget": int, "total_budget": int}
+# Булевы ключи приводятся к "1"/"0" ЗДЕСЬ, а не у читателя. Причина та же, что у `observe` ниже, и
+# она измерена: YAML 1.1 читает `ignore_robots: on` как булев True, обобщённая ветка `apply` кладёт
+# в окружение `str(value)` — то есть строку "True", — а единственный настоящий читатель сравнивает с
+# "1" (brain/robots.py). Значение доехало бы до прогона и не сработало, что хуже, чем не доехать.
+_BOOL = {"ignore_robots"}
 # agentctl emits these defaults for EVERY run; the file may override a still-default value.
-_AGENTCTL_DEFAULTS = {"PLANNER": "heuristic", "COVERAGE_TARGET": "0.85", "MAX_STEPS": "40"}
+_AGENTCTL_DEFAULTS = {"PLANNER": "heuristic", "COVERAGE_TARGET": "0.85", "MAX_STEPS": "40",
+                      # ⚠ БЕЗ ЭТОЙ ЗАПИСИ ВЕСЬ КЛЮЧ — МЁРТВЫЙ КОД, и это замерено, а не предположено.
+                      # `agentctl` выдаёт `IGNORE_ROBOTS=` ВСЕГДА и всегда непустым ("1"/"0",
+                      # cmd/agentctl/main.go), поэтому `_overridable` видит cur="0", не находит его в
+                      # этой таблице и возвращает False — файл не применился бы НИКОГДА, на
+                      # единственном пути, где RunConfig вообще существует. Ровно противоположный
+                      # случай `SENTINEL_OBSERVE` ниже: там агент дефолта НЕ выдаёт, и запись была бы
+                      # недостижимой; здесь выдаёт, и без записи недостижим сам ключ.
+                      "IGNORE_ROBOTS": "0"}
 # brain env var -> the agentctl flag that sets it (for the explicit-flag-wins check).
 _EXPLICIT_FLAG = {"GOAL": "goal", "DESCRIBE": "describe", "PLANNER": "planner",
-                  "COVERAGE_TARGET": "coverage-target", "MAX_STEPS": "max-steps"}
+                  "COVERAGE_TARGET": "coverage-target", "MAX_STEPS": "max-steps",
+                  # ⚠ ПАРНАЯ ПРАВКА В Go. Эта таблица читает `SENTINEL_EXPLICIT`, который наполняет
+                  # ЖЁСТКИЙ перечень имён флагов в cmd/agentctl/main.go; без "ignore-robots" ТАМ
+                  # запись здесь инертна — человек, снявший робота флагом, получил бы его обратно из
+                  # случайно лежащего рядом run.yaml.
+                  "IGNORE_ROBOTS": "ignore-robots"}
 # ⚠ `SENTINEL_OBSERVE` НЕТ в таблице выше НАМЕРЕННО, и это замер, а не забывчивость. Строка для него
 # была написана и УБРАНА, когда мутация её выживания ничего не покрасила: `agentctl` не выдаёт для
 # наблюдения ДЕФОЛТНОГО значения — только пустую строку либо то, что дал флаг, — поэтому явный выбор
@@ -82,7 +105,14 @@ def load_run_config(path: str) -> dict:
     for k, v in data.items():
         if k not in _ALLOWED or v is None:
             continue
-        if k == "observe":
+        if k in _BOOL:
+            # YAML 1.1 даёт булев для on/off/yes/no/true/false; строку принимаем как есть, но
+            # приводим к тому виду, который читает окружение.
+            if isinstance(v, bool):
+                v = "1" if v else "0"
+            else:
+                v = "1" if str(v).strip().lower() in ("1", "true", "yes", "on") else "0"
+        elif k == "observe":
             # ⚠ YAML 1.1 — which pyyaml implements — reads a bare `off` as the BOOLEAN False (same
             # for `on`/`yes`/`no`). `observe: off` is the single most likely thing a person writes,
             # and without this it arrives as False, becomes the string "False" in the environment,
