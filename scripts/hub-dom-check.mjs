@@ -2943,6 +2943,125 @@ try {
     eq(back.status, 200, 'could not restore the stand password');
   }, { allowConsole: freshConfig404 });
 
+  /* ADR-162: ИЗОЛЯЦИЯ ДВУХ АККАУНТОВ, ПРОВЕРЕННАЯ ЖИВЬЁМ И ГЛАЗАМИ ИНТЕРФЕЙСА.
+   *
+   * ⚠ ЗАЧЕМ, ЕСЛИ ЕСТЬ 13 GO-ПРОВЕРОК В `access_test.go`. Замерено: там ОБА аккаунта обычные, то
+   * есть правило «администратор тоже заскоуплен» не утверждает НИЧЕГО и нигде. А оно противоречит
+   * ожиданию: в большинстве продуктов админ видит всё. Реализация, «починенная» под это ожидание,
+   * прошла бы весь сьют зелёной.
+   *
+   * ⚠ И ВТОРОЕ СВОЙСТВО ПРОТИВОПОЛОЖНО ПЕРВОМУ ДЛЯ ТОГО ЖЕ ВЫЗЫВАЮЩЕГО: служебный журнал админ
+   * видит ЦЕЛИКОМ (`scoped:false`), а чужие прогоны — не видит вовсе. Утверждать надо ОБА: «админ
+   * видит всё» сломает первое, «админ видит только своё» — второе, и каждая из этих ошибок выглядит
+   * как разумная реализация.
+   *
+   * Замерено живьём перед тем, как писать: список обычного — 1 прогон, список админа — 0, по адресу
+   * админ получает 404, журнал админу 39 записей без скоупинга, обычному 11 со скоупингом.
+   * То есть это ТРЕВОЖКА НА РЕГРЕСС, а не охота за дефектом, и так её и надо читать. */
+  await check('isolation: a run started by one account is invisible to the other — including an ADMIN', async () => {
+    const base = `http://127.0.0.1:${PORT2}`;
+    const as = (tok, path, init) => idPage.evaluate(async ([b, t, p, i]) => {
+      const r = await fetch(b + p, Object.assign({ headers: { Authorization: 'Bearer ' + t } }, i || {}));
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    }, [base, tok, path, init]);
+    const login = async (name, pass) => {
+      const r = await idPage.evaluate(async ([b, n, p]) => {
+        const res = await fetch(b + '/v1/login', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: n, password: p }) });
+        return await res.json();
+      }, [base, name, pass]);
+      ok(r.session, `${name} could not sign in: ${JSON.stringify(r)}`);
+      return r.session;
+    };
+
+    const userTok = await login('gate-user', 'gate-user-pass1');
+    const adminTok = await login('gate-admin', 'gate-admin-pass');
+
+    // Прогон заводится ПО API, а не формой: форма запускает настоящий обход, и проверка стала бы
+    // мерить исполнитель, а не изоляцию. Владелец берётся из кредентиала, поэтому для предмета
+    // проверки способ создания безразличен.
+    const made = await as(userTok, '/v1/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + userTok },
+      body: JSON.stringify({ target: 'file:///nonexistent-for-isolation.html', mode: 'explore', max_steps: '1' }),
+    });
+    ok(made.body.run_id, `could not start a run as gate-user: ${JSON.stringify(made)}`);
+    const runID = made.body.run_id;
+
+    // 1. ПО API: владелец видит, администратор — нет, ни списком, ни по адресу.
+    const ownList = await as(userTok, '/v1/runs');
+    ok((ownList.body.runs || []).some((r) => r.run_id === runID),
+      `the owner does not see their own run: ${JSON.stringify(ownList.body).slice(0, 200)}`);
+    const admList = await as(adminTok, '/v1/runs');
+    ok(!(admList.body.runs || []).some((r) => r.run_id === runID),
+      `an ADMIN sees another account's run in the list — scoping regressed: ${JSON.stringify(admList.body).slice(0, 200)}`);
+    eq((await as(adminTok, `/v1/runs/${runID}`)).status, 404,
+      "an ADMIN fetched another account's run by address");
+    eq((await as(adminTok, `/v1/runs/${runID}/artifact?name=scenario.json`)).status, 404,
+      "an ADMIN fetched another account's artifact");
+    eq((await as(userTok, `/v1/runs/${runID}`)).status, 200, 'the owner lost access to their own run');
+
+    // 2. ПРОТИВОПОЛОЖНОЕ СВОЙСТВО, И ИМЕННО ОНО ДЕЛАЕТ ПАРУ ОСМЫСЛЕННОЙ: технический журнал админ
+    // видит ЦЕЛИКОМ, обычный — только своё. Директива Alex: «админ не видит СОДЕРЖИМОГО чужих
+    // прогонов, но видит технические журналы».
+    const admLog = await as(adminTok, '/v1/service-log?limit=200');
+    const usrLog = await as(userTok, '/v1/service-log?limit=200');
+    eq(admLog.body.scoped, false, 'the service journal is SCOPED for an admin — the audit half is gone');
+    eq(usrLog.body.scoped, true, 'the service journal is UNSCOPED for a plain account — it sees the deployment');
+    ok((admLog.body.matched || 0) > (usrLog.body.matched || 0),
+      `an admin sees ${admLog.body.matched} journal records and a plain account ${usrLog.body.matched} — ` +
+      'the two must differ, or one of the two scoping rules is not doing anything');
+
+    // 3. ГЛАЗАМИ ИНТЕРФЕЙСА, потому что «человек видит чужое» и «API отдаёт чужое» — разные
+    // утверждения, и расходятся они тише всего. Список прогонов живёт в разделе «Библиотека».
+    //
+    // ⚠ ПРИЗНАК СТРОКИ — `data-rerun`, А НЕ `data-watch`. Первая редакция ждала `data-watch` и
+    // упиралась в таймаут: он рисуется ТОЛЬКО при `state === 'running'` (docs/index.html), а этот
+    // прогон падает мгновенно — цель заведомо несуществующая. `data-rerun` есть у КАЖДОЙ строки
+    // независимо от состояния, то есть отвечает на вопрос «видна ли строка», а не «идёт ли прогон».
+    //
+    // ⚠ ВОССТАНОВЛЕНИЕ СТЕНДА — В `finally`. Без него упавшая проверка оставляла вход под gate-user
+    // и на разделе «Библиотека», и СЛЕДУЮЩАЯ проверка падала по чужой причине: замерено, «signing
+    // out» не нашла `#id-logout` и потратила свои 30 секунд на диагноз, к ней не относящийся.
+    try {
+      await openSettings();
+      await signIn('gate-admin', 'gate-admin-pass');
+      // ⚠ СПИСОК ПРОГОНОВ ЖИВЁТ В ПОДВКЛАДКЕ `runs`, а клик по рельсе открывает `library/library`
+      // (сценарии и тесты). Первая редакция кликала только рельсу и получала ПУСТОЙ `#runs-list` —
+      // диагноз «rows=0, list=(пусто)» и назвал причину. Тот же путь, что у соседней проверки.
+      const openRuns = async () => {
+        await idPage.click('.rail a[data-nav="library"]');
+        await idPage.click('[data-innerbar="library"] .subtab-btn[data-sub="runs"]');
+        await idPage.click('#runs-refresh');
+        await idPage.waitForTimeout(900);
+      };
+      await openRuns();
+      ok(!(await idPage.locator(`#runs-list [data-rerun="${runID}"]`).count()),
+        'the hub SHOWS an admin a run belonging to another account');
+
+      await openSettings();
+      await signIn('gate-user', 'gate-user-pass1');
+      await openRuns();
+      // Ждём НЕПУСТОЙ список, а не конкретную строку: слепое ожидание одной строки даёт «таймаут»
+      // вместо «вот что показано», и первый же промах диагностируется вслепую.
+      await idPage.waitForFunction(
+        () => { const e = document.getElementById('runs-list');
+                return !!e && !/загрузка|loading/i.test(e.innerHTML); },
+        null, { timeout: 15000 }).catch(() => {});
+      const shownToOwner = await idPage.evaluate(() => {
+        const e = document.getElementById('runs-list');
+        return { html: (e ? e.innerHTML : '(нет #runs-list)').slice(0, 400),
+                 rows: e ? e.querySelectorAll('[data-rerun]').length : -1 };
+      });
+      ok(await idPage.locator(`#runs-list [data-rerun="${runID}"]`).count() === 1,
+        `the owner does not see their own run in the hub. rows=${shownToOwner.rows}; list=${shownToOwner.html}`);
+    } finally {
+      await openSettings();
+      await signIn('gate-admin', 'gate-admin-pass');
+    }
+  }, { allowConsole: /404 \(Not Found\)|403 \(Forbidden\)/ });
+
   await check('identity: signing out returns the hub to no identity', async () => {
     await idPage.click('#id-logout');
     await idPage.waitForTimeout(500);
