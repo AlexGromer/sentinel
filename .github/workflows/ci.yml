@@ -343,9 +343,31 @@ jobs:
           done
           curl -sf http://127.0.0.1:8090/healthz >/dev/null || {
             echo "::error::control-api never answered /healthz"; sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
-          node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token-16plus \
-            --out "$PWD/ui-smoke" || {
-              echo "::error::the UI smoke failed — see the screenshots artifact"; sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1; }
+          # ⚠ ПОЛ НА ЧИСЛО ИСПОЛНЕННЫХ ПРОВЕРОК, А НЕ ТОЛЬКО КОД ВОЗВРАТА (ADR-162).
+          # До этого шаг смотрел ТОЛЬКО на exit code. Замерено: смоук сам печатает «N/M checks
+          # passed» (scripts/ui-smoke.mjs) в том же виде, что хаб, — но эту строку не читал никто.
+          # Проверка, тихо переставшая исполняться, уносила `results.length` вниз, `failed.length`
+          # оставался нулём, и шаг был зелёным над сузившимся обходом. Тот же класс, что полы у
+          # выведенных перечней: лишнее в списке видно, а ПРОПУЩЕННОЕ — нет.
+          # Идиома скопирована с гейта хаба (тот же файл, шаг «Hub Logs-view DOM gate»), включая
+          # `|| true`: пусть решают греп-проверки ниже, иначе падение печатает только код возврата.
+          out=$(node scripts/ui-smoke.mjs --base http://127.0.0.1:8090 --token ui-smoke-token-16plus \
+            --out "$PWD/ui-smoke" 2>&1) || true
+          echo "$out"
+          echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
+            echo "::error::the UI smoke printed no pass line — it did not run to the end"
+            sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1; }
+          n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
+          t=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f2 | cut -d' ' -f1)
+          if [ "$n" -ne "$t" ]; then
+            echo "::error::$n of $t checks passed in the UI smoke — see the screenshots artifact"
+            sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1
+          fi
+          # Пол, а не текущее число: 11 сегодня, и он ТРЕВОЖКА, а не налог на каждую новую проверку
+          # (тот же довод записан у пола хаба — 49 при 86 исполненных).
+          if [ "$t" -lt 11 ]; then
+            echo "::error::only $t checks ran in the UI smoke — expected at least 11"; exit 1
+          fi
 
       - name: Press every control of the hub (Ф4 — the walk ui-smoke does not do)
         # ⚠ Отдельный шаг, а НЕ часть смоука, и стенд у них общий: смоук ОПИСЫВАЕТ и ФОТОГРАФИРУЕТ
