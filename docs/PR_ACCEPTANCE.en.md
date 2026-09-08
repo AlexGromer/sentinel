@@ -46,8 +46,9 @@ manual half below reads as the **remainder** rather than as the whole list.
 | Python offline suite: **every** `tests/test_*_offline.py`, discovered by glob, floor 25 | `build` | `Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)` |
 | End-to-end UI smoke against a real deployment | `build` | `End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)` |
 | EVERY control of the hub is pressed: pressed, or not pressed for a recorded reason; the walk fails on a control that is neither | `build` | `Press every control of the hub (Ф4 — the walk ui-smoke does not do)` |
+| The multi-user deployment end to end: the first administrator creates itself and prints its password once, that admin creates accounts, each account runs with ITS OWN step ceiling and sees only its own run — including the assertion that an admin does NOT see another account's run while still seeing the whole service journal; floor on the number of checks | `build` | `Multi-user deployment end-to-end (first admin -> accounts -> per-account runs -> isolation)` |
 | The MV3 extension end to end: a real Chromium loads it unpacked, the bearer handshake goes through the SHIPPING `wsSubprotocols`, and the event reaches a live control-api's `events.ndjson`; floored on the check count | `build` | `End-to-end check of the MV3 extension in a REAL Chromium (EXTENSION-E2E-RUNS-NOWHERE)` |
-| Screenshots uploaded as an artifact (`always()` — a failure is exactly when they are worth having) | `build` | `Upload UI smoke screenshots` |
+| Screenshots uploaded as an artifact (`always()` — a failure is exactly when they are worth having) | `build` | `Upload UI screenshots (smoke + multi-user)` |
 | Deterministic per-fixture replay with a golden diff, asserting the exit code | `replay` | `Explore + freeze goldens + replay (assert exit code)` |
 | Explore over `testdata/site` producing `plan.json` | `explore` | `Explore testdata/site -> plan.json` |
 | Secrets: gitleaks over the **whole history**, hard fail | `security` | `gitleaks (secrets scan — HARD fail)` |

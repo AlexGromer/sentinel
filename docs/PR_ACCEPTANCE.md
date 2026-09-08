@@ -45,8 +45,9 @@
 | Питоновский офлайн-сьют: **все** `tests/test_*_offline.py`, обнаруживаются глобом, пол 25 | `build` | `Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)` |
 | Сквозной смоук интерфейса против настоящего развёртывания | `build` | `End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)` |
 | Протыкивание КАЖДОГО контрола хаба: нажат либо не нажат по записанной причине; исключение падает, если контрол не нажат и причина не объявлена | `build` | `Press every control of the hub (Ф4 — the walk ui-smoke does not do)` |
+| Многопользовательское развёртывание сквозь: первый администратор заводится сам и печатает пароль один раз, администратор заводит аккаунты, каждый гонит СВОЙ прогон со своим потолком шагов и видит только его — включая проверку, что администратор чужого прогона НЕ видит, а служебный журнал видит целиком; пол на число проверок | `build` | `Multi-user deployment end-to-end (first admin -> accounts -> per-account runs -> isolation)` |
 | Расширение MV3 сквозь: настоящий Chromium грузит его распакованным, bearer-рукопожатие идёт НАСТОЯЩЕЙ `wsSubprotocols`, событие доезжает до `events.ndjson` живого control-api; пол на число проверок | `build` | `End-to-end check of the MV3 extension in a REAL Chromium (EXTENSION-E2E-RUNS-NOWHERE)` |
-| Выгрузка скриншотов смоука артефактом (`always()` — падение и есть тот случай, когда они нужны) | `build` | `Upload UI smoke screenshots` |
+| Выгрузка скриншотов смоука артефактом (`always()` — падение и есть тот случай, когда они нужны) | `build` | `Upload UI screenshots (smoke + multi-user)` |
 | Детерминированный replay по фикстурам с golden-diff и утверждением кода выхода | `replay` | `Explore + freeze goldens + replay (assert exit code)` |
 | Explore по `testdata/site` до `plan.json` | `explore` | `Explore testdata/site -> plan.json` |
 | Секреты: gitleaks по **всей истории**, HARD fail | `security` | `gitleaks (secrets scan — HARD fail)` |

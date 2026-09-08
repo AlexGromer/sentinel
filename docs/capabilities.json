@@ -1252,6 +1252,25 @@
         }
       ],
       "reach": "capability"
+    },
+    {
+      "id": "multiuser-e2e",
+      "group": "Operations",
+      "severity": "high",
+      "title_ru": "Сквозная проверка многопользовательского развёртывания",
+      "title_en": "End-to-end check of a multi-user deployment",
+      "how_ru": "node scripts/multiuser-e2e.mjs --out <каталог> — поднимает свой стек, ловит пароль первого администратора, заводит аккаунты, гонит прогон от каждого и утверждает изоляцию; с --llm-base исполняется и половина «прогон спросил живую модель».",
+      "how_en": "node scripts/multiuser-e2e.mjs --out <dir> — brings up its own stack, catches the first administrator's password, creates accounts, runs one per account and asserts isolation; with --llm-base the \"the run asked a live model\" half runs too.",
+      "access": [
+        {
+          "kind": "file",
+          "ref": "scripts/multiuser-e2e.mjs"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "проверка развёртывания, а не способность продукта: вопрос «доступно ли тремя способами» к ней не применяется — она сама и есть способ наблюдения"
+      }
     }
   ]
 }
