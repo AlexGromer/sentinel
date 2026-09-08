@@ -355,12 +355,35 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		"modes":    []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, // replay/baseline (M9.9) need from_run; chat (M9.10) needs conversation_id
 		"planner":  []string{"heuristic", "llm", "goal"},
 		"backends": backends,
+		// ⚠ УМОЛЧАНИЯ ДЛЯ `modes`/`planner`, КОТОРЫХ ЗДЕСЬ НЕ БЫЛО ВОВСЕ, и это отсутствие само было
+		// дефектом: перечень БЕЗ умолчания не даёт с чем сверяться, поэтому «ничего не трогал и
+		// запустил» из терминала и из интерфейса были разными прогонами, и никакая проверка не могла
+		// этого заметить — сверять было не с чем.
+		//
+		// Умолчание ПОКОНТЕКСТНОЕ, и это решение, а не компромисс (Alex, W15). Терминал начинает с
+		// `explore`: у него нет заданной цели, он идёт смотреть. Форма прогона в хабе начинает с
+		// `goal`: человек, открывший форму, уже знает, чего хочет. Раздел «Чат» начинает с
+		// `describe`: там сначала описывают поток словами. Три разных начала — это три разные задачи,
+		// а не дрейф трёх копий одного числа; сводить их к одному значению значило бы отнять удобство
+		// у двух из трёх ради симметрии. Что БЫЛО дефектом — отсутствие места, где это записано.
+		//
+		// `default` — умолчание продукта (то, с чего начинает CLI). `contexts` — чем его перекрывает
+		// конкретная поверхность. Гейт хаба сверяет КАЖДЫЙ преселект с умолчанием ЕГО контекста.
+		"mode_default":    "explore",
+		"mode_contexts":   map[string]string{"run": "goal", "chat": "describe"},
+		"planner_default": "heuristic",
+		"planner_contexts": map[string]string{
+			// Форма прогона не преселектит планировщик: выбор режима уже сузил его, и второй
+			// невидимый выбор поверх первого сделал бы «я не выбирал» и «я выбрал ровно это» одним
+			// актом. Пусто здесь — это ЗАПИСАННОЕ отсутствие, а не забытая заливка.
+			"chat": "goal",
+		},
 		// ADR-108b added `chat`: conversation is its own role, so an operator can point talking and
 		// planning at different endpoints (the planner may be a large remote model while the chat that
 		// answers a question runs on whatever is local). A role the brain honours but the schema does not
 		// publish is a knob nobody can find — the same "capability nobody can reach" this milestone exists
 		// to close.
-		"roles": []string{"planner", "heal", "chat"}, // per-role override LLM_<KEY>_<ROLE> falls back to global LLM_<KEY>
+		"roles": llmRoles, // ЕДИНЫЙ источник ролей (llmenv.go): пер-ролевое LLM_<KEY>_<ROLE> перекрывает глобальное LLM_<KEY>
 		// ADR-107: `fields` is the per-run half of the one configuration model, and every key here is
 		// settable on POST /v1/runs — asserted by TestRunRequestCoversEverySchemaField, which walks this
 		// map rather than listing what it expects to find.
@@ -370,32 +393,40 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		// hub used to hard-code that, which is why nine of these fields existed as inputs the submit
 		// handler never read.
 		"fields": map[string]any{
-			"target":          map[string]any{"type": "string", "required": true, "group": "run"},
-			"goal":            map[string]any{"type": "string", "group": "run"},
-			"describe":        map[string]any{"type": "string", "group": "run"},
-			"conversation_id": map[string]any{"type": "string", "group": "run"}, // M9.10: multi-turn chat thread key (resume by conversation_id)
-			"coverage_target": map[string]any{"type": "number", "default": 0.85, "group": "run"},
-			"max_steps":       map[string]any{"type": "int", "default": 40, "group": "run"},
-			"scenario":        map[string]any{"type": "string", "group": "run"}, // --scenario: select a named scenario out of the RunConfig
-			"plan_budget":     map[string]any{"type": "int", "default": 50000, "group": "budgets"},
-			"heal_budget":     map[string]any{"type": "int", "default": 20000, "group": "budgets"},
-			"total_budget":    map[string]any{"type": "int", "default": 0, "group": "budgets"},
+			// W15: ТРИ ПОЛЯ, КОТОРЫХ ЗДЕСЬ НЕ БЫЛО, хотя тело прогона их принимало. Зеркальный гейт
+			// (TestEverySchemaFieldCoversRunRequest) требует дескриптор у КАЖДОГО экспортированного тега
+			// `runRequest` — до него сверка шла в одну сторону и была зелёной над этой дырой: `message` —
+			// текст хода в чате, `planner` — выбор планировщика, `mode` — что прогон вообще делает. Три
+			// величины, меняющие прогон, и ни одна не была видна из схемы.
+			"mode":            map[string]any{"type": "enum", "group": "run", "enum": []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, "set_by": []string{"flag:--mode"}},
+			"planner":         map[string]any{"type": "enum", "default": "heuristic", "group": "run", "enum": []string{"heuristic", "llm", "goal"}, "set_by": []string{"flag:--planner", "runconfig:planner"}},
+			"message":         map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--message"}},
+			"target":          map[string]any{"type": "string", "required": true, "group": "run", "set_by": []string{"flag:--target"}},
+			"goal":            map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--goal", "runconfig:goal"}},
+			"describe":        map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--describe", "runconfig:describe"}},
+			"conversation_id": map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--conversation-id"}}, // M9.10: multi-turn chat thread key (resume by conversation_id)
+			"coverage_target": map[string]any{"type": "number", "default": 0.85, "group": "run", "set_by": []string{"flag:--coverage-target", "runconfig:coverage_target"}},
+			"max_steps":       map[string]any{"type": "int", "default": 40, "group": "run", "set_by": []string{"flag:--max-steps", "runconfig:max_steps"}},
+			"scenario":        map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--scenario"}}, // --scenario: select a named scenario out of the RunConfig
+			"plan_budget":     map[string]any{"type": "int", "default": 50000, "group": "budgets", "set_by": []string{"runconfig:plan_budget"}},
+			"heal_budget":     map[string]any{"type": "int", "default": 20000, "group": "budgets", "set_by": []string{"runconfig:heal_budget"}},
+			"total_budget":    map[string]any{"type": "int", "default": 0, "group": "budgets", "set_by": []string{"runconfig:total_budget"}},
 			// Session reuse. These reach the brain through the RunConfig `auth:` block (writeRunConfig),
 			// never as environment: PLAN_FILE does not survive agentctl's env allowlist, and widening that
 			// allowlist to carry a convenience would spend a security boundary.
-			"storage_state":      map[string]any{"type": "string", "group": "auth"},
-			"storage_state_save": map[string]any{"type": "string", "group": "auth"},
-			"login_plan":         map[string]any{"type": "string", "group": "auth"},
-			"pw_no_trace":        map[string]any{"type": "bool", "default": false, "group": "auth"},
+			"storage_state":      map[string]any{"type": "string", "group": "auth", "set_by": []string{"env:STORAGE_STATE", "runconfig:auth.storage_state"}},
+			"storage_state_save": map[string]any{"type": "string", "group": "auth", "set_by": []string{"env:STORAGE_STATE_SAVE", "runconfig:auth.storage_state_save"}},
+			"login_plan":         map[string]any{"type": "string", "group": "auth", "set_by": []string{"runconfig:auth.login_plan"}},
+			"pw_no_trace":        map[string]any{"type": "bool", "default": false, "group": "auth", "set_by": []string{"env:PW_NO_TRACE", "runconfig:auth.pw_no_trace"}},
 			// Determinism guards. `ci` forbids `force_replay`; the rule lives in agentctl and the API
 			// rejects the pair early so a person gets a 400 instead of a run that dies at startup.
-			"ci":           map[string]any{"type": "bool", "default": false, "group": "gates"},
-			"force_replay": map[string]any{"type": "bool", "default": false, "group": "gates"},
-			"aut_version":  map[string]any{"type": "string", "group": "gates"},
-			"heal_llm":     map[string]any{"type": "bool", "default": false, "group": "healing"},
+			"ci":           map[string]any{"type": "bool", "default": false, "group": "gates", "set_by": []string{"flag:--ci"}},
+			"force_replay": map[string]any{"type": "bool", "default": false, "group": "gates", "set_by": []string{"flag:--force-replay"}},
+			"aut_version":  map[string]any{"type": "string", "group": "gates", "set_by": []string{"flag:--aut-version"}},
+			"heal_llm":     map[string]any{"type": "bool", "default": false, "group": "healing", "set_by": []string{"flag:--heal-llm", "env:HEAL_LLM"}},
 			// ADR-133. Группа `gates`, а не `healing`: это ворота обхода, как `ci`, и умолчание
 			// `false` означает «правила соблюдаются» — отступление требует ключа.
-			"ignore_robots": map[string]any{"type": "bool", "default": false, "group": "gates"},
+			"ignore_robots": map[string]any{"type": "bool", "default": false, "group": "gates", "set_by": []string{"flag:--ignore-robots", "runconfig:ignore_robots"}},
 			// LIVE-MATRIX (ADR-120). The observation mode is the PERSON's choice, not something the tool
 			// derives: a deployment default lives in settings, a run overrides it here, and the CLI takes
 			// the same name. `cost` rides along because a mode that only has a NAME leaves somebody
@@ -406,7 +437,7 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			// It is a fail-closed secret guard with two enforcement points; putting it in the same list
 			// would hand somebody a switch that removes a protection under the label "turn video off".
 			"observe": map[string]any{"type": "enum", "group": "run", "default": "frames",
-				"enum": []string{"off", "frames", "stream", "human", "record"},
+				"enum": []string{"off", "frames", "stream", "human", "record"}, "set_by": []string{"flag:--observe", "runconfig:observe"},
 				"cost": map[string]any{
 					"off":    map[string]any{"ru": "ничего не снимается — быстрее всего; смотреть будет не на что", "en": "nothing is captured — fastest; there will be nothing to look at"},
 					"frames": map[string]any{"ru": "кадр на каждый шаг, их показывает хаб; замедляет прогон незначительно", "en": "one frame per step, rendered by the hub; slows a run slightly"},
@@ -458,6 +489,8 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		// enforces it (configscope.go), so an interface disables what a caller may not change instead of
 		// letting them fill in a form whose save is going to be refused.
 		"config_sections": configSectionScope,
+		"service":         serviceSchema,
+		"not_published":   envNotPublished,
 		"note":            "secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload",
 	})
 }
@@ -591,6 +624,212 @@ var settingsSchema = map[string]any{
 			"en": "Seconds to wait for an operator who took control. On expiry the run CONTINUES on its own.",
 		},
 	},
+
+	// ── W15: РУЧКИ, КОТОРЫЕ ПРОДУКТ ЧИТАЛ, А СХЕМА НЕ НАЗЫВАЛА ───────────────────────────────
+	// Обещание `agentctl config schema` — «every knob the product has, with its env name and default».
+	// Замерено: выводится 169 имён, схема публиковала 42 дескриптора, и лишь 22 из них несли имя
+	// переменной. Ниже — те, что читает ПРОГОН и что доезжают до него через окружение; ручки самой
+	// службы лежат в `serviceSchema`, а всё остальное закрыто записанной причиной в `envNotPublished`.
+	// Третьего состояния больше нет, и это утверждает гейт tests/test_env_inventory_offline.py.
+	//
+	// ⚠ ЗАПИСЬ ЗДЕСЬ — ОБЕЩАНИЕ ДОСТАВКИ, а не подпись: её держит TestEverySettingIsPersistable, и
+	// нарушенной она уже была — `HEAL_LLM` стоял в схеме и до прогона не доезжал ВООБЩЕ.
+	"adapters": map[string]any{
+		"env": "SENTINEL_ADAPTERS", "type": "string", "default": "", "group": "adapters",
+		"hint": map[string]string{
+			"ru": "Имена importable-модулей через запятую, импорт которых регистрирует внешние адаптеры модели, аутентификации и развёртывания; неимпортируемое имя роняет конфигурацию, а не замалчивается.",
+			"en": "Comma-separated importable module names whose import registers out-of-tree model, auth and deploy adapters; a module that cannot be imported raises rather than being ignored.",
+		},
+	},
+	"adaptive_tokens": map[string]any{
+		"env": "LLM_ADAPTIVE_TOKENS", "type": "bool", "default": true, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Повторять тот же запрос с удвоенным потолком ответа, когда модель упёрлась в потолок и не выдала содержимого (выключается значениями 0, false, no, off).",
+			"en": "Retry the same request with a doubled answer ceiling when the model hit the cap before producing any content (turned off by 0, false, no, off).",
+		},
+	},
+	"app_log_cap": map[string]any{
+		"env": "PW_APP_LOG_CAP", "type": "int", "default": 500, "group": "gates",
+		"hint": map[string]string{
+			"ru": "Сколько сообщений тестируемого приложения (ошибки JS, консоль, упавшие запросы, ответы 4xx-5xx, диалоги) снимать за прогон — по достижении съёмка останавливается с отметкой `app.log_capped`, и этим же числом ограничен счётчик, с которым сравнивает `SENTINEL_FAIL_ON_APP_ERRORS`.",
+			"en": "How many messages from the application under test (JS errors, console, failed requests, 4xx-5xx responses, dialogs) are captured per run — on reaching it capture stops with an `app.log_capped` note, and the same number bounds the tally `SENTINEL_FAIL_ON_APP_ERRORS` compares against.",
+		},
+	},
+	"click_nav_settle_ms": map[string]any{
+		"env": "SENTINEL_CLICK_NAV_SETTLE_MS", "type": "int", "default": 250, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Сколько миллисекунд ждать смены адреса после клика, прежде чем считать, что навигации не было; 0 — не ждать вовсе, и потолок платит только тот клик, который навигацией не оказался.",
+			"en": "How many milliseconds to wait for the URL to change after a click before concluding there was no navigation; 0 — do not wait at all, and only a click that was not a navigation pays the ceiling.",
+		},
+	},
+	"env_allow": map[string]any{
+		"env": "SENTINEL_ENV_ALLOW", "type": "string", "default": "", "group": "security",
+		"hint": map[string]string{
+			"ru": "Дополнительные ИМЕНА переменных окружения через запятую, которые пропускать в прогон сверх встроенного списка — нужно, например, для пароля тестируемого приложения (AUT_PASSWORD).",
+			"en": "Extra environment variable NAMES, comma-separated, let through to the run beyond the built-in list — needed for e.g. the application-under-test password (AUT_PASSWORD).",
+		},
+	},
+	"env_allowlist": map[string]any{
+		"env": "SENTINEL_ENV_ALLOWLIST", "type": "bool", "default": true, "group": "security",
+		"hint": map[string]string{
+			"ru": "Пропускать в прогон только разрешённые переменные окружения; выключение значением 0 отдаёт прогону всё окружение хоста целиком, включая посторонние ключи и токены.",
+			"en": "Pass only allowlisted environment variables into the run; turning it off with 0 hands the run the host's entire environment, unrelated keys and tokens included.",
+		},
+	},
+	"explore_fail_limit": map[string]any{
+		"env": "SENTINEL_EXPLORE_FAIL_LIMIT", "type": "int", "default": 2, "group": "explore",
+		"hint": map[string]string{
+			"ru": "Сколько раз обход пробует один и тот же элемент, прежде чем выбросить его из кандидатов; значения меньше 1 подтягиваются до 1.",
+			"en": "How many times explore retries the same element before dropping it from the candidate set; values below 1 are raised to 1.",
+		},
+	},
+	"health_skip": map[string]any{
+		"env": "SENTINEL_HEALTH_SKIP", "type": "string", "default": "", "group": "health",
+		"hint": map[string]string{
+			"ru": "Список компонентов через запятую (store, llm, orchestrator), стартовую проверку которых не выполнять; каждый пропуск объявляется в журнале и ухудшает вердикт.",
+			"en": "Comma-separated components (store, llm, orchestrator) whose start-up health check is skipped; every skip is announced in the log and degrades the verdict.",
+		},
+	},
+	"ignore_https_errors": map[string]any{
+		"env": "PW_IGNORE_HTTPS_ERRORS", "type": "bool", "default": false, "group": "gates",
+		"hint": map[string]string{
+			"ru": "Не считать ошибку TLS-сертификата цели отказом — только для стенда с самоподписанным или просроченным сертификатом; действует у прогона, который сам запускает браузер, а при подключении к браузеру-службе по CDP контекст не создаётся и настройка не применяется.",
+			"en": "Do not treat the target's TLS certificate error as a failure — only for a stand with a self-signed or expired certificate; it applies to a run that launches its own browser, while a CDP-attached run adopts an existing context and the option is not applied.",
+		},
+	},
+	"llm_live_probe": map[string]any{
+		"env": "SENTINEL_LLM_LIVE_PROBE", "type": "bool", "default": false, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Перед стартом прогона спрашивать `/models` у LLM_BASE_URL и отказывать кодом 3, если ответа нет за 2 секунды; при пустом LLM_BASE_URL проверка ничего не спрашивает.",
+			"en": "Before a run starts, ask LLM_BASE_URL for `/models` and refuse with exit code 3 when nothing answers within 2 seconds; with LLM_BASE_URL empty the probe asks nothing.",
+		},
+	},
+	"llm_seed": map[string]any{
+		"env": "SENTINEL_LLM_SEED", "type": "int", "default": 0, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Целое число, которое ЗАПРАШИВАЕТСЯ сидом у OpenAI-совместимого эндпоинта (провайдер вправе его проигнорировать); пусто — сид не отправляется вовсе, а у Anthropic такого параметра нет.",
+			"en": "An integer REQUESTED as a seed from an OpenAI-compatible endpoint (a provider may ignore it); empty means no seed is sent at all, and Anthropic has no such parameter.",
+		},
+	},
+	"map_gate": map[string]any{
+		"env": "SENTINEL_MAP_GATE", "type": "bool", "default": true, "group": "hitl",
+		"hint": map[string]string{
+			"ru": "Спрашивать человека, одобряет ли он изученную карту сайта, прежде чем писать по ней тест; выключается значением 0, а без подключённого оркестратора гейт пропускает себя сам.",
+			"en": "Ask a person to approve the explored site map before authoring a test over it; 0 turns it off, and with no orchestrator wired the gate skips itself.",
+		},
+	},
+	"map_gate_timeout": map[string]any{
+		"env": "SENTINEL_MAP_GATE_TIMEOUT", "type": "int", "default": 300, "group": "hitl",
+		"hint": map[string]string{
+			"ru": "Сколько секунд ждать решения человека по карте — по истечении прогон получает ОТКАЗ, а не одобрение.",
+			"en": "How many seconds to wait for the human decision on the map — on expiry the run gets a REJECTION, not an approval.",
+		},
+	},
+	"max_tokens_goal_page": map[string]any{
+		"env": "LLM_MAX_TOKENS_GOAL_PAGE", "type": "int", "default": 2048, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Потолок токенов ответа в запросе «какая страница целевая»; на рассуждающей модели урезанный потолок обрывает ответ до закрывающей скобки.",
+			"en": "Answer-token ceiling for the “which page is the goal page” request; on a reasoning model a tight ceiling truncates the reply before its closing brace.",
+		},
+	},
+	"max_tokens_hard": map[string]any{
+		"env": "LLM_MAX_TOKENS_HARD", "type": "int", "default": 16384, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Абсолютный предел, выше которого удвоение потолка ответа не поднимается.",
+			"en": "The absolute cap the adaptive ceiling never escalates past.",
+		},
+	},
+	"max_tokens_pick": map[string]any{
+		"env": "LLM_MAX_TOKENS_PICK", "type": "int", "default": 1024, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Потолок токенов ответа, когда модель выбирает одно следующее действие.",
+			"en": "Answer-token ceiling when the model picks a single next action.",
+		},
+	},
+	"max_tokens_scenario": map[string]any{
+		"env": "LLM_MAX_TOKENS_SCENARIO", "type": "int", "default": 3072, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Потолок токенов ответа, когда модель пишет сценарий целиком.",
+			"en": "Answer-token ceiling when the model authors a whole scenario.",
+		},
+	},
+	"otel_endpoint": map[string]any{
+		"env": "OTEL_EXPORTER_OTLP_ENDPOINT", "type": "string", "default": "", "group": "telemetry",
+		"hint": map[string]string{
+			"ru": "Адрес OTLP-коллектора для трассировки прогона; пусто — трассировка выключена (пустой трассер без накладных расходов), а службы читают то же имя из своего окружения развёртывания.",
+			"en": "OTLP collector endpoint for the run's tracing; empty turns tracing off (a no-op tracer, zero overhead), and the services read the same name from their own deployment environment.",
+		},
+	},
+	"prom_pushgateway": map[string]any{
+		"env": "PROM_PUSHGATEWAY", "type": "string", "default": "", "group": "telemetry",
+		"hint": map[string]string{
+			"ru": "Адрес Prometheus Pushgateway, куда после прогона отправляются метрики его отчёта; пусто — не отправлять.",
+			"en": "Prometheus Pushgateway address the run's report metrics are pushed to after a run; empty means no push.",
+		},
+	},
+	"refine_history_keep": map[string]any{
+		"env": "SENTINEL_REFINE_HISTORY_KEEP", "type": "int", "default": 6, "group": "chat",
+		"hint": map[string]string{
+			"ru": "Сколько последних реплик человека попадает в запрос на уточнение целиком — всё, что старше, сворачивается в одну строку, чтобы стоимость беседы не росла с её длиной.",
+			"en": "How many of the most recent user turns go into the refine prompt in full — anything older collapses into a single line so the conversation's cost stays bounded as it grows.",
+		},
+	},
+	"refine_reverify": map[string]any{
+		"env": "SENTINEL_REFINE_REVERIFY", "type": "bool", "default": false, "group": "chat",
+		"hint": map[string]string{
+			"ru": "Изучать сайт заново на каждом ходе беседы вместо уточнения по сохранённой карте — дороже и с браузером, но снимает риск устаревшей карты.",
+			"en": "Re-explore the site on every chat turn instead of refining over the stored map — more expensive and with a browser, but it removes the risk of a stale map.",
+		},
+	},
+	"scenario_map_chars": map[string]any{
+		"env": "LLM_SCENARIO_MAP_CHARS", "type": "int", "default": 8000, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Сколько символов карты сайта уезжает в промпт авторинга; невлезшее объявляется остатком, а не отбрасывается молча.",
+			"en": "How many characters of the site map go into the authoring prompt; whatever does not fit is declared as a remainder rather than dropped silently.",
+		},
+	},
+	"slow_load_ms": map[string]any{
+		"env": "SENTINEL_SLOW_LOAD_MS", "type": "int", "default": 0, "group": "app",
+		"hint": map[string]string{
+			"ru": "С какого времени загрузки документа в миллисекундах (по данным самого браузера) сообщать, что приложение отвечало медленно; 0 — не сообщать, и покрыты только навигации, не клики.",
+			"en": "From what document load time in milliseconds (measured by the browser itself) to report the application as slow; 0 — never report, and only navigations are covered, not clicks.",
+		},
+	},
+	"step_menu_chars": map[string]any{
+		"env": "LLM_STEP_MENU_CHARS", "type": "int", "default": 8000, "group": "llm",
+		"hint": map[string]string{
+			"ru": "Сколько символов перечня кандидатов уезжает в промпт одного шага.",
+			"en": "How many characters of the candidate menu go into a single step's prompt.",
+		},
+	},
+	"trace_on_degraded": map[string]any{
+		"env": "SENTINEL_TRACE_ON_DEGRADED", "type": "bool", "default": false, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Сохранять `trace.zip` и у прогона, который вышел с кодом 0, но неполно — обход не дошёл до конца или остались несопоставленные шаги; по умолчанию трейс остаётся только у прогона с ненулевым кодом (ADR-084).",
+			"en": "Keep `trace.zip` also for a run that exited 0 but incomplete — the crawl did not finish or steps stayed unmatched; by default a trace survives only a non-zero exit (ADR-084).",
+		},
+	},
+	"trace_raw": map[string]any{
+		"env": "SENTINEL_TRACE_RAW", "type": "bool", "default": false, "group": "security",
+		"hint": map[string]string{
+			"ru": "Сохранять трейс без очистки — в нём остаются введённые пароли и токены, это режим диагностики самого инструмента, и он объявляется в журнале каждый раз.",
+			"en": "Keep the trace unredacted — typed passwords and tokens stay in it; this is a mode for diagnosing the tool itself, and it is announced in the log every time.",
+		},
+	},
+	"video_always": map[string]any{
+		"env": "SENTINEL_VIDEO_ALWAYS", "type": "bool", "default": false, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Сохранять `video.webm` даже у прогона, завершившегося чисто; по умолчанию запись, сделанную режимом `observe=record`, у зелёного прогона удаляют после прогона.",
+			"en": "Keep `video.webm` even when the run finished clean; by default a recording made by `observe=record` is deleted on a green run.",
+		},
+	},
+	"video_on_degraded": map[string]any{
+		"env": "SENTINEL_VIDEO_ON_DEGRADED", "type": "bool", "default": false, "group": "retention",
+		"hint": map[string]string{
+			"ru": "Сохранять `video.webm` у прогона, который вышел с кодом 0, но неполно (обход не дошёл до конца или остались несопоставленные шаги); действует только на прогон, который вообще записывал видео — то есть на `observe=record`.",
+			"en": "Keep `video.webm` for a run that exited 0 but incomplete (crawl unfinished or steps unmatched); it affects only a run that recorded at all, i.e. `observe=record`.",
+		},
+	},
 }
 
 type runRequest struct {
@@ -629,7 +868,11 @@ type runRequest struct {
 	StorageState     string `json:"storage_state"` // RunConfig auth.* — reuse a saved session
 	StorageStateSave string `json:"storage_state_save"`
 	LoginPlan        string `json:"login_plan"`
-	PWNoTrace        bool   `json:"pw_no_trace"`
+	// ⚠ УКАЗАТЕЛЬ, А НЕ bool, и по той же причине, что у `Vision`/`Structured` в llmenv.go: «снят» и
+	// «не указан» обязаны быть РАЗНЫМИ фактами. С обычным bool они один и тот же байт, и как только у
+	// секции `auth` появляется сохранённый слой (а он появляется), выключить защиту на один прогон
+	// становится нечем — сохранённое `true` перебить было бы невозможно. nil = «не выбирал».
+	PWNoTrace *bool `json:"pw_no_trace"`
 
 	// ADR-109: the account that asked for this run, resolved from the credential by the handler.
 	// Unexported like `plan` and `llm` — a client that could name its own owner could write into
@@ -728,8 +971,10 @@ func writeRunConfig(artDir string, req *runRequest) (string, error) {
 			authLines = append(authLines, fmt.Sprintf("  %s: %q", kv[0], kv[1]))
 		}
 	}
-	if req.PWNoTrace {
-		authLines = append(authLines, "  pw_no_trace: true")
+	if req.PWNoTrace != nil {
+		// Пишем ОБА значения, а не только истину. Явный `false` — это и есть отмена сохранённого
+		// `true`; строка, которую не пишут, ничего не отменяет.
+		authLines = append(authLines, fmt.Sprintf("  pw_no_trace: %t", *req.PWNoTrace))
 	}
 
 	// Nothing this file exists to carry -> no file, and `--run-config` stays off the argv, so a run
@@ -1452,6 +1697,17 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad JSON: " + err.Error()})
 		return
 	}
+	// ADR-109: чей это прогон, решается ДО валидации, а не после: от владельца зависят и личные
+	// умолчания ниже, и клеймо на самом прогоне. Раньше владелец ставился в самом конце — пока
+	// умолчаний не было, порядок не имел значения.
+	if c, ok := s.callerOf(r); ok {
+		req.owner = c.owner()
+	}
+	// W15: сохранённые ЛИЧНЫЕ настройки прогона наконец действуют. Заполняются ТОЛЬКО поля, которых
+	// запрос не нёс, и заполненное НАЗЫВАЕТСЯ в ответе — довод и замер записаны у
+	// applyPersonalRunDefaults (configscope.go).
+	inherited := s.applyPersonalRunDefaults(&req)
+
 	// ADR-063: a per-run LLM override applies to every mode (replay/baseline heal LLM too). Validated
 	// here (backend enum, base_url shape, secret refusal) so a bad value is a 400, not a broken spawn.
 	llmCfg, err := parseRunLLM(req.LLM)
@@ -1501,12 +1757,14 @@ func (s *server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			"error": "ci and force_replay are mutually exclusive: --force-replay bypasses the plan_hash hard-abort, which CI mode exists to enforce"})
 		return
 	}
-	// ADR-109: stamp the run with whoever asked for it, so their list shows it and nobody else's does.
-	if c, ok := s.callerOf(r); ok {
-		req.owner = c.owner()
-	}
 	rec := s.spawnRun(req)
-	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"})
+	resp := map[string]any{"run_id": rec.ID, "artifact_dir": rec.ArtifactDir, "state": "running"}
+	if len(inherited) > 0 {
+		// Названо поимённо, а не сосчитано: «применено 3 умолчания» не отвечает на вопрос, который
+		// человек задаёт («почему прогон пошёл на ДРУГОЙ адрес»), а перечень отвечает.
+		resp["inherited_defaults"] = inherited
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (s *server) handleListRuns(w http.ResponseWriter, r *http.Request) {
@@ -2581,4 +2839,232 @@ func main() {
 		fmt.Fprintf(os.Stderr, "control-api: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// serviceSchema — ручки процессов СЛУЖБЫ: control-api, ретранслятора CDP, контейнера браузера,
+// журнала сервиса. Отдельный блок, а не часть `settingsSchema`, и это не вкус: запись в настройках
+// есть обещание, что значение ДОЕДЕТ ДО ПРОГОНА, и его держит гейт. Эти же читает сам сервис при
+// старте — положить их туда значило бы пообещать доставку, которой нет, то есть завести второй
+// `HEAL_LLM`: настройку, которую предлагают задать, принимают, подтверждают, и которая не делает
+// ничего. Поэтому они публикуются ЧЕСТНО: с именем и умолчанием, но как то, что задаётся
+// окружением развёртывания (compose/systemd), а не формой и не телом прогона.
+var serviceSchema = map[string]any{
+	"autotoken": map[string]any{
+		"env": "CONTROL_API_AUTOTOKEN", "type": "bool", "default": true, "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Заводить ли control-api свой бирер-токен при старте — значение «0» оставляет развёртывание без токена, и изменяющие запросы получают 403.",
+			"en": "Whether control-api mints its own bearer token at startup — a value of 0 leaves the deployment tokenless and mutating requests get 403.",
+		},
+	},
+	"cdp_live": map[string]any{
+		"env": "CONTROL_API_CDP_LIVE", "type": "string", "default": "", "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Адрес живого эндпоинта браузерной службы, который control-api проксирует; пусто — браузерной службы в развёртывании нет, и живое видео так и говорит.",
+			"en": "Base URL of the browser service live endpoint that control-api proxies; empty means this deployment has no browser service and the live view says so.",
+		},
+	},
+	"claim_ttl_ms": map[string]any{
+		"env": "CDP_LIVE_CLAIM_TTL_MS", "type": "int", "default": 43200000, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Сколько миллисекунд заявка прогона на браузер переживает свой последний признак жизни, прежде чем её забудут.",
+			"en": "How many milliseconds a run's claim on the browser outlives its last sign of life before it is dropped.",
+		},
+	},
+	"cors_origins": map[string]any{
+		"env": "CONTROL_API_CORS_ORIGINS", "type": "string", "default": "", "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Список origin'ов через запятую, которым разрешён доступ из браузера; пустой список не разрешает ни одного.",
+			"en": "Comma-separated allowlist of browser origins; an empty list allows none.",
+		},
+	},
+	"every_nth": map[string]any{
+		"env": "CDP_LIVE_EVERY_NTH", "type": "int", "default": 2, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Каждый какой кадр скринкаста отдавать (2 — каждый второй): больше число — реже картинка и дешевле прогон.",
+			"en": "Which nth screencast frame to deliver (2 = every second one): a larger number means a rarer picture and a cheaper run.",
+		},
+	},
+	"headed": map[string]any{
+		"env": "PW_HEADED", "type": "bool", "default": false, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Запускать Chromium браузера-службы видимым — этим включается профиль `vnc`, где браузер рисует в виртуальный X-дисплей и его видно по VNC; по умолчанию служба headless, потому что байтовая стабильность скриншотов замерена только в headless.",
+			"en": "Launch the browser service's Chromium visible — this is what the `vnc` profile turns on, where the browser draws into a virtual X display exported over VNC; the service stays headless by default because screenshot byte-stability is measured only in headless.",
+		},
+	},
+	"idle_ms": map[string]any{
+		"env": "CDP_LIVE_IDLE_MS", "type": "int", "default": 15000, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Через сколько миллисекунд без единого запроса скринкаст останавливается.",
+			"en": "After how many milliseconds with nobody asking the screencast stops.",
+		},
+	},
+	"log_max_mb": map[string]any{
+		"env": "SENTINEL_LOG_MAX_MB", "type": "int", "default": 50, "group": "journal",
+		"hint": map[string]string{
+			"ru": "До скольких мегабайт растёт текстовый лог прогона (run.log), прежде чем его переименуют в одно предыдущее поколение; 0 — не вращать никогда.",
+			"en": "How many megabytes a run's text log (run.log) grows to before it is rotated into a single previous generation; 0 means never rotate.",
+		},
+	},
+	"max_height": map[string]any{
+		"env": "CDP_LIVE_MAX_HEIGHT", "type": "int", "default": 720, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Максимальная высота кадра живого экрана в пикселях — CDP ужимает кадр до неё.",
+			"en": "Maximum live-screen frame height in pixels — CDP scales the frame down to it.",
+		},
+	},
+	"max_width": map[string]any{
+		"env": "CDP_LIVE_MAX_WIDTH", "type": "int", "default": 960, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Максимальная ширина кадра живого экрана в пикселях — CDP ужимает кадр до неё.",
+			"en": "Maximum live-screen frame width in pixels — CDP scales the frame down to it.",
+		},
+	},
+	"print_token": map[string]any{
+		"env": "CONTROL_API_PRINT_TOKEN", "type": "bool", "default": true, "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Печатать ли токен в stderr при старте; печатается только сгенерированный или прочитанный из файла токен и только когда этот же процесс не обслуживает интерфейс.",
+			"en": "Whether the token is printed to stderr at startup; only a generated or file-read token is printed, and only when this same process does not serve the UI.",
+		},
+	},
+	"quality": map[string]any{
+		"env": "CDP_LIVE_QUALITY", "type": "int", "default": 55, "group": "browser",
+		"hint": map[string]string{
+			"ru": "Качество JPEG у кадров живого экрана — значение уходит в CDP как есть, и им же снимается одиночный кадр.",
+			"en": "JPEG quality of the live-screen frames — passed to CDP as is, and used for the single-frame capture too.",
+		},
+	},
+	"serve_ui": map[string]any{
+		"env": "CONTROL_API_SERVE_UI", "type": "bool", "default": false, "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Обслуживать ли этим же процессом встроенный веб-интерфейс; CONTROL_API_UI_DIR включает интерфейс с диска и проверяется раньше.",
+			"en": "Whether this process also serves the embedded WebUI; CONTROL_API_UI_DIR turns it on from disk instead and is checked first.",
+		},
+	},
+	"service_log_level": map[string]any{
+		"env": "SENTINEL_SERVICE_LOG_LEVEL", "type": "enum", "default": "info", "enum": []string{"debug", "info", "warn", "error"}, "group": "journal",
+		"hint": map[string]string{
+			"ru": "С какого уровня записи попадают в служебный журнал; нераспознанное значение пропускает всё, включая debug.",
+			"en": "The lowest level that reaches the service journal; an unrecognized value lets everything through, debug included.",
+		},
+	},
+	"service_log_max_mb": map[string]any{
+		"env": "SENTINEL_SERVICE_LOG_MAX_MB", "type": "int", "default": 32, "group": "journal",
+		"hint": map[string]string{
+			"ru": "До скольких мегабайт растёт служебный журнал, прежде чем его вращают с одним сохранённым поколением; 0 — не вращать никогда.",
+			"en": "How many megabytes the service journal grows to before it is rotated with a single kept generation; 0 means never rotate.",
+		},
+	},
+	"session_ttl": map[string]any{
+		"env": "CONTROL_API_SESSION_TTL", "type": "string", "default": "12h0m0s", "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Сколько живёт сессия входа; читается как длительность Go, непарсимое или неположительное значение молча заменяется умолчанием.",
+			"en": "How long a login session lives; parsed as a Go duration, an unparseable or non-positive value silently falls back to the default.",
+		},
+	},
+	"ui_bootstrap_ttl": map[string]any{
+		"env": "CONTROL_API_UI_BOOTSTRAP_TTL", "type": "string", "default": "5m0s", "group": "control_api",
+		"hint": map[string]string{
+			"ru": "Сколько времени одноразовый нонс первого входа остаётся обмениваемым; неположительное значение выключает вход по ссылке совсем, и токен копируют из файла руками.",
+			"en": "How long the one-time first-login nonce stays exchangeable; a non-positive value disables the bootstrap link entirely and the token is copied out of the file by hand.",
+		},
+	},
+	"vnc_geometry": map[string]any{
+		"env": "SENTINEL_VNC_GEOMETRY", "type": "string", "default": "1280x800x24", "group": "browser",
+		"hint": map[string]string{
+			"ru": "Геометрия экрана Xvfb в контейнере браузера (ШИРИНАxВЫСОТАxГЛУБИНА); из неё же берётся размер окна Chromium в головном режиме, чтобы экран и окно не разошлись.",
+			"en": "The Xvfb screen geometry in the browser container (WIDTHxHEIGHTxDEPTH); the headed Chromium window size is taken from the same value so screen and window cannot drift apart.",
+		},
+	},
+}
+
+// envNotPublished — имена, которые продукт читает, но схема НЕ публикует, и у каждого записана
+// причина. Это вторая половина закрытого знаменателя: обещание «every knob» выполнимо только если
+// у каждого выведенного имени есть либо дескриптор, либо объяснение, почему его нет. Молчание —
+// третье состояние, и именно оно было нормой: 130 имён не имели ни того, ни другого.
+//
+// Три класса: проводка развёртывания (адреса, порты, пути, имена бинарей), секреты (описываются,
+// но значением не публикуются — правило уже действует для LLM_API_KEY) и производные, которые
+// продукт ставит сам. Причина пишется ДОСЛОВНО и читается человеком: «infra» без объяснения — это
+// ярлык, а не причина.
+var envNotPublished = map[string]string{
+	"MESSAGE":                    "поверхность ОПУБЛИКОВАНА полем `fields.message`, а путь через окружение — не тот: `agentctl` дописывает `MESSAGE=` безусловно ПОСЛЕ унаследованного окружения, и os/exec берёт последнее значение. Задаётся флагом `--message`, как и записано в `set_by` поля.",
+	"PLANNER":                    "поверхность ОПУБЛИКОВАНА полем `fields.planner` и перечнем `planner` верхнего уровня; переменная задаётся безусловным run-var из флага `--planner`, поэтому унаследованное значение до мозга не доезжает. Исключение — MCP-путь brain/server.py, где `setdefault(\"PLANNER\",\"llm\")` имеет собственное обоснование рядом.",
+	"SENTINEL_CONVERSATION_ID":   "поверхность ОПУБЛИКОВАНА полем `fields.conversation_id`; переменная — безусловный run-var из флага `--conversation-id`, то есть окружением её не задать. Тот же случай, что MESSAGE и PLANNER: опубликовано не имя переменной, а способ, которым поле реально задаётся.",
+	"ANTHROPIC_API_KEY":          "Ключ провайдера. Правило схемы уже написано и уже НАЗЫВАЕТ это имя: cmd/control-api/main.go:461 — `\"note\": \"secrets (LLM_API_KEY/ANTHROPIC_API_KEY) go in the control-api process env, never in this payload\"`, и main.go:348-349 — «Secrets are DESCRIBED (api_key.secret) but never VALUED». Доставка есть: имя стоит в exact-аллоулисте (cmd/agentctl/main.go:406) и приходит через secretKeyRef в чарте (deploy/sentinel/temp…",
+	"ARTIFACT_DIR":               "Продукт ставит сам из флага `--artifact-dir` (cmd/agentctl/main.go:595) и run_id. Экспорт переменной мёртв ДВАЖДЫ: имени нет ни в exact-аллоулисте, ни под одним из префиксов LLM_/OTEL_/PW_/PLAYWRIGHT_/SENTINEL_ (main.go:400-424), поэтому filteredEnv его срезает; и даже если бы не срезал, run-var дописывается ПОСЛЕ (main.go:457 — `cmd.Env = append(filteredEnv(), append([]string{…}, extra...)...)`), последнее значен…",
+	"AUT_VERSION":                "⚠ ЭТО ПЕРЕМЕННАЯ СУЩЕСТВУЮЩЕГО ПОЛЯ БЛОКА `fields`. Поле `aut_version` уже опубликовано (cmd/control-api/main.go:394) — ему нужно НЕ новое поле, а ключ `\"env\": \"AUT_VERSION\"` у существующего. Но публиковать его честно можно только вместе с починкой доставки (см. delivery), иначе схема пообещает второе имя, которое, будучи экспортировано, ничего не делает.",
+	"BRAIN_PYTHON":               "Имя/путь интерпретатора, которым запускается brain — ровно «имя бинаря» из определения infra. Задаётся окружением развёртывания, а не человеком в интерфейсе; docs/DEVELOPMENT.md:48 — «`agentctl` автоматически использует `./.venv/bin/python` для запуска brain (переопределяется через `BRAIN_PYTHON`)». Побочно: это тестовый шов — три сьюта подменяют им brain на шелл-скрипт (cmd/agentctl/observe_flag_test.go:36, inher…",
+	"CDP_INTERNAL_PORT":          "Порт петлевого интерфейса внутри контейнера браузера — проводка, не ручка. ⚠ Смежная открытая находка, попадающая ровно сюда: BACKLOG.md:182 [GATE-STEALS-ANOTHER-BROWSER] — сьют живого видео рандомизирует CDP_LISTEN_PORT и CDP_LIVE_PORT, а этот не задаёт вовсе, и при чужом сервисе на 9222 гейт молча меряет ЧУЖОЙ браузер.",
+	"CDP_LISTEN_ADDR":            "Адрес привязки форвардера. Задаётся составом развёртывания; pw-executor/src/launch.ts:141 и server.ts:439 прямо разбирают случай `CDP_LISTEN_ADDR=::` как «IPv6-only deployment», то есть это выбор топологии, а не поведения прогона.",
+	"CDP_LISTEN_PORT":            "Публикуемый порт релея — проводка. Задаётся compose (сервис `browser`, docker-compose.yml:308) и сьютами (tests/test_live_video_offline.py:90).",
+	"CDP_LIVE_PORT":              "Порт живого сервиса — проводка. Второе чтение в server.ts подставляет этот порт в АДРЕС заявки, выводимый из PW_CDP_ENDPOINT (ADR-121, ARCHITECTURE.md:246: «порт заменяется на `CDP_LIVE_PORT`, путь — на `/live/claim`»), то есть значение участвует в вычислении адреса, а не в поведении. Публиковать как ручку значило бы предложить менять порт, по которому два процесса развёртывания находят друг друга.",
+	"CHECKPOINT_DSN":             "Строка подключения к Postgres — кредентиал: собственный чарт продукта доставляет её через secretKeyRef и относит к секретам, а плоское значение помечено «dev/offline fallback: plaintext DSN» (cronjob.yaml:69-72). По правилу main.go:348-349 такое описывается, но не отдаётся значением. ⚠ Двойственность записать честно: это ОДНОВРЕМЕННО проводка (адрес хранилища чекпойнтов) — brain/adapters.py:310-311 объявляет её кл…",
+	"CONTROL_API_ADDR":           "Адрес привязки самого сервиса — проводка развёртывания. Задаётся compose/systemd; менять его из интерфейса, который сам по этому адресу и отвечает, бессмысленно.",
+	"CONTROL_API_AGENTCTL":       "Путь до бинаря, который сервис запускает на каждый прогон — ровно «имя бинаря» из определения infra.",
+	"CONTROL_API_ORCH_ADDR":      "Путь unix-сокета оркестратора — прямо «путь сокета» из определения infra, и комментарий у читателя приводит именно такой пример значения.",
+	"CONTROL_API_STORE_ADDR":     "Адрес gRPC-шлюза хранилища — проводка. В compose-стеке он уже проставлен, и session.go:543-546 прямо пишет, что задавать его вручную приходится только вне compose.",
+	"CONTROL_API_TOKEN":          "Bearer-токен сервиса — по правилу main.go:348-349 описывается, но не отдаётся значением. Полезное для дескриптора, если он будет: с ADR-160 у env-ветки появился ПОЛ и отказ старта — token.go:143-149 `if !usableToken(v) { … return \"\", tokenRefused, path, warnings }`, границы token.go:35-36 `tokenMinLen = 16`, `tokenMaxLen = 512`. Комментарий token.go:133-138 сам называет прошлую ошибку описания: «`CONTROL_API_TOKEN…",
+	"CONTROL_API_TOKEN_FILE":     "Путь до файла с токеном — «путь каталога/файла» из определения infra, задаётся составом развёртывания (монтированием тома). ⚠ Оговорка, которую стоит записать в реестр честно: комментарий token.go:76-77 прямо допускает человека — «an operator may point CONTROL_API_TOKEN_FILE at their own secret». Класс всё равно infra, а не operator: значение — путь на файловой системе СЕРВЕРА, и место ему в compose/systemd, а не …",
+	"CONTROL_API_UI_DIR":         "Путь каталога со страницами — infra по определению («пути … каталогов»), и назначение у него разработческое: docs/DISTRIBUTION.en.md:102 — «`CONTROL_API_UI_DIR=<path>` serves the pages from disk instead (for …)». Побочно ВКЛЮЧАЕТ отдачу UI даже без CONTROL_API_SERVE_UI (ветка стоит первой, ui.go:108) — это стоит сказать в подсказке к CONTROL_API_SERVE_UI, чтобы схема не описывала два независимых переключателя там,…",
+	"CONTROL_API_URL":            "Адрес, по которому CLI ищет control-api — проводка развёртывания, зеркало CONTROL_API_ADDR с другой стороны провода. Не поведение прогона.",
+	"CONTROL_API_VNC_LIVE":       "Адрес живого эндпойнта vnc-сервиса для пробы готовности — проводка. ⚠ Смежная открытая находка, попадающая ровно сюда, и она уже записана в коде: readyz.go:177-179 [VNC-UP-BUT-UNWIRED] — «no compose file sets CONTROL_API_VNC_LIVE for control-api, so an unset address means either \"not asked for\" or \"asked for and not wired\"». То есть имя существует, ни один compose его не задаёт, и проба честно отказывается различа…",
+	"CONTROL_API_VNC_SERVICE":    "Имя compose-сервиса, с которым сверяется хост из PW_CDP_ENDPOINT — соглашение состава развёртывания. Код сам называет силу этого вывода: live_screen.go:179-183 — «This is an inference about a deployment convention, which is exactly why the hub shows it as a warning strip and never as a refusal». Менять здесь имя имеет смысл только тому, кто переименовал сервис в своём compose, то есть развёртыванию, а не человеку …",
+	"CONTROL_API_VNC_SOCK":       "Путь unix-сокета RFB — прямо «путь сокета» из определения infra. ⚠ Важная деталь для реестра: у этого пути ПРАВА ДОСТУПА и есть аутентификация — live_screen.go:64-66 «vncSocketMode reports the socket's permission bits, because THEY are the authentication. A socket that has been widened to 0666 authenticates nobody». Это довод НЕ публиковать его настраиваемым: подмена пути тихо меняет модель доступа к экрану.",
+	"COVERAGE_TARGET":            "Это переменная СУЩЕСТВУЮЩЕГО поля блока `fields` (`coverage_target`, main.go:377). Нужно не новое поле, а имя переменной у существующего — и вместе с ним честная пометка канала, иначе схема пообещает переменную, которой нельзя воспользоваться.",
+	"DEEPSEEK_API_KEY":           "ключ стороннего провайдера, который compose передаёт роутеру моделей: секрет, и притом не наш — описывается, но не публикуется значением (то же правило, что у LLM_API_KEY).",
+	"DESCRIBE":                   "Переменная существующего поля `describe` (main.go:375) — нужно имя переменной у существующего поля, а не новый дескриптор.",
+	"FORCE_REPLAY":               "Переменная существующего поля `force_replay` (main.go:393) — нужно имя переменной у существующего поля.",
+	"GID":                        "пара к UID — та же проводка томов, тот же способ задания.",
+	"GOAL":                       "Переменная существующего поля `goal` (main.go:374) — нужно имя переменной у существующего поля.",
+	"HEAL_TOKEN_LIMIT":           "Переменная существующего поля `heal_budget` (main.go:381) — нужно имя переменной у существующего поля, с честной пометкой «доезжает RunConfig-ом, не окружением».",
+	"IGNORE_ROBOTS":              "Переменная существующего поля `ignore_robots` (main.go:398) — нужно имя переменной у существующего поля.",
+	"IMPORT_DIR":                 "Продукт ставит это сам: человек задаёт `--from`/`--from-git`, а переменную безусловно пишет agentctl. Унаследованное значение и так недостижимо — имени нет в аллоулисте (cmd/agentctl/main.go:401-424), а run-var дописан после filteredEnv() (main.go:457-461). Публиковать как настраиваемую значило бы предложить менять путь, который команда вычисляет себе сама.",
+	"IMPORT_MAP":                 "Продукт ставит это сам из флага `--map` или из результата `--verify`-обхода. Как и IMPORT_DIR, унаследованное значение не проходит аллоулист и перекрывается run-var'ом. Человеку адресован флаг, а не переменная.",
+	"INVOCATION_ID":              "Не наша ручка вовсе: переменную выставляет systemd своим юнитам, продукт её только ЧИТАЕТ, чтобы ответить «кто меня поднял». Комментарий рядом это и заявляет (svclog.go:270-271: «Every signal here is one the supervisor itself sets, so nothing is inferred from our own configuration»). Задать её руками значило бы солгать журналу о способе запуска — публиковать как настраиваемую нельзя.",
+	"JOURNAL_STREAM":             "То же, что и INVOCATION_ID: сигнал супервизора, который systemd экспортирует сам. Продукт его не пишет и не может. ⚠ Замерено расхождение: TS-копия правила (pw-executor/src/svcjournal.ts:63) читает ТОЛЬКО `INVOCATION_ID`, а её же комментарий (svcjournal.ts:57-59) утверждает «Kept to the same signals as the Go original, deliberately in the same order, so a reader comparing them can see they agree» — это заявление л…",
+	"LITELLM_MASTER_KEY":         "мастер-ключ роутера LiteLLM в профиле литейной: секрет чужого сервиса.",
+	"MAX_STEPS":                  "ЭТО ПЕРЕМЕННАЯ СУЩЕСТВУЮЩЕГО ПОЛЯ `fields.max_steps` (cmd/control-api/main.go:379) — нужно не новое поле, а имя переменной у существующего",
+	"MCP_TRANSPORT":              "Выбирает ПРОВОД между brain и pw-executor (JSON-RPC против MCP SDK) — внутренняя связь двух наших процессов, а не поведение прогона. Задаётся развёртыванием: Helm подставляет его из values (deploy/sentinel/templates/cronjob.yaml:45-47 `- name: MCP_TRANSPORT / value: {{ .Values.transport | quote }}`), а brain при MCP-пути ЖЁСТКО навязывает его ребёнку (brain/executor.py:120 `env={**os.environ, \"MCP_TRANSPORT\": \"mcp…",
+	"MISTRAL_API_KEY":            "ключ стороннего провайдера для роутера моделей — секрет; см. DEEPSEEK_API_KEY.",
+	"OLLAMA_IMAGE_TAG":           "тег образа стороннего сервиса в профиле ollama: выбор ВЕРСИИ ЧУЖОГО контейнера, а не поведения нашего продукта.",
+	"OPENAI_API_KEY":             "Ключ. Правило уже записано в коде: `api_key` помечен `\"secret\": true` и значение наружу не отдаётся (cmd/control-api/main.go:432 `api_key is flagged secret and NEVER valued here`, main.go:438 `\"note\": \"never returned in this payload; anthropic->ANTHROPIC_API_KEY, openai->OPENAI_API_KEY\"`). Имя УЖЕ названо в note дескриптора `llm.api_key` — собственного дескриптора не заводим, значение не публикуем.",
+	"ORCH_ADDR":                  "Адрес gRPC-оркестратора — проводка развёртывания. Задаётся compose (docker-compose.yml:212 `CONTROL_API_ORCH_ADDR: ${CONTROL_API_ORCH_ADDR-unix:/app/state/orch.sock}`) и точечно пропущен аллоулистом agentctl как имя связи (cmd/agentctl/main.go:405 `\"ORCH_ADDR\": true, \"STORE_ADDR\": true, …`). Публиковать его настраиваемым значило бы предложить менять адрес, по которому сервисы говорят между собой.",
+	"PLAN_FILE":                  "ЭТО ПЕРЕМЕННАЯ СУЩЕСТВУЮЩЕГО ПОЛЯ `fields.login_plan` (cmd/control-api/main.go:387 + brain/adapters.py:292) — нужно не новое поле, а имя переменной у существующего. ⚠ Но одно имя несёт ДВА разных смысла (план replay из `--plan` и план входа из auth), и при заданном `--plan` RunConfig-овский `login_plan` молча не применится: brain/runconfig.py `_overridable` возвращает False, когда `cur` непустое.",
+	"PLAN_TOKEN_LIMIT":           "ЭТО ПЕРЕМЕННАЯ СУЩЕСТВУЮЩЕГО ПОЛЯ `fields.plan_budget` (cmd/control-api/main.go:380) — нужно не новое поле, а имя переменной у существующего, причём с пометкой, что доставка НЕ окружением, а RunConfig-ом",
+	"PW_CDP_ENDPOINT":            "Адрес внешнего браузера (CDP), задаётся compose: docker-compose.yml:225 `PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:9223}` и docker-compose.yml:371 `PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}`. brain его только ЧИТАЕТ и это оговорено прямо: brain/observe.py:289-291 `\\`PW_CDP_ENDPOINT\\` is the executor's variable and this file must never WRITE it — it is only asked whether the run is about to adopt somebody else'…",
+	"PW_EXECUTOR_CMD":            "Командная строка запуска нашего же бинаря pw-executor — «имя бинаря» в чистом виде. Собирается развёртыванием и ПЕРЕЗАПИСЫВАЕТСЯ безусловно: cmd/agentctl/main.go:447 `pwExec := \"node \" + filepath.Join(repo, \"pw-executor\", \"dist\", \"server.js\")` и main.go:457-461 `cmd.Env = append(filteredEnv(), append([]string{ … \"PW_EXECUTOR_CMD=\" + pwExec, …}, extra...)...)` — то есть унаследованное значение мертво (последнее поб…",
+	"PW_HEADLESS":                "Второе написание того же решения: и служба браузера (`pw-executor/src/cdp-service.ts:560`), и план запуска прогона (`pw-executor/src/launch.ts:72`) считают браузер видимым при `PW_HEADED=1` ИЛИ `PW_HEADLESS=0`. Опубликовать оба имени значит завести у одного решения двух авторов, а у противоречивой пары (`PW_HEADLESS=1` вместе с `PW_HEADED=1`) молча выигрывает видимый. Публикуется `PW_HEADED` — имя, которым это реш…",
+	"PW_LIVE_CLAIM":              "Проводка развёртывания, а не операторская ручка: адрес, по которому прогон заявляет свой экран браузеру-службе, по умолчанию ВЫВОДИТСЯ из уже заданного `PW_CDP_ENDPOINT` (`liveClaimUrl`, pw-executor/src/server.ts:747-761) и объявляется в логе. Второй адрес в развёртывании — второе место, где его можно указать неверно; ровно это вывод и устраняет (измеренный случай записан в докстринге на :740-741: YAML-merge замен…",
+	"REPORT_DIR":                 "Путь каталога прогона, из которого собирается отчёт — путь каталога, не ручка поведения. Задаётся вызовом (`agentctl report --run <dir>`), безусловно дописывается run-var-ом (cmd/agentctl/main.go:1026), так что унаследованное значение мертво; умолчание — сам каталог артефактов прогона (brain/__main__.py:1549).",
+	"REV_A":                      "Продукт ставит переменную сам из аргумента подкоманды `agentctl revisions --rev`; человек задаёт флаг, а не переменную, и вне `RUN_MODE=revisions` имя не читается вовсе. Унаследованное значение мертво — run-var дописывается безусловно (cmd/agentctl/main.go:831).",
+	"REV_B":                      "То же, что REV_A: продукт мостит аргумент подкоманды `revisions` в переменную; человек задаёт флаг. Унаследованное значение перезаписывается безусловно.",
+	"REV_OP":                     "Имя операции подкоманды (list|show|diff|rollback), которое продукт переносит из позиционного аргумента в переменную; проверка перечня уже сделана в agentctl, человек переменную не задаёт. Унаследованное значение перезаписывается безусловно.",
+	"RUN_CONFIG":                 "Это не ручка, а КАНАЛ доставки других ручек: путь к файлу RunConfig, который control-api создаёт сам внутри каталога артефактов прогона (cmd/control-api/main.go:695-707). Человек задаёт значения ВНУТРИ файла (plan_budget/heal_budget/total_budget, auth.*), а не эту переменную; унаследованное значение мертво — agentctl безусловно дописывает `RUN_CONFIG=` (пустую строку, если флага не было).",
+	"RUN_ID":                     "agentctl генерирует идентификатор сам и дописывает его БЕЗУСЛОВНО: cmd/agentctl/main.go:457-458 «cmd.Env = append(filteredEnv(), append([]string{ \"RUN_ID=\" + runID,». runID берётся из newRunID() либо из ОТДЕЛЬНОГО имени SENTINEL_RUN_ID (main.go:688-691) — и причина названа в коде (main.go:686-687): «RUN_ID is a common shell variable, and inheriting it by accident would make two unrelated runs claim one identity». …",
+	"RUN_MODE":                   "agentctl пишет его безусловно во ВСЕХ путях: cmd/agentctl/main.go:696 «\"RUN_MODE=\" + runMode» плюс литералы 760 (baseline), 775 (clear-quarantine), 793 (export-spec), 830 (revisions), 992 (explore), 1006 (import), 1024 (report), 1066 (calibrate). Унаследованное значение всегда затирается (append после filteredEnv, побеждает последнее). Режим уже опубликован схемой как перечень верхнего уровня «modes» (cmd/control-…",
+	"SENTINEL_AGENTCTL":          "Имя/путь БИНАРЯ — ровно то, что определение относит к проводке развёртывания. Продукт резолвит его сам двумя запасными способами (PATH, затем bin/agentctl), так что человеку задавать нечего; переменная существует для нестандартной раскладки файлов и для стенда (tests/test_trace_redaction_offline.py:56-59 «Call the real `_redact_trace` with SENTINEL_AGENTCTL pointed wherever the case needs»).",
+	"SENTINEL_CONVERSATIONS_DB":  "Путь к файлу SQLite — каталог/файл, то есть проводка развёртывания. Docstring читателя сам называет назначение (__main__.py:646): «SENTINEL_CONVERSATIONS_DB (an override for tests / relocation) or the air-gapped default state/conversations.db». Плюс выбор хранилища перекрывается совсем другим именем: :645 «CHECKPOINT_DSN (Postgres) overrides this in `_checkpointer`» — операторский выбор «где живут треды» делается …",
+	"SENTINEL_DECORATE":          "Пер-прогонное расширение режима `observe=human` с ровно одним автором (`brain/observe.py::apply`) и одним читателем (`pw-executor/src/decorate.ts`). Как настройка развёртывания она вредна в обе стороны: сохранённая `0` отняла бы у режима `human` его единственный механизм (значение из окружения перекрывает режим, `apply` пишет через `setdefault`), а сохранённая `1` украсила бы КАЖДЫЙ прогон — а украшенный прогон ме…",
+	"SENTINEL_LIVE_FRAMES":       "Половина ОДНОГО решения о съёмке, а не отдельная ручка: переменную пишет только `brain/observe.py::apply()` из режима `observe`, и пишет через `setdefault` (brain/observe.py:266) — значение, пришедшее из окружения, перекрывает выбранный на прогон режим навсегда. А хаб при сохранении настроек кладёт в документ КАЖДУЮ булеву настройку (`cfgSave`, docs/index.html:6496-6503), не только изменённую, — одно нажатие «Сохр…",
+	"SENTINEL_LLM_ATTEMPT_LOG":   "Измерительный зонд самого инструмента, а не ручка продукта, и код говорит это прямо: brain/llm.py:484 «MODEL-002 (measurement only, scripts/model_convergence.py)», :490 «(unset by default -> `_record_attempt` is a no-op, zero cost, zero behavior change for every existing caller/test)». Единственные, кто её ЗАДАЁТ, — измерительный стенд scripts/model_convergence.py:301 и его тест tests/test_model_convergence_offlin…",
+	"SENTINEL_LLM_BUDGET_FILE":   "Путь к файлу состояния (выученный потолок токенов), умолчание — state/llm-budget.json. Операторская ручка здесь НЕ путь, а флаг, из которого продукт этот путь ставит сам: cmd/agentctl/main.go:721 «extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)» → appendBudgetIsolation «return append(extra, \"SENTINEL_LLM_BUDGET_FILE=\"+filepath.Join(dir, \"llm-budget.json\"))», флаг объявлен в main.go:606 «fs.Bool(\"isola…",
+	"SENTINEL_LOG_LEVEL":         "уже настраивается разделом `logging` конфигурационного документа (persistedLoggingEnv, cmd/control-api/logenv.go:53) — второй дескриптор писал бы ту же переменную из второго места, а в mergedPersistedEnv (logenv.go:236-243) слой `settings` накладывается ПОСЛЕ `logging` и молча победил бы его",
+	"SENTINEL_LOG_LEVELS":        "уже настраивается разделом `logging` конфигурационного документа, и только он умеет выразить поКАТЕГОРИЙНЫЕ уровни (`heal=info,llm=debug`), которых плоский дескриптор не описывает; дескриптор в `settings` завёл бы второго автора той же переменной, побеждающего первого в mergedPersistedEnv",
+	"SENTINEL_OBSERVE":           "⚠ Это переменная СУЩЕСТВУЮЩЕГО поля блока `fields` — `observe`. Ей нужен не новый дескриптор, а ключ `env` у имеющегося поля. Отдельно: brain/runconfig.py:45 «\"observe\": \"SENTINEL_OBSERVE\"» — имя УЖЕ объявлено в таблице RunConfig→env, так что источник для ключа брать неоткуда, кроме этой строки; а runconfig.py:61-65 фиксирует, что в _AGENTCTL_DEFAULTS его намеренно нет («мутация её выживания ничего не покрасила»).",
+	"SENTINEL_OWNER":             "Продукт ставит это сам из состояния запроса, а не человек: control-api резолвит владельца из предъявленного удостоверения и передаёт флагом — cmd/control-api/main.go:658-659 «if req.owner != \"\" { args = append(args, \"--owner\", req.owner) }», причём поле НЕэкспортируемое именно чтобы клиент не мог назвать себя чужим именем (main.go:634-637 «a client that could name its own owner could write into somebody else's set…",
+	"SENTINEL_RECORD":            "Пер-прогонное расширение режима `observe=record` с одним автором (`brain/observe.py::apply`) и одним читателем (`pw-executor/src/record.ts`). Сохранённая в развёртывании, она обходит отказ, который `brain/observe.py` выносит У ДВЕРИ для пары «запись + подключение по CDP»: в развёртывании по умолчанию прогон подключается к браузеру-службе (docker-compose.yml:225 `PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:92…",
+	"SENTINEL_REVISIONS_DIR":     "Путь КАТАЛОГА хранилища ревизий — проводка развёртывания (умолчание state/revisions, файловый стор без сетевого сервиса, brain/__main__.py:219 «file-based under state/revisions»). В дереве его задают только тесты (tests/test_revisions_offline.py:122, tests/test_revisions_surface_offline.py:39); в compose/entrypoint не встречается. ⚠ один и тот же литерал умолчания продублирован в двух читателях.",
+	"SENTINEL_RUN_ID":            "Продукт ставит это сам: control-api именует прогон ДО того, как появляется agentctl (runs/control-<id>), и передаёт тот же id вниз, чтобы живой вид и хаб спрашивали про одно имя (комментарий cmd/agentctl/main.go:685-688 и cmd/control-api/main.go:907-910). Человек это не задаёт; предлагать менять id прогона значит предлагать развести хаб и прогон.",
+	"SENTINEL_STATE_DIR":         "Путь КАТАЛОГА состояния внутри контейнера, привязанный к точке монтирования compose. В дереве задаётся только тестами (tests/test_browser_journal_offline.py:116,201,241; tests/test_own_tab_offline.py:76). Публиковать настраиваемым — предлагать разойтись с томом.",
+	"SENTINEL_SVC_NAME":          "ИМЯ службы в журнале — проводка развёртывания: одинаковый образ поднимается дважды (browser и browser-vnc), и имя различает записи. Значение выставляет compose литералом, без ${...:-} — то есть не рассчитано на подмену человеком.",
+	"SENTINEL_TEST_ID":           "Идентичность НАЗВАННОГО теста, а не операторская ручка: значение ставит только `agentctl revisions --test` (cmd/agentctl/main.go:834 флаг, :852 `\"SENTINEL_TEST_ID=\" + *testID`), у `agentctl run` такого флага нет, а в `runRequest` нет соответствующего поля — публикация в `fields` покраснила бы TestRunRequestCoversEverySchemaField (cmd/control-api/config_projection_test.go:66), а публикация в `settings` превратила б…",
+	"SENTINEL_TRACE_SCREENSHOTS": "Вторая половина той же пары, что и `SENTINEL_LIVE_FRAMES`: её пишет только `brain/observe.py::apply()` из режима `observe` и через `setdefault`, поэтому сохранённое значение перекрывало бы режим на каждом прогоне, а хаб кладёт в документ каждую булеву настройку при первом же сохранении. Конфиденциальность пикселей, ради которой рычаг существует (ADR-098: снимки в трейсе нередактируемы), закрывается уже опубликован…",
+	"SENTINEL_VERSION":           "Клеймо версии/тег образа — проводка развёртывания: значение ОПИСЫВАЕТ сборку, а не меняет поведение прогона (единственный читатель в коде подставляет его в строку журнала). Публиковать настраиваемым — предлагать соврать о собственной версии.",
+	"SPEC_OUT":                   "Продукт ставит это сам из флага `--out` подкоманды `agentctl spec export`. Вручную заданное значение до brain не доедет ВООБЩЕ: имя без префикса LLM_/OTEL_/PW_/PLAYWRIGHT_/SENTINEL_ и не в точном перечне filteredEnv (cmd/agentctl/main.go:400-424), а agentctl дописывает своё значение ПОСЛЕ filteredEnv (spawnBrain: `cmd.Env = append(filteredEnv(), append([]string{...}, extra...)...)`). Кроме того, режим export-spec …",
+	"STORE_ADDR":                 "АДРЕС (юникс-сокет state/sentinel-store-<runID>.sock либо адрес шлюза развёртывания) — ровно тот случай, о котором сказано в постановке: предлагать менять адрес, по которому сервис сам с собой разговаривает. Его вычисляет agentctl (startGateway) или передаёт control-api; пустое значение означает документированный LocalStore.",
+	"STORE_DSN":                  "Строка подключения к БД — проводка развёртывания, и вдобавок РУЧКА, КОТОРАЯ УМЕЕТ ТОЛЬКО ОТКАЗАТЬ: любое непустое значение возвращает ошибку, бэкенда Postgres не существует (M13-service отложен). Опубликовать её настраиваемой значило бы рекламировать несуществующую возможность. Значение наружу не печатается — в тексте ошибки только путь SQLite, что верно.",
+	"STORE_TOKEN":                "Токен аутентификации к store-gateway. Действует уже записанное в коде правило: описывать, но значение не отдавать (cmd/control-api/main.go:349-350 «Secrets are DESCRIBED (api_key.secret) but never VALUED»). ⚠ Он умышленно НЕ в allowlist filteredEnv — cmd/agentctl/main.go:527-530 говорит это прямо, — и пересылается вниз только вручную рядом с адресом; поэтому запись в реестре обязана быть помечена secret:true и БЕЗ…",
+	"TARGET_URL":                 "⚠ ЭТО ПЕРЕМЕННАЯ УЖЕ СУЩЕСТВУЮЩЕГО ПОЛЯ `target` (cmd/control-api/main.go:378, единственное required в блоке fields) — ей нужно не новое поле, а решение про ключ `env` у существующего. Но ставить туда голое `TARGET_URL` НЕЛЬЗЯ без оговорки: agentctl дописывает её БЕЗУСЛОВНО и последним, поэтому заданное человеком значение всегда проигрывает — та же смерть, что у HEAL_LLM, который в схеме есть и до прогона не доезж…",
+	"TOTAL_TOKEN_LIMIT":          "⚠ ЭТО ПЕРЕМЕННАЯ УЖЕ СУЩЕСТВУЮЩЕГО ПОЛЯ `total_budget` (cmd/control-api/main.go:382, type int, default 0) — ей нужно не новое поле, а решение про `env` у существующего. Из окружения она не доезжает ВООБЩЕ: имени нет ни в точном перечне, ни среди префиксов filteredEnv (cmd/agentctl/main.go:400-424), и это уже записано в коде — cmd/control-api/main.go:702-705 «The brain reads budgets as PLAN_TOKEN_LIMIT / HEAL_TOKEN…",
+	"UID":                        "проводка развёртывания: compose подставляет её в `user:` каждого сервиса, чтобы файлы в томах принадлежали хозяину каталога, а не root. Задаётся окружением докера, продуктом не читается.",
 }

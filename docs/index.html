@@ -1024,7 +1024,7 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <label for="b-loginplan" style="margin-top:.4rem">login_plan</label>
           <input id="b-loginplan" placeholder="runs/login/plan.json">
           <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
-            <input id="b-pwnotrace" type="checkbox" checked style="width:auto">PW_NO_TRACE (<span data-lang="ru">откл. трейсинг при вводе пароля</span><span data-lang="en">disable tracing with password</span>)
+            <input id="b-pwnotrace" type="checkbox" style="width:auto">PW_NO_TRACE (<span data-lang="ru">откл. трейсинг при вводе пароля</span><span data-lang="en">disable tracing with password</span>)
           </label>
           <!-- ADR-107c: the determinism guards and the scenario selector had no control at all, so
                `--ci`, `--force-replay`, `--aut-version`, `--heal-llm` and `--scenario` were CLI-only.
@@ -3522,6 +3522,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     ci: 'b-ci', force_replay: 'b-forcereplay', aut_version: 'b-autversion', heal_llm: 'b-healllm',
     ignore_robots: 'b-ignorerobots',
     observe: 'b-observe',
+    /* W15: три поля, которых схема раньше не публиковала, и потому их здесь не было. `mode` и
+       `planner` форма прогона несёт своими селекторами — до этой правки они уезжали в тело мимо
+       карты, отдельными строками в bBody(), то есть карта, обещающая быть «THE one place the
+       correspondence lives», о двух полях не знала. `message` живёт в другом разделе, и это
+       записано причиной, а не молчанием. */
+    mode: 'b-mode', planner: 'b-planner',
+    message: { elsewhere: 'реплика принадлежит разделу «Чат» (#ch-text): форма прогона задаёт ЦЕЛЬ разговора через goal/describe, а ход в разговоре — это другой предмет, и поле для него в форме прогона предлагало бы вести беседу там, где беседы нет' },
     conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key; typing one into a run form would let a person graft a run onto someone else’s conversation' }
   };
   window.cfgFieldIds = cfgFieldIds;   // named so the DOM gate can walk it (see setView on addressability)
@@ -3568,6 +3575,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      ОТГРУЖЕННОМ заполнителе формы, с настоящей схемой на входе, а не на его копии в тесте. */
   window.lvFillObserve = lvFillObserve;
 
+  /* Поля-чекбоксы, у которых СНЯТОЕ состояние — это выбор, а не молчание. Держится словарём с
+     причиной, а не условием в теле обхода: список из одного элемента, который нечем объяснить,
+     через волну станет списком из четырёх, которые нечем объяснить. */
+  var SEND_UNCHECKED = { pw_no_trace: 'секция auth имеет сохранённый слой — снятая галочка обязана его отменять' };
+
   /* Builds the POST /v1/runs body by WALKING cfgFieldIds rather than restating the fields. */
   function bBody(){
     var mode = bVal('b-mode');
@@ -3577,7 +3589,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (typeof id !== 'string') return;            // recorded as living elsewhere
       var el = ge(id);
       if (!el) return;
-      if (el.type === 'checkbox'){ if (el.checked) body[name] = true; return; }
+      /* ⚠ ЧЕКБОКС ОБЫЧНО ШЛЁТСЯ ТОЛЬКО ВКЛЮЧЁННЫМ, и для большинства полей это верно: «не отметил»
+         и «отметил нет» там одно и то же. Для `pw_no_trace` — нет: у секции `auth` есть сохранённый
+         слой, и снятая галочка обязана ОТМЕНЯТЬ сохранённое, а не молчать. Сервер принимает
+         указатель ровно для этого. Перечень исключений держится здесь, а не догадкой у сервера. */
+      if (el.type === 'checkbox'){
+        if (SEND_UNCHECKED[name]) { body[name] = !!el.checked; return; }
+        if (el.checked) body[name] = true;
+        return;
+      }
       var v = (el.value || '').trim();
       if (v !== '') body[name] = v;
     });
@@ -6524,7 +6544,19 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       cfgDoc = doc;
       /* Naming the medium, because "saved" alone cannot tell a store write from a file write, and the
          two have different consequences for anyone else reading the same config. */
+      /* ⚠ ОТВЕТ НАЗЫВАЕТ СОСТАВ ЗАПИСАННОГО, И ЕГО НАДО ЧИТАТЬ. Замерено: у неадмина «Сохранить»
+         отправляло только его секции, а при их отсутствии — пустой документ `{}`, на который сервер
+         честно отвечает 200 и `written: {}`, ничего не записав. Хаб печатал «сохранено · действует
+         на следующие прогоны» — подтверждение сохранения того, чего не сохраняли. Подтверждение
+         несделанного хуже отказа: отказ виден, а это читается как успех. */
+      var wrote = Object.keys(j.written || {});
+      if (j.tier !== 'file' && j.written && !wrote.length){
+        cfgSetStatus('<span class="warn">✓ '+bi('запрос принят, но записывать было нечего','the request was accepted, but there was nothing to write')
+                   + ' — '+bi('в этом разделе вам не принадлежит ни одна секция','you own none of the sections in this view')+'</span>');
+        return;
+      }
       cfgSetStatus('<span class="ok">✓ '+bi('сохранено','saved')+' · '+esc(j.tier === 'file' ? (j.path || 'file') : 'store-gateway')
+                 + (wrote.length ? ' · '+esc(wrote.join(', ')) : '')
                  + ' · '+bi('действует на следующие прогоны','applies to subsequent runs')+'</span>');
     } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); }
   }

@@ -40,6 +40,21 @@ import (
 // config-schema handler and per-run validation both read it so they cannot drift apart.
 var llmBackends = []string{"anthropic", "openai", "sampling"}
 
+// llmRoles — тот же приём для РОЛЕЙ, и заведён он по измеренному дефекту. Роль `chat` реальна в
+// brain/llm.py (`_DEFAULT_MODEL` знает её с ADR-108b), схема её публикует, мастер настройки рисует
+// на неё поле и СОХРАНЯЕТ его — а проекция сохранённого документа в окружение прогона читала из
+// карты моделей ровно две роли двумя жёсткими `if`. Значение доезжало до хранилища и не доезжало
+// никуда дальше: интерфейс подтверждал сохранение, и человек считал, что настроил.
+//
+// Список литералом стоял в трёх местах (схема, проекция, per-run тело) и разошёлся в двух из трёх.
+// Теперь он один, и четвёртая роль попадёт во все три места по построению, а не по внимательности.
+var llmRoles = []string{"planner", "heal", "chat"}
+
+// llmModelEnv возвращает имя переменной для модели роли: LLM_MODEL_<ROLE>. Форму задаёт brain/llm.py
+// (`_env`: LLM_<KEY>_<ROLE> перекрывает глобальный LLM_<KEY>), поэтому строится она здесь, а не
+// пишется руками у каждого вызывателя.
+func llmModelEnv(role string) string { return "LLM_MODEL_" + strings.ToUpper(role) }
+
 func validBackend(b string) bool {
 	for _, x := range llmBackends {
 		if b == x {
@@ -53,12 +68,35 @@ func validBackend(b string) bool {
 // hub #build fields and the config-schema `llm` descriptors. NO api_key field by design — secrets never
 // travel in a run request (see the package comment); a secret-shaped member is rejected before we get here.
 type llmRunConfig struct {
-	Backend      string `json:"backend"`
-	BaseURL      string `json:"base_url"`
-	ModelPlanner string `json:"model_planner"`
-	ModelHeal    string `json:"model_heal"`
-	Vision       *bool  `json:"vision"`
-	Structured   *bool  `json:"structured"`
+	Backend string `json:"backend"`
+	BaseURL string `json:"base_url"`
+	// ⚠ ДВЕ ФОРМЫ ОДНОГО, И СТАРАЯ ОСТАЁТСЯ. `model_planner`/`model_heal` — то, что шлёт сегодняшний
+	// хаб и что лежит в чужих скриптах; ломать их значит ломать работающие вызовы ради формы. Новая
+	// `model: {<роль>: "…"}` покрывает ВСЕ роли из `llmRoles`, включая `chat`, которая до этого не
+	// имела на пер-ранном уровне никакой поверхности вовсе. При конфликте побеждает именованная
+	// роль: она точнее, потому что называет себя.
+	ModelPlanner string            `json:"model_planner"`
+	ModelHeal    string            `json:"model_heal"`
+	Model        map[string]string `json:"model"`
+	Vision       *bool             `json:"vision"`
+	Structured   *bool             `json:"structured"`
+}
+
+// modelFor возвращает модель роли из пер-ранного тела: сперва именованная запись, затем старое поле.
+func (c *llmRunConfig) modelFor(role string) string {
+	if c == nil {
+		return ""
+	}
+	if v := strings.TrimSpace(c.Model[role]); v != "" {
+		return v
+	}
+	switch role {
+	case "planner":
+		return c.ModelPlanner
+	case "heal":
+		return c.ModelHeal
+	}
+	return ""
 }
 
 // validateLLMBase bounds an operator-supplied OpenAI-compatible base_url. A run points the brain at this
@@ -163,8 +201,9 @@ func resolveRunEnv(base []string, perRun *llmRunConfig, persisted, stored map[st
 	if perRun != nil {
 		set("LLM_BACKEND", perRun.Backend)
 		set("LLM_BASE_URL", perRun.BaseURL)
-		set("LLM_MODEL_PLANNER", perRun.ModelPlanner)
-		set("LLM_MODEL_HEAL", perRun.ModelHeal)
+		for _, role := range llmRoles {
+			set(llmModelEnv(role), perRun.modelFor(role))
+		}
 		if perRun.Vision != nil { // an explicit false must win over a persisted true — write "1"/"0", not skip
 			set("LLM_VISION", boolEnv(*perRun.Vision))
 		}
@@ -233,12 +272,11 @@ func persistedLLMEnv(cfg map[string]any) map[string]string {
 		out["LLM_BASE_URL"] = v
 	}
 	switch m := llm["model"].(type) {
-	case map[string]any: // per-role {planner, heal}
-		if v, _ := m["planner"].(string); v != "" {
-			out["LLM_MODEL_PLANNER"] = v
-		}
-		if v, _ := m["heal"].(string); v != "" {
-			out["LLM_MODEL_HEAL"] = v
+	case map[string]any: // пер-ролевая карта — ОБХОДОМ по llmRoles, а не двумя `if`: см. довод там
+		for _, role := range llmRoles {
+			if v, _ := m[role].(string); v != "" {
+				out[llmModelEnv(role)] = v
+			}
 		}
 	case string:
 		if m != "" {

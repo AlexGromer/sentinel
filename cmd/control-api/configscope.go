@@ -37,6 +37,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -156,4 +157,127 @@ func marshalConfigDoc(doc map[string]json.RawMessage) ([]byte, error) {
 	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
+}
+
+// ── ЛИЧНЫЕ УМОЛЧАНИЯ ПРОГОНА ─────────────────────────────────────────────────────────────────────
+//
+// ⚠ ЗАМЕР, РАДИ КОТОРОГО ЭТО НАПИСАНО. Секции `run` и `auth` объявлены настраиваемыми, мастер их
+// сохраняет, `GET /v1/config` их отдаёт — и НИКТО их не читал. В окружение прогона материализуются
+// только глобальные секции, а личные, по замыслу, были «умолчаниями формы, которые заполняет
+// интерфейс». Интерфейс их не заполнял: обращений к `cfgDoc.run` в хабе не было ни одного. То есть
+// человек сохранял target/goal/mode/planner/бюджеты, получал подтверждение сохранения — и не
+// действовало НИЧЕГО. Худшая форма отказа: интерфейс подтверждает, и человек считает, что настроил.
+//
+// ПОЧЕМУ ЧИТАТЕЛЬ ЗДЕСЬ, А НЕ В ХАБЕ. Читатель на стороне интерфейса чинил бы одну дверь из трёх:
+// тело `POST /v1/runs` шлют ещё чат, заглушка `/v1/chat/completions` и мастер настройки, и каждому
+// пришлось бы повторить заполнение. Сервер — единственное место, общее для всех четырёх.
+//
+// ⚠ И ГЛАВНОЕ: «НЕ ВЫБИРАЛ» НЕ ПРЕВРАЩАЕТСЯ В «ВЫБРАЛ». Умолчание применяется ТОЛЬКО к полю,
+// которого запрос не нёс, и применённое НАЗЫВАЕТСЯ в ответе. Код рядом запрещает смешивать эти два
+// факта прямым текстом («an invisible default makes "I did not choose" and "I chose exactly this"
+// the same act, and then nobody can say what the run will produce»), и запрет соблюдён: невидимым
+// умолчание не становится — оно возвращается вызывателю поимённо.
+
+// personalRunDefaults — какие поля запроса заполняются из какой сохранённой секции. Перечень
+// закрытый и парный: ключ секции слева, адрес поля справа. Секции те же, что объявлены
+// пользовательскими в configSectionScope, — иначе появилась бы третья классификация тех же данных.
+var personalRunDefaults = []struct {
+	section string
+	key     string
+	get     func(*runRequest) string
+	set     func(*runRequest, string)
+}{
+	{"run", "mode", func(r *runRequest) string { return r.Mode }, func(r *runRequest, v string) { r.Mode = v }},
+	{"run", "planner", func(r *runRequest) string { return r.Planner }, func(r *runRequest, v string) { r.Planner = v }},
+	{"run", "target", func(r *runRequest) string { return r.Target }, func(r *runRequest, v string) { r.Target = v }},
+	{"run", "goal", func(r *runRequest) string { return r.Goal }, func(r *runRequest, v string) { r.Goal = v }},
+	{"run", "describe", func(r *runRequest) string { return r.Describe }, func(r *runRequest, v string) { r.Describe = v }},
+	{"run", "coverage_target", func(r *runRequest) string { return r.CoverageTarget }, func(r *runRequest, v string) { r.CoverageTarget = v }},
+	{"run", "max_steps", func(r *runRequest) string { return r.MaxSteps }, func(r *runRequest, v string) { r.MaxSteps = v }},
+	{"run", "plan_budget", func(r *runRequest) string { return r.PlanBudget }, func(r *runRequest, v string) { r.PlanBudget = v }},
+	{"run", "heal_budget", func(r *runRequest) string { return r.HealBudget }, func(r *runRequest, v string) { r.HealBudget = v }},
+	{"run", "total_budget", func(r *runRequest) string { return r.TotalBudget }, func(r *runRequest, v string) { r.TotalBudget = v }},
+	{"auth", "storage_state", func(r *runRequest) string { return r.StorageState }, func(r *runRequest, v string) { r.StorageState = v }},
+	{"auth", "storage_state_save", func(r *runRequest) string { return r.StorageStateSave }, func(r *runRequest, v string) { r.StorageStateSave = v }},
+	{"auth", "login_plan", func(r *runRequest) string { return r.LoginPlan }, func(r *runRequest, v string) { r.LoginPlan = v }},
+}
+
+// scalarString приводит сохранённое значение к строке, в которой его ждёт запрос. Числа в JSON
+// приходят float64, и `40` обязано стать "40", а не "40.000000" — иначе унаследованный потолок
+// шагов доедет до agentctl мусором и прогон упадёт по причине, к настройке не относящейся.
+func scalarString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case bool:
+		if x {
+			return "1"
+		}
+		return "0"
+	case float64:
+		if x == float64(int64(x)) {
+			return strconv.FormatInt(int64(x), 10)
+		}
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case json.Number:
+		return x.String()
+	}
+	return ""
+}
+
+// applyPersonalRunDefaults заполняет пустые поля запроса из ЛИЧНОГО документа вызывающего и
+// возвращает имена заполненных — их называет ответ. Молча возвращает пусто, когда владельца нет
+// (машинный кредентиал, развёртывание без аккаунтов) или хранилище недоступно: прогон, отказавшийся
+// стартовать из-за необязательных умолчаний, был бы хуже прогона без них.
+func (s *server) applyPersonalRunDefaults(req *runRequest) []string {
+	if req.owner == "" || s.store == nil {
+		return nil
+	}
+	rec, err := s.store.getConfig(setupConfigKey, req.owner, storeCallTimeout)
+	if err != nil || rec == nil || rec.ValueJson == "" {
+		return nil
+	}
+	var doc map[string]json.RawMessage
+	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+		return nil
+	}
+	sections := map[string]map[string]any{}
+	for name := range configSectionScope {
+		if configSectionScope[name] != scopeUser {
+			continue
+		}
+		raw, ok := doc[name]
+		if !ok {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(raw, &m) == nil {
+			sections[name] = m
+		}
+	}
+	var used []string
+	for _, f := range personalRunDefaults {
+		if f.get(req) != "" {
+			continue // человек выбрал сам — умолчание не спорит с выбором
+		}
+		v, ok := sections[f.section][f.key]
+		if !ok {
+			continue
+		}
+		if sv := scalarString(v); sv != "" {
+			f.set(req, sv)
+			used = append(used, f.section+"."+f.key)
+		}
+	}
+	// pw_no_trace — указатель, поэтому «не выбирал» у него выражается nil, а не пустой строкой.
+	if req.PWNoTrace == nil {
+		if v, ok := sections["auth"]["pw_no_trace"]; ok {
+			if b, isBool := v.(bool); isBool {
+				req.PWNoTrace = &b
+				used = append(used, "auth.pw_no_trace")
+			}
+		}
+	}
+	sort.Strings(used)
+	return used
 }
