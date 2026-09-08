@@ -384,6 +384,37 @@ jobs:
               echo "::error::протыкивание нашло контрол, который не нажат и не объявлен, либо нажатие сломало страницу"
               sed -n '1,60p' /tmp/ui-smoke-api.log; exit 1; }
 
+      - name: Multi-user deployment end-to-end (first admin -> accounts -> per-account runs -> isolation)
+        # ⚠ СВОЙ СТЕНД, а не общий с двумя шагами выше, и это не расточительность. Всё, что здесь
+        # утверждается, живёт ДО момента, с которого начинает смоук: как развёртывание заводит
+        # первого администратора, откуда берётся его пароль, как появляются остальные и что каждый
+        # из них видит. Домен аккаунтов обязан быть ЗАВЕДОМО ПУСТЫМ — пароль первого администратора
+        # печатается только над пустым хранилищем, — а стенд смоука к этому шагу уже не пуст.
+        # Скрипт поднимает и убирает стенд сам, на СВОЁМ порту (18760): 8090 и 18744/18745 заняты.
+        #
+        # ⚠ ЖИВОЙ МОДЕЛИ ЗДЕСЬ НЕТ, И ПРОПУСК ОБЪЯВЛЕН, А НЕ УМОЛЧАН. Эндпоинт живёт в локальной
+        # сети мейнтейнера (docs/PR_ACCEPTANCE.md §2). Скрипт печатает пропуск с причиной и держит
+        # их число РАВЕНСТВОМ: второй пропуск, заведённый молча, роняет прогон. Локально половина
+        # исполняется — `--llm-base <endpoint>/v1 --llm-model qwen3:8b`.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -e
+          out=$(node scripts/multiuser-e2e.mjs --out "$PWD/multiuser-e2e" 2>&1) || true
+          echo "$out"
+          echo "$out" | grep -qE '^[0-9]+/[0-9]+ checks passed$' || {
+            echo "::error::многопользовательский прогон не напечатал строку итога — он не дошёл до конца"; exit 1; }
+          n=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f1)
+          t=$(echo "$out" | grep -oE '^[0-9]+/[0-9]+ checks passed$' | cut -d/ -f2 | cut -d' ' -f1)
+          if [ "$n" -ne "$t" ]; then
+            echo "::error::$n из $t проверок прошло в многопользовательском прогоне — см. кадры в артефактах"; exit 1
+          fi
+          # Пол, а не текущее число: 15 сегодня. Проверка, тихо переставшая исполняться, унесла бы
+          # знаменатель вниз, а `failed` остался бы нулём — шаг был бы зелёным над сузившимся обходом.
+          if [ "$t" -lt 15 ]; then
+            echo "::error::в многопользовательском прогоне исполнилось только $t проверок — ожидалось не меньше 15"; exit 1
+          fi
+
       - name: End-to-end check of the MV3 extension in a REAL Chromium (EXTENSION-E2E-RUNS-NOWHERE)
         # ⚠ THIS FILE WAS RUN BY NOTHING. `extension/test/e2e/recorder.e2e.mjs` existed since M9.8 and
         # every mention of it in the tree was prose or self-description; measured 2026-08-30 and again
@@ -453,13 +484,18 @@ jobs:
             exit 1; }
           echo "transcript matches the committed artefact"
 
-      - name: Upload UI smoke screenshots
-        # `always()`: a failing smoke is exactly when the pictures are worth having.
+      - name: Upload UI screenshots (smoke + multi-user)
+        # `always()`: a failing walk is exactly when the pictures are worth having.
+        # Both sets go in ONE artifact deliberately: they answer the same question — what did the
+        # assembled product actually look like — and a reviewer who has to find two artifacts to see
+        # one run will look at neither.
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ui-smoke-screenshots
-          path: ui-smoke/
+          path: |
+            ui-smoke/
+            multiuser-e2e/
           if-no-files-found: warn
 
       - name: Upload build artifact (bin/ + pw-executor/dist/)

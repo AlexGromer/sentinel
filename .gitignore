@@ -1239,6 +1239,11 @@ ui-smoke/
 # beside it: regenerated per run, and the verdict a person reads is the exit code, not the file.
 ui-press/
 
+# Кадры многопользовательского прогона (scripts/multiuser-e2e.mjs default --out) — та же природа,
+# что у двух каталогов выше. ⚠ ЗВЁЗДОЧКА НЕ СЛУЧАЙНА: `ui-smoke/` без неё не покрывал `ui-smoke-159/`
+# и соседей, которые скрипт получает через --out, и за волну так осело 73 МБ вне игнора.
+multiuser-e2e*/
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALLOW LIST (OVERRIDE IGNORES)
 # ─────────────────────────────────────────────────────────────────────────────
