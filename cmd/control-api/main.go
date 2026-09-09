@@ -2410,6 +2410,13 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if c, ok := s.callerOf(r); ok {
 			rr.owner = c.owner()
 		}
+		// ⚠ ЧЕТВЁРТАЯ ДВЕРЬ, И ADR-166 НАЗЫВАЕТ ЕЁ ПОИМЁННО. Довод, по которому читатель личных
+		// умолчаний живёт на сервере, звучит так: «тело POST /v1/runs шлют четыре разных места, и
+		// читатель в интерфейсе чинил бы одну дверь из четырёх». Заглушка — одна из этих четырёх, и
+		// она собирала запрос в процессе и звала spawnRun напрямую, минуя единственный вызов. Человек,
+		// работающий через OpenAI-совместимый эндпоинт (Open WebUI, SDK, curl) — способность
+		// `openai-shim` каталога, — получал прогон БЕЗ своих сохранённых умолчаний и не узнавал об этом.
+		s.applyPersonalRunDefaults(&rr)
 		rec := s.spawnRun(rr)
 		s.conversationalReply(w, req.Stream, rec, id, created, model, conv)
 		return
@@ -2429,6 +2436,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if c, ok := s.callerOf(r); ok { // ADR-109: the chat shim spawns runs too
 		rr.owner = c.owner()
 	}
+	s.applyPersonalRunDefaults(&rr) // та же четвёртая дверь — см. довод у соседнего вызова выше
 	rec := s.spawnRun(rr)
 
 	if req.Stream {

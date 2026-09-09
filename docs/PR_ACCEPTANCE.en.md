@@ -40,8 +40,8 @@ manual half below reads as the **remainder** rather than as the whole list.
 | Go: `go vet ./...` + `go test ./...` across the whole tree | `build` | `Vet + unit test (Go)` |
 | Cross-build for every platform the release ships (compile only; the list is DERIVED from the `release.yml` matrix) | `build` | `Cross-build every platform the release ships (compile only; list derived from release.yml)` |
 | Inline JS syntax of every `docs/` page (`node --check`, with a floor on the page count) | `build` | `SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)` |
-| Setup-wizard DOM gate, live headless Chromium (floor 15) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |
-| Hub DOM gate, live headless Chromium (floor 45) | `build` | `Hub Logs-view DOM gate (headless Chromium; ADR-065)` |
+| Setup-wizard DOM gate, live headless Chromium (floor 16) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |
+| Hub DOM gate, live headless Chromium (floor 49) | `build` | `Hub Logs-view DOM gate (headless Chromium; ADR-065)` |
 | Static-showcase DOM gate — the hub with no control-API behind it (floor 5) | `build` | `Static-showcase DOM gate (the hub with NO control-API behind it; ADR-110)` |
 | Python offline suite: **every** `tests/test_*_offline.py`, discovered by glob, floor 25 | `build` | `Python offline suite (every tests/test_*_offline.py, discovered — FakeBackend/FakeExecutor, no network)` |
 | End-to-end UI smoke against a real deployment | `build` | `End-to-end UI smoke against a real deployment (screenshots; ADR-110/111)` |

@@ -219,7 +219,9 @@ jobs:
           if [ "$n" -ne "$t" ]; then
             echo "::error::$n of $t checks passed in scripts/wizard-dom-check.mjs"; exit 1
           fi
-          if [ "$t" -lt 15 ]; then
+          # Пол поднят 15 → 16 (ADR-168: снятая галочка мастера обязана отменять сохранённое).
+          # Пол двигается только ВВЕРХ и только вместе с причиной.
+          if [ "$t" -lt 16 ]; then
             echo "::error::only $t checks ran in scripts/wizard-dom-check.mjs — expected at least 15"; exit 1
           fi
 
