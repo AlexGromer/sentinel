@@ -53,8 +53,11 @@ achievable by models from 3–4B and above — see §3 and the VRAM calculator (
 
 ## 2. Env profile
 
-All variables are read by `make_backend` (`llm.py:241–279`). **Priority: role-specific
-`LLM_<KEY>_<ROLE>` > global `LLM_<KEY>`.** Roles: `PLANNER`, `HEAL`. Keys: `BACKEND`, `MODEL`,
+What follows is a **recipe** for wiring a local model, not a registry: the complete derived list of
+variables lives in [`PARAMETERS.md`](PARAMETERS.en.md). They are read by `make_backend`.
+**Priority: role-specific `LLM_<KEY>_<ROLE>` > global `LLM_<KEY>`.**
+Roles: `PLANNER`, `HEAL`, `CHAT` — ⚠ the third has been real since ADR-108b, and its absence from
+this line was exactly the staleness the derived list exists to remove. Keys: `BACKEND`, `MODEL`,
 `BASE_URL`, `API_KEY`, `VISION`, `STRUCTURED`.
 
 | Env | Purpose | Note |

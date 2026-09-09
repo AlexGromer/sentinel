@@ -360,6 +360,29 @@ async function main() {
         `panels that are empty AND say nothing (indistinguishable from broken): ${silent.join(', ')}`);
     });
 
+    await check('the parameters reference renders from the data the deployment serves', async () => {
+      // ADR-167: страница ЧИТАЕТ `parameters.json`, а не хранит перечень. Значит проверять надо не
+      // «страница открылась», а «строки появились ИЗ ДАННЫХ»: страница, отдавшая 200 с пустой
+      // таблицей, неотличима от страницы, у которой нет параметров, — а разница между ними и есть
+      // весь предмет. Плюс здесь единственное место, где отдача файла проверяется ЖИВЬЁМ: гейт
+      // `test_ui_embed_allowlist_offline.py` сверяет два списка в исходниках, а не результат.
+      await page.goto(`${BASE}/parameters.html`, { waitUntil: 'load' });
+      await page.waitForFunction(() => document.querySelectorAll('#rows tr').length > 0,
+        null, { timeout: 15_000 });
+      const rows = await page.locator('#rows tr').count();
+      ok(rows > 100, `в справке ${rows} строк — перечень собран не целиком или не прочитан`);
+      const counter = await page.locator('#count').innerText();
+      ok(/\d+ из \d+/.test(counter), `счётчик не назвал числа: ${JSON.stringify(counter)}`);
+      // Фильтр — это тоже поведение, и пустой ответ обязан объясняться, а не молчать.
+      await page.click('.chip[data-kind="service"]');
+      await page.waitForTimeout(200);
+      const filtered = await page.locator('#rows tr').count();
+      ok(filtered > 0 && filtered < rows,
+        `фильтр дал ${filtered} из ${rows} — он либо ничего не отфильтровал, либо всё`);
+      await shot(page, 'parameters-reference', true);
+      await page.goto(BASE, { waitUntil: 'load' });
+    });
+
     await check('the browser reported no errors while every panel was driven', async () => {
       // Collected across the WHOLE session (see the listeners in main()). These are the product's own
       // complaints; a smoke that discards them measures less than the browser already measured.

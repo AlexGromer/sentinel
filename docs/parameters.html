@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel — параметры</title>
+<!--
+  ЧИТАЕМАЯ СТРАНИЦА ПЕРЕЧНЯ ПАРАМЕТРОВ.
+
+  ⚠ ДАННЫЕ ОНА ЧИТАЕТ, А НЕ ХРАНИТ. В дереве уже лежат четыре рукописных перечня переменных, и все
+  четыре протухли одинаково; пятая копия — внутри этой страницы — протухла бы так же, и её
+  протухание было бы так же невидимо. Поэтому строки берутся из `parameters.json`, который собирает
+  `scripts/gen_parameters_doc.py` из выведенного перечня и схемы, а свежесть держит гейт
+  `tests/test_parameters_documented_offline.py`.
+
+  Самодостаточна: ни CDN, ни сборки. Открывается и файлом, и из развёртывания. ⚠ При открытии по
+  `file://` браузер запрещает `fetch` соседнего файла — страница ГОВОРИТ об этом и называет, что
+  открыть вместо неё, а не показывает пустую таблицу: пустая таблица неотличима от «параметров нет».
+-->
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fff; --mut:#666; --line:#e3e3e3; --acc:#c0304a; --chip:#f4f4f5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e8ea; --bg:#131316; --mut:#9a9aa2; --line:#2a2a30; --acc:#ff5c78; --chip:#1e1e24; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:1.4rem clamp(.8rem,3vw,2.4rem); background:var(--bg); color:var(--fg);
+         font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  h1 { font-size:1.35rem; margin:0 0 .3rem; }
+  .sub { color:var(--mut); margin:0 0 1rem; max-width:70ch; }
+  .sub a { color:var(--acc); }
+  .bar { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; margin:0 0 1rem; }
+  input[type=search] { flex:1 1 18rem; min-width:12rem; padding:.5rem .7rem; border:1px solid var(--line);
+                       border-radius:.4rem; background:var(--bg); color:var(--fg); font:inherit; }
+  .chip { border:1px solid var(--line); background:var(--chip); color:var(--fg); border-radius:999px;
+          padding:.3rem .7rem; cursor:pointer; font:inherit; font-size:.86rem; }
+  .chip[aria-pressed=true] { border-color:var(--acc); color:var(--acc); }
+  .count { color:var(--mut); font-size:.86rem; }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:.5rem; }
+  table { border-collapse:collapse; width:100%; min-width:44rem; }
+  th, td { text-align:left; vertical-align:top; padding:.5rem .7rem; border-bottom:1px solid var(--line); }
+  th { position:sticky; top:0; background:var(--bg); font-size:.82rem; text-transform:uppercase;
+       letter-spacing:.04em; color:var(--mut); }
+  tbody tr:last-child td { border-bottom:0; }
+  code { font:.9em/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  td.name code { color:var(--acc); font-weight:600; }
+  td.how { color:var(--mut); font-size:.9rem; }
+  .note { margin:1rem 0 0; padding:.7rem .9rem; border:1px solid var(--line); border-left:3px solid var(--acc);
+          border-radius:.3rem; color:var(--mut); }
+</style>
+</head>
+<body>
+<h1>Параметры Sentinel</h1>
+<p class="sub">Все переменные окружения, которые читает продукт. Перечень <strong>выводится</strong>
+обходом читателей и схемой, а не пишется руками — авторитетный источник и объяснение, почему так,
+в <a href="PARAMETERS.md">PARAMETERS.md</a>.</p>
+
+<div class="bar">
+  <input type="search" id="q" placeholder="искать по имени или описанию…" autocomplete="off">
+  <button class="chip" data-kind="all" aria-pressed="true">все</button>
+  <button class="chip" data-kind="settings" aria-pressed="false">настройки развёртывания</button>
+  <button class="chip" data-kind="service" aria-pressed="false">окружение службы</button>
+  <button class="chip" data-kind="run" aria-pressed="false">поля прогона</button>
+  <button class="chip" data-kind="no" aria-pressed="false">не настройки</button>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="wrap">
+  <table>
+    <thead><tr><th>Переменная</th><th>Что делает</th><th>Умолчание</th><th>Как задаётся</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<div class="note" id="note" hidden></div>
+
+<script>
+(function () {
+  var rows = document.getElementById('rows'), note = document.getElementById('note'),
+      q = document.getElementById('q'), count = document.getElementById('count');
+  var DATA = [], kind = 'all';
+
+  /* Вид записи ВЫВОДИТСЯ из того, как параметр задаётся, а не хранится отдельным полем: лишнее поле
+     было бы ещё одним местом, где можно разойтись с генератором. */
+  function kindOf(p) {
+    var how = p.how_ru || '';
+    if (how.indexOf('не настройка') >= 0) return 'no';
+    if (how.indexOf('процесса службы') >= 0) return 'service';
+    if (how.indexOf('поле прогона') >= 0) return 'run';
+    return 'settings';
+  }
+  function fmtDefault(d) {
+    if (d === null || d === undefined) return '—';
+    if (d === '') return '(пусто)';
+    return String(d);
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) {
+    return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; }); }
+
+  function render() {
+    var needle = (q.value || '').trim().toLowerCase();
+    var shown = 0, html = '';
+    DATA.forEach(function (p) {
+      if (kind !== 'all' && kindOf(p) !== kind) return;
+      if (needle && (p.name + ' ' + (p.ru || '')).toLowerCase().indexOf(needle) < 0) return;
+      shown++;
+      html += '<tr><td class="name"><code>' + esc(p.name) + '</code></td><td>' + esc(p.ru) +
+              '</td><td><code>' + esc(fmtDefault(p.default)) + '</code></td><td class="how">' +
+              esc(p.how_ru) + '</td></tr>';
+    });
+    rows.innerHTML = html;
+    /* Пустой ответ ОБЪЯСНЯЕТСЯ: «ничего не нашлось» и «данные не загрузились» обязаны выглядеть
+       по-разному, иначе читатель принимает второе за первое. */
+    count.textContent = shown + ' из ' + DATA.length;
+    if (!shown && DATA.length) {
+      rows.innerHTML = '<tr><td colspan="4">по этому запросу ничего не нашлось</td></tr>';
+    }
+  }
+
+  q.addEventListener('input', render);
+  Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (b) {
+    b.addEventListener('click', function () {
+      kind = b.dataset.kind;
+      Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (o) {
+        o.setAttribute('aria-pressed', String(o === b));
+      });
+      render();
+    });
+  });
+
+  fetch('parameters.json', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (j) {
+      DATA = (j && j.parameters) || [];
+      render();
+      if (j && j.derived_total && DATA.length < j.derived_total) {
+        note.hidden = false;
+        note.textContent = 'В файле ' + DATA.length + ' записей при ' + j.derived_total +
+          ' выведенных именах — перечень собран не целиком; пересоберите: ' +
+          'scripts/gen_parameters_doc.py';
+      }
+    })
+    .catch(function (e) {
+      note.hidden = false;
+      note.textContent = 'parameters.json не прочитан (' + e.message + '). При открытии по file:// ' +
+        'браузер запрещает чтение соседнего файла — откройте страницу из развёртывания ' +
+        '(/parameters.html) либо читайте PARAMETERS.md, где та же таблица лежит текстом.';
+      count.textContent = '';
+    });
+})();
+</script>
+</body>
+</html>

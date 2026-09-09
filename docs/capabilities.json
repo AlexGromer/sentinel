@@ -1271,6 +1271,29 @@
       "missing": {
         "_": "проверка развёртывания, а не способность продукта: вопрос «доступно ли тремя способами» к ней не применяется — она сама и есть способ наблюдения"
       }
+    },
+    {
+      "id": "parameters-reference",
+      "group": "Operations",
+      "severity": "high",
+      "title_ru": "Справка по ВСЕМ параметрам, выводимая из кода",
+      "title_en": "A reference for EVERY parameter, derived from the code",
+      "how_ru": "docs/PARAMETERS.md (и .en.md) — перечень всех переменных окружения; в браузере — /parameters.html. Перечень ВЫВОДИТСЯ обходом читателей и схемой, пересборка — scripts/gen_parameters_doc.py, свежесть держит гейт.",
+      "how_en": "docs/PARAMETERS.md (and .en.md) — the list of every environment variable; in a browser, /parameters.html. The list is DERIVED from a walk over the readers plus the schema; rebuild with scripts/gen_parameters_doc.py, freshness held by a gate.",
+      "access": [
+        {
+          "kind": "file",
+          "ref": "docs/PARAMETERS.md"
+        },
+        {
+          "kind": "file",
+          "ref": "docs/parameters.html"
+        }
+      ],
+      "reach": "artifact",
+      "missing": {
+        "_": "справочный артефакт, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется — он сам и есть способ узнать про остальные"
+      }
     }
   ]
 }

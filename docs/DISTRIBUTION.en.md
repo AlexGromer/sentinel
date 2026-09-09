@@ -137,7 +137,7 @@ ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 # LLM_VISION: 0                   # 1 only for a vision-capable heal model
 ```
 
-The full env-variable matrix (per-role `_PLANNER`/`_HEAL` suffixes, priority) — see `docs/LOCAL_MODELS.md`.
+The derived list of every env variable — [`docs/PARAMETERS.md`](PARAMETERS.en.md); the recipe for wiring a local model (role suffixes, priority) — see `docs/LOCAL_MODELS.md`.
 
 ### Test fixtures
 

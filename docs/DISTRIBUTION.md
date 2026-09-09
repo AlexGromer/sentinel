@@ -137,7 +137,7 @@ ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 # LLM_VISION: 0                   # 1 только для vision-capable heal модели
 ```
 
-Полная матрица env-переменных (per-role `_PLANNER`/`_HEAL` суффиксы, приоритет) — `docs/LOCAL_MODELS.md`.
+Выводимый перечень всех env-переменных — [`docs/PARAMETERS.md`](PARAMETERS.md); рецепт подключения локальной модели (суффиксы ролей, приоритет) — `docs/LOCAL_MODELS.md`.
 
 ### Тестовые fixtures
 
