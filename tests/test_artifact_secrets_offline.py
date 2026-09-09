@@ -26,7 +26,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from brain.__main__ import _keep_trace, _stop_trace                # noqa: E402
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import DIST as dist, require_executor  # noqa: E402  (path set above)
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
+_driven = 0
+
+
+def _drove() -> None:
+    """These two build their own child script rather than call drive(), so they count themselves."""
+    global _driven
+    _driven += 1
 
 
 class Ex:
@@ -162,11 +172,9 @@ def test_the_executor_restricts_the_session_file_and_the_test_can_tell():
     """Driven through the REAL executor over stdio, because the property is a filesystem mode — a unit
     test of our own code would assert that we called chmod, not that the file ended up restricted.
 
-    Skipped rather than failed when the executor is not built: this suite must run without a browser
-    install, and a skipped check says so out loud instead of passing quietly."""
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
+    Skipped only when a prerequisite is OBSERVED absent (tests/_executor_gate.py). It used to decide
+    that from the absence of the artefact, which an executor that ran and FAILED also produces."""
+    if require_executor("the session-file mode") is not None:
         return
     out = pathlib.Path(tempfile.mkdtemp()) / "state.json"
     script = (
@@ -180,9 +188,11 @@ def test_the_executor_restricts_the_session_file_and_the_test_can_tell():
     env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
     r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
                        timeout=180)
-    if not out.exists():
-        print("     SKIP — no browser available:", (r.stderr or "")[-200:].replace("\n", " "))
-        return
+    assert out.exists(), (
+        f"prerequisites were observed present, so this is a real failure and NOT a missing browser: "
+        f"the executor exited {r.returncode} and wrote no session file. "
+        + ((r.stderr or "") + (r.stdout or ""))[-400:].replace("\n", " "))
+    _drove()
     mode = stat.S_IMODE(out.stat().st_mode)
     assert mode == 0o600, f"session file mode is {oct(mode)}, want 0o600"
     assert out.read_text().strip(), "an empty state file would make the mode check vacuous"
@@ -197,9 +207,7 @@ def test_the_executor_really_writes_nothing_when_the_path_is_omitted():
     Driven through the real executor with tracing ON, both directions in one run: discard leaves no
     file, and the control (a path IS given) leaves one — otherwise "no file" could just mean tracing
     never started."""
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
+    if require_executor("the traceStop discard") is not None:
         return
     d = pathlib.Path(tempfile.mkdtemp())
     dropped, kept = d / "dropped.zip", d / "kept.zip"
@@ -223,9 +231,11 @@ def test_the_executor_really_writes_nothing_when_the_path_is_omitted():
     cwd.mkdir()
     r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
                        cwd=cwd, timeout=240)
-    if not kept.exists():
-        print("     SKIP — no browser available:", (r.stderr or "")[-200:].replace("\n", " "))
-        return
+    assert kept.exists(), (
+        f"prerequisites were observed present, so this is a real failure and NOT a missing browser: "
+        f"the executor exited {r.returncode} and the CONTROL trace was never written. "
+        + ((r.stderr or "") + (r.stdout or ""))[-400:].replace("\n", " "))
+    _drove()
     assert kept.stat().st_size > 0, "the control produced an empty trace — the check below is vacuous"
     assert not dropped.exists(), "traceStop without a path still wrote a trace to the requested name"
     strays = [p.name for p in cwd.rglob("*") if p.is_file()]
@@ -247,3 +257,4 @@ if __name__ == "__main__":
         fn()
         print("  ok  ", fn.__name__)
     print(f"OK — {len(fns)} artifact-secret tests passed")
+    print(f"EXECUTOR-DRIVEN {_driven} artifact-secrets")

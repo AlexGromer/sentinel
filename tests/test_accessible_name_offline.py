@@ -26,37 +26,26 @@ What this pins:
   * a label's text names the control WITHOUT the control's own subtree — the case that separates
     "Theme:" from "Theme: one two".
 """
-import json
 import os
 import pathlib
-import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "testdata" / "fixtures"
 
 
-def _drive(calls: list) -> "list | None":
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=600)
-    for line in (r.stdout or "").splitlines():
-        if line.startswith("@@RESULT@@"):
-            return json.loads(line[len("@@RESULT@@"):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive as _gate_drive, run_suite  # noqa: E402  (path set above)
+
+
+def _drive(calls: list) -> list:
+    """The shared discriminator, with this suite's recorded 600s ceiling.
+
+    See tests/_executor_gate.py: a skip is now an OBSERVATION of the prerequisites, never an
+    inference from a missing success marker. Raises rather than returning None, so a broken
+    executor can no longer read as "no browser available".
+    """
+    return _gate_drive(calls, timeout=600)
 
 
 def _url(name: str) -> str:
@@ -67,14 +56,12 @@ def _fixtures() -> list:
     return sorted(p.name for p in FIXTURES.glob("*.html"))
 
 
-def _all_elements() -> "dict | None":
+def _all_elements() -> dict:
     calls, names = [], []
     for fx in _fixtures():
         calls += [("browser.navigate", {"url": _url(fx)}), ("browser.interactives", {})]
         names.append(fx)
     res = _drive(calls)
-    if res is None:
-        return None
     return {fx: res[2 * i + 1]["elements"] for i, fx in enumerate(names)}
 
 
@@ -86,8 +73,6 @@ def test_every_visible_control_can_be_addressed_somehow():
     one legitimate exception is a control with no ARIA role at all, which the brain drops on purpose
     and which is never planned against."""
     per_fixture = _all_elements()
-    if per_fixture is None:
-        return
     nameless, checked = [], 0
     for fx, els in per_fixture.items():
         for e in els:
@@ -115,8 +100,6 @@ def test_the_page_model_keeps_everything_that_has_a_role():
     for fx in _fixtures():
         res = _drive([("browser.navigate", {"url": _url(fx)}),
                       ("browser.interactives", {}), ("browser.perceptionAudit", {})])
-        if res is None:
-            return
         _, inter, audit = res
         raw = inter["elements"]
         model = _elements_from_interactives(raw, "/" + fx)
@@ -132,8 +115,6 @@ def test_every_claimed_name_resolves_on_the_page():
 
     A table of expected names would be written by the same reasoning that produced the bug."""
     per_fixture = _all_elements()
-    if per_fixture is None:
-        return
     probes, meta = [], []
     for fx, els in per_fixture.items():
         probes.append(("browser.navigate", {"url": _url(fx)}))
@@ -147,8 +128,6 @@ def test_every_claimed_name_resolves_on_the_page():
             probes.append(("browser.probe", {"locator": loc}))
             meta.append((fx, e["role"], e["name"]))
     res = _drive(probes)
-    if res is None:
-        return
     bad, checked = [], 0
     for m, r in zip(meta, res):
         if m is None:
@@ -173,8 +152,6 @@ def test_a_label_names_the_control_without_the_controls_own_subtree():
     two computations apart."""
     res = _drive([("browser.navigate", {"url": _url("l9-roles.html")}),
                   ("browser.interactives", {})])
-    if res is None:
-        return
     els = res[1]["elements"]
     wrapped = [e for e in els if (e.get("name") or "").startswith("WrappedSelect")]
     assert wrapped, f"l9 §3 lost its wrapped select; got {[e.get('name') for e in els]}"
@@ -189,8 +166,6 @@ def test_a_label_names_the_control_without_the_controls_own_subtree():
                    ("browser.probe", {"locator": {"role": "combobox", "name": name}}),
                    ("browser.probe", {"locator": {"role": "combobox",
                                                   "name": "WrappedSelect: one two"}})])
-    if res2 is None:
-        return
     assert res2[1]["count"] == 1, f"the corrected name resolves {res2[1]['count']}"
     assert res2[2]["count"] == 0, (
         "the naive name resolves too — then this distinction costs nothing and the check proves "
@@ -211,8 +186,6 @@ def test_the_fallback_name_sources_are_the_ones_the_browser_uses():
                   ("browser.interactives", {}),
                   ("browser.probe", {"locator": {"role": "textbox", "name": "SearchPlaceholder"}}),
                   ("browser.probe", {"locator": {"role": "combobox", "name": "alpha beta"}})])
-    if res is None:
-        return
     _, inter, by_ph, by_options = res
     els = inter["elements"]
 
@@ -239,8 +212,6 @@ def test_a_form_field_is_named_by_its_label_in_both_spellings():
     Anchored on named controls from two fixtures, so a regression in either spelling shows up."""
     res = _drive([("browser.navigate", {"url": _url("l2.html")}), ("browser.interactives", {}),
                   ("browser.navigate", {"url": _url("l5.html")}), ("browser.interactives", {})])
-    if res is None:
-        return
     l2 = {(e.get("name") or ""): e for e in res[1]["elements"]}
     l5 = {(e.get("name") or ""): e for e in res[3]["elements"]}
     # l2 uses <label for=…>
@@ -260,8 +231,6 @@ def test_both_perception_surfaces_report_the_same_name():
     for fx in ("l2.html", "l3.html", "l9-roles.html"):
         res = _drive([("browser.navigate", {"url": _url(fx)}),
                       ("browser.interactives", {}), ("browser.setOfMarks", {})])
-        if res is None:
-            return
         _, inter, som = res
         on_screen = {(e.get("name") or "").strip() for e in inter["elements"] if e.get("visible")}
         marks = {(m.get("name") or "").strip() for m in som["marks"]}
@@ -278,8 +247,6 @@ def test_a_select_is_not_named_by_its_options():
     nothing. It is hidden, so it cannot be probed; the assertion is therefore on the NAME, which is
     what was wrong, and the resolvability half is carried by `l9`'s visible one above."""
     res = _drive([("browser.navigate", {"url": _url("l5.html")}), ("browser.interactives", {})])
-    if res is None:
-        return
     sel = [e for e in res[1]["elements"] if e.get("tag") == "select"]
     assert sel, "l5 lost its <select>; this check is vacuous"
     for e in sel:
@@ -289,8 +256,4 @@ def test_a_select_is_not_named_by_its_options():
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("  ok  ", fn.__name__)
-    print(f"OK — {len(fns)} accessible-name tests passed")
+    raise SystemExit(run_suite(globals(), "accessible-name"))

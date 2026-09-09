@@ -30,44 +30,15 @@ What this pins:
   * `visible` reaches the brain as three states, so an older executor's silence never reads as
     "invisible" (which would empty the candidate set).
 """
-import json
-import os
 import pathlib
-import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive, run_suite  # noqa: E402  (path set above)
 
 _UNSET = object()
 REPO = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "testdata" / "fixtures"
-
-
-def _drive(calls: list) -> "list | None":
-    """Run a list of (method, params) through the REAL executor and return the results.
-
-    Skipped rather than failed when the executor is not built or no browser is available: this suite
-    must run without a browser install, and a skipped check says so out loud instead of passing
-    quietly."""
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=300)
-    marker = "@@RESULT@@"
-    for line in (r.stdout or "").splitlines():
-        if line.startswith(marker):
-            return json.loads(line[len(marker):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
 
 
 def _fixture(name: str) -> str:
@@ -83,11 +54,9 @@ def test_the_audit_counts_the_same_elements_the_perception_returns():
     was invisible on a flat page: with no shadow root, `querySelectorAll` and the selector engine
     agree, and a single-fixture gate would have gone green over the defect."""
     for fx in ("l5.html", "l1.html", "l8-blindspots.html"):
-        res = _drive([("browser.navigate", {"url": _fixture(fx)}),
+        res = drive([("browser.navigate", {"url": _fixture(fx)}),
                       ("browser.interactives", {}),
                       ("browser.perceptionAudit", {})])
-        if res is None:
-            return
         _, inter, audit = res
         n = len(inter["elements"])
         assert audit["seen"] == n, (
@@ -105,12 +74,10 @@ def test_a_control_inside_an_open_shadow_root_is_perceived_probed_and_clicked():
     ADR-092 called unseen. Perception, `browser.probe` and `browser.click` are asserted together on
     purpose: seeing an element and being able to act on it are different capabilities, and a
     perception gate that only checks the list would still let a product plan steps it cannot run."""
-    res = _drive([("browser.navigate", {"url": _fixture("l5.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l5.html")}),
                   ("browser.interactives", {}),
                   ("browser.probe", {"locator": {"role": "button", "name": "Apply color"}}),
                   ("browser.click", {"locator": {"role": "button", "name": "Apply color"}})])
-    if res is None:
-        return
     _, inter, probe, click = res
     names = [(e.get("name") or "").strip() for e in inter["elements"]]
     # The six swatches + the hex field + the apply button, all inside the shadow root.
@@ -127,10 +94,8 @@ def test_the_open_shadow_root_page_is_reported_as_fully_seen():
     and a bound would go green again on the next measurement that is wrong in a smaller way. The
     breakdown is asserted empty for the same reason — a ratio of 1.0 with a non-empty `unseen` would
     be two statements contradicting each other."""
-    res = _drive([("browser.navigate", {"url": _fixture("l5.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l5.html")}),
                   ("browser.perceptionAudit", {})])
-    if res is None:
-        return
     audit = res[1]
     assert audit["ratio"] == 1.0, f"l5 reports ratio {audit['ratio']}, want 1.0 — {audit}"
     assert audit["unseen"] == {"outside_selector": 0, "iframe": 0}, audit["unseen"]
@@ -144,11 +109,9 @@ def test_a_page_of_blind_spots_names_every_zone_it_cannot_see():
 
     Each expected number is tied to a section of that fixture, so a change to either side has to be
     made on purpose."""
-    res = _drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
                   ("browser.interactives", {}),
                   ("browser.perceptionAudit", {})])
-    if res is None:
-        return
     _, inter, audit = res
     assert len(inter["elements"]) == 4, (
         "l8 holds exactly four controls our selector names — two ordinary (§0) and two present but "
@@ -178,11 +141,9 @@ def test_the_sealed_button_is_genuinely_unreachable():
     It also guards the fixture: if someone changes that root to `open`, the closed-root count in the
     test above still says 1 (custom elements with no reachable root are what that heuristic counts),
     but THIS check fails — the fixture would no longer demonstrate the thing it exists to demonstrate."""
-    res = _drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
                   ("browser.probe", {"locator": {"role": "button", "name": "Sealed button"}}),
                   ("browser.probe", {"locator": {"testid": "nothing-like-this-exists"}})])
-    if res is None:
-        return
     _, sealed, absent = res
     assert sealed["count"] == 0, (
         f"a button inside a CLOSED shadow root resolved to {sealed['count']} — either the fixture's "
@@ -198,11 +159,9 @@ def test_the_executor_reports_hidden_controls_instead_of_hiding_them():
     zero-box elements, so it returned 16 while `browser.interactives` returned 23, and neither knew.
     The two are asserted against each other here, because the agreement is the point; a fixed
     constant would let both drift together."""
-    res = _drive([("browser.navigate", {"url": _fixture("l5.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l5.html")}),
                   ("browser.interactives", {}),
                   ("browser.setOfMarks", {})])
-    if res is None:
-        return
     _, inter, som = res
     els = inter["elements"]
     assert all("visible" in e for e in els), "every perceived element must carry the field, not some"
@@ -231,10 +190,8 @@ def test_both_ways_a_control_leaves_the_screen_are_detected():
 
     Asserted per element, by id, rather than as a count: a count of 2 is satisfied by finding the
     same mechanism twice, which is exactly the hole this closes."""
-    res = _drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
+    res = drive([("browser.navigate", {"url": _fixture("l8-blindspots.html")}),
                   ("browser.interactives", {})])
-    if res is None:
-        return
     els = res[1]["elements"]
     by_name = {(e.get("name") or "").strip(): e for e in els}
     for name in ("hidden by an ancestor", "hidden by visibility"):
@@ -271,11 +228,9 @@ def test_the_two_perception_surfaces_agree_about_what_is_on_screen():
     enough — every hidden control there is a collapsed box, so a box-only filter agrees by accident.
     `l8` is the fixture where the two definitions come apart, so the agreement is asserted there."""
     for fx in ("l5.html", "l8-blindspots.html"):
-        res = _drive([("browser.navigate", {"url": _fixture(fx)}),
+        res = drive([("browser.navigate", {"url": _fixture(fx)}),
                       ("browser.interactives", {}),
                       ("browser.setOfMarks", {})])
-        if res is None:
-            return
         _, inter, som = res
         on_screen = [e for e in inter["elements"] if e["visible"]]
         marks = som["marks"]
@@ -376,8 +331,4 @@ def test_the_brain_treats_an_old_executors_silence_as_unknown_not_as_invisible()
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("  ok  ", fn.__name__)
-    print(f"OK — {len(fns)} perception-engine tests passed")
+    raise SystemExit(run_suite(globals(), "perception-engine"))

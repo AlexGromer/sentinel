@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/AlexGromer/sentinel/internal/protogate"
 )
 
 // repoRoot walks up from this package to the directory holding go.mod.
@@ -43,11 +45,16 @@ func TestRunControlStubsAreReproducible(t *testing.T) {
 	root := repoRoot(t)
 	py := filepath.Join(root, ".venv", "bin", "python")
 	if _, err := os.Stat(py); err != nil {
-		t.Skipf("no project venv at %s — the brain env provides protoc, so there is nothing to compare against", py)
+		protogate.Missing(t, "no project venv at "+py+" (the brain env provides protoc)",
+			"create it with `python -m venv .venv && .venv/bin/pip install -r requirements.txt`")
+		return
 	}
 	for _, plugin := range []string{"protoc-gen-go", "protoc-gen-go-grpc"} {
 		if _, err := exec.LookPath(plugin); err != nil {
-			t.Skipf("%s not on PATH — regeneration needs it (go install google.golang.org/protobuf/cmd/protoc-gen-go@latest and .../grpc/cmd/protoc-gen-go-grpc@latest)", plugin)
+			protogate.Missing(t, plugin+" is not on PATH and regeneration needs it",
+				"go install google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' "+
+					"google.golang.org/protobuf) and google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2")
+			return
 		}
 	}
 
