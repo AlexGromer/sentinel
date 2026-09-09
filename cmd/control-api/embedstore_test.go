@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	storepb "github.com/AlexGromer/sentinel/internal/store/pb"
+	"net/http"
 )
 
 // newTestUser — минимальная учётка. Хеш здесь НЕ настоящий и настоящим быть не должен: эти проверки
@@ -159,5 +160,89 @@ func TestEveryPersistedSectionReachesARunOnTheFileTier(t *testing.T) {
 	// А вот это и есть починка: до неё на файловом ярусе ключа не было ни при каких настройках.
 	if env["SENTINEL_LOG_LEVEL"] != "debug" {
 		t.Fatalf("секция logging не доехала до прогона на файловом ярусе: %+v", env)
+	}
+}
+
+// TestSavedPersonalSettingsReachARunOnTheStandaloneTier — ЯРУС, НА КОТОРОМ ЭТОГО НЕ ПРОВЕРЯЛ НИКТО,
+// и именно поэтому там всё было сломано.
+//
+// ЗАМЕРЕННЫЙ ДЕФЕКТ. Личные умолчания прогона (W15) читались прямо из `s.store`, а на автономном
+// ярусе `configTier()` отвечает `tierFile` — PUT клал документ в `state/config.json`, читатель
+// смотрел во встроенную базу, куда конфиг не писался НИКОГДА. Человек проходил мастер, сохранял
+// `run`/`auth`, получал «✓ сохранено … действует на следующие прогоны», видел значения обратно в
+// форме — подтверждение приходило ДВАЖДЫ, — и ни один прогон их не наследовал.
+//
+// Дефект был невидим по одной причине: соседний тест `TestSavedPersonalSettingsActuallyReachARun`
+// поднимается через `storeBackedServer`, то есть ВСЕГДА на ярусе с внешним шлюзом. Ярус, которым
+// пользуется одиночное развёртывание, не покрывал ни один тест — а действующая директива говорит,
+// что ярус это развёртывание, а не другой продукт.
+//
+// KILLS: возврат `applyPersonalRunDefaults` к прямому `s.store.getConfig`; запись личных секций в
+// общий файл; ответ «сохранено» без состава записанного.
+func TestSavedPersonalSettingsReachARunOnTheStandaloneTier(t *testing.T) {
+	es, err := startEmbeddedStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("встроенное хранилище не поднялось: %v", err)
+	}
+	t.Cleanup(es.stop)
+	sc, err := newEmbeddedStoreClient(es)
+	if err != nil {
+		t.Fatalf("встроенное хранилище не ответило: %v", err)
+	}
+	t.Cleanup(sc.close)
+
+	s := newTestServer()
+	s.store, s.storeEmbedded = sc, true
+	if s.configTier() != tierFile {
+		t.Fatalf("ярус %q — тест мерит не то развёртывание", s.configTier())
+	}
+
+	// Аккаунт заводится так же, как это делает развёртывание при первом старте (ADR-159).
+	if !s.store.upsertUser(&storepb.User{UserId: "u-solo", Name: "solo", PwHash: "x", IsAdmin: false}) {
+		t.Fatal("аккаунт не завёлся во встроенном хранилище")
+	}
+	tok := s.sessions.mint("u-solo", "solo", false, sessionTTL())
+
+	// 1. ЧЕЛОВЕК СОХРАНЯЕТ СВОЁ. Ответ обязан НАЗВАТЬ состав записанного: «сохранено» над пустым
+	// документом — это подтверждение несделанного, и оно хуже отказа.
+	rec, body := doJSON(t, s, http.MethodPut, "/v1/config",
+		[]byte(`{"run":{"max_steps":5,"target":"http://solo.example/"}}`), tok)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT личной секции на автономном ярусе = %d (%s)", rec.Code, rec.Body.String())
+	}
+	written, _ := body["written"].(map[string]any)
+	if written == nil || written["personal"] == nil {
+		t.Errorf("ответ не назвал, что записана личная секция: %v", body)
+	}
+
+	// 2. И ЧИТАЕТ ЕЁ ОБРАТНО КАК СВОЮ — с той же формой ответа, что на ярусе со шлюзом.
+	rec2, got := doJSON(t, s, http.MethodGet, "/v1/config", nil, tok)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET = %d (%s)", rec2.Code, rec2.Body.String())
+	}
+	sources, _ := got["sources"].(map[string]any)
+	if sources["run"] != "user" {
+		t.Errorf("секция run числится не за человеком: sources=%v — форма ответа отличается от яруса со шлюзом", sources)
+	}
+	if _, ok := got["may_write_global"]; !ok {
+		t.Error("ответ автономного яруса не несёт may_write_global — интерфейс не может узнать, что человеку нельзя менять")
+	}
+
+	// 3. ГЛАВНОЕ: СОХРАНЁННОЕ ДОЕЗЖАЕТ ДО ПРОГОНА. Круговорот документа этого не доказывает —
+	// он и был исправен, пока значение не действовало ни на что.
+	req := runRequest{owner: "u-solo"}
+	used := s.applyPersonalRunDefaults(&req)
+	if req.MaxSteps != "5" || req.Target != "http://solo.example/" {
+		t.Fatalf("на автономном ярусе умолчания не доехали до прогона: %+v (применено %v)", req, used)
+	}
+	if len(used) != 2 {
+		t.Errorf("применено %v — ответ обязан назвать унаследованное поимённо", used)
+	}
+
+	// 4. И ЯВНЫЙ ВЫБОР ПО-ПРЕЖНЕМУ ПОБЕЖДАЕТ — на этом ярусе тоже.
+	req2 := runRequest{owner: "u-solo", MaxSteps: "1"}
+	s.applyPersonalRunDefaults(&req2)
+	if req2.MaxSteps != "1" {
+		t.Errorf("умолчание перебило явный выбор: %q", req2.MaxSteps)
 	}
 }

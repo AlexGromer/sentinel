@@ -181,25 +181,44 @@ func marshalConfigDoc(doc map[string]json.RawMessage) ([]byte, error) {
 // personalRunDefaults — какие поля запроса заполняются из какой сохранённой секции. Перечень
 // закрытый и парный: ключ секции слева, адрес поля справа. Секции те же, что объявлены
 // пользовательскими в configSectionScope, — иначе появилась бы третья классификация тех же данных.
+// planDerivedModes — режимы, в которых прогон берёт часть полей из ЗАМОРОЖЕННОГО ПЛАНА, а не из
+// запроса. Умолчание не имеет права подставлять такое поле: оно займёт место, которое режим
+// собирался заполнить сам.
+var planDerivedModes = map[string]bool{"replay": true, "baseline": true}
+
 var personalRunDefaults = []struct {
 	section string
 	key     string
 	get     func(*runRequest) string
 	set     func(*runRequest, string)
+	// notInModes — режимы, для которых это поле НЕ наследуется, с причиной у каждой записи.
+	notInModes map[string]bool
 }{
-	{"run", "mode", func(r *runRequest) string { return r.Mode }, func(r *runRequest, v string) { r.Mode = v }},
-	{"run", "planner", func(r *runRequest) string { return r.Planner }, func(r *runRequest, v string) { r.Planner = v }},
-	{"run", "target", func(r *runRequest) string { return r.Target }, func(r *runRequest, v string) { r.Target = v }},
-	{"run", "goal", func(r *runRequest) string { return r.Goal }, func(r *runRequest, v string) { r.Goal = v }},
-	{"run", "describe", func(r *runRequest) string { return r.Describe }, func(r *runRequest, v string) { r.Describe = v }},
-	{"run", "coverage_target", func(r *runRequest) string { return r.CoverageTarget }, func(r *runRequest, v string) { r.CoverageTarget = v }},
-	{"run", "max_steps", func(r *runRequest) string { return r.MaxSteps }, func(r *runRequest, v string) { r.MaxSteps = v }},
-	{"run", "plan_budget", func(r *runRequest) string { return r.PlanBudget }, func(r *runRequest, v string) { r.PlanBudget = v }},
-	{"run", "heal_budget", func(r *runRequest) string { return r.HealBudget }, func(r *runRequest, v string) { r.HealBudget = v }},
-	{"run", "total_budget", func(r *runRequest) string { return r.TotalBudget }, func(r *runRequest, v string) { r.TotalBudget = v }},
-	{"auth", "storage_state", func(r *runRequest) string { return r.StorageState }, func(r *runRequest, v string) { r.StorageState = v }},
-	{"auth", "storage_state_save", func(r *runRequest) string { return r.StorageStateSave }, func(r *runRequest, v string) { r.StorageStateSave = v }},
-	{"auth", "login_plan", func(r *runRequest) string { return r.LoginPlan }, func(r *runRequest, v string) { r.LoginPlan = v }},
+	{"run", "mode", func(r *runRequest) string { return r.Mode }, func(r *runRequest, v string) { r.Mode = v }, nil},
+	{"run", "planner", func(r *runRequest) string { return r.Planner }, func(r *runRequest, v string) { r.Planner = v }, nil},
+	// ⚠ ЦЕЛЬ НЕ НАСЛЕДУЕТСЯ ПРИ ВОСПРОИЗВЕДЕНИИ, и это замеренная регрессия, а не осторожность.
+	// Ветка replay/baseline откатывается на `plan.target_url` только `if !validTarget(req.Target)`, а
+	// кнопки «Перепрогон»/«Эталон» шлют тело БЕЗ адреса — значит подставленное умолчание делало
+	// проверку истинной, и откат не срабатывал НИКОГДА. Кнопка обещает повторить ТОТ ЖЕ прогон, а
+	// замороженный план проигрывался против сохранённого адреса. Комментарий «request target wins»
+	// оставался верным буквально и ложным по смыслу: «запрошенным» оказывалось то, чего человек не
+	// вводил.
+	{"run", "target", func(r *runRequest) string { return r.Target }, func(r *runRequest, v string) { r.Target = v }, planDerivedModes},
+	{"run", "goal", func(r *runRequest) string { return r.Goal }, func(r *runRequest, v string) { r.Goal = v }, nil},
+	{"run", "describe", func(r *runRequest) string { return r.Describe }, func(r *runRequest, v string) { r.Describe = v }, nil},
+	{"run", "coverage_target", func(r *runRequest) string { return r.CoverageTarget }, func(r *runRequest, v string) { r.CoverageTarget = v }, nil},
+	{"run", "max_steps", func(r *runRequest) string { return r.MaxSteps }, func(r *runRequest, v string) { r.MaxSteps = v }, nil},
+	{"run", "plan_budget", func(r *runRequest) string { return r.PlanBudget }, func(r *runRequest, v string) { r.PlanBudget = v }, nil},
+	{"run", "heal_budget", func(r *runRequest) string { return r.HealBudget }, func(r *runRequest, v string) { r.HealBudget = v }, nil},
+	{"run", "total_budget", func(r *runRequest) string { return r.TotalBudget }, func(r *runRequest, v string) { r.TotalBudget = v }, nil},
+	{"auth", "storage_state", func(r *runRequest) string { return r.StorageState }, func(r *runRequest, v string) { r.StorageState = v }, nil},
+	{"auth", "storage_state_save", func(r *runRequest) string { return r.StorageStateSave }, func(r *runRequest, v string) { r.StorageStateSave = v }, nil},
+	// ⚠ И ПЛАН ВХОДА ТОЖЕ НЕ НАСЛЕДУЕТСЯ ПРИ ВОСПРОИЗВЕДЕНИИ. Он доезжает переменной `PLAN_FILE`, и
+	// в replay ту же переменную безусловно занимает план ВОСПРОИЗВЕДЕНИЯ — одно имя, два смысла,
+	// побеждает второй. Унаследовать его значило бы объявить в `inherited_defaults` применённым то,
+	// что заведомо не применится: ответ, называющий несделанное, хуже молчания. Столкновение имён —
+	// отдельная открытая запись, здесь закрыт только ложный отчёт о нём.
+	{"auth", "login_plan", func(r *runRequest) string { return r.LoginPlan }, func(r *runRequest, v string) { r.LoginPlan = v }, planDerivedModes},
 }
 
 // scalarString приводит сохранённое значение к строке, в которой его ждёт запрос. Числа в JSON
@@ -230,15 +249,11 @@ func scalarString(v any) string {
 // (машинный кредентиал, развёртывание без аккаунтов) или хранилище недоступно: прогон, отказавшийся
 // стартовать из-за необязательных умолчаний, был бы хуже прогона без них.
 func (s *server) applyPersonalRunDefaults(req *runRequest) []string {
-	if req.owner == "" || s.store == nil {
-		return nil
-	}
-	rec, err := s.store.getConfig(setupConfigKey, req.owner, storeCallTimeout)
-	if err != nil || rec == nil || rec.ValueJson == "" {
-		return nil
-	}
-	var doc map[string]json.RawMessage
-	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+	// ⚠ ЧИТАТЕЛЬ ОДИН НА ОБА ЯРУСА. Первая редакция спрашивала `s.store` прямо здесь и потому
+	// работала ТОЛЬКО там, где шлюз внешний: на автономном ярусе человек сохранял настройки, получал
+	// подтверждение ДВАЖДЫ и не наследовал ничего. Довод и замер — у personalConfigDoc.
+	doc := s.personalConfigDoc(req.owner)
+	if doc == nil {
 		return nil
 	}
 	sections := map[string]map[string]any{}
@@ -259,6 +274,9 @@ func (s *server) applyPersonalRunDefaults(req *runRequest) []string {
 	for _, f := range personalRunDefaults {
 		if f.get(req) != "" {
 			continue // человек выбрал сам — умолчание не спорит с выбором
+		}
+		if f.notInModes[req.Mode] {
+			continue // режим выводит это поле сам — см. причину у записи
 		}
 		v, ok := sections[f.section][f.key]
 		if !ok {

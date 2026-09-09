@@ -1082,9 +1082,20 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
           <input id="b-modelp" placeholder="qwen3:14b  /  claude-opus-4-8  /  o3">
           <label for="b-modelh" style="margin-top:.4rem">LLM_MODEL_HEAL (<span data-lang="ru">опц.</span><span data-lang="en">opt.</span>)</label>
           <input id="b-modelh" placeholder="qwen2.5vl:7b  /  claude-sonnet-4-6">
-          <label style="margin-top:.55rem;display:inline-flex;align-items:center;gap:.4rem;color:var(--tx)">
-            <input id="b-vision" type="checkbox" style="width:auto">LLM_VISION (<span data-lang="ru">нужна VLM</span><span data-lang="en">requires VLM</span>)
-          </label>
+          <!-- ⚠ ТРИ ПОЛОЖЕНИЯ, А НЕ ГАЛОЧКА, и это не украшение. Галочка шлёт значение ТОЛЬКО во
+               включённом состоянии, поэтому снятая не отправляла ничего — и сохранённое глобально
+               `vision: true` нельзя было выключить на один прогон, хотя сервер явный `false`
+               поддерживает СПЕЦИАЛЬНО («an explicit false must win over a persisted true»). «Не
+               выбирал» и «выбрал нет» обязаны быть разными фактами; пустой вариант НАЗЫВАЕТ
+               унаследованное умолчание, как это уже делает селектор наблюдения. -->
+          <label for="b-vision" style="margin-top:.55rem">LLM_VISION (<span data-lang="ru">нужна VLM</span><span data-lang="en">requires VLM</span>)</label>
+          <select id="b-vision"></select>
+          <label for="b-structured" style="margin-top:.4rem">LLM_STRUCTURED (<span data-lang="ru">нативный JSON-ответ</span><span data-lang="en">native JSON reply</span>)</label>
+          <select id="b-structured"></select>
+          <span class="hint">
+            <span data-lang="ru">Обе ручки меняют поведение только у OpenAI-совместимых бэкендов: у anthropic поддержка зрения и структурированного ответа объявлена константой и не выключается.</span>
+            <span data-lang="en">Both knobs change behaviour only for OpenAI-compatible backends: with anthropic, vision and structured support are constants and cannot be turned off.</span>
+          </span>
           <label for="b-temp" style="margin-top:.55rem">Temperature</label>
           <input id="b-temp" type="number" value="0" disabled style="max-width:6rem">
           <span class="hint">
@@ -2666,14 +2677,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     /* env */
     var be=bVal('b-backend'), bu=bVal('b-baseurl').trim(),
-        mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim(), vis=ge('b-vision').checked;
+        mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim(),
+        vis=bVal('b-vision'), str=bVal('b-structured');
     var env=[];
     if (be){
       env.push('export LLM_BACKEND='+be);
       if (be==='openai'&&bu) env.push('export LLM_BASE_URL='+bu);
       if (mp) env.push('export LLM_MODEL_PLANNER='+mp);
       if (mh) env.push('export LLM_MODEL_HEAL='+mh);
-      if (vis) env.push('export LLM_VISION=1');
+      /* Экспорт обязан ВОСПРОИЗВОДИТЬ прогон, поэтому положение «выкл» пишется явным нулём, а не
+         пропуском: пропуск в терминале означал бы «как в окружении», то есть другой прогон. */
+      if (vis!=='') env.push('export LLM_VISION='+(vis==='on'?'1':'0'));
+      if (str!=='') env.push('export LLM_STRUCTURED='+(str==='on'?'1':'0'));
       if (be==='openai'){
         env.push("export LLM_API_KEY=...        # local Ollama/vLLM: 'noauth'; cloud/router: your key — DO NOT COMMIT");
       } else {
@@ -3499,7 +3514,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim();
     if (mp) o.model_planner=mp;   // models/vision apply even at the default backend (server accepts backend:"")
     if (mh) o.model_heal=mh;
-    if (ge('b-vision').checked) o.vision=true;
+    /* Пустая строка = «наследовать», и тогда ключ НЕ отправляется вовсе: отсутствие ключа — это то,
+       что сервер читает как «человек не выбирал», и только оно оставляет действовать сохранённый
+       слой. Явный выбор уезжает в ОБЕ стороны, потому что `false` здесь — отмена сохранённого
+       `true`, а не молчание. */
+    var vis=bVal('b-vision'); if (vis!=='') o.vision = (vis==='on');
+    var str=bVal('b-structured'); if (str!=='') o.structured = (str==='on');
     return Object.keys(o).length ? o : null;   // nothing set -> null (no per-run override)
   }
   /* ADR-107c: schema field name -> the control that carries it. THE one place the correspondence
@@ -3571,6 +3591,33 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     sel.addEventListener('change', showCost);
     showCost();
   }
+  /* Заполняет трёхпозиционные переключатели блока `llm` ИЗ СХЕМЫ — как lvFillObserve заполняет
+     наблюдение, и по той же причине: умолчание развёртывания публикует сервер, а вторая копия в
+     этой странице была бы вторым местом, где можно разойтись.
+
+     ⚠ Пустой вариант НАЗЫВАЕТ унаследованное значение. Пустое «по умолчанию» ничего не говорит
+     человеку о том, что он получит, и тогда «я не выбирал» и «я выбрал ровно это» становятся одним
+     актом — ровно то, что запрещает довод у поля `observe` на сервере. */
+  function bFillLLMTristate(schema){
+    var en = document.body.classList.contains('lang-en');
+    [['b-vision','vision'],['b-structured','structured']].forEach(function(pair){
+      var sel = ge(pair[0]); if (!sel) return;
+      var d = ((schema||{}).llm||{})[pair[1]] || {};
+      var def = d.default === true ? (en?'on':'вкл') : (en?'off':'выкл');
+      var keep = sel.value;
+      sel.innerHTML = '';
+      [['', (en?'deployment default':'по умолчанию в развёртывании') + ' — ' + def],
+       ['on', en?'on':'вкл'],
+       ['off', en?'off':'выкл']].forEach(function(o){
+        var el = document.createElement('option');
+        el.value = o[0]; el.textContent = o[1];
+        sel.appendChild(el);
+      });
+      if (keep) sel.value = keep;   // перерисовка при смене языка не отменяет выбор человека
+    });
+  }
+  window.bFillLLMTristate = bFillLLMTristate;
+
   /* Открыт как seam по той же причине, что window.lvOnEvent: проверять цену режима надо на
      ОТГРУЖЕННОМ заполнителе формы, с настоящей схемой на входе, а не на его копии в тесте. */
   window.lvFillObserve = lvFillObserve;
@@ -6464,6 +6511,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (!rs.ok) throw new Error('HTTP ' + rs.status);
       cfgSchema = await rs.json();
       lvFillObserve(cfgSchema);   /* LIVE-MATRIX: the run form's modes come from the same schema */
+      bFillLLMTristate(cfgSchema);  /* ADR-168: vision/structured — три положения, умолчание из схемы */
     } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); return; }
     /* The saved document is token-gated, so with no token this request cannot succeed — and asking
        anyway would put a 403 in the console on every visit made before someone pastes a token, which

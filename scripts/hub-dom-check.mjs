@@ -2330,6 +2330,103 @@ try {
     }
   }, { allowConsole: freshConfig404 });
 
+  await check('vision и structured — ТРИ положения, и «выкл» уезжает явным false', async () => {
+    // ⚠ ЗАМЕРЕННЫЙ ДЕФЕКТ. Галочка отправляла значение ТОЛЬКО во включённом состоянии, поэтому
+    // СНЯТАЯ не слала ничего — и сохранённое глобально `vision: true` нельзя было выключить на один
+    // прогон, хотя сервер явный `false` поддерживает СПЕЦИАЛЬНО («an explicit false must win over a
+    // persisted true», llmenv.go). «Не выбирал» и «выбрал нет» были одним байтом. У `structured`
+    // контрола не было вовсе: ручка объявлена схемой, принимается сервером на прогон, и дотянуться
+    // до неё из интерфейса было нельзя.
+    //
+    // ⚠ УТВЕРЖДАЕТСЯ ПЕРЕХВАЧЕННОЕ ТЕЛО, А НЕ РАЗМЕТКА. Проверка «в файле есть <select>» совпала бы
+    // с комментарием, её объясняющим, и мутация прошла бы её насквозь. Здесь запрос перехватывается
+    // и читается то, что реально уехало.
+    // ▶ Run ships disabled and only capUnlock() enables it — ведём приложение так же, как человек:
+    // сперва «Проверить» в настройках, потом вид прогона. Тот же путь, что у соседней проверки, и
+    // повторён он намеренно: проверка, зависящая от порядка соседей, падает по чужой причине.
+    // ▶ Run поставляется отключённым, и включает его только capUnlock(). Разблокировка делается
+    // ТОЛЬКО если она нужна: соседняя проверка уже проводит её тем же путём, и повторный клик по
+    // рельсе после её прогона упирается в актуабельность (замерено: элемент есть, страница уже на
+    // виде прогона, клик всё равно ждёт 30 с). Проверка, зависящая от порядка соседей, падает по
+    // чужой причине — поэтому здесь условие, а не порядок.
+    if (await page.locator('#b-run').isDisabled()) {
+      await page.evaluate(() => setView('settings'));
+      await page.click('#cap-check');
+      await page.waitForTimeout(700);
+      await page.evaluate(() => setView('run'));
+      await page.waitForTimeout(200);
+    }
+    ok(!(await page.locator('#b-run').isDisabled()), 'подключение не разблокировало ▶ Run');
+
+    const bodies = [];
+    // Перехватывается ВЕСЬ жизненный цикл, а не только старт. Иначе хаб остаётся с прогоном, который
+    // никогда не заканчивается, ▶ Run не разблокируется, и второе нажатие даёт «таймаут» вместо
+    // ответа на вопрос проверки. Прогон здесь не предмет — предмет тело запроса.
+    let n = 0;
+    await page.route('**/v1/runs', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      try { bodies.push(JSON.parse(route.request().postData() || '{}')); } catch { bodies.push({}); }
+      n += 1;
+      await route.fulfill({ status: 202, contentType: 'application/json',
+        body: JSON.stringify({ run_id: 'intercepted-' + n, artifact_dir: '/tmp/x', state: 'running' }) });
+    });
+    await page.route('**/v1/runs/intercepted-*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ run_id: 'intercepted', state: 'done', exit_code: 0, verdict: 'pass' }) });
+    });
+    try {
+      const opts = await page.$$eval('#b-vision option', (os) => os.map((o) => o.value));
+      eq(opts.length, 3, `у переключателя vision ${opts.length} положений — «наследовать» неотличимо от «выкл»`);
+      ok(opts[0] === '', 'первое положение не пустое — унаследованное умолчание нечем выбрать');
+      const empty = await page.$eval('#b-vision option', (o) => o.textContent || '');
+      ok(/по умолчанию|default/i.test(empty) && /вкл|выкл|on|off/i.test(empty),
+        `пустой вариант не НАЗЫВАЕТ унаследованное значение: ${JSON.stringify(empty)}`);
+
+      await page.fill('#b-target', 'file:///tmp/x.html');
+      // ⚠ ЖДЁМ СОСТОЯНИЕ, А НЕ ИНТЕРВАЛ. Нажатие ▶ Run ВЫКЛЮЧАЕТ кнопку на время прогона, поэтому
+      // второе нажатие через фиксированную паузу упирается в неактуабельный элемент и даёт
+      // «таймаут» вместо диагноза — замерено, тридцать секунд впустую на причину, к предмету
+      // проверки не относящуюся.
+      const press = async (label) => {
+        await page.locator('#b-run:not([disabled])').waitFor({ state: 'visible', timeout: 20_000 })
+          .catch(async () => {
+            const st = await page.evaluate(() => {
+              const b = document.getElementById('b-run');
+              return { disabled: b && b.disabled, log: (document.getElementById('b-log') || {}).textContent };
+            });
+            throw new Error(`▶ Run не вернулась в рабочее состояние перед «${label}»: ${JSON.stringify(st).slice(0, 200)}`);
+          });
+        const before = bodies.length;
+        await page.click('#b-run');
+        await page.waitForFunction((n) => window.__muPressed === undefined || true, null, { timeout: 100 }).catch(() => {});
+        for (let i = 0; i < 60 && bodies.length === before; i++) await page.waitForTimeout(100);
+        ok(bodies.length > before, `нажатие «${label}» не отправило тело прогона`);
+      };
+      // 1. «наследовать» — ключа в теле быть НЕ ДОЛЖНО.
+      await page.selectOption('#b-vision', '');
+      await page.selectOption('#b-structured', '');
+      await press('наследовать');
+      // 2. «выкл» — явный false, иначе сохранённое true не отменить.
+      await page.selectOption('#b-vision', 'off');
+      await page.selectOption('#b-structured', 'on');
+      await press('явный выбор');
+
+      ok(bodies.length >= 2, `перехвачено ${bodies.length} запрос(ов) — форма не отправила прогон`);
+      const inherit = bodies[bodies.length - 2].llm || {};
+      const explicit = bodies[bodies.length - 1].llm || {};
+      ok(!('vision' in inherit) && !('structured' in inherit),
+        `в положении «наследовать» ключи всё равно уехали: ${JSON.stringify(inherit)}`);
+      eq(explicit.vision, false, `«выкл» не доехал явным false: ${JSON.stringify(explicit)}`);
+      eq(explicit.structured, true, `«вкл» не доехал: ${JSON.stringify(explicit)}`);
+    } finally {
+      await page.unroute('**/v1/runs');
+      await page.unroute('**/v1/runs/intercepted-*');
+    }
+    // Перехваченный прогон отвечает вымышленным run_id, поэтому хаб честно спрашивает про его
+    // артефакты и получает 404 — это КОРРЕКТНОЕ поведение сценария, а не дефект, и потому
+    // названо регуляркой, а не заглушено скопом.
+  }, { allowConsole: /404 \(Not Found\)|Failed to load resource|net::ERR_FAILED/ });
+
   await check('ci + force_replay is refused beside the checkboxes, not in a run log', async () => {
     // The previous check left ▶ Run disabled: bSubmit disables the controls for the duration of a run,
     // and the run it started was answered by a route interceptor, so the flow never reached its end.

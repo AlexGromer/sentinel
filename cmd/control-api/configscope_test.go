@@ -343,3 +343,111 @@ func ownerOfToken(t *testing.T, s *server, tok string) string {
 	}
 	return c.owner()
 }
+
+// TestEveryDoorThatSpawnsARunAppliesPersonalDefaults — ЧЕТВЁРТАЯ ДВЕРЬ, и найдена она была ПОСЛЕ
+// того, как ADR-166 назвал её поимённо в собственном обосновании.
+//
+// Довод ADR-166 звучит так: читатель личных умолчаний живёт на СЕРВЕРЕ, потому что тело прогона шлют
+// четыре разных места, и читатель в интерфейсе чинил бы одну дверь из четырёх. Замерено: сам
+// читатель был подключён к ОДНОЙ двери — `handleCreateRun`. Заглушка `/v1/chat/completions`
+// собирала `runRequest` в процессе и звала `spawnRun` напрямую, то есть человек, работающий через
+// OpenAI-совместимый эндпоинт, получал прогон без своих настроек и не узнавал об этом.
+//
+// ⚠ ПЕРЕЧЕНЬ ДВЕРЕЙ ВЫВОДИТСЯ ИЗ КОДА, А НЕ ПИШЕТСЯ. Список, написанный руками, был бы написан тем
+// же пониманием, что породило дыру, и пятая дверь появилась бы в нём молча. Здесь ищутся ВСЕ места,
+// зовущие `spawnRun`, и каждое обязано либо звать `applyPersonalRunDefaults`, либо нести рядом
+// записанную причину.
+func TestEveryDoorThatSpawnsARunAppliesPersonalDefaults(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("main.go: %v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	var doors []int
+	for i, ln := range lines {
+		if strings.Contains(ln, "s.spawnRun(") && !strings.Contains(ln, "func ") {
+			doors = append(doors, i)
+		}
+	}
+	if len(doors) < 3 {
+		t.Fatalf("найдено %d дверей — разбор сломался, и утверждение стало бы вакуумным", len(doors))
+	}
+	for _, i := range doors {
+		// ⚠ ИЩЕМ В ТЕЛЕ ФУНКЦИИ, А НЕ В ОКНЕ ФИКСИРОВАННОЙ ВЫСОТЫ. Первая редакция брала двадцать
+		// строк выше и обвинила `handleCreateRun`, где вызов стоит сразу после разбора тела — то есть
+		// сотней строк раньше. Окно отвечает на вопрос «рядом ли», а спросить надо «в этой ли
+		// функции»: дверь — это функция, а не соседство строк.
+		// ⚠ ГРАНИЦА — БЛИЖАЙШИЙ ПРЕДЫДУЩИЙ СПАВН ИЛИ НАЧАЛО ФУНКЦИИ, что ближе. Вторая редакция брала
+		// всё тело функции и была ВАКУУМНОЙ: у заглушки чата два спавна в одной функции, и вызов из
+		// первой ветки закрывал вторую — мутация «убрать вызов у второй двери» ВЫЖИЛА. Каждая дверь
+		// обязана отвечать за себя; без этой границы гейт утверждал «в функции где-то есть вызов»,
+		// а спросить надо «есть ли он у ЭТОГО спавна».
+		lo := 0
+		for k := i - 1; k >= 0; k-- {
+			if strings.Contains(lines[k], "s.spawnRun(") || strings.HasPrefix(lines[k], "func ") {
+				lo = k + 1
+				break
+			}
+		}
+		window := strings.Join(lines[lo:i], "\n")
+		if strings.Contains(window, "applyPersonalRunDefaults") {
+			continue
+		}
+		if strings.Contains(window, "БЕЗ ЛИЧНЫХ УМОЛЧАНИЙ:") {
+			continue // записанная причина, а не молчание
+		}
+		t.Errorf("main.go:%d зовёт spawnRun, не применив личные умолчания и не назвав причину:\n    %s\n"+
+			"Человек, пришедший этой дверью, получит прогон без своих сохранённых настроек и не узнает об этом.",
+			i+1, strings.TrimSpace(lines[i]))
+	}
+}
+
+// TestReplayDoesNotInheritTheSavedTarget — РЕГРЕССИЯ, которую завёл сам ADR-166, и она высшей цены.
+//
+// Кнопка «🔁 Перепрогон» шлёт тело БЕЗ адреса: адрес берётся из замороженного плана. Личные
+// умолчания применяются ДО разбора режима, поэтому подставленный `run.target` занимал пустое место,
+// ветка replay видела валидный адрес, и откат на `plan.target_url` не срабатывал НИКОГДА — план
+// проигрывался против СОХРАНЁННОГО адреса, а кнопка обещала повторить ТОТ ЖЕ прогон. Комментарий
+// «request target wins» при этом оставался верным буквально и ложным по смыслу: «запрошенным»
+// оказывалось то, чего человек не вводил.
+//
+// KILLS: снятие `planDerivedModes` с поля `target`; возврат применения умолчаний в режимах,
+// выводящих поля из плана.
+func TestReplayDoesNotInheritTheSavedTarget(t *testing.T) {
+	s, _, bob, _ := storeBackedServer(t)
+	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config",
+		[]byte(`{"run":{"target":"http://saved.example/","max_steps":9},"auth":{"login_plan":"runs/login/plan.json"}}`), bob); rec.Code != http.StatusOK {
+		t.Fatalf("сохранение личной секции: %d", rec.Code)
+	}
+	owner := ownerOfToken(t, s, bob)
+
+	for _, mode := range []string{"replay", "baseline"} {
+		req := runRequest{owner: owner, Mode: mode, FromRun: "prior"}
+		used := s.applyPersonalRunDefaults(&req)
+		if req.Target != "" {
+			t.Errorf("режим %q унаследовал сохранённый адрес %q — замороженный план пойдёт не туда, "+
+				"а кнопка обещала повторить ТОТ ЖЕ прогон", mode, req.Target)
+		}
+		if req.LoginPlan != "" {
+			t.Errorf("режим %q унаследовал план входа %q — он доезжает той же переменной, что план "+
+				"воспроизведения, и заведомо не применится; ответ объявил бы применённым несделанное", mode, req.LoginPlan)
+		}
+		for _, u := range used {
+			if u == "run.target" || u == "auth.login_plan" {
+				t.Errorf("режим %q объявил унаследованным поле, которое выводит сам: %v", mode, used)
+			}
+		}
+		// А то, что режим НЕ выводит, наследоваться обязано — иначе правка вылечила бы дефект,
+		// отняв возможность.
+		if req.MaxSteps != "9" {
+			t.Errorf("режим %q потерял умолчание, к плану отношения не имеющее: max_steps=%q", mode, req.MaxSteps)
+		}
+	}
+
+	// И в обычном режиме адрес по-прежнему наследуется: исключение точечное, а не запрет.
+	req := runRequest{owner: owner, Mode: "explore"}
+	s.applyPersonalRunDefaults(&req)
+	if req.Target != "http://saved.example/" {
+		t.Errorf("explore перестал наследовать адрес: %q — исключение расползлось за свои режимы", req.Target)
+	}
+}

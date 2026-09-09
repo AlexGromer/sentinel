@@ -754,6 +754,36 @@ try {
    * хранилища НЕ МОЛЧИТ: право выдано, машинный секрет в браузер не попал, а человеку НАЗВАНА
    * причина, по которой дальше хода нет. Молчаливый отказ и есть тот дефект, ради которого
    * заводился [UI-FIRST-RUN-BOOTSTRAP-DEAD-END]. */
+  await check('снятая галочка мастера ОТМЕНЯЕТ сохранённое, а не молчит', async () => {
+    // ⚠ ЗАМЕРЕННЫЙ ДЕФЕКТ ТОГО ЖЕ КЛАССА, ЧТО В ХАБЕ. Мастер писал `pw_no_trace` и обе LLM-ручки
+    // ТОЛЬКО во включённом состоянии. Сервер читает отсутствие ключа как «человек не выбирал» и
+    // подставляет сохранённый слой — а этот слой пишет ЭТОТ ЖЕ мастер безусловным булевым при
+    // умолчательно взведённой галочке. Значит снятая галочка не отменяла ничего: человек просил
+    // трассировать, прогон шёл без трассировки, подтверждение приходило как обычно.
+    //
+    // Утверждается ФУНКЦИЯ СБОРКИ, а не разметка: разметка совпала бы с комментарием, её
+    // объясняющим. Обе половины прогоняются в браузере на настоящей странице.
+    // Своя страница: у этого гейта нет разделяемого `page` — каждая проверка берёт свою через
+    // freshPage(), и зависеть от чужого состояния значило бы падать по чужой причине.
+    const { ctx, page } = await freshPage(browser, base);
+    try {
+    const out = await page.evaluate(() => {
+      const set = (id, v) => { const e = document.getElementById(id); if (e) e.checked = v; };
+      set('pwnotrace', false); set('vision', false); set('structured', false);
+      const offBody = (typeof buildRunBody === 'function') ? buildRunBody() : null;
+      const offEnv = buildEnv();
+      set('pwnotrace', true); set('vision', true); set('structured', true);
+      const onEnv = buildEnv();
+      return { offEnv: String(offEnv), onEnv: String(onEnv), hasBuilder: !!offBody };
+    });
+    ok(/LLM_VISION=0/.test(out.offEnv),
+      `снятая галочка vision не попала в env-блок: файл, который не отменяет, воспроизводит не тот прогон\n${out.offEnv.slice(0, 400)}`);
+    ok(/LLM_STRUCTURED=0/.test(out.offEnv), 'снятая галочка structured не попала в env-блок');
+    ok(/LLM_VISION=1/.test(out.onEnv) && /LLM_STRUCTURED=1/.test(out.onEnv),
+      'включённое состояние перестало попадать в env-блок');
+    } finally { await ctx.close(); }
+  });
+
   await check('mode 3, standalone tier: with NO external gateway the first run still completes — the tiers are one product', async () => {
     const port3 = await freePort();
     capi3 = await startModeThreeAPI(port3, tmp);      // storeAddr omitted — standalone on purpose

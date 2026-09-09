@@ -2075,8 +2075,14 @@ function buildEnv() {
     var el = $(roleId(r));
     if (el && el.value.trim()) env.push('export ' + roleEnv(r) + '=' + el.value.trim());
   });
-  if ($('vision').checked)     env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.vision && SCHEMA.llm.vision.env) || 'LLM_VISION') + '=1');
-  if ($('structured').checked) env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.structured && SCHEMA.llm.structured.env) || 'LLM_STRUCTURED') + '=1');
+  /* ⚠ ПИШУТСЯ ОБА СОСТОЯНИЯ, а не только включённое. Строкой ниже, в этой же функции, настройки
+     `s-*` уже так и делают — то есть внутри одного buildEnv() было два разных правила. Цена
+     асимметрии: `source sentinel.env` в оболочке, где LLM_VISION=1 уже экспортирован, оставлял его
+     включённым, хотя человек снял галочку и скачал файл ИМЕННО чтобы воспроизвести свой выбор.
+     Файл, который не отменяет, воспроизводит не тот прогон. Тот же довод, что у трёхпозиционных
+     переключателей хаба (ADR-168). */
+  env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.vision && SCHEMA.llm.vision.env) || 'LLM_VISION') + '=' + ($('vision').checked ? '1' : '0'));
+  env.push('export ' + ((SCHEMA.llm && SCHEMA.llm.structured && SCHEMA.llm.structured.env) || 'LLM_STRUCTURED') + '=' + ($('structured').checked ? '1' : '0'));
   // ADR-085: a setting the operator CHANGED is exported; one left at its default is not, so the
   // generated block stays short and every line in it means "I decided this".
   Object.keys(SCHEMA.settings || {}).sort().forEach(function (k) {
@@ -2327,7 +2333,12 @@ $('run').addEventListener('click', function () {
     var el = $(p[0]);
     if (el && el.value.trim()) body[p[1]] = el.value.trim();
   });
-  if ($('pwnotrace') && $('pwnotrace').checked) body.pw_no_trace = true;
+  /* ⚠ ОТПРАВЛЯЮТСЯ ОБА СОСТОЯНИЯ. Сервер принимает УКАЗАТЕЛЬ и читает отсутствие ключа как «человек
+     не выбирал», подставляя сохранённый слой; а этот слой пишет ЭТОТ ЖЕ мастер, безусловным булевым
+     при умолчательно взведённой галочке. То есть снятая галочка не отменяла ничего: человек просил
+     трассировать, сервер брал сохранённое «не трассировать», и подтверждение приходило как обычно.
+     У хаба то же исключение записано словарём SEND_UNCHECKED с той же причиной. */
+  if ($('pwnotrace')) body.pw_no_trace = !!$('pwnotrace').checked;
   startRun(body);
 });
 $('rerun').addEventListener('click', function () { if (lastRunId) startRun({ mode: 'replay', from_run: lastRunId }, '🔁 replay from_run=' + lastRunId); });

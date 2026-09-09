@@ -111,6 +111,38 @@ func (s *server) persistedConfigDoc() map[string]any {
 	return doc
 }
 
+// personalConfigDoc reads the PERSONAL layer of `owner`, on ЛЮБОМ ярусе, или nil, когда его нет.
+//
+// ⚠ ЗАЧЕМ ОТДЕЛЬНЫЙ ЧИТАТЕЛЬ И ПОЧЕМУ ОН НЕ СПРАШИВАЕТ ЯРУС. Личный слой живёт во ВСТРОЕННОМ
+// хранилище даже там, где глобальный документ лежит файлом, и это ровно правило, записанное у
+// configTier выше: встроенное хранилище существует, чтобы вернуть то, у чего БЕЗ шлюза не было
+// реализации, — локальные аккаунты и всё, что скоупится владельцем. Личная конфигурация скоупится
+// владельцем по определению, значит её носитель — хранилище, а не файл.
+//
+// ⚠ ЗАМЕР, КУПИВШИЙ ЭТУ ФУНКЦИЮ. Первая редакция личных умолчаний (W15) спрашивала `s.store`
+// напрямую и работала ТОЛЬКО там, где шлюз внешний. На автономном ярусе человек проходил мастер,
+// сохранял `run`/`auth`, получал «✓ сохранено … действует на следующие прогоны», видел значения
+// обратно в форме — и ни один прогон их не наследовал: PUT клал документ в state/config.json, а
+// читатель смотрел во встроенную базу, куда конфиг не писался никогда. Подтверждение приходило
+// ДВАЖДЫ, а не действовало ничего. Это тот же дефект, из-за которого рядом появился
+// persistedConfigDoc («три читателя разошлись … один читатель, один ответ»), и он вернулся ЧЕТВЁРТЫМ
+// читателем — а вдобавок нарушал действующую директиву «функциональность standalone и
+// многопользовательская не должна отличаться, у нас одна версия».
+func (s *server) personalConfigDoc(owner string) map[string]json.RawMessage {
+	if owner == "" || s.store == nil {
+		return nil // нет субъекта — нет скоупинга; то же правило, что везде в ADR-109
+	}
+	rec, err := s.store.getConfig(setupConfigKey, owner, storeCallTimeout)
+	if err != nil || rec == nil || rec.ValueJson == "" {
+		return nil // fail-open: прогон не должен падать из-за недостижимых необязательных умолчаний
+	}
+	var doc map[string]json.RawMessage
+	if json.Unmarshal([]byte(rec.ValueJson), &doc) != nil {
+		return nil
+	}
+	return doc
+}
+
 // configFileDoc is the on-disk envelope. It carries the same three things as the store's ConfigRecord —
 // key, document, updated_at — so GET and the readiness probe need not know which tier answered.
 //

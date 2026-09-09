@@ -714,17 +714,33 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": ferr.Error(), "tier": tierFile})
 			return
 		}
-		if !ok {
+		// ⚠ «НЕТ ГЛОБАЛЬНОГО ФАЙЛА» ≠ «НИЧЕГО НЕ СОХРАНЕНО». Человек, сохранивший ТОЛЬКО свою секцию,
+		// получал 404 над собственным, только что записанным документом — то есть подтверждение
+		// сохранения и отрицание его существования подряд. На ярусе со шлюзом это уже учтено
+		// (404 только когда пусты ОБА слоя); здесь ярус отличался поведением, а не носителем.
+		cf, _ := s.callerOf(r)
+		personalDoc := s.personalConfigDoc(cf.owner())
+		if !ok && len(personalDoc) == 0 {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no config stored", "tier": tierFile})
 			return
 		}
-		var parsed any
-		if err := json.Unmarshal(doc.ValueJson, &parsed); err != nil {
+		if !ok {
+			doc = &configFileDoc{Key: setupConfigKey, ValueJson: json.RawMessage("{}")}
+		}
+		globalDoc := map[string]json.RawMessage{}
+		if err := json.Unmarshal(doc.ValueJson, &globalDoc); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "stored config is not valid JSON", "tier": tierFile})
 			return
 		}
+		// ⚠ ФОРМА ОТВЕТА ТА ЖЕ, ЧТО У ЯРУСА С ХРАНИЛИЩЕМ, и это не косметика. Раньше здесь
+		// возвращался СЫРОЙ документ без `sources` и без `may_write_global` — то есть интерфейс на
+		// автономном ярусе не мог ни сказать, чьё значение он показывает, ни узнать, что человеку
+		// нельзя менять. Ярус — это развёртывание, а не другой продукт; отличаться ему разрешено
+		// носителем глобальной половины, а не составом ответа.
+		merged, sources := mergeConfigDocs(globalDoc, personalDoc)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"key": doc.Key, "updated_at": doc.UpdatedAt, "config": parsed, "tier": tierFile, "path": s.configFilePath()})
+			"key": doc.Key, "updated_at": doc.UpdatedAt, "config": merged, "sources": sources,
+			"tier": tierFile, "path": s.configFilePath(), "may_write_global": mayWriteGlobal(cf)})
 		return
 	}
 	// ADR-109 / Alex's directive: what a caller reads is the EFFECTIVE document — the tool's global
@@ -826,9 +842,62 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.configTier() == tierFile { // ADR-075 standalone tier
-		// The file tier has no accounts at all (local accounts need a store-gateway), so there is exactly
-		// one document and it is the global one. Writing the body through unchanged keeps a standalone
-		// deployment byte-identical to what it had before the split existed.
+		// ⚠ ПРЕЖНИЙ ДОВОД ЗДЕСЬ УСТАРЕЛ, И ЭТО ЗАМЕРЕНО. Он гласил: «на файловом ярусе аккаунтов нет
+		// вовсе (локальным аккаунтам нужен шлюз), значит документ ровно один и он глобальный».
+		// С ADR-158 встроенное хранилище поднимается ВСЕГДА, а ADR-159 заводит на нём администратора
+		// сам — то есть аккаунты на этом ярусе есть, и у вызывающего есть владелец. Документ остался
+		// один, и личные секции молча уезжали в общий файл: настройка одного человека меняла бы
+		// прогоны другого, а прочитать её обратно как СВОЮ было нечем.
+		//
+		// Носитель выбирается по правилу, записанному у configTier: встроенное хранилище существует
+		// ради того, что скоупится ВЛАДЕЛЬЦЕМ. Глобальный документ остаётся файлом — его оператор
+		// читает, диффает и правит руками; личный слой уходит в хранилище, где у него есть ключ
+		// владельца. Ярус перестаёт отличаться поведением, отличаясь только носителем глобальной
+		// половины — ровно то, чего требует «одна версия».
+		owner := c.owner()
+		// ⚠ НЕТ СУБЪЕКТА — НЕТ РАЗДЕЛЕНИЯ. Машинный кредентиал и развёртывание без аккаунтов имеют
+		// владельца "" и пишут ГЛОБАЛЬНЫЙ документ целиком — то же одно правило, что везде в ADR-109,
+		// и ровно оно оставляет мастер настройки работать неизменным: он аутентифицируется машинным
+		// токеном, поэтому сохранённые им умолчания `run`/`auth` — умолчания ИНСТРУМЕНТА, как и были.
+		// Первая редакция этой правки делила документ всегда и роняла личные секции машинного
+		// вызывающего на пол; поймали собственные тесты файлового яруса.
+		if owner == "" {
+			for k, v := range personal {
+				global[k] = v
+			}
+			personal = nil
+		}
+		if owner != "" && len(personal) > 0 {
+			if s.store == nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+					"error": "личные секции (" + globalSectionsIn(personal) + ") некуда сохранить: " +
+						"хранилище недоступно", "tier": tierFile})
+				return
+			}
+			pdoc, err := marshalConfigDoc(personal)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "tier": tierFile})
+				return
+			}
+			if err := s.putConfigLayer(w, owner, string(pdoc)); err != nil {
+				return // putConfigLayer уже ответил
+			}
+		}
+		if len(global) == 0 {
+			// Нечего писать в файл — но личное уже сохранено, и ответ обязан назвать ЧТО именно, а не
+			// сказать «сохранено» над пустым документом.
+			s.invalidateReadiness()
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "saved", "key": setupConfigKey, "tier": tierFile,
+				"written": map[string]string{"personal": globalSectionsIn(personal)}})
+			return
+		}
+		gdoc, gerr := marshalConfigDoc(global)
+		if gerr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": gerr.Error(), "tier": tierFile})
+			return
+		}
+		body = gdoc
 		if err := s.writeConfigFile(string(body)); err != nil {
 			// A config write that silently vanished would leave the operator believing the wizard had
 			// saved — the same reason storeClient.putConfig is the one store helper that does not swallow
@@ -845,8 +914,13 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.journalEvent("service.config_changed", "info", map[string]string{
 			"actor": who, "detail": " (standalone file tier)",
 		}, r, "sections: "+sectionNames(global, personal))
+		written := map[string]string{"global": globalSectionsIn(global)}
+		if len(personal) > 0 {
+			written["personal"] = globalSectionsIn(personal)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath()})
+			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath(),
+			"written": written})
 		return
 	}
 	// A caller with no subject (the machine token, or a deployment with no accounts) writes the global
