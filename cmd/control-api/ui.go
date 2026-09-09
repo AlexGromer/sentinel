@@ -66,7 +66,13 @@ func uiPathAllowed(name string) bool {
 		}
 	}
 	switch name {
-	case "index.html", "prices.json", "backend-presets.json", "capabilities.json":
+	// ⚠ ЭТОТ ПЕРЕЧЕНЬ ОБЯЗАН СОВПАДАТЬ СО СТРОКОЙ `//go:embed` в docs/embed.go, и до W15 их не
+	// сверяло НИЧТО — комментарий рядом говорил «mirrors», и это было единственной гарантией.
+	// Забытая половина даёт молчаливый 404 в развёртывании при зелёном CI: файл встроен и не
+	// отдаётся, либо разрешён и не встроен. Теперь равенство утверждает
+	// tests/test_ui_embed_allowlist_offline.py, выводя оба множества из исходников.
+	case "index.html", "prices.json", "backend-presets.json", "capabilities.json",
+		"parameters.html", "parameters.json":
 		return true
 	}
 	return false

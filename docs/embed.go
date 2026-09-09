@@ -19,7 +19,7 @@ import (
 	"io/fs"
 )
 
-//go:embed index.html prices.json backend-presets.json capabilities.json
+//go:embed index.html prices.json backend-presets.json capabilities.json parameters.html parameters.json
 //go:embed setup chat calculators
 var embedded embed.FS
 

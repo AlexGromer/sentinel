@@ -17,7 +17,7 @@ COPY internal/ internal/
 # the context these COPY lines produce and compiles against it, so the drift surfaces in the fast
 # offline suite instead of minutes later in the airgap image build (which is how it was caught
 # twice: 2026-07-23 for index.html, 2026-07-29 for capabilities.json).
-COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json docs/capabilities.json docs/
+COPY docs/embed.go docs/index.html docs/prices.json docs/backend-presets.json docs/capabilities.json docs/parameters.html docs/parameters.json docs/
 COPY docs/setup/ docs/setup/
 COPY docs/chat/ docs/chat/
 COPY docs/calculators/ docs/calculators/

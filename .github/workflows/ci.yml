@@ -363,10 +363,11 @@ jobs:
             echo "::error::$n of $t checks passed in the UI smoke — see the screenshots artifact"
             sed -n '1,80p' /tmp/ui-smoke-api.log; exit 1
           fi
-          # Пол, а не текущее число: 11 сегодня, и он ТРЕВОЖКА, а не налог на каждую новую проверку
-          # (тот же довод записан у пола хаба — 49 при 86 исполненных).
-          if [ "$t" -lt 11 ]; then
-            echo "::error::only $t checks ran in the UI smoke — expected at least 11"; exit 1
+          # Пол, а не текущее число: 12 с ADR-167 (добавлена проверка справки по параметрам), и он
+          # ТРЕВОЖКА, а не налог на каждую новую проверку (тот же довод записан у пола хаба).
+          # Пол двигается только ВВЕРХ и только вместе с причиной.
+          if [ "$t" -lt 12 ]; then
+            echo "::error::only $t checks ran in the UI smoke — expected at least 12"; exit 1
           fi
 
       - name: Press every control of the hub (Ф4 — the walk ui-smoke does not do)

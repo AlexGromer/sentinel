@@ -31,5 +31,7 @@ docs/**
 # tests/test_container_embed_context_offline.py, which applies THIS file when it reconstructs the
 # build context — an exclusion here is as fatal as a missing COPY, and looks nothing like it.
 !docs/capabilities.json
+!docs/parameters.html
+!docs/parameters.json
 memory
 **/__pycache__
