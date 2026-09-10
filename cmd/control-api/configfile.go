@@ -111,6 +111,34 @@ func (s *server) persistedConfigDoc() map[string]any {
 	return doc
 }
 
+// storedGlobalSections returns the GLOBAL document already persisted, as a section map, on either
+// tier. Empty when nothing is stored yet — a first save must not need a document to exist.
+//
+// Один читатель, один ответ: тот же `persistedConfigDoc`, что читает ярус для всех остальных нужд,
+// а не четвёртая копия выбора носителя (см. предупреждение ниже — эта ошибка уже стоила W15 целой
+// регрессии).
+func (s *server) storedGlobalSections() map[string]json.RawMessage {
+	doc := s.persistedConfigDoc()
+	if doc == nil {
+		return map[string]json.RawMessage{}
+	}
+	out := map[string]json.RawMessage{}
+	for k, v := range doc {
+		// ⚠ БЕЗ ФИЛЬТРА ПО СКОУПУ, И ЭТО ЗАМЕРЕНО. Первая редакция оставляла здесь только секции
+		// scopeGlobal — и роняла `run`/`auth` машинного вызывающего: у него нет владельца, поэтому
+		// его личные секции ЗАКОННО живут в глобальном документе («нет субъекта — нет разделения»,
+		// ADR-109). Слияние обязано сохранять весь документ, который оно перезаписывает, а не свою
+		// догадку о том, что в нём должно лежать. Поймал wizard-dom-check: сохранение из мастера
+		// теряло `run.target`.
+		raw, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+		out[k] = raw
+	}
+	return out
+}
+
 // personalConfigDoc reads the PERSONAL layer of `owner`, on ЛЮБОМ ярусе, или nil, когда его нет.
 //
 // ⚠ ЗАЧЕМ ОТДЕЛЬНЫЙ ЧИТАТЕЛЬ И ПОЧЕМУ ОН НЕ СПРАШИВАЕТ ЯРУС. Личный слой живёт во ВСТРОЕННОМ

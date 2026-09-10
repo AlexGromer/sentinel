@@ -2212,6 +2212,81 @@ try {
     eq(await page.locator('#cfg-groups code').count(), declared, 'not every setting shows its env var name');
   }, { allowConsole: freshConfig404 });
 
+  await check('settings: сохранение шлёт ТОЛЬКО свою секцию и не форкает себе чужое', async () => {
+    /* Утверждается ПЕРЕХВАЧЕННОЕ ТЕЛО запроса, а не разметка: до W16 вид «Настройки» тащил вперёд
+       ВЕСЬ слитый документ, потому что PUT заменял его целиком, — и администратор, не тронувший
+       ничего, записывал себе ЛИЧНУЮ копию общих `run`/`auth`; дальше развёртывание меняли, а его
+       прогоны шли по форку. Поле `sources` сервер отдаёт ровно затем, чтобы это различать, и не
+       читал его НИКТО.
+
+       ⚠ ДВЕ ВЕЩИ, КУПЛЕННЫЕ ПРОМАХАМИ ЭТОЙ ЖЕ ПРОВЕРКИ.
+       1. Документ ЗАСЕВАЕТСЯ. На свежем стенде сохранённого конфига нет, `cfgDoc` пуст, и «тащить
+          вперёд весь документ» не добавляет ни одной секции — мутация, восстанавливающая форк,
+          проходила ЗЕЛЁНОЙ. Кладём секции машинным токеном: у него нет владельца, поэтому `run`/
+          `auth` ложатся в ГЛОБАЛЬНЫЙ документ — ровно тот случай, из которого форк и возникает.
+       2. СВОЙ КОНТЕКСТ, а не общая вкладка. Странице нужен токен (поле #capitok, в памяти вкладки —
+          ADR-032/061/064), а заполнение его в общей вкладке роняло четыре соседние проверки: они
+          рассчитаны на страницу БЕЗ удостоверения. Отравление фикстуры здесь класс, а не случай. */
+    const seeded = await fetch(`http://127.0.0.1:${PORT}/v1/config`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run: { target: 'https://seeded.example', mode: 'explore' },
+                             auth: { storage_state: '/seeded/state.json' } }),
+    });
+    if (!seeded.ok) throw new Error(`seeding /v1/config -> ${seeded.status}`);
+
+    const ctx = await browser.newContext({ viewport: { width: 1180, height: 1400 } });
+    const p2 = await ctx.newPage();
+    try {
+      await p2.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+      await p2.click('.rail a[data-nav="settings"]');
+      await p2.waitForSelector('#capitok', { timeout: 15000 });
+      await p2.fill('#capitok', token);
+      /* Перечитать конфиг ПОСЛЕ того, как появился токен: cfgInit бежит один раз (`cfgLoaded`),
+         и первый заход случился без удостоверения — то есть с пустым `cfgDoc`. Кнопка перезагрузки
+         существует ровно для этого. */
+      await p2.click('#cfg-reload');
+      await p2.waitForSelector('#cfg-groups input', { timeout: 15000 });
+      await p2.waitForTimeout(500);
+
+      const seenSections = await p2.evaluate(async (tok) => {
+        const r = await fetch('/v1/config', { headers: { Authorization: 'Bearer ' + tok } });
+        const j = await r.json().catch(() => ({}));
+        return Object.keys((j && j.config) || {});
+      }, token);
+      ok(seenSections.includes('run'),
+        `засеянные секции не читаются (${seenSections.join(',') || 'ничего'}) — проверка была бы вакуумной`);
+
+      let sent = null;
+      await p2.route('**/v1/config', async (route) => {
+        if (route.request().method() !== 'PUT') return route.fallback();
+        sent = JSON.parse(route.request().postData() || '{}');
+        await route.fulfill({ status: 200, contentType: 'application/json',
+          body: '{"status":"saved","written":{"global":"settings"},"kept":{"global":"llm"}}' });
+      });
+      await p2.click('#cfg-save');
+      for (let i = 0; i < 80 && sent === null; i++) await p2.waitForTimeout(100);
+      await p2.unroute('**/v1/config');
+
+      ok(sent !== null, 'сохранение не отправило PUT /v1/config вовсе — проверка ниже была бы вакуумной');
+      /* Наблюдение НЕЗАВИСИМОЕ: тело строит страница, а состав личных секций объявляет СХЕМА —
+         сравниваются две разные величины, а не формула страницы сама с собой. */
+      const personal = await p2.evaluate(async () => {
+        const r = await fetch('/v1/config-schema');
+        const m = (await r.json()).config_sections || {};
+        return Object.keys(m).filter((k) => m[k] === 'user');
+      });
+      ok(personal.length > 0, 'схема не объявила ни одной ЛИЧНОЙ секции — сравнивать не с чем');
+      const forked = personal.filter((k) => Object.prototype.hasOwnProperty.call(sent, k));
+      eq(forked.length, 0,
+        `сохранение настроек несёт чужие личные секции (${forked.join(', ')}) — сервер запишет их в ЛИЧНЫЙ слой сохраняющего, и он молча уедет с форка развёртывания`);
+      ok(Object.prototype.hasOwnProperty.call(sent, 'settings'),
+        'сохранение не несёт даже собственную секцию `settings`');
+    } finally {
+      await ctx.close();
+    }
+  }, { allowConsole: freshConfig404 });
+
   await check('settings: hints survive the language switch instead of freezing at first render', async () => {
     // The page switches language with CSS over data-lang pairs. A hint rendered as one chosen string
     // would freeze in whichever language was active when the view first opened — the defect the Logs
