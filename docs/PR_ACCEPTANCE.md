@@ -37,6 +37,7 @@
 | pw-executor: сборка TypeScript + модульные тесты (`npm test` заодно гейтит компиляцию) | `build` | `Build + unit-test pw-executor (TypeScript -> dist/server.js; node:test gates the compile)` |
 | Расширение MV3: `tsc --noEmit` + модульные тесты под jsdom (пол на число файлов `*.test.ts`) | `build` | `Build + unit-test the MV3 extension (tsc --noEmit; jsdom node:test — PERCEPT-RECORDER-SHADOW)` |
 | Go: `go vet ./...` + `go test ./...` по всему дереву | `build` | `Vet + unit test (Go)` |
+| Воспроизводимость gRPC-стабов: перегенерация и побайтовая сверка с закоммиченным (ADR-109). Отдельный шаг ПОСЛЕ провижнинга venv — protoc живёт в нём; до W16 обе проверки скипались в CI всегда, а пропущенный Go-тест зелёный | `build` | `Stub reproducibility gates (ADR-109 — protoc comes from the venv provisioned above)` |
 | Кросс-сборка под каждую платформу релиза (только компиляция; перечень ВЫВОДИТСЯ из матрицы `release.yml`) | `build` | `Cross-build every platform the release ships (compile only; list derived from release.yml)` |
 | Синтаксис встроенного JS каждой страницы `docs/` (`node --check`, с полом на число страниц) | `build` | `SPA syntax check (inline JS of every docs page — node --check floor gate; M15 + M11.5 PR-4)` |
 | DOM-гейт мастера настройки, живой headless Chromium (пол 16) | `build` | `Setup-wizard DOM gate (headless Chromium; M11.5)` |

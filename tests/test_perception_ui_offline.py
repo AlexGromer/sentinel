@@ -24,7 +24,6 @@ import json
 import os
 import pathlib
 import re
-import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -32,27 +31,18 @@ FIXTURES = REPO / "testdata" / "fixtures"
 sys.path.insert(0, str(REPO))
 
 
-def _drive(calls: list) -> "list | None":
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=600)
-    for line in (r.stdout or "").splitlines():
-        if line.startswith("@@RESULT@@"):
-            return json.loads(line[len("@@RESULT@@"):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive as _gate_drive, run_suite  # noqa: E402  (path set above)
+
+
+def _drive(calls: list) -> list:
+    """The shared discriminator, with this suite's recorded 600s ceiling.
+
+    See tests/_executor_gate.py: a skip is now an OBSERVATION of the prerequisites, never an
+    inference from a missing success marker. Raises rather than returning None, so a broken
+    executor can no longer read as "no browser available".
+    """
+    return _gate_drive(calls, timeout=600)
 
 
 # --- the load-bearing check -------------------------------------------------------------------------
@@ -76,8 +66,6 @@ def test_the_breakdown_adds_up_to_what_the_audit_measured():
     for fx in sorted(p.name for p in FIXTURES.glob("*.html")):
         res = _drive([("browser.navigate", {"url": "file://" + str(FIXTURES / fx)}),
                       ("browser.interactives", {}), ("browser.perceptionAudit", {})])
-        if res is None:
-            return
         _, inter, audit = res
         els = _elements_from_interactives(inter["elements"], "/" + fx)
         a = _perception_audit(_Ex({"browser.perceptionAudit": audit}), "/" + fx, els)
@@ -166,8 +154,6 @@ def test_seen_and_usable_are_different_numbers():
 
     res = _drive([("browser.navigate", {"url": "file://" + str(FIXTURES / "l5.html")}),
                   ("browser.interactives", {}), ("browser.perceptionAudit", {})])
-    if res is None:
-        return
     _, inter, audit = res
     els = _elements_from_interactives(inter["elements"], "/l5")
     a = _perception_audit(_Ex(audit), "/l5", els)
@@ -288,8 +274,4 @@ def test_the_go_decoder_keeps_the_block_it_used_to_drop():
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("  ok  ", fn.__name__)
-    print(f"OK — {len(fns)} perception-UI tests passed")
+    raise SystemExit(run_suite(globals(), "perception-UI"))

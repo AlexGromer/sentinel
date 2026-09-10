@@ -22,10 +22,8 @@ are untouched. What that buys is checked here rather than asserted:
     that only exists inside a frame, and the replay would then fail on a step just called healed.
 """
 import copy
-import json
 import os
 import pathlib
-import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -33,35 +31,24 @@ FIXTURES = REPO / "testdata" / "fixtures"
 FRAMES = "file://" + str(FIXTURES / "l10-frames.html")
 
 
-def _drive(calls: list) -> "list | None":
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=600)
-    for line in (r.stdout or "").splitlines():
-        if line.startswith("@@RESULT@@"):
-            return json.loads(line[len("@@RESULT@@"):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive as _gate_drive, run_suite  # noqa: E402  (path set above)
+
+
+def _drive(calls: list) -> list:
+    """The shared discriminator, with this suite's recorded 600s ceiling.
+
+    See tests/_executor_gate.py: a skip is now an OBSERVATION of the prerequisites, never an
+    inference from a missing success marker. Raises rather than returning None, so a broken
+    executor can no longer read as "no browser available".
+    """
+    return _gate_drive(calls, timeout=600)
 
 
 def test_controls_inside_frames_are_perceived_and_carry_their_scope():
     """Three addressing modes, in the order stability demands. Asserted per control, because a count
     is satisfied by finding the same frame three times."""
     res = _drive([("browser.navigate", {"url": FRAMES}), ("browser.interactives", {})])
-    if res is None:
-        return
     els = res[1]["elements"]
     by_name = {(e.get("name") or "").strip(): e for e in els}
     want = {
@@ -110,8 +97,6 @@ def test_the_locators_the_brain_builds_for_framed_controls_resolve():
     sys.path.insert(0, str(REPO))
     from brain.graph import _elements_from_interactives
     res = _drive([("browser.navigate", {"url": FRAMES}), ("browser.interactives", {})])
-    if res is None:
-        return
     built = _elements_from_interactives(res[1]["elements"], "/l10")
     framed = [e for e in built if e.get("frame")]
     assert len(framed) >= 5, f"only {len(framed)} framed descriptors; the sample is too thin"
@@ -124,8 +109,6 @@ def test_the_locators_the_brain_builds_for_framed_controls_resolve():
             probes.append(("browser.probe", {"locator": loc}))
             meta.append((e["name"], loc))
     res2 = _drive(probes)
-    if res2 is None:
-        return
     for m, r in zip(meta, res2):
         if m is None:
             continue
@@ -147,8 +130,6 @@ def test_a_frame_scoped_locator_resolves_and_the_control_can_be_used():
                                       "frame": 'iframe[name="payment"]'}, "value": "4242"}),
         ("browser.probe", {"locator": {"testid": "anon-btn", "frame": "iframe >> nth=2"}}),
     ])
-    if res is None:
-        return
     _, scoped, unscoped, click, fill, positional = res
     assert scoped["count"] == 1, f"a frame-scoped locator resolved {scoped['count']}"
     assert unscoped["count"] == 0, (
@@ -168,8 +149,6 @@ def test_the_audit_still_counts_what_perception_returns():
     for fx, url in (("l10-frames.html", FRAMES), ("l5.html", "file://" + str(FIXTURES / "l5.html"))):
         res = _drive([("browser.navigate", {"url": url}),
                       ("browser.interactives", {}), ("browser.perceptionAudit", {})])
-        if res is None:
-            return
         _, inter, audit = res
         assert audit["seen"] == len(inter["elements"]), (
             f"{fx}: audit says {audit['seen']}, perception returns {len(inter['elements'])}")
@@ -182,8 +161,6 @@ def test_the_boundary_is_reported_rather_than_passed_over():
     something the numerator does not — which is the only shape that proves the cap is a cap and not
     an absence."""
     res = _drive([("browser.navigate", {"url": FRAMES}), ("browser.perceptionAudit", {})])
-    if res is None:
-        return
     a = res[1]
     assert a["opaque"]["frames_nested"] == 1, a["opaque"]
     assert a["unseen"]["iframe"] == 1, (
@@ -208,8 +185,6 @@ def test_a_page_without_frames_produces_byte_identical_descriptors():
     from brain.graph import _elements_from_interactives
     res = _drive([("browser.navigate", {"url": "file://" + str(FIXTURES / "l1.html")}),
                   ("browser.interactives", {})])
-    if res is None:
-        return
     raw = res[1]["elements"]
     assert raw, "l1 perceived nothing; this check would be vacuous"
     assert all("frame" not in e for e in raw), \
@@ -234,8 +209,6 @@ def test_the_heal_path_carries_the_scope():
     sys.path.insert(0, str(REPO))
     from brain.healing import descriptor_to_locator
     res = _drive([("browser.navigate", {"url": FRAMES}), ("browser.interactives", {})])
-    if res is None:
-        return
     els = res[1]["elements"]
     in_frames = [e for e in els if e.get("frame")]
     assert len(in_frames) >= 5, f"only {len(in_frames)} framed controls; the sample is too thin"
@@ -247,8 +220,6 @@ def test_the_heal_path_carries_the_scope():
             f"the heal locator lost its scope: {loc} from {e}")
         probes.append(("browser.probe", {"locator": loc}))
     res2 = _drive(probes)
-    if res2 is None:
-        return
     for e, r in zip(in_frames, res2[1:]):
         assert r.get("count") == 1, (
             f"a heal locator for {e['name']!r} in {e['frame']!r} resolves {r.get('count')} — the "
@@ -317,8 +288,4 @@ def test_the_exported_test_keeps_the_frame():
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("  ok  ", fn.__name__)
-    print(f"OK — {len(fns)} iframe-scope tests passed")
+    raise SystemExit(run_suite(globals(), "iframe-scope"))

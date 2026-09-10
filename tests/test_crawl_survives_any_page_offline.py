@@ -31,10 +31,8 @@ frameset». То есть JS, читающий `document.body`, работает
      ⚠ У самого `<frameset>` доступных узлов НЕ бывает — весь контент во фреймах, — поэтому пустое
      дерево там законно, и требовать непустоты значило бы утверждать неверное. Замерено: 0 против 58.
 """
-import json
 import os
 import pathlib
-import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -49,35 +47,23 @@ def fail(msg: str) -> None:
     failures.append(msg)
 
 
-def _drive(calls: list) -> "list | None":
-    """Прогнать вызовы через НАСТОЯЩИЙ исполнитель. Форма списана с tests/test_iframe_scope_offline.py:
-    один способ поднимать исполнителя в гейтах, а не второй рядом."""
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=600)
-    for line in (r.stdout or "").splitlines():
-        if line.startswith("@@RESULT@@"):
-            return json.loads(line[len("@@RESULT@@"):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive as _gate_drive, drives, missing_prerequisite  # noqa: E402  (path set above)
+
+
+def _drive(calls: list) -> list:
+    """The shared discriminator, with this suite's recorded 600s ceiling.
+
+    See tests/_executor_gate.py: a skip is now an OBSERVATION of the prerequisites, never an
+    inference from a missing success marker. Raises rather than returning None, so a broken
+    executor can no longer read as "no browser available".
+    """
+    return _gate_drive(calls, timeout=600)
+
 
 
 def test_a_document_without_a_body_is_snapshotted_rather_than_fatal():
     res = _drive([("browser.navigate", {"url": FRAMESET}), ("browser.snapshot", {})])
-    if res is None:
-        return
     snap = res[1]
     # Сам факт возврата — и есть утверждение: до правки этот вызов БРОСАЛ, и прогон кончался здесь.
     if snap.get("rootless"):
@@ -96,8 +82,6 @@ def test_a_document_without_a_body_is_snapshotted_rather_than_fatal():
 def test_controls_and_links_inside_frames_are_visible():
     res = _drive([("browser.navigate", {"url": FRAMESET}),
                   ("browser.interactives", {}), ("browser.links", {})])
-    if res is None:
-        return
     els = res[1].get("elements") or []
     names = [(e.get("name") or "").strip() for e in els]
     if not any("во фрейме" in n for n in names):
@@ -127,8 +111,6 @@ def test_an_ordinary_page_is_unchanged():
     """Встречное утверждение. Без него «снимок не падает» удовлетворяется снимком, который не работает
     нигде: пустая строка не бросает точно так же."""
     res = _drive([("browser.navigate", {"url": PLAIN}), ("browser.snapshot", {})])
-    if res is None:
-        return
     snap = res[1]
     if snap.get("rootless"):
         fail(f"обычная страница объявлена бескорневой: {snap['rootless']}")
@@ -138,16 +120,31 @@ def test_an_ordinary_page_is_unchanged():
 
 
 def main() -> int:
-    for fn in (test_a_document_without_a_body_is_snapshotted_rather_than_fatal,
-               test_controls_and_links_inside_frames_are_visible,
-               test_an_ordinary_page_is_unchanged):
+    # A prerequisite genuinely absent is an OBSERVATION made before anything runs; it is the only
+    # thing allowed to produce a skip here. Anything else that goes wrong is a failure (see
+    # tests/_executor_gate.py).
+    fns = (test_a_document_without_a_body_is_snapshotted_rather_than_fatal,
+           test_controls_and_links_inside_frames_are_visible,
+           test_an_ordinary_page_is_unchanged)
+    missing = missing_prerequisite()
+    if missing:
+        print(f"  SKIP-LOUD: {missing}")
+        print(f"     {len(fns)} crawl-survives checks are UNCHECKED here, not 'checked and fine'")
+        print("EXECUTOR-DRIVEN 0 crawl-survives")
+        return 0
+    driven = 0
+    for fn in fns:
+        before = drives()
         fn()
+        if drives() > before:
+            driven += 1
     if failures:
         print(f"FAIL — {len(failures)} проблем(а):")
         for f in failures:
             print("  - " + f)
         return 1
     print("crawl survives any page: OK")
+    print(f"EXECUTOR-DRIVEN {driven} crawl-survives")
     return 0
 
 
