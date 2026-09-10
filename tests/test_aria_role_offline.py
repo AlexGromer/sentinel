@@ -22,38 +22,26 @@ A table of expected roles would have to be written by hand, i.e. by the same rea
 the bug, and would agree with a wrong implementation that shared its assumptions. Asking the page is
 the only check that cannot.
 """
-import json
 import os
 import pathlib
-import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "testdata" / "fixtures"
 
 
-def _drive(calls: list) -> "list | None":
-    """Run calls through the REAL executor. SKIP (not fail) without a build or a browser."""
-    dist = REPO / "pw-executor" / "dist" / "server.js"
-    if not dist.exists():
-        print("     SKIP — pw-executor/dist not built (npm run build)")
-        return None
-    script = (
-        'import sys, json; sys.path.insert(0, %r)\n'
-        'from brain.executor import Executor\n'
-        'ex = Executor("node %s")\n'
-        'out = [ex.call(m, **p) for m, p in json.loads(%r)]\n'
-        'ex.call("shutdown"); ex.close()\n'
-        'print("@@RESULT@@" + json.dumps(out))\n' % (str(REPO), dist, json.dumps(calls))
-    )
-    env = {**os.environ, "PYTHONPATH": str(REPO), "PW_NO_TRACE": "1"}
-    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env,
-                       timeout=600)
-    for line in (r.stdout or "").splitlines():
-        if line.startswith("@@RESULT@@"):
-            return json.loads(line[len("@@RESULT@@"):])
-    print("     SKIP — no browser available:", ((r.stderr or "") + (r.stdout or ""))[-250:].replace("\n", " "))
-    return None
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _executor_gate import drive as _gate_drive, run_suite  # noqa: E402  (path set above)
+
+
+def _drive(calls: list) -> list:
+    """The shared discriminator, with this suite's recorded 600s ceiling.
+
+    See tests/_executor_gate.py: a skip is now an OBSERVATION of the prerequisites, never an
+    inference from a missing success marker. Raises rather than returning None, so a broken
+    executor can no longer read as "no browser available".
+    """
+    return _gate_drive(calls, timeout=600)
 
 
 def _url(name: str) -> str:
@@ -79,8 +67,6 @@ def test_every_role_the_executor_claims_resolves_on_the_page():
         calls += [("browser.navigate", {"url": _url(fx)}), ("browser.interactives", {})]
         index.append(fx)
     res = _drive(calls)
-    if res is None:
-        return
     per_fixture = {fx: res[2 * i + 1]["elements"] for i, fx in enumerate(index)}
 
     probes, meta = [], []
@@ -102,8 +88,6 @@ def test_every_role_the_executor_claims_resolves_on_the_page():
             probes.append(("browser.probe", {"locator": loc}))
             meta.append((fx, role, name, e.get("tag")))
     res2 = _drive(probes)
-    if res2 is None:
-        return
 
     checked, bad = 0, []
     for m, r in zip(meta, res2):
@@ -131,8 +115,6 @@ def test_an_explicit_role_attribute_beats_the_tag():
                   ("browser.interactives", {}),
                   ("browser.probe", {"locator": {"role": "tab", "name": "TabByRole"}}),
                   ("browser.probe", {"locator": {"role": "button", "name": "TabByRole"}})])
-    if res is None:
-        return
     _, inter, as_tab, as_button = res
     by_name = {(e.get("name") or "").strip(): e for e in inter["elements"]}
     assert by_name["TabByRole"]["role"] == "tab", (
@@ -157,8 +139,6 @@ def test_input_is_eight_roles_chosen_by_type_not_one():
     types are on a page something looks at."""
     res = _drive([("browser.navigate", {"url": _url("l9-roles.html")}),
                   ("browser.interactives", {})])
-    if res is None:
-        return
     by_name = {(e.get("name") or "").strip(): e for e in res[1]["elements"]}
     want = {"RoleText": "textbox", "RoleSearch": "searchbox", "RoleCheckbox": "checkbox",
             "RoleRadio": "radio", "RoleNumber": "spinbutton", "RoleRange": "slider"}
@@ -176,8 +156,6 @@ def test_a_tag_name_is_never_reported_as_a_role():
     none of them is an ARIA role, and `getByRole` cannot match any of them."""
     res = _drive([(c, p) for fx in _fixtures()
                   for c, p in (("browser.navigate", {"url": _url(fx)}), ("browser.interactives", {}))])
-    if res is None:
-        return
     offenders = []
     for r in res[1::2]:
         for e in r["elements"]:
@@ -195,8 +173,6 @@ def test_the_heal_path_builds_a_locator_that_resolves():
     from brain.healing import descriptor_to_locator
     res = _drive([(c, p) for fx in _fixtures()
                   for c, p in (("browser.navigate", {"url": _url(fx)}), ("browser.interactives", {}))])
-    if res is None:
-        return
     built, checked = [], 0
     for r in res[1::2]:
         for e in r["elements"]:
@@ -240,8 +216,6 @@ def test_the_coverage_denominator_did_not_shrink_when_tabs_got_their_real_role()
         "the denominator on every form page for reasons that have nothing to do with roles")
 
     res = _drive([("browser.navigate", {"url": _url("l5.html")}), ("browser.interactives", {})])
-    if res is None:
-        return
     els = _elements_from_interactives(res[1]["elements"], "/l5")
     candidates = [e for e in els if e["role"] in _CLICK_ROLES]
     assert len(candidates) == 15, (
@@ -259,8 +233,6 @@ def test_an_element_with_no_role_is_dropped_rather_than_named_after_its_tag():
     from brain.graph import _elements_from_interactives
     res = _drive([("browser.navigate", {"url": _url("l9-roles.html")}),
                   ("browser.interactives", {})])
-    if res is None:
-        return
     raw = res[1]["elements"]
     hidden = [e for e in raw if e.get("tag") == "input" and not e.get("role")]
     assert hidden, ("l9 §4 carries an <input type=hidden>; nothing reported a roleless element, so "
@@ -318,8 +290,6 @@ def test_both_perception_surfaces_report_the_same_role():
     one definition — asserted per control, not by count."""
     res = _drive([("browser.navigate", {"url": _url("l9-roles.html")}),
                   ("browser.interactives", {}), ("browser.setOfMarks", {})])
-    if res is None:
-        return
     _, inter, som = res
     on_screen = {(e.get("name") or "").strip(): e["role"] for e in inter["elements"] if e["visible"]}
     marks = {(m.get("name") or "").strip(): m["role"] for m in som["marks"]}
@@ -330,8 +300,4 @@ def test_both_perception_surfaces_report_the_same_role():
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-        print("  ok  ", fn.__name__)
-    print(f"OK — {len(fns)} ARIA-role tests passed")
+    raise SystemExit(run_suite(globals(), "ARIA-role"))

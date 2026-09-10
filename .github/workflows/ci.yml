@@ -145,6 +145,22 @@ jobs:
           go build -o bin/control-api ./cmd/control-api
           go build -o bin/store-gateway ./cmd/store-gateway
 
+      # The two stub-reproducibility gates (internal/*/pb/regen_test.go, ADR-109) probe for these
+      # plugins and, until now, skipped when they were absent — which they always were, because no
+      # step installed them. A skipped Go test is a GREEN test, so the gates reported success on every
+      # run since M2b without once comparing a stub. Installing the toolchain here and declaring it
+      # with SENTINEL_REQUIRE_PROTO_GATE below is what turns that skip into a comparison.
+      # protoc-gen-go's version is DERIVED from go.mod, so the plugin and the library cannot drift
+      # apart silently. protoc-gen-go-grpc versions independently of google.golang.org/grpc, so it is
+      # pinned to the version the committed stubs name in their own header
+      # (internal/store/pb/store_grpc.pb.go: "protoc-gen-go-grpc v1.6.2"); when that header changes,
+      # change this with it — the byte-diff will say so loudly rather than drift.
+      - name: Install the protoc Go plugins (the stub-reproducibility gates fail without them)
+        run: |
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@$(go list -m -f '{{.Version}}' google.golang.org/protobuf)"
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Vet + unit test (Go)
         run: |
           go vet ./...
@@ -229,6 +245,20 @@ jobs:
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
 
+      # ⚠ ЭТОТ ШАГ СТОИТ ЗДЕСЬ, А НЕ У `go test ./...`, И ЭТО ЗАМЕРЕНО В CI, А НЕ УГАДАНО.
+      # Гейты воспроизводимости стабов (internal/*/pb/regen_test.go, ADR-109) берут protoc из
+      # grpc_tools ВНУТРИ brain-venv, а venv провижнится шагом выше — то есть на «Vet + unit test
+      # (Go)» его ещё нет. Объявление SENTINEL_REQUIRE_PROTO_GATE=1 там уронило прогон именно этим
+      # («no project venv at …/.venv/bin/python»), и уронило ПРАВИЛЬНО: гейт отказался молча
+      # пропустить проверку в окружении, которое пообещало тулчейн. Обещание и его выполнение
+      # обязаны стоять рядом — поэтому объявление переехало туда, где venv уже существует.
+      # Пакеты названы явно: `go test ./...` выше их уже прогнал (со скипом), а здесь нужен ровно
+      # тот прогон, который сравнивает.
+      - name: Stub reproducibility gates (ADR-109 — protoc comes from the venv provisioned above)
+        env:
+          SENTINEL_REQUIRE_PROTO_GATE: "1"
+        run: go test ./internal/store/pb/ ./internal/orchestrator/pb/
+
       # ADR-065: the Logs view's claims are all about what a person SEES — the narrative staying out of
       # the diagnostics, a loop reading as one counted row, filters that filter, Russian with real
       # values, and <option> labels that switch language (they cannot be CSS-toggled). None of that is
@@ -292,9 +322,10 @@ jobs:
           # survived only because each addition was noticed by hand.
           shopt -s nullglob
           found=0
+          : > /tmp/offline-suite.log
           for f in tests/test_*_offline.py; do
             echo "== $(basename "$f" .py) =="
-            .venv/bin/python "$f"
+            .venv/bin/python "$f" | tee -a /tmp/offline-suite.log
             found=$((found + 1))
           done
           # A glob that matches nothing must fail loudly rather than report success over an empty set —
@@ -304,6 +335,25 @@ jobs:
             exit 1
           fi
           echo "-- $found offline suites --"
+          # ⚠ THE SECOND FLOOR, and the one the count of FILES cannot give. Seven of these suites drive
+          # the REAL pw-executor in a child process. Every one of them used to read "no browser
+          # available" off the ABSENCE of a success marker, so a raised verb, a dead child or a renamed
+          # marker turned into SKIP + "ok" + a green step — measured: `returncode` appeared zero times
+          # in all seven files. They now report how many of their checks actually reached an executor
+          # (tests/_executor_gate.py), and this asserts that none of them reported none. `found` above
+          # cannot see this: a suite that drives nothing still executes, still prints ok, still counts.
+          drivers=$(grep -c '^EXECUTOR-DRIVEN ' /tmp/offline-suite.log || true)
+          if [ "$drivers" -lt 7 ]; then
+            echo "::error::only $drivers suites reported EXECUTOR-DRIVEN — expected at least 7; a suite that drives the executor stopped saying so"
+            exit 1
+          fi
+          if grep -q '^EXECUTOR-DRIVEN 0 ' /tmp/offline-suite.log; then
+            echo "::error::a suite drove the executor zero times while this job installs chromium and builds pw-executor/dist:"
+            grep '^EXECUTOR-DRIVEN 0 ' /tmp/offline-suite.log
+            exit 1
+          fi
+          echo "-- executor-driving suites --"
+          grep '^EXECUTOR-DRIVEN ' /tmp/offline-suite.log
           # M9.8 recorder→bridge tie (offline, FakeExecutor) — doesn't match the *_offline.py glob.
           echo "== test_record_bridge_recorder_e2e =="
           .venv/bin/python tests/test_record_bridge_recorder_e2e.py
