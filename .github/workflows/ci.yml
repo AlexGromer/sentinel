@@ -162,8 +162,6 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Vet + unit test (Go)
-        env:
-          SENTINEL_REQUIRE_PROTO_GATE: "1"
         run: |
           go vet ./...
           go test ./...
@@ -246,6 +244,20 @@ jobs:
 
       - name: Provision brain venv (frozen install from brain/uv.lock — #38)
         run: UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --frozen --project brain
+
+      # ⚠ ЭТОТ ШАГ СТОИТ ЗДЕСЬ, А НЕ У `go test ./...`, И ЭТО ЗАМЕРЕНО В CI, А НЕ УГАДАНО.
+      # Гейты воспроизводимости стабов (internal/*/pb/regen_test.go, ADR-109) берут protoc из
+      # grpc_tools ВНУТРИ brain-venv, а venv провижнится шагом выше — то есть на «Vet + unit test
+      # (Go)» его ещё нет. Объявление SENTINEL_REQUIRE_PROTO_GATE=1 там уронило прогон именно этим
+      # («no project venv at …/.venv/bin/python»), и уронило ПРАВИЛЬНО: гейт отказался молча
+      # пропустить проверку в окружении, которое пообещало тулчейн. Обещание и его выполнение
+      # обязаны стоять рядом — поэтому объявление переехало туда, где venv уже существует.
+      # Пакеты названы явно: `go test ./...` выше их уже прогнал (со скипом), а здесь нужен ровно
+      # тот прогон, который сравнивает.
+      - name: Stub reproducibility gates (ADR-109 — protoc comes from the venv provisioned above)
+        env:
+          SENTINEL_REQUIRE_PROTO_GATE: "1"
+        run: go test ./internal/store/pb/ ./internal/orchestrator/pb/
 
       # ADR-065: the Logs view's claims are all about what a person SEES — the narrative staying out of
       # the diagnostics, a loop reading as one counted row, filters that filter, Russian with real
