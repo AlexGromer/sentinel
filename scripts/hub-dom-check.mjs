@@ -2226,24 +2226,56 @@ try {
     // Walks the schema against the page's own map. This is the gate for the defect ADR-107 exists to
     // fix: nine inputs were rendered whose values the submit handler never read, because the form and
     // the handler were two lists that had to agree and did not.
-    const missing = await page.evaluate(async () => {
+    const res = await page.evaluate(async () => {
       const r = await fetch('/v1/config-schema');
-      const fields = Object.keys((await r.json()).fields || {});
+      const doc = await r.json();
+      // `fields || {}` превращало «сервер не отдал схему» в «в схеме нет полей», и это ровно тот
+      // дефект: обход по пустому множеству не находит расхождений и печатает то же, что обход,
+      // который их искал. Транспорт возвращается наверх ОТДЕЛЬНОЙ величиной.
+      const hasFields = Object.prototype.hasOwnProperty.call(doc, 'fields');
+      const fields = Object.keys(hasFields ? (doc.fields || {}) : {});
       const map = window.cfgFieldIds || {};
+      const mapped = Object.keys(map).filter((k) => typeof map[k] === 'string');
       const bad = [];
       for (const name of fields) {
         const v = map[name];
         if (typeof v === 'string') {
           if (!document.getElementById(v)) bad.push(`${name} -> #${v} (no such element)`);
         } else if (v && typeof v.elsewhere === 'string' && v.elsewhere.trim()) {
-          continue;                        // deliberately not in this form, reason recorded
+          // «Живёт в другом месте» обязано быть ПРОВЕРЯЕМЫМ утверждением, а не прозой: причина
+          // называет id, и этот id должен существовать. Иначе одной правкой поле убирается и из
+          // формы, и из тела запроса, а гейт этому аплодирует.
+          const ref = (v.elsewhere.match(/#([A-Za-z0-9_-]+)/) || [])[1];
+          if (!ref) bad.push(`${name} (reason names no #id: ${v.elsewhere.slice(0, 60)})`);
+          else if (!document.getElementById(ref)) bad.push(`${name} -> reason names #${ref}, absent`);
         } else {
           bad.push(`${name} (absent from cfgFieldIds)`);
         }
       }
-      return bad;
+      return { status: r.status, hasFields, count: fields.length, mapped: mapped.length, bad };
     });
-    eq(missing.length, 0, `schema fields with no control: ${missing.join(', ')}`);
+    // ⚠ ПОЛ, КОТОРОГО НЕ БЫЛО, И ТРИ РАЗНЫЕ ВЕЩИ, КОТОРЫЕ ОН РАЗДЕЛЯЕТ. Соседняя проверка настроек
+    // (:2205) свой пол имеет, и это правило дома, а не вкус. Здесь его отсутствие открывало путь,
+    // которого Go-гейт (config_projection_test.go:59, он же floor на тот же блок) не видит: этот
+    // маршрут отдаёт 403 ВАЛИДНЫМ JSON без `fields`, как только заводится первый аккаунт и
+    // `legacyOpen` перестаёт послаблять (access.go:194-198 — замерено живьём 2026-09-06). Тогда
+    // fields=[] и `eq(0, 0)` — зелено над непроверенным обещанием.
+    ok(res.status === 200, `/v1/config-schema answered ${res.status} — the walk below compares nothing`);
+    ok(res.hasFields, 'the schema response carries no `fields` key at all — renamed or refused');
+    // Второе наблюдение НЕЗАВИСИМО: `fields` пишется руками в cmd/control-api/main.go, а cfgFieldIds
+    // — руками в docs/index.html. Ни один не выводится из другого, поэтому сравнение их размеров не
+    // повторяет формулу страницы. Голое `count > 0` было бы слабее: оно переживает схему, которая
+    // публикует два поля при двадцати в форме.
+    // ⚠ И ПОЛ НА ВТОРУЮ ПОЛОВИНУ СРАВНЕНИЯ, иначе дыра просто переезжает: пропади
+    // `window.cfgFieldIds`, и `mapped` станет нулём, `count >= 0` — истиной даром, а обход по
+    // полям не найдёт ни одной жалобы, потому что каждое поле «отсутствует в карте»… нет, попадёт
+    // в bad. Но карта, ссохшаяся до пары записей, даёт МОЛЧАЛИВОЕ сужение: замерено 21 при 23
+    // полях схемы, и пол ловит именно усадку, а не исчезновение.
+    ok(res.mapped >= 18,
+      `the run form maps only ${res.mapped} controls (measured 21) — cfgFieldIds has shrunk and the comparison below is weaker than it reads`);
+    ok(res.count >= res.mapped,
+      `schema publishes ${res.count} fields while the form maps ${res.mapped} — the walk cannot cover the form`);
+    eq(res.bad.length, 0, `schema fields with no control: ${res.bad.join(', ')}`);
   }, { allowConsole: freshConfig404 });
 
   await check('каждый преселект режима совпадает с умолчанием СВОЕГО контекста из схемы', async () => {

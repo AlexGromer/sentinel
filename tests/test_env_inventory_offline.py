@@ -52,6 +52,7 @@ LITERAL_FLOOR = 95         # замерено 105
 NONLITERAL_FLOOR = 55      # замерено 65 (обёртки 30 + отображения 32 + константы 4 + семейство 24, за вычетом пересечений)
 FAMILY_FLOOR = 20          # замерено 24 = 6 ключей × (1 + 3 роли)
 COMPOSE_FLOOR = 15         # замерено 22
+RUNVAR_FLOOR = 18          # замерено 20 в литерале `extra` (HEAL_LLM дописывается условно ВНЕ него)
 
 
 def check(name, cond, detail=""):
@@ -178,13 +179,31 @@ def test_every_published_setting_actually_reaches_a_run():
     работать. Замерено на `HEAL_LLM` — он был в схеме, интерфейс его сохранял, подтверждал, и до
     прогона значение не доезжало ни разу.
 
-    KILLS: возврат безусловного run-var для HEAL_LLM; удаление его из аллоулиста; добавление в
-    `settings` любой новой ручки, до прогона не доезжающей."""
+    KILLS: перенос записи HEAL_LLM ОБРАТНО ВНУТРЬ литерала `extra`; удаление его из аллоулиста;
+    добавление в `settings` любой новой ручки, до прогона не доезжающей.
+
+    ⚠ ЧЕГО ЭТА ПРОВЕРКА НЕ ЛОВИТ, И ЭТО ЗАПИСАНО ЗДЕСЬ, А НЕ УМОЛЧАНО. Раньше строка выше обещала
+    «возврат безусловного run-var для HEAL_LLM». Замерено, что ДОБРОСОВЕСТНЫЙ откат W15-правки её
+    не будит: `unconditional` собирается регуляркой по ОДНОМУ литералу `extra := []string{…}`, а
+    запись HEAL_LLM живёт ЗА ним (`extra = append(extra, …)` под `if setFlags[...]`). Снять `if`,
+    оставив `append`, — и множество `unconditional` не меняется, `deliverable("HEAL_LLM")` отвечает
+    «точное имя в аллоулисте», гейт зелёный над восстановленным дефектом. Утверждение о ФОРМЕ
+    ИСХОДНИКА не может закрыть доставку; её закрывает наблюдение за окружением, которое мозг реально
+    получил, — cmd/agentctl/heal_llm_delivery_test.go."""
     schema = wizard_schema()
     exact, prefixes, unconditional = agentctl_delivery()
     check("аллоулист разобран, а не пуст", len(exact) > 10 and prefixes,
           "exact=%d prefixes=%s — разбор сломался, и все утверждения ниже стали бы вакуумными"
           % (len(exact), prefixes))
+    # ТРЕТИЙ разбор тоже нуждается в поле, и до W16 его не было: `unconditional` собирается одной
+    # регуляркой, а при промахе тихо становится пустым множеством (`if extra else set()`). Пустое
+    # множество делает `deliverable` разрешающим для ВСЕХ имён, то есть проверка ниже проходит
+    # идеально ровно тогда, когда перестала что-либо измерять. Замерено: переименование `extra` в
+    # `runVars` роняет 20 имён до 0 молча.
+    check("перечень безусловных run-var разобран (пол %d)" % RUNVAR_FLOOR,
+          len(unconditional) >= RUNVAR_FLOOR and "RUN_MODE" in unconditional,
+          "unconditional=%d — разбор литерала `extra` сломался, и вся проверка стала вакуумной"
+          % len(unconditional))
     bad = []
     for key, d in (schema.get("settings") or {}).items():
         env = d.get("env") if isinstance(d, dict) else None
@@ -195,6 +214,35 @@ def test_every_published_setting_actually_reaches_a_run():
             bad.append("settings.%s (%s): %s" % (key, env, why))
     check("каждая настройка развёртывания доезжает до прогона", not bad,
           "объявлены настройкой и не доезжают:\n        " + "\n        ".join(bad))
+
+
+def test_every_runvar_agentctl_writes_is_published_or_explained():
+    """ЗНАМЕНАТЕЛЬ, ВЗЯТЫЙ СНАРУЖИ ОБХОДА, — и это весь смысл проверки.
+
+    `test_every_derived_name_is_published_or_explained` бежит квантором по `inventory()`, то есть по
+    выходу того самого обхода, чью полноту оно и должно было бы удостоверять: имя, невидимое
+    регуляркам, сиротой стать не может, и «третьего состояния нет» остаётся правдой ровно потому,
+    что третье состояние не видно. Замерено: так пропали `CI` (короче трёх символов) и `SCENARIO` с
+    `SENTINEL_EXPLICIT` (читаются как `env.get(...)`, а форма ждала однобуквенного получателя).
+
+    Здесь множество строится разбором Go-исходника, который run-var ПИШЕТ, а не регуляркой по тем,
+    кто их читает. Сузить обход и усыпить эту проверку одним движением нельзя.
+
+    KILLS: любое новое имя в литерале `extra` без дескриптора и без записанной причины — красное в
+    день появления; сужение регулярок обхода — этой проверке безразлично."""
+    src = open(os.path.join(ROOT, "cmd", "agentctl", "main.go"), encoding="utf-8").read()
+    extra = re.search(r'extra := \[\]string\{(.*?)\n\t\}', src, re.S)
+    runvars = sorted(set(re.findall(r'"([A-Z][A-Z0-9_]*)=', extra.group(1)))) if extra else []
+    # Пол ОБЯЗАТЕЛЕН и по той же причине, что у соседей: разбор — одна регулярка, привязанная к
+    # форме литерала, и её обрыв даёт пустое множество, над которым «все имена объяснены» — правда.
+    check("run-var агентctl разобраны (пол %d)" % RUNVAR_FLOOR, len(runvars) >= RUNVAR_FLOOR,
+          "разобрано %d имён — регулярка литерала `extra` сломалась" % len(runvars))
+    schema = wizard_schema()
+    published = published_names(schema)
+    explained = schema.get("not_published") or {}
+    orphans = [n for n in runvars if n not in published and n not in explained]
+    check("каждый run-var опубликован или объяснён", not orphans,
+          "агентctl кладёт мозгу, а схема о них молчит (%d): %s" % (len(orphans), ", ".join(orphans)))
 
 
 def test_service_block_does_not_promise_delivery():
@@ -213,14 +261,24 @@ def test_service_block_does_not_promise_delivery():
           "без env: %s — ручка службы задаётся ТОЛЬКО окружением, безымянная бесполезна" % noenv)
 
 
+# Сколько проверок в этом файле — ВЫВОДИТСЯ, а не перечисляется. Пол на случай, если вывод
+# перестанет находить: обход по пустому множеству прошёл бы идеально (принцип 5).
+TESTS_FLOOR = 5            # замерено 5
+
+
 def main():
     print("[CONFIG-SCHEMA-PUBLISHES-42-OF-174] знаменатель обещания «every knob»")
-    for fn in (
-        test_the_walk_still_finds_things,
-        test_every_derived_name_is_published_or_explained,
-        test_every_published_setting_actually_reaches_a_run,
-        test_service_block_does_not_promise_delivery,
-    ):
+    # ⚠ БЫЛО РУКОПИСНЫМ КОРТЕЖЕМ, и он ровно этим и отказал: добавленная в W16 проверка
+    # `test_every_runvar_agentctl_writes_is_published_or_explained` в него не попала и МОЛЧА не
+    # исполнялась — тест, который не запускается, не может упасть, и от пройденного он неотличим.
+    # Та же болезнь, что чинит весь этот PR, в рантайме самого гейта. Теперь перечень выводится из
+    # модуля, а пол ловит вывод, переставший находить.
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    if len(fns) < TESTS_FLOOR:
+        print("FAIL — обнаружено %d проверок при поле %d: вывод сломался" % (len(fns), TESTS_FLOOR))
+        return 1
+    print("проверок обнаружено: %d" % len(fns))
+    for fn in fns:
         fn()
     if FAILS:
         print("\nFAIL — %d check(s): %s" % (len(FAILS), ", ".join(FAILS)))

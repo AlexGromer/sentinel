@@ -59,7 +59,12 @@ SKIP_DIRS = {
 # публиковать внутренний инструментарий.
 CORPUS = [("cmd", (".go",)), ("internal", (".go",)), ("brain", (".py",)), ("pw-executor/src", (".ts",))]
 
-NAME = r"([A-Z][A-Z0-9_]{2,})"
+# ⚠ МИНИМУМ ДВА СИМВОЛА, а не три. При `{2,}` имя `CI` было невидимо ОБЕИМИ поддерживаемыми
+# формами разом (brain/__main__.py `os.environ.get("CI", …)` и brain/observe.py `e.get("CI", …)`),
+# и знаменатель, объявленный ЗАКРЫТЫМ, молча не содержал переменную, которая решает
+# `fatal.force_replay_in_ci`. Замерено: во всём корпусе продукта двухсимвольное чтение ровно одно,
+# так что расширение не даёт ложных срабатываний — оно возвращает единственное пропущенное.
+NAME = r"([A-Z][A-Z0-9_]+)"
 PATTERNS = [
     ("literal", re.compile(r'os\.(?:Getenv|LookupEnv)\(\s*"' + NAME + '"')),
     ("literal", re.compile(r'os\.environ(?:\.get|\.setdefault|\.pop)?\(\s*["\']' + NAME + '["\']')),
@@ -68,7 +73,13 @@ PATTERNS = [
     ("literal", re.compile(r"process\.env\." + NAME + r"\b")),
     ("literal", re.compile(r'process\.env\[\s*["\']' + NAME + '["\']')),
     ("mapping", re.compile(r"\benv\." + NAME + r"\b")),
-    ("mapping", re.compile(r'\b[a-z]\.get\(\s*["\']' + NAME + '["\']')),
+    # ⚠ Получатель — ЛЮБОЕ имя, оканчивающееся на `env`, а не только однобуквенное. При `[a-z]`
+    # форма ловила `e.get("X")` и не ловила `env.get("X")`, поэтому `SENTINEL_EXPLICIT` и `SCENARIO`
+    # (brain/runconfig.py) проваливались между двумя поддерживаемыми формами: для атрибутной они не
+    # атрибуты, для отображения — получатель длиннее буквы. Дверь произвольным словарям это не
+    # открывает: замерено, что в brain/*.py `.get("ЗАГЛАВНОЕ")` встречается только у `os.environ`
+    # и у `env`.
+    ("mapping", re.compile(r'\b(?:[a-z]|[a-z_]*env)\.get\(\s*["\']' + NAME + '["\']')),
     ("wrapper", re.compile(r'\b(?:envStr|envMB|envInt|envOr|envEnabled|envDisabled|logEnvMB)\(\s*"' + NAME + '"')),
     ("wrapper", re.compile(r'\b(?:_env_conf|_tok_budget|_limit|_env_flag|_env_int|_int_env|_int_or_none)'
                            r'\(\s*["\']' + NAME + '["\']')),
