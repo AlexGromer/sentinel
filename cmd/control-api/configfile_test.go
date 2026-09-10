@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -223,15 +224,26 @@ func TestReadyzReflectsTheConfigFileTier(t *testing.T) {
 	}
 }
 
-// Re-saving REPLACES the document rather than overlaying it, and the temp file the atomic write goes
-// through never survives beside it. The replacement half is the one that bites: a shorter second
-// document written over a longer first one leaves the tail of the first behind unless the write
-// truncates, and the reader would then call a perfectly good save "corrupt".
-func TestConfigFileResaveReplacesTheDocument(t *testing.T) {
+// ⚠ ЭТОТ ТЕСТ ПЕРЕПИСАН В W16, И ВОТ ПРИЧИНА, а не исключение вместо неё.
+//
+// Он назывался `TestConfigFileResaveReplacesTheDocument` и утверждал ДВЕ РАЗНЫЕ вещи одной
+// проверкой: (а) гигиену записи файлового бэкенда — короткий документ поверх длинного не оставляет
+// хвоста предыдущего, и рядом не выживает временный файл атомарной записи; (б) семантику PUT —
+// «повторное сохранение ЗАМЕНЯЕТ документ». Первое верно и остаётся. Второе оказалось дефектом:
+// замерено, что запрос, несущий подмножество глобальных секций, уносил остальные молча, и сценарий
+// мастера настройки (шлёт `llm`, не шлёт `settings`) стирал 44 операторские ручки — см.
+// configmerge_test.go. Пока обе половины жили в одном утверждении, вторую нельзя было починить, не
+// удалив первую.
+//
+// Поэтому: два теста вместо одного. Гигиена записи утверждается через секцию, которую сохранение
+// ЗАМЕНЯЕТ (одна и та же секция, длинное значение → короткое), — то есть ровно тот случай, ради
+// которого проверка заводилась, и он от слияния не зависит.
+
+// TestConfigFileWriteTruncatesAndLeavesNoTempBeside — половина (а).
+func TestConfigFileWriteTruncatesAndLeavesNoTempBeside(t *testing.T) {
 	s := fileTierServer(t)
-	long := `{"llm":{"backend":"openai","base_url":"http://a-deliberately-long-host.example.lan:11434/v1"},` +
-		`"run":{"mode":"explore","planner":"heuristic","max_steps":40}}`
-	short := `{"run":{"mode":"goal"}}`
+	long := `{"llm":{"backend":"openai","base_url":"http://a-deliberately-long-host.example.lan:11434/v1"}}`
+	short := `{"llm":{"backend":"anthropic"}}`
 
 	for _, doc := range []string{long, short} {
 		if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config", []byte(doc), "secret-tok"); rec.Code != http.StatusOK {
@@ -239,20 +251,19 @@ func TestConfigFileResaveReplacesTheDocument(t *testing.T) {
 		}
 	}
 
-	rec, body := doJSON(t, s, http.MethodGet, "/v1/config", nil, "secret-tok")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET after re-save = %d (%s)", rec.Code, rec.Body.String())
+	raw, err := os.ReadFile(s.configFilePath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, ok := body["config"].(map[string]any)
-	if !ok || len(got) == 0 {
-		t.Fatalf("GET returned no document after re-save: %v", body)
+	// Утверждается БАЙТ, а не разобранный документ: хвост первой записи, оставшийся после короткой
+	// второй, разбором может и не пойматься — а читатель назовёт совершенно исправное сохранение
+	// «повреждённым».
+	if bytes.Contains(raw, []byte("a-deliberately-long-host")) {
+		t.Errorf("хвост длинного документа пережил короткую запись — файл не усекается:\n%s", raw)
 	}
-	if _, stale := got["llm"]; stale {
-		t.Fatalf("the first document's llm block survived the second save: %v", got)
-	}
-	runBlk, ok := got["run"].(map[string]any)
-	if !ok || runBlk["mode"] != "goal" {
-		t.Fatalf("second document not stored: run = %v", got["run"])
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("после двух записей файл не разбирается: %v\n%s", err, raw)
 	}
 
 	entries, err := os.ReadDir(filepath.Dir(s.configFilePath()))
@@ -266,5 +277,26 @@ func TestConfigFileResaveReplacesTheDocument(t *testing.T) {
 		if e.Name() != configFileName {
 			t.Fatalf("stray file %q left beside the config", e.Name())
 		}
+	}
+}
+
+// TestResavingASectionReplacesThatSection — половина (б), в её ИСПРАВЛЕННОМ виде: замену секции
+// проверяем на самой секции, а не на документе. Что происходит с секциями, которых в запросе НЕ
+// было, утверждает configmerge_test.go.
+func TestResavingASectionReplacesThatSection(t *testing.T) {
+	s := fileTierServer(t)
+	putSections(t, s, `{"llm":{"backend":"openai","base_url":"http://a.example.lan:11434/v1"}}`)
+	putSections(t, s, `{"llm":{"backend":"anthropic"}}`)
+
+	llm, ok := configNow(t, s)["llm"].(map[string]any)
+	if !ok {
+		t.Fatalf("секция пропала после повторного сохранения")
+	}
+	if llm["backend"] != "anthropic" {
+		t.Errorf("новое значение не победило: %v", llm)
+	}
+	if _, still := llm["base_url"]; still {
+		t.Errorf("секция слита ПОКЛЮЧЕВО: `base_url` пережил замену секции, значит убрать ключ "+
+			"нечем — та же болезнь, что чинил ADR-168: %v", llm)
 	}
 }

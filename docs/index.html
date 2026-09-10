@@ -6405,6 +6405,13 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
      `settings` member and nothing read one.
      ========================================================================= */
   var cfgLoaded = false, cfgSchema = null, cfgDoc = null;
+  /* ⚠ ОТКУДА ПРИШЛА КАЖДАЯ СЕКЦИЯ. Сервер отдаёт `sources` рядом со СЛИТЫМ документом ровно затем,
+     чтобы интерфейс мог отличить «моё» от «развёртывания» (ADR-109). До W16 это поле не читал НИКТО:
+     единственным читателем во всём дереве был scripts/multiuser-e2e.mjs. Следствие замерено — сохранение
+     из вида «Настройки» тащило вперёд ВЕСЬ слитый документ, и администратор, не тронувший ничего,
+     записывал себе ЛИЧНУЮ копию общих `run`/`auth`: дальше развёртывание меняли, а его прогоны шли по
+     форку, и увидеть это было нечем. */
+  var cfgSources = {};
   function cfgId(k){ return 'cfg-s-' + k.replace(/_/g, '-'); }
   function cfgSetStatus(html){ var el = ge('cfg-status'); if (el) el.innerHTML = html; }
 
@@ -6526,6 +6533,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
         var rc = await fetch(base + '/v1/config', { headers: authHdr() });
         var j = await rc.json().catch(function(){ return {}; });
         if (rc.ok && j && j.config) cfgDoc = j.config;
+        cfgSources = (rc.ok && j && j.sources) ? j.sources : {};
         /* ADR-109: whether this caller may change the TOOL's configuration is the server's answer, and
            it travels with the document precisely because the page cannot work it out. */
         if (rc.ok && Object.prototype.hasOwnProperty.call(j, 'may_write_global')) cfgMayWriteGlobal = !!j.may_write_global;
@@ -6569,9 +6577,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     /* PUT replaces the WHOLE document, so the save has to carry forward what the setup wizard wrote
        (llm / run / auth). Sending only `settings` would silently delete the LLM connection — a save
        button that erases a different page's work is worse than one that does nothing. */
-    var doc = {};
-    Object.keys(cfgDoc || {}).forEach(function(k){ doc[k] = cfgDoc[k]; });
-    doc.settings = settings;
+    /* ⚠ ТЕПЕРЬ ОТПРАВЛЯЕТСЯ ТОЛЬКО ТО, ЧТО ЭТОТ ВИД ПРАВИТ, и прежний довод рядом БОЛЬШЕ НЕ ДЕЙСТВУЕТ.
+       Он гласил: «PUT заменяет ВЕСЬ документ, поэтому сохранение обязано тащить вперёд llm/run/auth».
+       Это было правдой и породило собственный дефект: вперёд тащился СЛИТЫЙ документ, и секции,
+       принадлежащие развёртыванию, молча становились ЛИЧНОЙ копией сохраняющего — дальше общие
+       настройки меняли, а его прогоны шли по форку, и увидеть это было нечем (поле `sources` сервер
+       отдаёт ровно для этого, и не читал его никто). С W16 частичный PUT сливается посекционно:
+       отсутствие секции означает «не трогал», а не «убери». Значит и тащить нечего — а нечего тащить,
+       значит нечего и форкнуть. */
+    var doc = { settings: settings };
     /* ADR-109: a caller who may not change the tool sends only their OWN sections. Carrying the global
        ones forward would make every save a 403 — the document we read back is the MERGED one, so it
        always contains them, and a non-admin would find the settings view permanently unable to save

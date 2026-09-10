@@ -205,26 +205,43 @@ func TestTheWizardOnlyWritesClassifiedSections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// buildConfigDoc ends with `return { llm: llm, run: run, auth: {...} };`
 	body := regexp.MustCompile(`(?s)function buildConfigDoc\s*\(\)\s*\{.*?\n\}`).Find(raw)
 	if body == nil {
 		t.Fatal("buildConfigDoc not found in docs/setup/index.html — this gate would pass by reading nothing")
 	}
-	ret := regexp.MustCompile(`(?s)return \{(.*?)\n  \};`).FindSubmatch(body)
-	if ret == nil {
-		t.Fatalf("the return literal of buildConfigDoc did not parse — the gate must fail loudly rather "+
-			"than silently stop checking:\n%s", body)
+	// ⚠ РАЗБОР ПЕРЕПИСАН В W16, И ВОТ ПРИЧИНА. Раньше он выхватывал ОДИН `return { … };` литерал —
+	// то есть предполагал, что состав документа известен на момент возврата и постоянен. В W16
+	// состав стал условным: глобальные секции кладутся только тому, кому их можно менять (иначе
+	// сервер отказывает всему документу, и обычный аккаунт не мог сохранить даже своё), а `settings`
+	// — только когда в ней что-то есть. Литерала больше нет, и старый разбор падал ГРОМКО, как и
+	// задуман. Теперь имена собираются из ОБЕИХ форм записи секции, потому что обе реальны:
+	// член объектного литерала (`run: run,`) и присваивание члену (`doc.llm = llm;`).
+	names := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\s{4}(\w+):\s`).FindAllSubmatch(body, -1) {
+		names[string(m[1])] = true
 	}
-	names := regexp.MustCompile(`(?m)^\s{4}(\w+):`).FindAllSubmatch(ret[1], -1)
-	if len(names) == 0 {
-		t.Fatalf("no section names found in the return literal:\n%s", ret[1])
+	for _, m := range regexp.MustCompile(`\bdoc\.(\w+)\s*=`).FindAllSubmatch(body, -1) {
+		names[string(m[1])] = true
 	}
-	for _, m := range names {
-		name := string(m[1])
+	// Пол: разбор, переставший что-либо находить, проходит идеально над пустым множеством — и это
+	// единственное, чего сам вывод не ловит (docs/DEVELOPMENT.md §0, принцип 5). Замерено 4:
+	// run, auth, llm, settings.
+	if len(names) < 4 {
+		t.Fatalf("разбор нашёл %d секций (%v) при поле 4 — он сломался, и проверка ниже стала бы "+
+			"вакуумной:\n%s", len(names), names, body)
+	}
+	for name := range names {
 		if _, ok := configSectionScope[name]; !ok {
 			t.Errorf("the setup wizard writes a %q section that configscope.go does not classify — saving "+
 				"from the wizard would 400 in production", name)
 		}
+	}
+	// Обратная сторона, и она новая: мастер рисует контролы настроек из схемы, а собирал документ
+	// без них — 44 операторские ручки принимались формой и не сохранялись никогда. Требуем, чтобы
+	// секция `settings` вообще участвовала в сборке.
+	if !names["settings"] {
+		t.Error("buildConfigDoc не собирает секцию `settings`, хотя мастер рисует её контролы из схемы: " +
+			"человек заполняет форму, получает «✓ конфиг сохранён» и не сохраняет из неё ничего")
 	}
 }
 

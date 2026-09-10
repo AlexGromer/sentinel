@@ -892,7 +892,12 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 				"written": map[string]string{"personal": globalSectionsIn(personal)}})
 			return
 		}
-		gdoc, gerr := marshalConfigDoc(global)
+		// Слияние с уже лежащим документом: запрос, несущий подмножество глобальных секций, не
+		// имеет права унести остальные. Секции, которых в запросе не было, называются в ответе
+		// полем `kept` — «saved», перечисляющее только присланное, и делало потерю невидимой.
+		stored := s.storedGlobalSections()
+		merged, keptGlobal := applySectionEdits(stored, global)
+		gdoc, gerr := marshalConfigDoc(merged)
 		if gerr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": gerr.Error(), "tier": tierFile})
 			return
@@ -920,7 +925,7 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "saved", "key": setupConfigKey, "tier": tierFile, "path": s.configFilePath(),
-			"written": written})
+			"written": written, "kept": map[string]string{"global": strings.Join(keptGlobal, ", ")}})
 		return
 	}
 	// A caller with no subject (the machine token, or a deployment with no accounts) writes the global
@@ -929,8 +934,15 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// run/auth defaults it saves are the tool's defaults, exactly as before.
 	owner := c.owner()
 	written := map[string]string{}
+	var keptGlobal []string
 	if len(global) > 0 || owner == "" {
-		doc, merr := marshalConfigDoc(mergeSectionsForOwner(global, personal, owner))
+		// ТО ЖЕ СЛИЯНИЕ, ЧТО НА ФАЙЛОВОМ ЯРУСЕ, и это не совпадение, а требование директивы «одна
+		// версия»: ярус — это носитель, а не другое поведение. Оба яруса теряли секции одинаково,
+		// оба перестают.
+		incoming := mergeSectionsForOwner(global, personal, owner)
+		mergedGlobal, k := applySectionEdits(s.storedGlobalSections(), incoming)
+		keptGlobal = k
+		doc, merr := marshalConfigDoc(mergedGlobal)
 		if merr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "cannot re-serialise the document"})
 			return
@@ -938,7 +950,7 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		if err := s.putConfigLayer(w, "", string(doc)); err != nil {
 			return // putConfigLayer wrote the response
 		}
-		written["global"] = globalSectionsIn(mergeSectionsForOwner(global, personal, owner))
+		written["global"] = globalSectionsIn(incoming)
 	}
 	if owner != "" && len(personal) > 0 {
 		doc, merr := marshalConfigDoc(personal)
@@ -965,7 +977,8 @@ func (s *server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.journalEvent("service.config_changed", "info", map[string]string{"actor": who}, r, detail...)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written})
+		"status": "saved", "key": setupConfigKey, "tier": tierStore, "written": written,
+		"kept": map[string]string{"global": strings.Join(keptGlobal, ", ")}})
 }
 
 // mergeSectionsForOwner decides what goes into the GLOBAL document. For a caller with no subject that

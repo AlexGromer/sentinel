@@ -34,6 +34,7 @@ package main
 // POST /v1/runs, where it already travelled.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -116,6 +117,46 @@ func mergeConfigDocs(global, personal map[string]json.RawMessage) (map[string]js
 		out[k], sources[k] = v, string(scopeUser)
 	}
 	return out, sources
+}
+
+// applySectionEdits overlays an incoming PARTIAL document onto the one already stored, and reports
+// which stored sections the save did not touch.
+//
+// ЗАЧЕМ. PUT заменял глобальный документ целиком, поэтому запрос, несущий подмножество секций, унёс
+// бы остальные молча: ответ говорил «saved» и перечислял ЗАПИСАННОЕ, то есть подтверждал ровно то,
+// что человек прислал. Замерено на сценарии мастера: он шлёт `llm` и не шлёт `settings`, и одно
+// сохранение стирало 44 операторские ручки. ⚠ Это НЕ расхождение ярусов, вопреки записи реестра —
+// оба яруса вели себя так одинаково.
+//
+// Слияние ПОСЕКЦИОННОЕ, той же формы, что и `mergeConfigDocs` этажом выше, и по той же причине:
+// глубокое слияние сделало бы «убрать ключ из настройки» невыразимым — ровно та асимметрия, из-за
+// которой снятая галочка когда-то ничего не отменяла (ADR-168). Секцию целиком снимает явный
+// `null`; отсутствие секции в запросе означает «не трогал», а не «убери».
+func applySectionEdits(stored, incoming map[string]json.RawMessage) (out map[string]json.RawMessage, kept []string) {
+	out = map[string]json.RawMessage{}
+	for k, v := range stored {
+		out[k] = v
+	}
+	for k, v := range incoming {
+		if isJSONNull(v) {
+			delete(out, k)
+			continue
+		}
+		out[k] = v
+	}
+	for k := range stored {
+		if _, touched := incoming[k]; !touched {
+			kept = append(kept, k)
+		}
+	}
+	sort.Strings(kept)
+	return out, kept
+}
+
+// isJSONNull reports whether a raw member is literally `null` — the only way to REMOVE a section,
+// as opposed to leaving it alone by omitting it.
+func isJSONNull(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
 }
 
 // mayWriteGlobal reports whether this caller may change the tool's own configuration.

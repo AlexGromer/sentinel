@@ -97,6 +97,9 @@ func validateLoggingSection(body []byte) error {
 	if !present {
 		return nil
 	}
+	if raw == nil {
+		return nil // явный null снимает секцию — это удаление, а не описание её содержимого
+	}
 	sec, ok := raw.(map[string]any)
 	if !ok {
 		return fmt.Errorf("logging: must be an object")
