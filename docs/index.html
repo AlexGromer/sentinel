@@ -3549,7 +3549,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
        записано причиной, а не молчанием. */
     mode: 'b-mode', planner: 'b-planner',
     message: { elsewhere: 'реплика принадлежит разделу «Чат» (#ch-text): форма прогона задаёт ЦЕЛЬ разговора через goal/describe, а ход в разговоре — это другой предмет, и поле для него в форме прогона предлагало бы вести беседу там, где беседы нет' },
-    conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key; typing one into a run form would let a person graft a run onto someone else’s conversation' }
+    conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key (#ch-newconv resets it); typing one into a run form would let a person graft a run onto someone else’s conversation' }
   };
   window.cfgFieldIds = cfgFieldIds;   // named so the DOM gate can walk it (see setView on addressability)
 
