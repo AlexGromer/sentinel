@@ -12,6 +12,7 @@
     "  http    : a route \"METHOD /path\", registered via HandleFunc in cmd/control-api",
     "  mode    : a RUN_MODE value the brain dispatches on (brain/__main__.py)",
     "  profile : a docker-compose profile (docker-compose.yml)",
+    "  runconfig : a RunConfig key — in brain/runconfig.py's mapping table AND materialised into run.yaml by control-api. ⚠ NOT the same claim as `env`: token budgets were catalogued as `env: PLAN_TOKEN_LIMIT` and the gate passed because the brain DOES read that name — while agentctl's filteredEnv allowlist drops it, so the advertised path reached nothing.",
     "  env     : an environment variable read by non-test product code",
     "  code    : a token present in a named source file",
     "  file    : a path that exists in the repo",
@@ -760,12 +761,16 @@
       "severity": "medium",
       "title_ru": "Токен-бюджеты",
       "title_en": "Token budgets",
-      "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат. Мягкая половина (деградация до эвристики и L1–L6) работает В БРЕЙНЕ всегда и не требует ничего. ⚠ ЖЁСТКИЙ потолок — модельно-НЕЗАВИСИМАЯ остановка прогона (ADR-021) — требует запущенного orchestrator: он объявляет превышение, а останавливает control-api, потому что под compose у каждого сервиса свой PID-неймспейс и сигналить чужие процессы физически нельзя (ADR-126). Без сервиса остаётся только мягкая половина, и это состояние по умолчанию.",
-      "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings. The soft half (degrading to the heuristic planner and L1–L6 healing) lives IN THE BRAIN and needs nothing. ⚠ The HARD ceiling — the model-INDEPENDENT stop of ADR-021 — needs the orchestrator running: it declares the breach and control-api stops the run, because under compose each service has its own PID namespace and signalling another's processes is impossible (ADR-126). Without the service only the soft half remains, and that is the default state.",
+      "how_ru": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — потолки трат. Мягкая половина (деградация до эвристики и L1–L6) работает В БРЕЙНЕ всегда и не требует ничего. ⚠ ЖЁСТКИЙ потолок — модельно-НЕЗАВИСИМАЯ остановка прогона (ADR-021) — требует запущенного orchestrator: он объявляет превышение, а останавливает control-api, потому что под compose у каждого сервиса свой PID-неймспейс и сигналить чужие процессы физически нельзя (ADR-126). Без сервиса остаётся только мягкая половина, и это состояние по умолчанию. ⚠ ЗАДАЁТСЯ НЕ ОКРУЖЕНИЕМ. Имена PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT читает brain, но ни одно не проходит аллоулист `filteredEnv` агентctl — экспорт перед прогоном не доезжает НИКУДА. Настоящий путь: поля `plan_budget`/`heal_budget`/`total_budget` в теле POST /v1/runs либо в файле RunConfig (`--run-config`); control-api материализует их в `run.yaml` рядом с артефактами прогона. Окружением их не проводят СПЕЦИАЛЬНО: аллоулист существует, чтобы секреты хоста не доезжали до мозга, и расширять его ради удобства проводки значило бы платить границей безопасности.",
+      "how_en": "PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT — spend ceilings. The soft half (degrading to the heuristic planner and L1–L6 healing) lives IN THE BRAIN and needs nothing. ⚠ The HARD ceiling — the model-INDEPENDENT stop of ADR-021 — needs the orchestrator running: it declares the breach and control-api stops the run, because under compose each service has its own PID namespace and signalling another's processes is impossible (ADR-126). Without the service only the soft half remains, and that is the default state. ⚠ NOT SET BY ENVIRONMENT. The brain reads PLAN_TOKEN_LIMIT / HEAL_TOKEN_LIMIT / TOTAL_TOKEN_LIMIT, but none of those names survives agentctl's `filteredEnv` allowlist — exporting one before a run reaches NOTHING. The real path is the `plan_budget`/`heal_budget`/`total_budget` fields on POST /v1/runs or in a RunConfig file (`--run-config`); control-api materialises them into `run.yaml` beside the run's artefacts. Environment is refused DELIBERATELY: the allowlist exists to keep host secrets away from the brain, and widening it for plumbing would pay in a security boundary.",
       "access": [
         {
-          "kind": "env",
-          "ref": "PLAN_TOKEN_LIMIT"
+          "kind": "runconfig",
+          "ref": "plan_budget"
+        },
+        {
+          "kind": "http",
+          "ref": "POST /v1/runs"
         },
         {
           "kind": "service",

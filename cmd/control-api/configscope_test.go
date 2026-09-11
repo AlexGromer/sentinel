@@ -245,6 +245,39 @@ func TestTheWizardOnlyWritesClassifiedSections(t *testing.T) {
 	}
 }
 
+// Старшинство двух слоёв `heal_llm` — единственной ручки, которую схема публикует И настройкой
+// развёртывания, и полем прогона. Правила для этой пары не было написано нигде, а пер-прогонный слой
+// умел говорить только «да»: с обычным bool «снял галочку» и «не заполнял поле» — один и тот же байт,
+// поэтому человек с сохранённым HEAL_LLM=1 не мог выключить самопочинку на ОДИН прогон.
+//
+// Утверждается ARGV, который сервер СОБИРАЕТ, а не форма запроса: именно argv доезжает до agentctl,
+// и именно там дефект был бы виден. Три состояния, три разных ответа.
+func TestThePerRunHealLLMChoiceBeatsTheSavedSetting(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		req  runRequest
+		want string
+	}{
+		{"явное да", runRequest{HealLLM: &yes}, "--heal-llm=true"},
+		{"явное нет", runRequest{HealLLM: &no}, "--heal-llm=false"},
+	}
+	for _, c := range cases {
+		got := strings.Join(appendRunFlags([]string{"run"}, &c.req, ""), " ")
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%s: argv не несёт %q — выбор человека до прогона не доедет: %s", c.name, c.want, got)
+		}
+	}
+	// «Не выбирал» НЕ имеет права превратиться в выбор: без флага agentctl не пишет run-var вовсе, и
+	// сохранённое значение доезжает до мозга само (ADR-165). Стоит здесь появиться `--heal-llm=false`
+	// по умолчанию — и сохранённая настройка развёртывания перестала бы действовать НИКОГДА.
+	var unchosen runRequest
+	if got := strings.Join(appendRunFlags([]string{"run"}, &unchosen, ""), " "); strings.Contains(got, "--heal-llm") {
+		t.Errorf("пустой запрос принёс флаг самопочинки (%s) — «не выбирал» стало выбором, и сохранённая "+
+			"настройка развёртывания не действовала бы никогда", got)
+	}
+}
+
 // TestSplitPreservesTheCallersBytes: the stored document must be the document that was sent. Round
 // tripping through map[string]any would rewrite numbers (40 becoming 4e+01) and reorder members, so
 // "save my configuration" would quietly save something merely equivalent to it.

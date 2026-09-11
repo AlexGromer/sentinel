@@ -259,7 +259,15 @@ def test_the_reference_auth_adapter_is_the_m9_1_workflow_unchanged():
     apply_run_config(cfg, env)
     check("STORAGE_STATE", env.get("STORAGE_STATE") == "s.json", env)
     check("STORAGE_STATE_SAVE", env.get("STORAGE_STATE_SAVE") == "save.json", env)
-    check("login_plan -> PLAN_FILE", env.get("PLAN_FILE") == "l.json", env)
+    # ⚠ УТВЕРЖДЕНИЕ ПЕРЕВЁРНУТО В W16, И ВОТ ПРИЧИНА, А НЕ ИСКЛЮЧЕНИЕ ВМЕСТО НЕЁ. Раньше здесь
+    # стояло `login_plan -> PLAN_FILE`, то есть тест ЗАКРЕПЛЯЛ столкновение имён: `PLAN_FILE` — это
+    # ПЛАН ПРОГОНА, который replay/baseline читает и исполняет, и agentctl пишет его безусловно и
+    # непустым. Значит `_overridable` для этого имени всегда отвечал False и план входа не
+    # применялся НИКОГДА; а примени он его — заменил бы собой план прогона, и исполнился бы не тот
+    # план. Теперь утверждается ОТСУТСТВИЕ отображения: ключ остаётся в схеме и в RunConfig как
+    # заявленный, но НЕ доставляемый (у него нет потребителя — `[LOGIN-PLAN-HAS-NO-CONSUMER]`), и
+    # собственного имени ему не дано намеренно.
+    check("login_plan НЕ делит имя с планом прогона", env.get("PLAN_FILE") is None, env)
     check("pw_no_trace: true normalizes to '1'", env.get("PW_NO_TRACE") == "1", env)
 
     off = {}
@@ -406,8 +414,11 @@ def test_every_declared_key_of_every_shipped_env_adapter_actually_reaches_env():
 
     check("floor: at least two env-shaped adapters ship (auth + deploy)",
           sum(len(SHIPPED[k]) for k in kinds) >= 2, {k: SHIPPED[k] for k in kinds})
-    check("floor: at least 7 declared sub-keys were walked (4 auth + 3 deploy)",
-          total_keys >= 7, total_keys)
+    # Пол опущен 7 -> 6 вместе со снятием отображения `login_plan` (см. выше): секция `auth` несёт
+    # теперь 3 доставляемых ключа, а не 4. Двигается ЧИСЛО в том же коммите и с причиной — это не
+    # исключение, а сдвиг замера.
+    check("floor: at least 6 declared sub-keys were walked (3 auth + 3 deploy)",
+          total_keys >= 6, total_keys)
 
 
 def test_no_enterprise_auth_adapter_ships_in_this_apache_repository():

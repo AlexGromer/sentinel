@@ -369,10 +369,20 @@ def make_backend(role: str) -> Optional[LLMBackend]:
         if adapter is None:
             log("llm.backend_unknown", provider=provider)
             return None
+        # ⚠ ЗАШИТОЕ УМОЛЧАНИЕ ГОДИТСЯ ТОЛЬКО РОДНОМУ ANTHROPIC, и до W16 оно подставлялось ВСЕМ.
+        # `_DEFAULT_MODEL` — это калиброванные anthropic-идентификаторы (claude-*). Человек, который
+        # указал `LLM_MODEL` один раз для планировщика и не указал модель для роли `heal` или `chat`,
+        # получал на OpenAI-совместимом эндпоинте запрос с моделью `claude-sonnet-4-6`, которой там
+        # нет: отказ приходил ЧУЖИМ 404 из середины прогона, а не отказом на входе, и читался как
+        # «сломался сервер», а не «роли не назначена модель». Отказ обязан случаться у двери.
+        model = _env(role, "MODEL") or (_DEFAULT_MODEL.get(role) if provider == "anthropic" else None)
+        if not model:
+            log("llm.model_missing_for_role", role=role, provider=provider)
+            return None
         return adapter.make(adapters.ModelSpec(
             role=role,
             provider=provider,
-            model=_env(role, "MODEL") or _DEFAULT_MODEL.get(role),
+            model=model,
             base_url=_env(role, "BASE_URL"),
             api_key=_env(role, "API_KEY"),
             supports_vision=(_env(role, "VISION") or "") == "1",

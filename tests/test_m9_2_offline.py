@@ -231,6 +231,34 @@ def test_goal_mode_labeled_and_frozen_steps_hash_stable():
     assert a == b, "canonical_plan_hash must be key-order-independent (sort_keys)"
 
 
+def test_no_two_runconfig_keys_share_one_env_name():
+    """Одно имя переменной у двух разных ключей — это молчаливая потеря одного из них.
+
+    Замерено: `auth.login_plan` отображался в `PLAN_FILE` — то же имя, которым agentctl БЕЗУСЛОВНО
+    передаёт ПЛАН ПРОГОНА на каждом replay-пути. `_overridable` для непустого значения отвечает
+    False, поэтому план входа не применялся НИКОГДА; а примени он его — заменил бы собой план
+    прогона, и исполнился бы не тот план. Утверждается СВОЙСТВО (имена уникальны), а не отсутствие
+    одной конкретной пары: новая коллизия покраснеет в день появления.
+    """
+    import collections
+    from brain import adapters
+
+    seen = collections.defaultdict(list)
+    for cls in (adapters.EnvBlockAdapter.__subclasses__() if hasattr(adapters, "EnvBlockAdapter") else []):
+        for key, env in getattr(cls, "_ENV", {}).items():
+            seen[env].append(f"{getattr(cls, 'name', cls.__name__)}.{key}")
+    # Пол: разбор, переставший что-либо находить, проходит идеально над пустым множеством.
+    assert len(seen) >= 5, f"собрано {len(seen)} имён — разбор адаптеров сломался, проверка вакуумна"
+    clashes = {env: keys for env, keys in seen.items() if len(keys) > 1}
+    assert not clashes, f"одно имя переменной у нескольких ключей: {clashes}"
+
+    # И отдельно — то самое имя: план прогона принадлежит прогону, и делить его не с кем.
+    owners = seen.get("PLAN_FILE", [])
+    assert owners == [] or owners == ["storage_state.plan_file"], (
+        f"PLAN_FILE снова назначен ключу RunConfig ({owners}): это имя ПЛАНА ПРОГОНА, "
+        "agentctl пишет его безусловно, и второй претендент будет молча потерян")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

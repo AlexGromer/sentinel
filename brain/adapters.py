@@ -288,8 +288,23 @@ class StorageStateAuth(EnvBlockAdapter):
     """
 
     name = "storage_state"
+    # ⚠ `login_plan` БОЛЬШЕ НЕ ОТОБРАЖАЕТСЯ В `PLAN_FILE`, И ЭТО НЕ ПЕРЕИМЕНОВАНИЕ, А ЗАКРЫТИЕ
+    # СТОЛКНОВЕНИЯ ИМЁН. `PLAN_FILE` — это ПЛАН ПРОГОНА, который replay/baseline читает и исполняет
+    # (brain/__main__.py: `_run_replay(..., os.environ.get("PLAN_FILE", ""), ...)`), и agentctl пишет
+    # его БЕЗУСЛОВНО и непустым на каждом replay-пути. Значит `_overridable` для этого имени всегда
+    # отвечал False, и `auth.login_plan` из RunConfig не применялся НИКОГДА — молча. Хуже: примени он
+    # его, план входа заменил бы собой план прогона, и человек получил бы исполнение не того плана.
+    # Одно имя двух разных предметов — дефект, а не конфигурация.
+    #
+    # ⚠ ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ ЭТО ОБЪЯВЛЕНО, А НЕ УМОЛЧАНО (docs/DEVELOPMENT.md §0). Собственного
+    # имени `login_plan` не дано намеренно: у него НЕТ ПОТРЕБИТЕЛЯ. Замерено — во всём дереве это
+    # ключ читает только данное отображение; ни brain, ни pw-executor не умеют «прогнать план входа
+    # перед основным прогоном, чтобы получить сессию», как обещает docs/TESTING.md. Завести имя
+    # значило бы перенести мёртвую ручку на новый адрес и выдать это за починку. Ключ остаётся в
+    # схеме и в RunConfig как ЗАЯВЛЕННЫЙ, но НЕ доставляемый, и `[LOGIN-PLAN-HAS-NO-CONSUMER]`
+    # заведён отдельной записью.
     _ENV = {"storage_state": "STORAGE_STATE", "storage_state_save": "STORAGE_STATE_SAVE",
-            "login_plan": "PLAN_FILE", "pw_no_trace": "PW_NO_TRACE"}
+            "pw_no_trace": "PW_NO_TRACE"}
     _BOOL = frozenset({"pw_no_trace"})
 
 

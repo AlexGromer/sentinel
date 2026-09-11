@@ -328,6 +328,18 @@ func (s *server) applyPersonalRunDefaults(req *runRequest) []string {
 			used = append(used, f.section+"."+f.key)
 		}
 	}
+	// ⚠ heal_llm — ручка, ПУБЛИКУЕМАЯ НА ОБОИХ СЛОЯХ, и здесь решается их старшинство: пер-прогонный
+	// выбор (любой, включая явное «нет») побеждает сохранённое, а nil означает «не выбирал» и
+	// пропускает сохранённое вперёд. Источник — секция `settings` (это настройка РАЗВЁРТЫВАНИЯ), а не
+	// `run`: доставка её env-имени живёт в аллоулисте agentctl и починена в ADR-165.
+	if req.HealLLM == nil {
+		if v, ok := sections["settings"]["heal_llm"]; ok {
+			if b, isBool := v.(bool); isBool {
+				req.HealLLM = &b
+				used = append(used, "settings.heal_llm")
+			}
+		}
+	}
 	// pw_no_trace — указатель, поэтому «не выбирал» у него выражается nil, а не пустой строкой.
 	if req.PWNoTrace == nil {
 		if v, ok := sections["auth"]["pw_no_trace"]; ok {

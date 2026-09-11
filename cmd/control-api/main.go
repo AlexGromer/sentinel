@@ -852,12 +852,19 @@ type runRequest struct {
 	// file. The hub rendered inputs for the budgets and the auth block and then wrote them into a
 	// downloadable run.yaml with "Pass via: --run-config <file>" — a form that assembled a file and
 	// sent the person back to the console, because the API had nowhere to put the values.
-	Scenario     string `json:"scenario"`      // --scenario: pick a named scenario out of the RunConfig
-	AutVersion   string `json:"aut_version"`   // --aut-version: app-under-test sha, keys flake quarantine
-	CI           bool   `json:"ci"`            // --ci: forbids --force-replay
-	ForceReplay  bool   `json:"force_replay"`  // --force-replay: bypass the plan_hash hard-abort
-	HealLLM      bool   `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
-	IgnoreRobots bool   `json:"ignore_robots"` // --ignore-robots: ADR-133, a person's explicit choice
+	Scenario    string `json:"scenario"`     // --scenario: pick a named scenario out of the RunConfig
+	AutVersion  string `json:"aut_version"`  // --aut-version: app-under-test sha, keys flake quarantine
+	CI          bool   `json:"ci"`           // --ci: forbids --force-replay
+	ForceReplay bool   `json:"force_replay"` // --force-replay: bypass the plan_hash hard-abort
+	// ⚠ УКАЗАТЕЛЬ, А НЕ bool, и по той же причине, что у `PWNoTrace` ниже: «снял» и «не выбирал»
+	// обязаны быть РАЗНЫМИ фактами. `heal_llm` — ЕДИНСТВЕННАЯ ручка, которую схема публикует на ОБОИХ
+	// слоях сразу: как настройку развёртывания (`settings.heal_llm`, env HEAL_LLM) и как поле прогона
+	// (`fields.heal_llm`, флаг --heal-llm). Правила старшинства для этой пары не было написано нигде,
+	// а пер-прогонный слой умел говорить только «да»: с обычным bool снятая галочка неотличима от
+	// незаполненного поля, и человек, у которого в развёртывании сохранено HEAL_LLM=1, не мог
+	// выключить самопочинку на ОДИН прогон — нечем. nil = «не выбирал», и тогда действует сохранённое.
+	HealLLM      *bool `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
+	IgnoreRobots bool  `json:"ignore_robots"` // --ignore-robots: ADR-133, a person's explicit choice
 	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the deployment default, which the form
 	// SHOWS rather than implies — an invisible default makes "I did not choose" and "I chose exactly
 	// this" the same act, and then nobody can say what the run will produce.
@@ -913,8 +920,11 @@ func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string 
 	if req.ForceReplay {
 		args = append(args, "--force-replay")
 	}
-	if req.HealLLM {
-		args = append(args, "--heal-llm")
+	// Явный выбор уезжает В ОБЕ СТОРОНЫ. `--heal-llm=false` нужен именно потому, что унаследованное
+	// HEAL_LLM=1 иначе победит: run-var дописывается ТОЛЬКО когда флаг передан (cmd/agentctl), значит
+	// без флага сохранённое доезжает до мозга — это и есть починка ADR-165, и её тут нельзя терять.
+	if req.HealLLM != nil {
+		args = append(args, fmt.Sprintf("--heal-llm=%t", *req.HealLLM))
 	}
 	if req.IgnoreRobots {
 		args = append(args, "--ignore-robots")

@@ -111,6 +111,39 @@ def test_make_backend_openai_without_key_or_base_url_is_none():
     _clear_env()
 
 
+def test_a_role_without_a_model_is_refused_instead_of_given_an_anthropic_id():
+    """Зашитое умолчание годится ТОЛЬКО родному anthropic, а подставлялось ВСЕМ.
+
+    `_DEFAULT_MODEL` — калиброванные claude-* идентификаторы. Человек, указавший `LLM_MODEL` один раз
+    (для планировщика) и не указавший модель для роли `heal`, получал на своём OpenAI-совместимом
+    эндпоинте запрос с моделью `claude-sonnet-4-6`, которой там нет: отказ приходил ЧУЖИМ 404 из
+    середины прогона и читался как «сломался сервер», а не «роли не назначена модель».
+
+    Утверждается ПОВЕДЕНИЕ `make_backend`, а не текст словаря умолчаний: проверка переживает
+    переименование моделей и ловит именно подстановку чужого идентификатора.
+    """
+    _clear_env()
+    os.environ["LLM_BACKEND"] = "openai"
+    os.environ["LLM_BASE_URL"] = "http://127.0.0.1:11434/v1"
+    os.environ["LLM_MODEL_PLANNER"] = "qwen3:8b"        # задана ТОЛЬКО одна роль
+
+    b = make_backend("heal")
+    assert b is None, (
+        "роль без своей модели получила бэкенд: на OpenAI-совместимый эндпоинт уедет зашитое "
+        "anthropic-умолчание, и отказ придёт чужим 404 из середины прогона, а не на входе")
+
+    # Обратная сторона, иначе «починка» удовлетворялась бы отказом ВСЕГДА: названная роль работает.
+    assert make_backend("planner") is not None, "роль со своей моделью перестала подниматься"
+
+    # И родной anthropic по-прежнему имеет право на умолчание — оно для него и калибровалось.
+    _clear_env()
+    os.environ["LLM_BACKEND"] = "anthropic"
+    os.environ["LLM_API_KEY"] = "test-key"
+    assert make_backend("heal") is not None, (
+        "у родного anthropic отобрали зашитое умолчание — это не тот дефект, что чинился")
+    _clear_env()
+
+
 def test_set_llm_tokens_normalized_and_none_safe():
     class _Span:
         def __init__(self):

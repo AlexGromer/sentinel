@@ -13,6 +13,11 @@ So every entry carries an ACCESS ref, and this gate verifies that ref RESOLVES i
   mode    -> a RUN_MODE value the brain dispatches on
   profile -> a docker-compose profile
   service -> a docker-compose service in the DEFAULT stack (started by `docker compose up`)
+  runconfig -> a RunConfig key: in brain/runconfig.py's mapping table AND materialised into run.yaml
+               by control-api. ⚠ NOT the same claim as `env` — «читается продуктом» и «этим путём его
+               можно задать» разные утверждения: токен-бюджеты стояли как `env: PLAN_TOKEN_LIMIT`, и
+               проверка проходила, потому что brain это имя ДЕЙСТВИТЕЛЬНО читает, — а аллоулист
+               `filteredEnv` агентctl его отбрасывает, и обещанный путь не доезжал никуда
   env     -> an environment variable read by non-test product code
   code    -> a token present in a named source file
   file    -> a path that exists
@@ -98,6 +103,20 @@ def _resolve(cid, kind, ref, agentctl, control_api, brain_main, compose, product
         assert not re.search(r"(?m)^    profiles:", body), (
             f"{cid}: service {ref!r} is behind a profile, so `docker compose up` does not start "
             f"it and the catalogue's access path is a flag the reader was not told to pass")
+    elif kind == "runconfig":
+        # ⚠ ВИД ДОСТУПА, ЗАВЕДЁННЫЙ В W16, И ВОТ ЗАЧЕМ. Каталог обещал токен-бюджетам вид `env` с
+        # именем PLAN_TOKEN_LIMIT — brain его читает, поэтому проверка `env` выше проходила, — но до
+        # мозга оно не доезжает НИКОГДА: имени нет в аллоулисте `filteredEnv` агентctl. То есть
+        # «читается продуктом» и «этим путём его можно задать» — РАЗНЫЕ утверждения, а вид `env`
+        # проверял первое, выдавая за второе. Ключ RunConfig обязан: (1) существовать в таблице
+        # соответствий brain/runconfig.py и (2) МАТЕРИАЛИЗОВЫВАТЬСЯ сервером в run.yaml — иначе это
+        # снова обещание пути, которым никто не ходит.
+        runcfg = _read(os.path.join("brain", "runconfig.py"))
+        assert f'"{ref}"' in runcfg, (
+            f"{cid}: RunConfig key {ref!r} is not in brain/runconfig.py's mapping table")
+        assert f'"{ref}"' in control_api, (
+            f"{cid}: RunConfig key {ref!r} is never materialised by control-api into run.yaml, so the "
+            f"catalogue offers a path nothing writes")
     elif kind == "env":
         assert ref in product_src, (
             f"{cid}: env var {ref!r} is read by no non-test product code — dead or renamed?")
