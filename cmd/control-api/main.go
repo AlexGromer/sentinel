@@ -945,6 +945,28 @@ func appendRunFlags(args []string, req *runRequest, runCfgPath string) []string 
 	return args
 }
 
+// baselineArgs builds the argv for `agentctl baseline update`. A named function rather than an
+// inline block so a gate can assert what the server REALLY passes: a claim about the shape of this
+// source would be a surrogate, and mutations walk straight through those.
+//
+// `baseline update` executes a FROZEN plan, so the flags that BUILD a run (planner, coverage target,
+// step ceiling, goal) do not belong to it and are deliberately absent. What does belong is every
+// channel the answer already promised the caller: the RunConfig file — the only way budgets and the
+// `auth` block reach the brain — and the observation mode.
+func baselineArgs(artDir, runCfgPath string, req *runRequest) []string {
+	args := []string{"baseline", "update", "--plan", req.plan, "--artifact-dir", artDir}
+	if req.Target != "" {
+		args = append(args, "--target", req.Target)
+	}
+	if runCfgPath != "" {
+		args = append(args, "--run-config", runCfgPath)
+	}
+	if req.Observe != "" {
+		args = append(args, "--observe", req.Observe)
+	}
+	return args
+}
+
 // writeRunConfig materialises the request's budget and auth values as a RunConfig YAML inside the run's
 // own artifact dir, and returns its path ("" when the request carries none of them).
 //
@@ -1102,12 +1124,18 @@ func (s *server) spawnRun(req runRequest) *run {
 		args = []string{"run", "--target", req.Target, "--artifact-dir", artDir, "--replay", "--plan", req.plan}
 		args = appendRunFlags(args, &req, runCfgPath)
 	case "baseline": // M9.9: update golden baseline from a prior frozen plan (the only golden-write path)
-		// `baseline update` is a different subcommand with its own small flag set — the run flags below
-		// do not exist on it, so they are deliberately NOT appended here.
-		args = []string{"baseline", "update", "--plan", req.plan, "--artifact-dir", artDir}
-		if req.Target != "" {
-			args = append(args, "--target", req.Target)
-		}
+		// ⚠ ПРЕЖНИЙ ДОВОД ЗДЕСЬ БЫЛ ВЕРЕН ПО ФАКТУ И ЛОЖЕН ПО СУЩЕСТВУ. Он гласил: «у `baseline update`
+		// свой маленький набор флагов, поэтому run-флаги ниже сюда намеренно НЕ дописываются». Флагов
+		// действительно не было — но из этого следовало не «их не нужно передавать», а «передать их
+		// нечем». Замерено: сервер для `mode=baseline` принимает настройки, ПРИМЕНЯЕТ личные умолчания,
+		// НАЗЫВАЕТ применённое в ответе 202 полем `inherited_defaults` и пишет выше `run.yaml` — файл,
+		// который по своему заголовку есть «конфигурация, под которой прогон РЕАЛЬНО шёл». Прогон под
+		// ней не шёл: бюджеты и блок `auth` доезжают до мозга ТОЛЬКО этим файлом, а путь к нему в argv
+		// не попадал. Интерфейс подтверждал несделанное.
+		//
+		// Подкоманда получила `--run-config` и `--observe` (W16); остальные run-флаги ей по-прежнему не
+		// принадлежат — `baseline update` исполняет ЗАМОРОЖЕННЫЙ план, а не строит новый.
+		args = baselineArgs(artDir, runCfgPath, &req)
 	default: // explore / goal / describe / chat (mode inferred from goal/describe + conversation_id as before)
 		// ADR-108b: a conversational turn has no target — the person is still deciding what to test.
 		// Passing an EMPTY `--target` instead of omitting it would reach agentctl as a set-but-blank
