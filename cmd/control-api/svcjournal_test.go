@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AlexGromer/sentinel/internal/svclog"
 )
@@ -46,6 +47,53 @@ func readJournal(t *testing.T, repo string) []svclog.Record {
 		out = append(out, r)
 	}
 	return out
+}
+
+// journalWaitCeiling bounds waitForJournalRecord. Stated as a constant so the failure message can
+// name it: a record that never arrives must fail as an ABSENCE with a named limit, not as a hang.
+const journalWaitCeiling = 5 * time.Second
+
+// waitForJournalRecord waits for the RECORD, not for the run to leave "running". Those are two
+// different moments, and confusing them is what made TestASpawnThatNeverHappened… flap: spawnRun
+// flips the state under the mutex (cmd/control-api/main.go:1227) and writes the journal line AFTER
+// releasing it (:1253), so postRunAndWait can return while the line is still unwritten. Measured on
+// an UNMODIFIED tree: `go test -run TestASpawnThatNeverHappened -count=30` failed once out of thirty,
+// and the failure accused the product of losing a record it does in fact write — a red that trains
+// the reader to merge over red.
+//
+// Only COMPLETE lines are decoded, a line counting as complete when a newline follows it. svclog
+// writes each record with ONE Write of ONE line under a whole-file lock
+// (internal/svclog/svclog.go:222), so the only line a concurrent reader can catch half-written is the
+// last one; skipping it costs one more poll instead of failing with "journal line is not valid JSON",
+// which would be a true sentence about a problem that does not exist. A malformed line ANYWHERE ELSE
+// still fails loudly — that check is the reason readJournal has it.
+func waitForJournalRecord(t *testing.T, repo, code string) (svclog.Record, bool) {
+	t.Helper()
+	path := filepath.Join(repo, "state", "logs", svclog.FileName)
+	deadline := time.Now().Add(journalWaitCeiling)
+	for {
+		b, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(b), "\n")
+		for _, line := range lines[:len(lines)-1] { // the tail after the last \n is a half-written record
+			if line == "" {
+				continue
+			}
+			var r svclog.Record
+			if err := json.Unmarshal([]byte(line), &r); err != nil {
+				t.Fatalf("journal line is not valid JSON: %s", line)
+			}
+			if r.Code == code {
+				return r, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return svclog.Record{}, false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // journalServer is a test server whose journal is open at `debug`, so reads are recorded too and the
