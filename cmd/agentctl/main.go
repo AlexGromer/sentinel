@@ -769,6 +769,15 @@ func cmdBaseline(repo string, args []string) int {
 	planFile := fs.String("plan", "", "path to plan.json (required)")
 	target := fs.String("target", "", "target URL (default: the plan's target_url)")
 	artifactDir := fs.String("artifact-dir", "", "artifact dir")
+	// ⚠ ДВА ФЛАГА, КОТОРЫХ ЗДЕСЬ НЕ БЫЛО, И ИХ ОТСУТСТВИЕ БЫЛО НЕ УПУЩЕНИЕМ, А ТИХОЙ ПОТЕРЕЙ ВЫБОРА.
+	// `baseline update` — единственный путь записи голденов, и он собирал окружение мозгу из ЧЕТЫРЁХ
+	// переменных. При этом control-api для `mode=baseline` принимает настройки, применяет личные
+	// умолчания, НАЗЫВАЕТ применённое в ответе 202 (`inherited_defaults`) и кладёт рядом с артефактами
+	// `run.yaml` — файл, который по своему заголовку есть «конфигурация, под которой прогон РЕАЛЬНО
+	// шёл». Передать путь к нему было НЕЧЕМ: флага не существовало, а `flag.ExitOnError` на неизвестном
+	// флаге убивает процесс кодом 2. Бюджеты и блок `auth` доезжают до мозга ТОЛЬКО этим файлом.
+	runConfig := fs.String("run-config", "", "path to RunConfig YAML (budgets and the auth block reach the brain only through it)")
+	observe := fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
 	_ = fs.Parse(args[1:])
 	if *planFile == "" {
 		fmt.Fprintln(os.Stderr, "error: --plan is required")
@@ -782,6 +791,15 @@ func cmdBaseline(repo string, args []string) int {
 		"TARGET_URL=" + *target,
 		"ARTIFACT_DIR=" + dir,
 		"PLAN_FILE=" + *planFile,
+		"RUN_CONFIG=" + *runConfig,
+		// ⚠ ПИШЕТСЯ БЕЗУСЛОВНО, И ЭТО ТОТ ЖЕ НАМЕРЕННЫЙ КОНТРАКТ, ЧТО НА ПУТИ `run`. Run-var
+		// дописывается ПОСЛЕ унаследованного окружения, и os/exec берёт последнее значение — значит
+		// пустая строка ЗАТИРАЕТ унаследованное. Без этой строки префикс `SENTINEL_` проходит
+		// аллоулист `filteredEnv`, и экспортированный в оболочке `SENTINEL_OBSERVE=record` доезжал до
+		// мозга: прогон отказывался со ссылкой на режим, которого человек в этом запросе не выбирал.
+		// На пути `run` ровно это закрыто и закреплено тестом (observe_flag_test.go); два разных
+		// ответа на один вопрос в двух подкомандах — сам по себе дефект.
+		"SENTINEL_OBSERVE=" + *observe,
 	})
 }
 

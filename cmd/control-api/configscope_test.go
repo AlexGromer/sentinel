@@ -278,6 +278,43 @@ func TestThePerRunHealLLMChoiceBeatsTheSavedSetting(t *testing.T) {
 	}
 }
 
+// `mode=baseline` перестал подтверждать выбор, который выбрасывает.
+//
+// Замерено: сервер принимал настройки, применял личные умолчания, называл применённое в ответе 202
+// и писал `run.yaml` рядом с артефактами — а затем собирал argv, в котором не было НИ ОДНОГО канала
+// доставки. Бюджеты и блок `auth` доезжают до мозга ТОЛЬКО этим файлом, поэтому «конфигурация, под
+// которой прогон реально шёл» описывала прогон, которого не было.
+//
+// ⚠ Утверждается ARGV — то, что сервер РЕАЛЬНО передаёт, а не форма запроса и не текст исходника.
+// И утверждается ГРАНИЦА: `baseline update` исполняет ЗАМОРОЖЕННЫЙ план, поэтому флаги, строящие
+// новый прогон (планировщик, цель обхода, потолок шагов), ему НЕ принадлежат — если они появятся,
+// это регресс в другую сторону, и он тоже покраснеет.
+func TestBaselineArgvCarriesTheChoicesTheAnswerConfirms(t *testing.T) {
+	req := runRequest{Mode: "baseline", plan: "/runs/prior/plan.json", Observe: "off"}
+	args := baselineArgs("/runs/now", "/runs/now/run.yaml", &req)
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{"--run-config /runs/now/run.yaml", "--observe off"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("argv не несёт %q: сервер подтвердил применённое в ответе 202 и положил run.yaml "+
+				"рядом с артефактами, а доставить его нечем — %s", want, joined)
+		}
+	}
+	// Граница: план замороженный, значит флаги ПОСТРОЕНИЯ прогона сюда не относятся.
+	for _, forbidden := range []string{"--planner", "--coverage-target", "--max-steps", "--goal"} {
+		if strings.Contains(joined, forbidden) {
+			t.Errorf("argv несёт %q — `baseline update` исполняет ЗАМОРОЖЕННЫЙ план, а не строит новый: %s",
+				forbidden, joined)
+		}
+	}
+	// И пустой выбор не превращается в выбор: без `observe` флага быть не должно, иначе умолчание
+	// развёртывания оказалось бы отменено на каждом обновлении голдена.
+	bare := strings.Join(baselineArgs("/runs/now", "", &runRequest{Mode: "baseline", plan: "/p.json"}), " ")
+	if strings.Contains(bare, "--observe") || strings.Contains(bare, "--run-config") {
+		t.Errorf("пустой запрос принёс флаги, которых человек не выбирал: %s", bare)
+	}
+}
+
 // TestSplitPreservesTheCallersBytes: the stored document must be the document that was sent. Round
 // tripping through map[string]any would rewrite numbers (40 becoming 4e+01) and reorder members, so
 // "save my configuration" would quietly save something merely equivalent to it.
