@@ -2702,12 +2702,31 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     /* command */
     var t=target||'<TARGET_URL>';
+    /* [HUB-EXPORT-DROPS-FIVE-RUN-FLAGS]. Пять полей формы — scenario, aut_version, ci,
+       force_replay, heal_llm — доезжали до прогона по HTTP и НЕ попадали ни в файл, ни в команду:
+       экспорт собирался рукописным перечнем строк, стоявшим рядом с картой полей и не знавшим о
+       пяти её записях. Повтор «того же прогона» шёл без запрета обхода plan_hash, без версии AUT,
+       без сценария — молча, под обещанием страницы «⬇ — это экспорт ТОЙ ЖЕ конфигурации».
+       Перечень теперь ВЫВОДИТСЯ обходом RUN_FLAG (принцип 5), как его сосед bBody выводит тело
+       запроса из cfgFieldIds. Форма чтения контрола та же, что у bBody, и это не совпадение:
+       расхождение между «что уедет в прогон» и «что уедет в экспорт» — и есть чинимый дефект. */
+    var flags='';
+    Object.keys(RUN_FLAG).forEach(function(name){
+      var spec=RUN_FLAG[name], el=ge(cfgFieldIds[name]);
+      if (!el) return;
+      if (el.type==='checkbox'){
+        if (el.checked) flags += ' '+spec.flag+(spec.bool?'=true':'');
+        return;
+      }
+      var v=(el.value||'').trim();
+      if (v) flags += ' '+spec.flag+' '+bq(v);
+    });
     var cmd=[];
     cmd.push('# native:');
-    cmd.push('agentctl run --target '+bq(t)+' --run-config run.yaml');
+    cmd.push('agentctl run --target '+bq(t)+flags+' --run-config run.yaml');
     cmd.push('');
     cmd.push('# docker (mount run.yaml into /config):');
-    cmd.push('docker compose run --rm sentinel run --target '+bq(t)+' --run-config /config/run.yaml');
+    cmd.push('docker compose run --rm sentinel run --target '+bq(t)+flags+' --run-config /config/run.yaml');
     ge('b-cmd').textContent=cmd.join('\n');
   }
 
@@ -3561,6 +3580,30 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     conversation_id: { elsewhere: 'a conversation is started in the Chat view, which owns the thread key (#ch-newconv resets it); typing one into a run form would let a person graft a run onto someone else’s conversation' }
   };
   window.cfgFieldIds = cfgFieldIds;   // named so the DOM gate can walk it (see setView on addressability)
+
+  /* ВТОРОЙ КАНАЛ ДОСТАВКИ, объявленный рядом с первым. `cfgFieldIds` говорит, КАКОЙ контрол несёт
+     поле; эта карта — КАКИМ флагом поле доезжает до прогона, когда его не несёт run.yaml.
+     Зеркало `appendRunFlags` (cmd/control-api/main.go): сервер превращает тело запроса ровно в эти
+     флаги, поэтому экспортируемая КОМАНДА обязана нести их же.
+
+     ⚠ Почему не ключами в YAML, хотя так короче: загрузчик их МОЛЧА выбрасывает. `_ALLOWED`
+     (brain/runconfig.py) не содержит ни scenario, ни ci, ни force_replay, ни aut_version, ни
+     heal_llm, а неизвестные ключи там игнорируются намеренно (forward-compat). Файл со строкой
+     `ci: true` заставил бы экспорт лгать ГРОМЧЕ, чем его молчание: человек читал бы в файле выбор,
+     которого прогон не сделает. Ровно тот класс, что ADR-133 закрыл для ignore_robots.
+
+     Ключи, которые несёт run.yaml, здесь отсутствуют НАМЕРЕННО — задать одно значение обоими
+     каналами значит дать двум источникам спорить о нём. */
+  var RUN_FLAG = {
+    scenario:     { flag: '--scenario' },
+    aut_version:  { flag: '--aut-version' },
+    ci:           { flag: '--ci' },
+    force_replay: { flag: '--force-replay' },
+    /* Значение, а не голый флаг: у heal_llm есть сохранённый слой, и `--heal-llm=true` отличается
+       от его отсутствия — отсутствие означает «наследовать». Форма шлёт галочку только включённой
+       (bBody ниже), поэтому и флаг пишется только тогда: экспорт повторяет ТО ЖЕ тело. */
+    heal_llm:     { flag: '--heal-llm', bool: true }
+  };
 
   /* LIVE-MATRIX (ADR-120). The observation selector is FILLED FROM THE SCHEMA, never hard-coded:
      the server already publishes the set, the deployment default and the cost of each mode, and a
