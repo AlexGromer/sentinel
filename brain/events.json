@@ -766,6 +766,18 @@
         "llm"
       ]
     },
+    "llm.model_missing_for_role": {
+      "lvl": "warn",
+      "cat": "llm",
+      "degrades": true,
+      "ru": "Роли {role} не назначена модель у провайдера {provider} — работаю без ИИ, по простым правилам",
+      "en": "Role {role} has no model for provider {provider} — running without AI, on simple rules",
+      "ru_verdict": "ИИ не использовался: у роли не было своей модели, а зашитое умолчание годится только родному Anthropic",
+      "en_verdict": "AI was not used: the role had no model of its own, and the built-in default is valid for native Anthropic only",
+      "modules": [
+        "llm"
+      ]
+    },
     "llm.openai_endpoint_missing": {
       "lvl": "warn",
       "cat": "llm",

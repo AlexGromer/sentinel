@@ -332,10 +332,25 @@ def _yaml(text):
 
 
 def test_runconfig_auth_maps_to_m9_1_env():
+    """⚠ УТВЕРЖДЕНИЕ ПРО `login_plan` ПЕРЕВЁРНУТО В W16, И ВОТ ПРИЧИНА.
+
+    Тест ЗАКРЕПЛЯЛ `login_plan -> PLAN_FILE`. Но `PLAN_FILE` — это ПЛАН ПРОГОНА, который
+    replay/baseline читает и исполняет (`brain/__main__.py`), и agentctl пишет его БЕЗУСЛОВНО и
+    непустым на каждом replay-пути. Значит `_overridable` для этого имени всегда отвечал False, и
+    план входа не применялся НИКОГДА — молча; а примени он его, план входа заменил бы собой план
+    прогона, и человек получил бы исполнение не того плана. Одно имя двух разных предметов — дефект,
+    а не конфигурация, и закреплять его тестом значило бы охранять его.
+
+    Ключ остаётся в схеме и в RunConfig как ЗАЯВЛЕННЫЙ, но НЕ доставляемый: собственного имени ему не
+    дано намеренно, потому что у него нет потребителя (`[LOGIN-PLAN-HAS-NO-CONSUMER]`).
+    """
     env = {"STORAGE_STATE": "", "STORAGE_STATE_SAVE": "", "PLAN_FILE": "", "PW_NO_TRACE": ""}
     cfg = load_run_config(_yaml("auth:\n  storage_state: s.json\n  pw_no_trace: true\n  login_plan: l.json\n"))
     apply_run_config(cfg, env)
-    assert env["STORAGE_STATE"] == "s.json" and env["PW_NO_TRACE"] == "1" and env["PLAN_FILE"] == "l.json", env
+    assert env["STORAGE_STATE"] == "s.json" and env["PW_NO_TRACE"] == "1", env
+    assert env["PLAN_FILE"] == "", (
+        "login_plan снова уехал в PLAN_FILE — имя ПЛАНА ПРОГОНА: план входа либо потеряется молча, "
+        f"либо подменит собой план прогона: {env}")
 
 
 def test_runconfig_scenarios_selector():

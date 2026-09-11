@@ -180,7 +180,11 @@ func TestAppendRunFlagsPassesEveryFlaggedField(t *testing.T) {
 		{"aut_version", func(r *runRequest) { r.AutVersion = "deadbeef" }, []string{"--aut-version", "deadbeef"}},
 		{"ci", func(r *runRequest) { r.CI = true }, []string{"--ci"}},
 		{"force_replay", func(r *runRequest) { r.ForceReplay = true }, []string{"--force-replay"}},
-		{"heal_llm", func(r *runRequest) { r.HealLLM = true }, []string{"--heal-llm"}},
+		// ⚠ УКАЗАТЕЛЬ С W16: у ручки, публикуемой на ОБОИХ слоях, «снял» обязано отличаться от «не
+		// выбирал», иначе сохранённое HEAL_LLM=1 нечем перебить на один прогон. Поэтому и флаг теперь
+		// уезжает со ЗНАЧЕНИЕМ, а не одним своим присутствием; обратная сторона утверждается ниже.
+		{"heal_llm", func(r *runRequest) { b := true; r.HealLLM = &b }, []string{"--heal-llm=true"}},
+		{"heal_llm off", func(r *runRequest) { b := false; r.HealLLM = &b }, []string{"--heal-llm=false"}},
 		{"observe", func(r *runRequest) { r.Observe = "off" }, []string{"--observe", "off"}},
 	}
 	for _, c := range cases {
