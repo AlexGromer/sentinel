@@ -1016,6 +1016,117 @@ try {
        `the mode must be quoted — bare off is a YAML 1.1 boolean:\n${doc}`);
   });
 
+  // [EXPORT-GATE-SATISFIED-BY-AN-UNRELATED-LINE] + [HUB-EXPORT-DROPS-FIVE-RUN-FLAGS].
+  //
+  // Гейт, стоявший здесь до W17, жил в офлайн-сьюте и был ВАКУУМЕН: он искал две подстроки по ВСЕМУ
+  // тексту docs/index.html, и обе давала ОДНА строка карты `cfgFieldIds` за девятьсот строк от
+  // экспорта. Замерено: удалить чекбокс И весь сборщик экспорта — проверка оставалась зелёной,
+  // то есть не могла упасть на дефекте, ради которого написана.
+  //
+  // Здесь наблюдение НЕЗАВИСИМО и РАЗНОСТНОЕ: контрол действительно трогают и смотрят, изменился ли
+  // экспортируемый документ. Такое утверждение нельзя удовлетворить посторонней строкой — ни одна
+  // строка в другом месте страницы не начнёт меняться от того, что человек щёлкнул чекбокс. И оно
+  // не повторяет формулу renderBuild: гейт не знает, КАК поле попадает в экспорт (ключом YAML или
+  // флагом команды), и знать не должен — он знает только, что выбор обязан стать видимым.
+  //
+  // Перечень ВЫВОДИТСЯ из `window.cfgFieldIds` — той же карты, которую уже обходит гейт схемы ниже,
+  // — а не переписывается сюда. Спутник вывода обязателен: пол на число полей, потому что обход
+  // ссохшейся до пары записей карты прошёл бы идеально.
+  //
+  // Два прохода по режимам: `goal` и `describe` экспортируются каждый в СВОЁМ режиме, и проход в
+  // одном объявил бы второе поле недостижимым, хотя оно достижимо. Поле засчитывается, если
+  // подвинуло экспорт хотя бы в одном проходе.
+  await check('каждое поле формы прогона доезжает до экспорта, который страница предлагает унести', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    const res = await page.evaluate(() => {
+      const map = window.cfgFieldIds || {};
+      const mapped = Object.keys(map).filter((k) => typeof map[k] === 'string');
+      // ОБА артефакта, потому что «повторить тот же прогон» — это пара: файл и команда. Поле,
+      // уехавшее флагом в команду, доехало; требовать от всех ключа в YAML значило бы требовать
+      // ключей, которые загрузчик молча выбрасывает (brain/runconfig.py `_ALLOWED`).
+      const snap = () => {
+        const y = document.getElementById('b-yaml');
+        const c = document.getElementById('b-cmd');
+        return ((y && y.textContent) || '') + '\n@@CMD@@\n' + ((c && c.textContent) || '');
+      };
+      const fire = (el) => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const setMode = (m) => {
+        const el = document.getElementById('b-mode');
+        if (!el) return;
+        el.value = m;
+        fire(el);
+      };
+      // nudge returns false when the control has no second value to offer — reported apart from
+      // "did not reach the export", because the two have different causes and different fixes.
+      const nudge = (el, salt) => {
+        if (el.type === 'checkbox') { el.checked = !el.checked; return true; }
+        if (el.tagName === 'SELECT') {
+          const next = Array.from(el.options).map((o) => o.value).find((v) => v !== el.value && v !== '');
+          if (next === undefined) return false;
+          el.value = next;
+          return true;
+        }
+        if (el.type === 'number') { el.value = String(7 + (salt % 11)); return true; }
+        el.value = 'gate' + salt;
+        return true;
+      };
+
+      // ⚠ ВОССТАНОВЛЕНИЕ ОБЯЗАТЕЛЬНО, и это замер, а не осторожность: первый прогон этой проверки
+      // оставил `ignore_robots` взведённым и уронил СОСЕДНЮЮ проверку («robots.txt соблюдается по
+      // умолчанию»), которая читает ту же форму. Проверка, меняющая общее состояние вкладки, отвечает
+      // не только за себя — здесь она возвращает форму ровно в то положение, в котором её застала.
+      const form = document.getElementById('build');
+      const els = form ? Array.from(form.querySelectorAll('input,select,textarea')) : [];
+      const saved = els.map((el) => ({ el, v: el.value, c: el.checked }));
+
+      // `mode` is the state the other two passes stand on, so it is asserted here and skipped below:
+      // nudging it inside the loop would move the ground under the field being measured.
+      setMode('goal');
+      const atGoal = snap();
+      setMode('describe');
+      const modeMoved = snap() !== atGoal;
+
+      const reached = {};
+      const mute = [];
+      ['goal', 'describe'].forEach((m, pass) => {
+        setMode(m);
+        const t = document.getElementById('b-target');
+        if (t && !t.value) { t.value = 'https://example.test/'; fire(t); }
+        mapped.forEach((name, i) => {
+          if (name === 'mode' || reached[name]) return;
+          const el = document.getElementById(map[name]);
+          if (!el) return;                      // absent control is the neighbouring gate's subject
+          const before = snap();
+          if (!nudge(el, i + pass * 100)) { mute.push(name); return; }
+          fire(el);
+          if (snap() !== before) reached[name] = true;
+        });
+      });
+      reached.mode = modeMoved;
+
+      saved.forEach((o) => { o.el.value = o.v; o.el.checked = o.c; });
+      if (els.length) fire(els[0]);   // one render, so the export agrees with the restored form
+
+      return {
+        mapped: mapped.length,
+        missing: mapped.filter((n) => !reached[n] && mute.indexOf(n) < 0),
+        mute: mute.filter((n) => !reached[n]),
+      };
+    });
+    // Пол: обход карты, ссохшейся до пары записей, не найдёт ни одной жалобы и напечатает то же
+    // самое, что обход, который их искал. Замерено 21 при 23 полях схемы.
+    ok(res.mapped >= 18,
+       `the run form maps only ${res.mapped} controls (measured 21) — the walk below covers less than it reads`);
+    eq(res.mute.length, 0,
+       `контрол не предлагает второго значения, поэтому доезд нечем проверить: ${res.mute.join(', ')}`);
+    eq(res.missing.length, 0,
+       `поле формы не доезжает до экспорта — «повторить тот же прогон» повторит ДРУГОЙ: ${res.missing.join(', ')}`);
+  });
+
   // LIVE-HUMAN (ADR-120). Two halves of one claim, and each is invisible to the other side's gate.
   //
   // FIRST: the mode has to be OFFERED. `human` spent months declared-and-refused, and the schema's
