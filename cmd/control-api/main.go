@@ -2179,11 +2179,46 @@ func (s *server) handleGetScenario(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sc)
 }
 
-func (s *server) handleDeleteScenario(w http.ResponseWriter, r *http.Request) {
-	if s.store != nil {
-		s.store.deleteScenario(r.PathValue("id"))
+// refuseIfDeleteFailed answers the caller when a deletion could not be attempted or did not succeed,
+// and reports whether it has already written the response.
+//
+// ⚠ ОДНА ФУНКЦИЯ НА ЧЕТЫРЕ УДАЛЕНИЯ — ПОТОМУ ЧТО ЧЕТЫРЕ КОПИИ РАЗОШЛИСЬ БЫ. Раньше каждый обработчик
+// отвечал «deleted» БЕЗУСЛОВНО, в том числе когда хранилища нет вовсе: подтверждение приходило на
+// работу, которой не делалось. Здесь различаются ТРИ исхода, которые прежний код складывал в один:
+//   - хранилища нет      -> 503: удалять негде, и сказать «удалено» было бы неправдой;
+//   - хранилище отказало -> 502: виновато ХРАНИЛИЩЕ, а не запрос, и код это называет;
+//   - объект отсутствует -> УСПЕХ, и это не исключение: идемпотентность даёт SQL, гейтвей отвечает
+//     OK на `DELETE ... WHERE id=?` по пустому множеству. Терять её нельзя — повторное удаление
+//     обязано оставаться успехом.
+func (s *server) refuseIfDeleteFailed(w http.ResponseWriter, what string, err error) bool {
+	// ⚠ РАЗВЁРТЫВАНИЕ БЕЗ ХРАНИЛИЩА — НЕ ОТКАЗ, и запись реестра здесь ПЕРЕОЦЕНИЛА дефект. Она винила
+	// и этот случай тоже («отвечает deleted даже когда store == nil, то есть когда попытки не было»).
+	// Замерено: там, где хранилища нет, объектов нет ВООБЩЕ — список отдаёт пусто, `GET` по адресу
+	// отдаёт 404. Удаление того, чего заведомо не существует, УСПЕШНО по той же причине, по которой
+	// успешно удаление отсутствующей строки. И это закреплённый контракт вехи: M14_CONTRACT.md §3
+	// («writes stay idempotent-safe, nothing 503s»), утверждаемый TestScenariosTestsChatsFailOpenNoStore.
+	// Настоящий дефект — второй случай: хранилище ЕСТЬ и ОТКАЗАЛО. Складывать его с первым значит
+	// отвечать «готово» на «не смог».
+	if s.store == nil {
+		return false
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent: missing id (or no store) is still success
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "хранилище не смогло удалить " + what + ": " + err.Error()})
+		return true
+	}
+	return false
+}
+
+func (s *server) handleDeleteScenario(w http.ResponseWriter, r *http.Request) {
+	var err error
+	if s.store != nil {
+		err = s.store.deleteScenario(r.PathValue("id"))
+	}
+	if s.refuseIfDeleteFailed(w, "сценарий", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (s *server) handleListTests(w http.ResponseWriter, r *http.Request) {
@@ -2212,10 +2247,14 @@ func (s *server) handleGetTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteTest(w http.ResponseWriter, r *http.Request) {
+	var err error
 	if s.store != nil {
-		s.store.deleteTest(r.PathValue("id"))
+		err = s.store.deleteTest(r.PathValue("id"))
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent
+	if s.refuseIfDeleteFailed(w, "тест", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 type promoteRequest struct {
@@ -2280,10 +2319,14 @@ func (s *server) handleGetChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
+	var err error
 	if s.store != nil {
-		s.store.deleteChat(r.PathValue("id"))
+		err = s.store.deleteChat(r.PathValue("id"))
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"}) // idempotent
+	if s.refuseIfDeleteFailed(w, "разговор", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // --- OpenAI-compatible chat-completions shim (ADR-041) -------------------------------------------

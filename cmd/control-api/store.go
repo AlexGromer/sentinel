@@ -142,12 +142,18 @@ func (c *storeClient) listUsers() (*storepb.UserList, bool) {
 	return l, true
 }
 
-func (c *storeClient) deleteUser(ref *storepb.UserRef) {
+// ⚠ ВОЗВРАЩАЕТ `error`, И ЭТО НЕ КОСМЕТИКА. Раньше четыре метода удаления печатали отказ gRPC/БД в
+// stderr и глотали его, а обработчик поверх отвечал «deleted»/«removed» БЕЗУСЛОВНО — в том числе
+// когда хранилища не было вовсе, то есть когда попытки не делалось ни одной. Человек видел
+// подтверждение и узнавал правду, когда «удалённый» объект снова оказывался в списке.
+// Довод «идемпотентно» защищал не тот случай: идемпотентность даёт САМ SQL (`DELETE ... WHERE id=?`
+// по отсутствующей строке успешен и гейтвей отвечает OK), а отказ ТРАНСПОРТА — это несделанная
+// работа. Форма скопирована с `deleteConfig` — единственного из пяти, который отказывать умел.
+func (c *storeClient) deleteUser(ref *storepb.UserRef) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	if _, err := c.cl.DeleteUser(ctx, ref); err != nil {
-		fmt.Fprintf(os.Stderr, "[control-api] store DeleteUser: %v\n", err)
-	}
+	_, err := c.cl.DeleteUser(ctx, ref)
+	return err
 }
 
 func (c *storeClient) upsertRun(r *run) {
@@ -231,12 +237,18 @@ func (c *storeClient) listScenarios(target, owner string) (*storepb.ScenarioList
 
 // deleteScenario is best-effort; a gateway error is logged, not surfaced (delete stays idempotent
 // from the HTTP caller's point of view — see handleDeleteScenario).
-func (c *storeClient) deleteScenario(id string) {
+// ⚠ ВОЗВРАЩАЕТ `error`, И ЭТО НЕ КОСМЕТИКА. Раньше четыре метода удаления печатали отказ gRPC/БД в
+// stderr и глотали его, а обработчик поверх отвечал «deleted»/«removed» БЕЗУСЛОВНО — в том числе
+// когда хранилища не было вовсе, то есть когда попытки не делалось ни одной. Человек видел
+// подтверждение и узнавал правду, когда «удалённый» объект снова оказывался в списке.
+// Довод «идемпотентно» защищал не тот случай: идемпотентность даёт САМ SQL (`DELETE ... WHERE id=?`
+// по отсутствующей строке успешен и гейтвей отвечает OK), а отказ ТРАНСПОРТА — это несделанная
+// работа. Форма скопирована с `deleteConfig` — единственного из пяти, который отказывать умел.
+func (c *storeClient) deleteScenario(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	if _, err := c.cl.DeleteScenario(ctx, &storepb.ScenarioId{ScenarioId: id}); err != nil {
-		fmt.Fprintf(os.Stderr, "[control-api] store DeleteScenario(%s): %v\n", id, err)
-	}
+	_, err := c.cl.DeleteScenario(ctx, &storepb.ScenarioId{ScenarioId: id})
+	return err
 }
 
 // promoteTest freezes a scenario into a test. Returns (nil,false) on gateway error; the returned
@@ -277,12 +289,18 @@ func (c *storeClient) listTests(owner string) (*storepb.TestList, bool) {
 	return tl, true
 }
 
-func (c *storeClient) deleteTest(id string) {
+// ⚠ ВОЗВРАЩАЕТ `error`, И ЭТО НЕ КОСМЕТИКА. Раньше четыре метода удаления печатали отказ gRPC/БД в
+// stderr и глотали его, а обработчик поверх отвечал «deleted»/«removed» БЕЗУСЛОВНО — в том числе
+// когда хранилища не было вовсе, то есть когда попытки не делалось ни одной. Человек видел
+// подтверждение и узнавал правду, когда «удалённый» объект снова оказывался в списке.
+// Довод «идемпотентно» защищал не тот случай: идемпотентность даёт САМ SQL (`DELETE ... WHERE id=?`
+// по отсутствующей строке успешен и гейтвей отвечает OK), а отказ ТРАНСПОРТА — это несделанная
+// работа. Форма скопирована с `deleteConfig` — единственного из пяти, который отказывать умел.
+func (c *storeClient) deleteTest(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	if _, err := c.cl.DeleteTest(ctx, &storepb.TestId{TestId: id}); err != nil {
-		fmt.Fprintf(os.Stderr, "[control-api] store DeleteTest(%s): %v\n", id, err)
-	}
+	_, err := c.cl.DeleteTest(ctx, &storepb.TestId{TestId: id})
+	return err
 }
 
 func (c *storeClient) getChat(id string) (*storepb.ChatProjection, bool) {
@@ -310,12 +328,18 @@ func (c *storeClient) listChats(owner string) (*storepb.ChatList, bool) {
 	return cl, true
 }
 
-func (c *storeClient) deleteChat(id string) {
+// ⚠ ВОЗВРАЩАЕТ `error`, И ЭТО НЕ КОСМЕТИКА. Раньше четыре метода удаления печатали отказ gRPC/БД в
+// stderr и глотали его, а обработчик поверх отвечал «deleted»/«removed» БЕЗУСЛОВНО — в том числе
+// когда хранилища не было вовсе, то есть когда попытки не делалось ни одной. Человек видел
+// подтверждение и узнавал правду, когда «удалённый» объект снова оказывался в списке.
+// Довод «идемпотентно» защищал не тот случай: идемпотентность даёт САМ SQL (`DELETE ... WHERE id=?`
+// по отсутствующей строке успешен и гейтвей отвечает OK), а отказ ТРАНСПОРТА — это несделанная
+// работа. Форма скопирована с `deleteConfig` — единственного из пяти, который отказывать умел.
+func (c *storeClient) deleteChat(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), storeCallTimeout)
 	defer cancel()
-	if _, err := c.cl.DeleteChat(ctx, &storepb.ConversationId{ConversationId: id}); err != nil {
-		fmt.Fprintf(os.Stderr, "[control-api] store DeleteChat(%s): %v\n", id, err)
-	}
+	_, err := c.cl.DeleteChat(ctx, &storepb.ConversationId{ConversationId: id})
+	return err
 }
 
 // --- results / metrics (M15, ADR-051: metrics-in-UI) -------------------------------------------

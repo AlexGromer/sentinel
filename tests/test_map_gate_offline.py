@@ -14,6 +14,7 @@ Three things have to hold, and the second is the one a gate usually gets wrong:
    so the report is emitted and the wait is skipped. Otherwise CI, cron and the air-gapped bundle stop
    working the day this ships.
 """
+import json
 import os
 import sys
 import threading
@@ -32,8 +33,11 @@ class FakeRC:
         self.answers, self.polls, self.wired = list(answers), 0, wired
 
     def map_decision(self, run_id):
+        """⚠ ПАРА, А НЕ ОДИН ВЕРБ (W16). Оркестратор кладёт причину оператора в `Control.reason`, и
+        настоящий клиент теперь её возвращает: раньше она выбрасывалась, и отказ печатался одним
+        числом страниц. Фикстура обязана иметь ту же форму, иначе она проверяет не тот интерфейс."""
         self.polls += 1
-        return self.answers.pop(0) if self.answers else ""
+        return (self.answers.pop(0) if self.answers else ""), "оператор не объяснил"
 
     # The graph also reports token deltas and polls for takeover; neither is what this fixture is
     # about, so both answer "carry on" rather than being left to raise deep inside a node.
@@ -86,7 +90,7 @@ def test_an_unanswered_gate_waits_then_refuses():
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="1", SENTINEL_MAP_GATE=None)
     try:
         t0 = time.monotonic()
-        d = await_map_decision(rc, "r1", {"pages": 1, "interactives": 2})
+        d, _ = await_map_decision(rc, "r1", {"pages": 1, "interactives": 2})
         waited = time.monotonic() - t0
     finally:
         os.environ.clear()
@@ -101,7 +105,7 @@ def test_a_late_answer_is_honoured():
     rc = FakeRC(["", "", "approve"])
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="10", SENTINEL_MAP_GATE=None)
     try:
-        assert await_map_decision(rc, "r1", {"pages": 1}) == "approve"
+        assert await_map_decision(rc, "r1", {"pages": 1})[0] == "approve"
     finally:
         os.environ.clear()
         os.environ.update(saved)
@@ -112,7 +116,7 @@ def test_a_refusal_is_carried_through():
     rc = FakeRC(["reject"])
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="10", SENTINEL_MAP_GATE=None)
     try:
-        assert await_map_decision(rc, "r1", {"pages": 1}) == "reject"
+        assert await_map_decision(rc, "r1", {"pages": 1})[0] == "reject"
     finally:
         os.environ.clear()
         os.environ.update(saved)
@@ -125,7 +129,7 @@ def test_it_does_not_hang_a_run_nobody_is_watching():
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="30", SENTINEL_MAP_GATE=None)
     try:
         t0 = time.monotonic()
-        d = await_map_decision(rc, "r1", {"pages": 3, "interactives": 9})
+        d, _ = await_map_decision(rc, "r1", {"pages": 3, "interactives": 9})
         waited = time.monotonic() - t0
     finally:
         os.environ.clear()
@@ -139,7 +143,7 @@ def test_the_opt_out_is_explicit():
     rc = FakeRC(["approve"], wired=True)
     saved = _env(SENTINEL_MAP_GATE="0", SENTINEL_MAP_GATE_TIMEOUT="30")
     try:
-        assert await_map_decision(rc, "r1", {"pages": 1}) == "skipped"
+        assert await_map_decision(rc, "r1", {"pages": 1})[0] == "skipped"
     finally:
         os.environ.clear()
         os.environ.update(saved)
@@ -178,8 +182,24 @@ def test_the_gate_blocks_the_scenario_node_itself():
             os.environ.update(saved)
             budget.reset()
 
-    rejected = run_with(FakeRC(["reject"]))
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        rejected = run_with(FakeRC(["reject"]))
     assert rejected.get("phase") == "map_rejected", rejected.get("phase")
+    # ⚠ ОТКАЗ ОБЯЗАН НЕСТИ ПРИЧИНУ, И БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ПОЧИНКА БЫЛА ВАКУУМНОЙ. Оркестратор кладёт
+    # причину оператора в `Control.reason` — поле, о котором в proto написано «shown to the person and
+    # recorded in the run log», — а клиент её выбрасывал: `map.rejected` печатался одним числом
+    # страниц, и отказ человека читался как сбой инструмента. Замерено: мутация «перестать передавать
+    # причину» проходила ЗЕЛЁНОЙ, пока этой строки не было.
+    out = buf.getvalue()
+    assert "map.rejected" in out, out[-400:]
+    # ⚠ Кадр AG-UI — это JSON, и кириллица в нём приходит ЭКРАНИРОВАННОЙ (\uXXXX). Искать сырую
+    # строку значило бы писать проверку, которая не может пройти по устройству канала.
+    escaped = json.dumps("оператор не объяснил", ensure_ascii=True).strip('"')
+    assert ("оператор не объяснил" in out) or (escaped in out), (
+        "запись об отказе не несёт причину оператора — отказ, у которого отобрали причину, "
+        f"читается как сбой инструмента:\n{out[-400:]}")
     assert not rejected.get("scenario_steps"), \
         f"a refused map still authored {len(rejected.get('scenario_steps') or [])} step(s)"
 
@@ -225,7 +245,11 @@ def test_a_bare_socket_path_actually_connects():
     s.start()
     try:
         rc = _GrpcRunControl(sock)
-        assert rc.map_decision("r1") == "approve", (
+        verb, why = rc.map_decision("r1")
+        assert why == "from the server", (
+            "причина оператора не доехала из ответа оркестратора: отказ карты печатался бы одним "
+            f"числом страниц, и человек не узнал бы, чьё это решение — got {why!r}")
+        assert verb == "approve", (
             "the client could not reach an orchestrator listening on that very socket — a bare path is "
             "being handed to gRPC as a DNS name")
         assert rc.poll("r1") == "continue"
@@ -255,13 +279,13 @@ def test_a_dead_channel_is_not_reported_as_an_unanswered_gate():
         def map_decision(self, run_id):
             self.polls += 1
             self.transport_errors += 1
-            return ""
+            return "", ""
 
     eventlog.reset_degradations()
     rc = DeadChannel()
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="1", SENTINEL_MAP_GATE=None)
     try:
-        assert await_map_decision(rc, "r1", {"pages": 1}) == "reject"
+        assert await_map_decision(rc, "r1", {"pages": 1})[0] == "reject"
     finally:
         os.environ.clear()
         os.environ.update(saved)
@@ -279,7 +303,7 @@ def test_a_dead_channel_is_not_reported_as_an_unanswered_gate():
     rc2 = FakeRC([])
     saved = _env(SENTINEL_MAP_GATE_TIMEOUT="1", SENTINEL_MAP_GATE=None)
     try:
-        assert await_map_decision(rc2, "r2", {"pages": 1}) == "reject"
+        assert await_map_decision(rc2, "r2", {"pages": 1})[0] == "reject"
     finally:
         os.environ.clear()
         os.environ.update(saved)

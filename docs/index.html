@@ -3448,6 +3448,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (r.status!==202){ bRunLog('✗ HTTP '+r.status+': '+esc(j.error||JSON.stringify(j))); bSetControls(false); return; }
       id=j.run_id;
       bRunLog(bi('Запущен','Started')+' run_id='+esc(id)+'\n'+bi('артефакты:','artifacts:')+' '+esc(j.artifact_dir||''));
+      /* ⚠ УНАСЛЕДОВАННОЕ НАЗЫВАЕТСЯ ЧЕЛОВЕКУ, И ДО W16 ЭТО НЕ ЧИТАЛ НИКТО. Сервер отдаёт
+         `inherited_defaults` — поимённый перечень полей, которые запрос НЕ нёс и которые подставлены
+         из сохранённых настроек (ADR-166 оговаривает поимённо, а не числом, ровно потому, что человек
+         спрашивает «почему прогон пошёл на ДРУГОЙ адрес», и на это отвечает перечень). Единственным
+         читателем во всём дереве был скрипт e2e-проверки: механизм существовал, объяснял и молчал. */
+      var inh = j.inherited_defaults;
+      if (inh && inh.length) {
+        bRunLog(bi('подставлено из сохранённых настроек: ','filled in from saved settings: ') + esc(inh.join(', ')));
+      }
       tFillLiveRunId(id);   // M14: hand the fresh run_id to the Live AG-UI timeline (no auto-connect)
     } catch(e){ bRunLog('✗ '+esc(e.message)); bSetControls(false); return; }
 

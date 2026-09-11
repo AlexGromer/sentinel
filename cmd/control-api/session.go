@@ -505,10 +505,19 @@ func (s *server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		name = u.Name
 	}
 	remover, _ := s.actorOf(r)
+	// ⚠ УДАЛЕНИЕ ПЕРВЫМ, ЗАПИСЬ ВТОРОЙ, И ПОРЯДОК ЗДЕСЬ — ЭТО И ЕСТЬ ПОЧИНКА. Раньше служебная запись
+	// `service.account_deleted` писалась ДО вызова хранилища, а сам вызов глотал отказ: журнал
+	// утверждал удаление, которого могло не быть, и отвечал неправдой ровно на тот вопрос, ради
+	// которого заведён — «кто что удалил и когда». Сессии тоже сбрасывались безусловно, поэтому
+	// живой аккаунт оставался без доступа, а развёртывание считало его удалённым.
+	if err := s.store.deleteUser(&storepb.UserRef{UserId: id}); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "хранилище не смогло удалить аккаунт: " + err.Error(), "user_id": id})
+		return
+	}
 	s.journalSubject("service.account_deleted", "warn", map[string]string{
 		"actor": remover, "account": name,
 	}, r, id, "user_id: "+id)
-	s.store.deleteUser(&storepb.UserRef{UserId: id})
 	// The rows the account owned are LEFT (internal/store: unowned, not deleted). Its sessions are not:
 	// a live token for an account that no longer exists is access nobody can revoke.
 	s.sessions.dropUser(id)
