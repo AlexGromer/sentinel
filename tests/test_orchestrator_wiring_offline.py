@@ -152,7 +152,7 @@ def test_the_wired_flag_is_what_the_map_gate_reads():
         check("no ORCH_ADDR -> a no-op client that is honest about being one",
               getattr(c, "wired", None) is False, f"wired={getattr(c, 'wired', None)!r}")
         check("...and it never aborts or pauses a run",
-              c.report("r", "plan", 0, 0) == runcontrol.CONTINUE and c.map_decision("r") == "",
+              c.report("r", "plan", 0, 0) == runcontrol.CONTINUE and c.map_decision("r") == ("", ""),
               "a no-op that answers anything but 'continue' would stop runs on deployments with no orchestrator")
 
         # The real client is constructed lazily against an address that cannot be dialled; grpc's

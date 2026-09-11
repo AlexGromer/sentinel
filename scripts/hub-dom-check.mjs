@@ -2212,6 +2212,37 @@ try {
     eq(await page.locator('#cfg-groups code').count(), declared, 'not every setting shows its env var name');
   }, { allowConsole: freshConfig404 });
 
+  await check('run: унаследованные умолчания НАЗЫВАЮТСЯ человеку, а не молчат', async () => {
+    /* Сервер отдаёт `inherited_defaults` — поимённый перечень полей, которых запрос не нёс и которые
+       подставлены из сохранённых настроек. ADR-166 оговаривает «поимённо, а не числом» ровно потому,
+       что человек спрашивает «почему прогон пошёл на ДРУГОЙ адрес». Единственным читателем во всём
+       дереве был скрипт e2e: механизм объяснял и молчал.
+       Утверждается ЭКРАН при ПОДМЕНЁННОМ ответе — наблюдение независимо от того, что решит сервер. */
+    const ctx = await browser.newContext({ viewport: { width: 1180, height: 1400 } });
+    const p2 = await ctx.newPage();
+    try {
+      await p2.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+      await p2.route('**/v1/runs', async (route) => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        await route.fulfill({ status: 202, contentType: 'application/json',
+          body: JSON.stringify({ run_id: 'gate-inh', artifact_dir: '/tmp/x', state: 'running',
+                                 inherited_defaults: ['run.target', 'run.max_steps'] }) });
+      });
+      await p2.click('.rail a[data-nav="run"]');
+      await p2.waitForSelector('#b-target', { timeout: 10000 });
+      await p2.fill('#b-target', 'https://app.example');
+      await p2.click('#b-run');
+      await p2.waitForFunction(
+        () => /run\.target/.test(document.body.innerText), null, { timeout: 8000 });
+      const shown = await p2.locator('body').innerText();
+      ok(shown.includes('run.target') && shown.includes('run.max_steps'),
+        'экран не назвал подставленные поля поимённо — человек не узнает, почему прогон пошёл не туда');
+      await p2.unroute('**/v1/runs');
+    } finally {
+      await ctx.close();
+    }
+  }, { allowConsole: freshConfig404 });
+
   await check('settings: сохранение шлёт ТОЛЬКО свою секцию и не форкает себе чужое', async () => {
     /* Утверждается ПЕРЕХВАЧЕННОЕ ТЕЛО запроса, а не разметка: до W16 вид «Настройки» тащил вперёд
        ВЕСЬ слитый документ, потому что PUT заменял его целиком, — и администратор, не тронувший

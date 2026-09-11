@@ -37,8 +37,10 @@ class _Noop:
     def poll(self, run_id, node="checkpoint") -> str:
         return CONTINUE
 
-    def map_decision(self, run_id) -> str:
-        return ""
+    def map_decision(self, run_id) -> tuple:
+        # ⚠ ТА ЖЕ ФОРМА, ЧТО У НАСТОЯЩЕГО КЛИЕНТА (пара «верб, причина»). Заглушка, отвечающая другой
+        # формой, расходится с реальностью ровно там, где её никто не проверяет.
+        return "", ""
 
     def close(self) -> None:
         pass
@@ -106,15 +108,21 @@ class _GrpcRunControl:
         as waiting-for-a-person rather than as ordinary progress. A transport error reads as "" — not
         answered — because the alternative is to invent an answer nobody gave, and the caller already
         bounds the wait with a timeout.
+
+        ⚠ ВОЗВРАЩАЕТ ПАРУ, А НЕ ОДИН ВЕРБ, И ЭТО ПОЧИНКА, А НЕ УДОБСТВО. Оркестратор кладёт причину
+        оператора в `Control.reason` — поле, у которого в proto записано «optional, shown to the
+        person and recorded in the run log». Читался ТОЛЬКО `map_decision`, а причина выбрасывалась
+        здесь же, строкой ниже: человек отклонял карту с объяснением, а прогон печатал `map.rejected`
+        с одним числом страниц. Отказ, у которого отобрали причину, читается как сбой инструмента.
         """
         try:
             c = self._stub.ReportEvent(self._pb.RunEvent(
                 run_id=run_id, node="map_gate", prompt_tokens=0, completion_tokens=0, status="running"))
-            return getattr(c, "map_decision", "") or ""
+            return (getattr(c, "map_decision", "") or ""), (getattr(c, "reason", "") or "")
         except Exception as e:
             self.transport_errors += 1
             log("system.runcontrol_report_error", error=e)
-            return ""
+            return "", ""
 
     def close(self) -> None:
         try:

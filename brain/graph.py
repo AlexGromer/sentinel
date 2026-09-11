@@ -160,7 +160,7 @@ def _map_gate_timeout() -> float:
         return 300.0
 
 
-def await_map_decision(rc, run_id: str, summary: dict) -> str:
+def await_map_decision(rc, run_id: str, summary: dict) -> tuple:
     """Return "approve" | "reject" | "skipped".
 
     "skipped" is the honest answer in two situations, and neither is a failure:
@@ -178,18 +178,21 @@ def await_map_decision(rc, run_id: str, summary: dict) -> str:
 
     if os.environ.get("SENTINEL_MAP_GATE") == "0":
         log("map.gate_disabled")
-        return "skipped"
+        return "skipped", ""
     if not getattr(rc, "wired", False):
         log("map.gate_unattended", pages=summary.get("pages", 0))
-        return "skipped"
+        return "skipped", ""
 
     deadline = time.monotonic() + _map_gate_timeout()
     log("map.gate_waiting", pages=summary.get("pages", 0), interactives=summary.get("interactives", 0))
     errors_before = getattr(rc, "transport_errors", 0)
     while True:
-        decision = rc.map_decision(run_id)
+        decision, why = rc.map_decision(run_id)
         if decision in ("approve", "reject"):
-            return decision
+            # Причина оператора доезжает ДО этой точки и раньше выбрасывалась здесь: отказ печатался
+            # одним числом страниц, и человек, отклонивший карту с объяснением, видел вердикт, из
+            # которого нельзя понять, чьё это решение и почему.
+            return decision, why
         if time.monotonic() >= deadline:
             # "Nobody answered" and "nobody COULD answer" look identical from here and are not the same
             # problem: one waits on a person, the other on a broken channel, and only the second is
@@ -198,9 +201,9 @@ def await_map_decision(rc, run_id: str, summary: dict) -> str:
             failed = getattr(rc, "transport_errors", 0) - errors_before
             if failed > 0:
                 log("map.gate_unreachable", errors=failed)
-            else:
-                log("map.gate_timeout", seconds=int(_map_gate_timeout()))
-            return "reject"
+                return "reject", "канал до оркестратора недоступен — ответить было нечем"
+            log("map.gate_timeout", seconds=int(_map_gate_timeout()))
+            return "reject", "никто не ответил за отведённое время"
         time.sleep(MAP_GATE_POLL_SECONDS)
 
 
@@ -975,13 +978,13 @@ def build_graph(ex, planner, tx_write, scenario_head=None, rc=None, robots=None)
         _agui("map.ready", rid, **summary)
         log("map.ready", pages=summary["pages"], interactives=summary["interactives"],
             destructive=len(summary["looks_destructive"]), auth=len(summary["looks_like_auth"]))
-        decision = await_map_decision(rc, rid, summary)
+        decision, decision_reason = await_map_decision(rc, rid, summary)
         if decision == "reject":
             # A refusal ends the run the ORDINARY way: the explore plan is still frozen and its
             # artefacts still written, because the map is what the person was looking at and throwing it
             # away would make "no" cost them the exploration too.
-            _agui("map.rejected", rid, pages=summary["pages"])
-            log("map.rejected", pages=summary["pages"])
+            _agui("map.rejected", rid, pages=summary["pages"], reason=decision_reason)
+            log("map.rejected", pages=summary["pages"], reason=decision_reason)
             return {"scenario_steps": [], "scenario_unmatched": [], "phase": "map_rejected",
                     "messages": [{"role": "assistant",
                                   "content": "the map was not approved, so no test was authored"}]}
