@@ -64,3 +64,46 @@ func TestTheSavedHealLLMReachesTheBrain(t *testing.T) {
 			"на один прогон нечем.\nenv:\n%s", got)
 	}
 }
+
+// TestTheHealVisualFlagReachesTheBrain — [M5-HEAL-VISUAL-FLAG-DOES-NOT-EXIST], вторая половина.
+//
+// Флаг, который РАЗБИРАЕТСЯ и ничего не доставляет, — тот же класс дефекта, что отсутствующий флаг,
+// только тише: `--help` его печатает, человек его передаёт, и прогон идёт как раньше. Поэтому
+// утверждение здесь про ДОСТАВКУ, а не про наличие имени (наличие сверяет гейт контрактов).
+//
+// Форма зеркальна соседу выше и не случайно: у `HEAL_VISUAL` тоже есть сохранённый слой (настройка
+// развёртывания), значит run-var обязан писаться ТОЛЬКО по флагу — безусловная запись затёрла бы
+// сохранённую единицу нулём на каждом прогоне.
+func TestTheHealVisualFlagReachesTheBrain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the brain stub is a /bin/sh script")
+	}
+	const target = "file:///dev/null"
+
+	// 1. Флага нет — решает сохранённая настройка развёртывания.
+	t.Setenv("HEAL_VISUAL", "1")
+	got := brainEnvAfterRun(t, []string{"--target", target})
+	if !strings.Contains(got, "HEAL_VISUAL=1") {
+		t.Errorf("сохранённый HEAL_VISUAL=1 не доехал до мозга.\nenv:\n%s", got)
+	}
+	if strings.Contains(got, "HEAL_VISUAL=0") {
+		t.Errorf("унаследованное значение затёрто нулём — run-var дописывается ПОСЛЕ окружения, "+
+			"и os/exec берёт последнее.\nenv:\n%s", got)
+	}
+
+	// 2. Явное «нет» побеждает сохранённое — иначе выключить визуальный тир на ОДИН прогон нечем, а
+	// ровно это и обещает фраза контракта, ради которой флаг заведён.
+	t.Setenv("HEAL_VISUAL", "1")
+	got = brainEnvAfterRun(t, []string{"--target", target, "--heal-visual=false"})
+	if !strings.Contains(got, "HEAL_VISUAL=0") {
+		t.Errorf("явное --heal-visual=false не перебило сохранённое HEAL_VISUAL=1.\nenv:\n%s", got)
+	}
+
+	// 3. Явное «да» тоже доезжает: без этой ноги проверка удовлетворялась бы тем, что окружение
+	// случайно несёт нужное значение.
+	t.Setenv("HEAL_VISUAL", "0")
+	got = brainEnvAfterRun(t, []string{"--target", target, "--heal-visual"})
+	if !strings.Contains(got, "HEAL_VISUAL=1") {
+		t.Errorf("явное --heal-visual не включило визуальный тир.\nenv:\n%s", got)
+	}
+}

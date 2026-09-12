@@ -193,6 +193,15 @@ services:
       CONTROL_API_TOKEN: ${CONTROL_API_TOKEN:-}
       CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS-http://localhost:8088,https://alexgromer.github.io}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # ⚠ ДУБЛЬ ИМЁН ИЗ ЯКОРЯ, И ОН ОБЯЗАТЕЛЕН, А НЕ ИЗБЫТОЧЕН. Собственный блок `environment:`
+      # ЗАМЕЩАЕТ пришедшее по мерж-ключу целиком, поэтому без этих строк ручка локальной модели
+      # мертва ровно для сервиса, который запускает КАЖДЫЙ прогон из интерфейса (замерено
+      # `docker compose config`, W17). Тот же довод, что записан рядом у PW_CDP_ENDPOINT.
+      LLM_BACKEND: ${LLM_BACKEND:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_VISION: ${LLM_VISION:-}
       CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
       CONTROL_API_STORE_ADDR: ${CONTROL_API_STORE_ADDR-unix:/app/state/store.sock}
       # ADR-126: where the RunControl orchestrator listens. ONE address for the deployment, not one

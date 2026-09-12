@@ -98,7 +98,7 @@ password; the port is never published to the host).
 **setup-WebUI (static, air-gapped, part of the bundle)** is part of that same `up` →
 open `http://localhost:8088/setup/` (and `/calculators/`) — the config generator + calculators run in your browser, no network.
 
-**Local model** (no cloud): uncomment the `LLM_*` block in [`docker-compose.yml`](docker-compose.yml) and
+**Local model** (no cloud): set `LLM_*` in a `.env` beside [`docker-compose.yml`](docker-compose.yml) (⚠ NOT "uncomment the block", which is what this said until W17 and did not work for `control-api`: its own `environment:` replaces the anchor wholesale, so every run started from the interface quietly fell back to the cloud default) and
 start an endpoint — `docker compose --profile ollama up -d ollama` (or the multi-provider LiteLLM router — `docker compose --profile litellm up -d litellm`, see [`docs/ADAPTERS.md`](docs/ADAPTERS.md)). Model/hardware sizing lives in
 [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) and the interactive calculators on
 [GitHub Pages](https://alexgromer.github.io/sentinel/). Full run & verification guide:

@@ -129,12 +129,14 @@ Env-блок задаётся в `docker-compose.yml` или передаётс�
 # Cloud (Anthropic) — без ключа → offline heuristic + L1–L6 heal
 ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
-# Локальная модель (активировать, убрав комментарии):
-# LLM_BACKEND: openai
-# LLM_BASE_URL: http://ollama:11434/v1
-# LLM_MODEL: qwen2.5:7b           # из каталога docs/LOCAL_MODELS.md §3
-# LLM_API_KEY: noauth             # Ollama игнорирует ключ; SDK требует непустое значение
-# LLM_VISION: 0                   # 1 только для vision-capable heal модели
+# Локальная модель — имена ЖИВЫЕ; задавайте их в `.env`, ничего не раскомментируя.
+# ⚠ До W17 блок был закомментирован с инструкцией «активировать, убрав комментарии», и она НЕ
+# работала для `control-api`: сервис со своим блоком `environment:` замещает якорь целиком.
+LLM_BACKEND: ${LLM_BACKEND:-}     # openai
+LLM_BASE_URL: ${LLM_BASE_URL:-}   # http://ollama:11434/v1
+LLM_MODEL: ${LLM_MODEL:-}         # из каталога docs/LOCAL_MODELS.md §3
+LLM_API_KEY: ${LLM_API_KEY:-}     # Ollama игнорирует ключ; SDK требует непустое значение
+LLM_VISION: ${LLM_VISION:-}       # 1 только для vision-capable heal модели
 ```
 
 Выводимый перечень всех env-переменных — [`docs/PARAMETERS.md`](PARAMETERS.md); рецепт подключения локальной модели (суффиксы ролей, приоритет) — `docs/LOCAL_MODELS.md`.

@@ -373,10 +373,21 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		"mode_contexts":   map[string]string{"run": "goal", "chat": "describe"},
 		"planner_default": "heuristic",
 		"planner_contexts": map[string]string{
-			// Форма прогона не преселектит планировщик: выбор режима уже сузил его, и второй
-			// невидимый выбор поверх первого сделал бы «я не выбирал» и «я выбрал ровно это» одним
-			// актом. Пусто здесь — это ЗАПИСАННОЕ отсутствие, а не забытая заливка.
-			"chat": "goal",
+			// ПУСТО, И ЭТО ЗАПИСАННОЕ ОТСУТСТВИЕ ДЛЯ ОБЕИХ ПОВЕРХНОСТЕЙ, а не забытая заливка.
+			//
+			// `run`: форма прогона не преселектит планировщик — выбор режима уже сузил его, и второй
+			// невидимый выбор поверх первого сделал бы «я не выбирал» и «я выбрал ровно это» одним актом.
+			//
+			// `chat`: запись `"chat": "goal"` стояла здесь и была ОБЕЩАНИЕМ БЕЗ ЕДИНОЙ СТОРОНЫ, которая
+			// его держит — замерено W17, тремя наблюдениями сразу. (1) Выбрать планировщик в чате
+			// НЕЛЬЗЯ: контрола `#ch-planner` нет ни в разметке, ни в JS, и заводить его запрещено
+			// решением ADR-147 (второй выбор на сообщение). (2) В умолчательном режиме чат ОТПРАВЛЯЕТ
+			// `heuristic`: `#ch-mode` открывается на `describe` (docs/index.html:1215), а тело строится
+			// тернарником `mode==='goal'?'goal':'heuristic'` (:4233). (3) И даже присланный `goal` до
+			// прогона не доезжает: `conversation_id` подменяет режим на chat, а `_run_chat` прибивает
+			// `HeuristicPlanner()` гвоздём (brain/__main__.py:783) и `PLANNER` на этом маршруте не читает
+			// вовсе. Публиковать перекрытие для поверхности, у которой нет ни ручки, ни читателя, —
+			// значит обещать ручку, которой нет и которая всё равно не доедет.
 		},
 		// ADR-108b added `chat`: conversation is its own role, so an operator can point talking and
 		// planning at different endpoints (the planner may be a large remote model while the chat that
@@ -398,7 +409,14 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			// `runRequest` — до него сверка шла в одну сторону и была зелёной над этой дырой: `message` —
 			// текст хода в чате, `planner` — выбор планировщика, `mode` — что прогон вообще делает. Три
 			// величины, меняющие прогон, и ни одна не была видна из схемы.
-			"mode":            map[string]any{"type": "enum", "group": "run", "enum": []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, "set_by": []string{"flag:--mode"}},
+			// [RUN-MODE-LABELS-THE-RECORD-NOT-THE-RUN]. `set_by: flag:--mode` было ЛОЖНО для пяти
+			// значений из шести, и это замер: `--mode` дописывается РОВНО в одном месте и только
+			// литералом "chat" при наличии `conversation_id`. Осей в продукте ДВЕ и они разведены
+			// НАМЕРЕННО: ось ИСПОЛНЕНИЯ (replay/baseline/chat) и ось АВТОРИНГА (explore/goal/describe),
+			// которую по ADR-027 несут `--goal`/`--describe`, а `--mode goal|describe` отклонён. Поле
+			// здесь — ось ЗАПРОСА, из которой сервер выводит и то, и другое; поэтому маршруты названы
+			// все, а не один.
+			"mode":            map[string]any{"type": "enum", "group": "run", "enum": []string{"explore", "goal", "describe", "replay", "baseline", "chat"}, "set_by": []string{"body:mode", "flag:--goal", "flag:--describe", "flag:--replay", "flag:--mode"}},
 			"planner":         map[string]any{"type": "enum", "default": "heuristic", "group": "run", "enum": []string{"heuristic", "llm", "goal"}, "set_by": []string{"flag:--planner", "runconfig:planner"}},
 			"message":         map[string]any{"type": "string", "group": "run", "set_by": []string{"flag:--message"}},
 			"target":          map[string]any{"type": "string", "required": true, "group": "run", "set_by": []string{"flag:--target"}},
@@ -428,7 +446,9 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			// `false` означает «правила соблюдаются» — отступление требует ключа.
 			"ignore_robots": map[string]any{"type": "bool", "default": false, "group": "gates", "set_by": []string{"flag:--ignore-robots", "runconfig:ignore_robots"}},
 			// LIVE-MATRIX (ADR-120). The observation mode is the PERSON's choice, not something the tool
-			// derives: a deployment default lives in settings, a run overrides it here, and the CLI takes
+			// derives: a deployment default lives in the SAVED RUN DEFAULTS (`run.observe`, W17 — not in
+			// `settings`, where it never existed despite this line once saying so), a run overrides it
+			// here, and the CLI takes
 			// the same name. `cost` rides along because a mode that only has a NAME leaves somebody
 			// choosing by vibe — ADR-120 requires the applicability and the price to be on screen, and a
 			// hub that had to hard-code those strings would be a second place for them to drift.
@@ -865,7 +885,9 @@ type runRequest struct {
 	// выключить самопочинку на ОДИН прогон — нечем. nil = «не выбирал», и тогда действует сохранённое.
 	HealLLM      *bool `json:"heal_llm"`      // --heal-llm: allow LLM re-grounding during heal
 	IgnoreRobots bool  `json:"ignore_robots"` // --ignore-robots: ADR-133, a person's explicit choice
-	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the deployment default, which the form
+	// LIVE-MATRIX (ADR-120): what this run observes. Empty = the saved `run.observe` if the deployment
+	// has one, else the product default `frames`; W17 built that layer — before it, "the deployment
+	// default" named a constant nothing could change. The form
 	// SHOWS rather than implies — an invisible default makes "I did not choose" and "I chose exactly
 	// this" the same act, and then nobody can say what the run will produce.
 	Observe          string `json:"observe"`
@@ -891,6 +913,47 @@ type runRequest struct {
 
 func validTarget(t string) bool {
 	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://") || strings.HasPrefix(t, "file://")
+}
+
+// modeFromArgs derives a run's mode brand from the argv that will REALLY be executed, so the record
+// and the run cannot disagree. [RUN-MODE-LABELS-THE-RECORD-NOT-THE-RUN]: the brand used to be copied
+// straight from `req.Mode`, a string no validation ever checked against the enum, and it lied in BOTH
+// directions — an explore run branded `goal` (the person picked «Цель», left the goal empty, and
+// nothing passed `--goal`), and a real chat turn branded `describe`. The brand is not cosmetic: it
+// reaches GET /v1/runs, ResultRecord.Mode and the `{mode,target}` metric labels, so a lie here is a
+// lie in the record, the report and the dashboard at once.
+//
+// Derived from argv rather than recomputed from the request on purpose: a second copy of the same
+// formula would agree with the first at every error, which is exactly what a gate cannot detect.
+// argv is the artefact another process reads.
+//
+// Precedence follows what agentctl itself does with these flags: the subcommand first, then replay,
+// then an explicit `--mode`, then the authoring flags (ADR-027: authoring is carried by
+// `--goal`/`--describe`, and `--mode goal|describe` is refused), and `explore` last — which is
+// agentctl's own default when nothing says otherwise.
+func modeFromArgs(args []string) string {
+	if len(args) > 0 && args[0] == "baseline" {
+		return "baseline"
+	}
+	for i, a := range args {
+		switch {
+		case a == "--replay":
+			return "replay"
+		case a == "--mode" && i+1 < len(args):
+			return args[i+1]
+		}
+	}
+	for _, a := range args {
+		if a == "--goal" {
+			return "goal"
+		}
+	}
+	for _, a := range args {
+		if a == "--describe" {
+			return "describe"
+		}
+	}
+	return "explore"
 }
 
 // appendRunFlags adds the `agentctl run` flags that ADR-107 brought onto the HTTP contract. It is shared
@@ -1172,6 +1235,11 @@ func (s *server) spawnRun(req runRequest) *run {
 		}
 		args = appendRunFlags(args, &req, runCfgPath)
 	}
+	// Клеймо — ПРОИЗВОДНОЕ от argv, а не копия поля запроса: см. modeFromArgs. Под мьютексом, потому
+	// что запись уже лежит в s.runs (выше) и её читают маршруты и SSE.
+	s.mu.Lock()
+	rec.Mode = modeFromArgs(args)
+	s.mu.Unlock()
 	cmd := exec.Command(s.agentctl, args...)
 	cmd.Dir = s.repo
 	// ADR-063 + ADR-146: layer the LLM connection into the spawn env — process env > per-run >
@@ -3133,7 +3201,7 @@ var envNotPublished = map[string]string{
 	"REV_OP":                     "Имя операции подкоманды (list|show|diff|rollback), которое продукт переносит из позиционного аргумента в переменную; проверка перечня уже сделана в agentctl, человек переменную не задаёт. Унаследованное значение перезаписывается безусловно.",
 	"RUN_CONFIG":                 "Это не ручка, а КАНАЛ доставки других ручек: путь к файлу RunConfig, который control-api создаёт сам внутри каталога артефактов прогона (cmd/control-api/main.go:695-707). Человек задаёт значения ВНУТРИ файла (plan_budget/heal_budget/total_budget, auth.*), а не эту переменную; унаследованное значение мертво — agentctl безусловно дописывает `RUN_CONFIG=` (пустую строку, если флага не было).",
 	"RUN_ID":                     "agentctl генерирует идентификатор сам и дописывает его БЕЗУСЛОВНО: cmd/agentctl/main.go:457-458 «cmd.Env = append(filteredEnv(), append([]string{ \"RUN_ID=\" + runID,». runID берётся из newRunID() либо из ОТДЕЛЬНОГО имени SENTINEL_RUN_ID (main.go:688-691) — и причина названа в коде (main.go:686-687): «RUN_ID is a common shell variable, and inheriting it by accident would make two unrelated runs claim one identity». …",
-	"RUN_MODE":                   "agentctl пишет его безусловно во ВСЕХ путях: cmd/agentctl/main.go:696 «\"RUN_MODE=\" + runMode» плюс литералы 760 (baseline), 775 (clear-quarantine), 793 (export-spec), 830 (revisions), 992 (explore), 1006 (import), 1024 (report), 1066 (calibrate). Унаследованное значение всегда затирается (append после filteredEnv, побеждает последнее). Режим уже опубликован схемой как перечень верхнего уровня «modes» (cmd/control-…",
+	"RUN_MODE":                   "поверхность ОПУБЛИКОВАНА перечнем `modes` верхнего уровня и полем `fields.mode`; переменная — безусловный run-var: `agentctl` пишет `RUN_MODE=` на КАЖДОМ пути (общий `run` плюс восемь подкоманд), append идёт ПОСЛЕ filteredEnv, и побеждает последнее значение — значит унаследованное до мозга не доезжает никогда. Тот же класс, что MESSAGE, PLANNER и SCENARIO. ⚠ ПРЕЖНЯЯ ПРИЧИНА ЗДЕСЬ ОБРЫВАЛАСЬ МНОГОТОЧИЕМ НА ПОЛУСЛОВЕ и держала девять номеров строк — число в прозе есть обещание, которое никто не перезамеряет; счёт путей проверяется гейтом, а не переписыванием номеров.",
 	"SENTINEL_AGENTCTL":          "Имя/путь БИНАРЯ — ровно то, что определение относит к проводке развёртывания. Продукт резолвит его сам двумя запасными способами (PATH, затем bin/agentctl), так что человеку задавать нечего; переменная существует для нестандартной раскладки файлов и для стенда (tests/test_trace_redaction_offline.py:56-59 «Call the real `_redact_trace` with SENTINEL_AGENTCTL pointed wherever the case needs»).",
 	"SENTINEL_CONVERSATIONS_DB":  "Путь к файлу SQLite — каталог/файл, то есть проводка развёртывания. Docstring читателя сам называет назначение (__main__.py:646): «SENTINEL_CONVERSATIONS_DB (an override for tests / relocation) or the air-gapped default state/conversations.db». Плюс выбор хранилища перекрывается совсем другим именем: :645 «CHECKPOINT_DSN (Postgres) overrides this in `_checkpointer`» — операторский выбор «где живут треды» делается …",
 	"SENTINEL_DECORATE":          "Пер-прогонное расширение режима `observe=human` с ровно одним автором (`brain/observe.py::apply`) и одним читателем (`pw-executor/src/decorate.ts`). Как настройка развёртывания она вредна в обе стороны: сохранённая `0` отняла бы у режима `human` его единственный механизм (значение из окружения перекрывает режим, `apply` пишет через `setdefault`), а сохранённая `1` украсила бы КАЖДЫЙ прогон — а украшенный прогон ме…",
@@ -3142,7 +3210,7 @@ var envNotPublished = map[string]string{
 	"SENTINEL_LLM_BUDGET_FILE":   "Путь к файлу состояния (выученный потолок токенов), умолчание — state/llm-budget.json. Операторская ручка здесь НЕ путь, а флаг, из которого продукт этот путь ставит сам: cmd/agentctl/main.go:721 «extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)» → appendBudgetIsolation «return append(extra, \"SENTINEL_LLM_BUDGET_FILE=\"+filepath.Join(dir, \"llm-budget.json\"))», флаг объявлен в main.go:606 «fs.Bool(\"isola…",
 	"SENTINEL_LOG_LEVEL":         "уже настраивается разделом `logging` конфигурационного документа (persistedLoggingEnv, cmd/control-api/logenv.go:53) — второй дескриптор писал бы ту же переменную из второго места, а в mergedPersistedEnv (logenv.go:236-243) слой `settings` накладывается ПОСЛЕ `logging` и молча победил бы его",
 	"SENTINEL_LOG_LEVELS":        "уже настраивается разделом `logging` конфигурационного документа, и только он умеет выразить поКАТЕГОРИЙНЫЕ уровни (`heal=info,llm=debug`), которых плоский дескриптор не описывает; дескриптор в `settings` завёл бы второго автора той же переменной, побеждающего первого в mergedPersistedEnv",
-	"SENTINEL_OBSERVE":           "⚠ Это переменная СУЩЕСТВУЮЩЕГО поля блока `fields` — `observe`. Ей нужен не новый дескриптор, а ключ `env` у имеющегося поля. Отдельно: brain/runconfig.py:45 «\"observe\": \"SENTINEL_OBSERVE\"» — имя УЖЕ объявлено в таблице RunConfig→env, так что источник для ключа брать неоткуда, кроме этой строки; а runconfig.py:61-65 фиксирует, что в _AGENTCTL_DEFAULTS его намеренно нет («мутация её выживания ничего не покрасила»).",
+	"SENTINEL_OBSERVE":           "поверхность ОПУБЛИКОВАНА полем `fields.observe`; переменная — безусловный run-var из флага `--observe`, поэтому унаследованное значение до мозга НЕ ДОЕЗЖАЕТ. Тот же класс, что MESSAGE, PLANNER и SCENARIO. ⚠ ПРЕЖНЯЯ ПРИЧИНА ЗДЕСЬ БЫЛА ЛОЖНА И ПРЕДПИСЫВАЛА ДЕФЕКТ: она гласила «ей нужен ключ `env` у имеющегося поля», то есть предлагала опубликовать доставку, которой нет по контракту — схема пообещала бы слой, мёртвый по построению, и гейт каталога был бы зелен над ним. Слой у наблюдения теперь ЕСТЬ и он другой: сохранённые умолчания прогона (`personalRunDefaults`, ключ `run.observe`), откуда значение уезжает ФЛАГОМ и называется в `inherited_defaults` (решение Alex, W17). Отдельно: brain/runconfig.py:45 «\"observe\": \"SENTINEL_OBSERVE\"» — имя УЖЕ объявлено в таблице RunConfig→env, так что источник для ключа брать неоткуда, кроме этой строки; а runconfig.py:61-65 фиксирует, что в _AGENTCTL_DEFAULTS его намеренно нет («мутация её выживания ничего не покрасила»).",
 	"SENTINEL_OWNER":             "Продукт ставит это сам из состояния запроса, а не человек: control-api резолвит владельца из предъявленного удостоверения и передаёт флагом — cmd/control-api/main.go:658-659 «if req.owner != \"\" { args = append(args, \"--owner\", req.owner) }», причём поле НЕэкспортируемое именно чтобы клиент не мог назвать себя чужим именем (main.go:634-637 «a client that could name its own owner could write into somebody else's set…",
 	"SENTINEL_RECORD":            "Пер-прогонное расширение режима `observe=record` с одним автором (`brain/observe.py::apply`) и одним читателем (`pw-executor/src/record.ts`). Сохранённая в развёртывании, она обходит отказ, который `brain/observe.py` выносит У ДВЕРИ для пары «запись + подключение по CDP»: в развёртывании по умолчанию прогон подключается к браузеру-службе (docker-compose.yml:225 `PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:92…",
 	"SENTINEL_REVISIONS_DIR":     "Путь КАТАЛОГА хранилища ревизий — проводка развёртывания (умолчание state/revisions, файловый стор без сетевого сервиса, brain/__main__.py:219 «file-based under state/revisions»). В дереве его задают только тесты (tests/test_revisions_offline.py:122, tests/test_revisions_surface_offline.py:39); в compose/entrypoint не встречается. ⚠ один и тот же литерал умолчания продублирован в двух читателях.",

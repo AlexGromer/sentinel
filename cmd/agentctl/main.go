@@ -85,7 +85,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "               [--observe off|frames|stream|human|record]   # what this run lets you see")
 	fmt.Fprintln(os.Stderr, "               [--replay --plan <p>] [--aut-version <sha>] [--ci] [--force-replay]")
 	fmt.Fprintln(os.Stderr, "               [--run-config <run.yaml>] [--scenario <name>] [--coverage-target <0..1>]")
-	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--ignore-robots] [--artifact-dir <dir>]")
+	fmt.Fprintln(os.Stderr, "               [--max-steps <n>] [--heal-llm] [--heal-visual] [--ignore-robots] [--artifact-dir <dir>]")
 	fmt.Fprintln(os.Stderr, "               [--isolate-llm-budget]      # keep the learned token ceiling in THIS run (comparable measurements)")
 	fmt.Fprintln(os.Stderr, "                                                                    (all flags: agentctl run --help)")
 	fmt.Fprintln(os.Stderr, "  agentctl run --target <URL> --mode chat --conversation-id <id> [--message <text>] [--goal <g>|--describe <d>]")
@@ -584,6 +584,7 @@ type runFlags struct {
 	replay         *bool
 	planFile       *string
 	healLLM        *bool
+	healVisual     *bool
 	ignoreRobots   *bool
 	observe        *string
 	autVersion     *string
@@ -628,6 +629,13 @@ func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	f.replay = fs.Bool("replay", false, "replay a frozen plan, healing broken locators (M2/M3)")
 	f.planFile = fs.String("plan", "", "path to plan.json (required with --replay)")
 	f.healLLM = fs.Bool("heal-llm", false, "allow Sonnet LLM re-grounding during heal")
+	// [M5-HEAL-VISUAL-FLAG-DOES-NOT-EXIST]. docs/M5_CONTRACT.md обещал этот флаг парой к `--heal-llm`
+	// («заблокирован за `--heal-visual` + `--heal-llm`»), и человек, попробовавший обещанное, получал
+	// код 2 — то есть узнавал, что флага нет, и НЕ узнавал, что способность существует этажом ниже,
+	// настройкой развёртывания `HEAL_VISUAL`. Решение Alex (W17): закрывать принцип 6 ПУТЁМ, а не
+	// отговоркой. Форма зеркальна соседу: run-var пишется ТОЛЬКО по флагу, потому что он дописывается
+	// после унаследованного окружения и безусловная запись затёрла бы сохранённую настройку нулём.
+	f.healVisual = fs.Bool("heal-visual", false, "allow the visual tier during heal (without the flag the deployment setting HEAL_VISUAL decides)")
 	// ADR-133: правила чужого сайта соблюдаются ПО УМОЛЧАНИЮ, и отказ от них — осознанный выбор
 	// человека, который прогон записывает в журнал. Флаг отрицательный (`--ignore-robots`, а не
 	// `--respect-robots=true`) именно поэтому: умолчание не требует ключа, а отступление от него —
@@ -636,7 +644,7 @@ func newRunFlagSet() (*flag.FlagSet, *runFlags) {
 	// LIVE-MATRIX (ADR-120): the same choice the hub offers, under the same name. A capability the UI
 	// has and the terminal does not is the gap ADR-107 exists to close; an EMPTY value is left empty
 	// so the brain can tell "nothing was asked for" from "frames was asked for" and say which it used.
-	f.observe = fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
+	f.observe = fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: frames; a deployment layer exists only through control-api's saved run.observe — this binary reads no config document)")
 	f.autVersion = fs.String("aut-version", "", "app-under-test version/sha (flake quarantine)")
 	f.ci = fs.Bool("ci", false, "CI mode (forbids --force-replay)")
 	f.force = fs.Bool("force-replay", false, "bypass plan_hash hard-abort (disallowed under --ci)")
@@ -734,10 +742,19 @@ func cmdRun(repo string, args []string) int {
 	//
 	// ⚠ ТОТ ЖЕ РЕЦЕПТ НЕЛЬЗЯ ПРИМЕНЯТЬ К `SENTINEL_OBSERVE`: там безусловная перезапись — НАМЕРЕННЫЙ
 	// контракт, закреплённый тестом (observe_flag_test.go), потому что наблюдение приходит флагом и
-	// унаследованное значение до мозга доезжать не должно. Разница в том, что у наблюдения нет
-	// сохранённого слоя, а у самопочинки он есть.
+	// унаследованное значение до мозга доезжать не должно.
+	//
+	// ⚠ ПРЕЖНИЙ ДОВОД ЗДЕСЬ УСТАРЕЛ В W17 И БЫЛ БЫ ЛОЖЕН: он гласил «у наблюдения НЕТ сохранённого
+	// слоя, а у самопочинки он есть». Слой у наблюдения теперь ЕСТЬ (`run.observe` в сохранённых
+	// умолчаниях прогона). Разница осталась, но она в ДОСТАВКЕ: сохранённое наблюдение применяет
+	// control-api и передаёт его ФЛАГОМ, поэтому безусловная перезапись run-var ничего не теряет —
+	// флаг уже несёт унаследованное значение. У самопочинки сохранённое доезжает окружением, и
+	// безусловная строка затёрла бы его.
 	if setFlags["heal-llm"] {
 		extra = append(extra, "HEAL_LLM="+boolEnv(*healLLM))
+	}
+	if setFlags["heal-visual"] {
+		extra = append(extra, "HEAL_VISUAL="+boolEnv(*rf.healVisual))
 	}
 	extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)
 	if runNeedsStore(*mode, *replay) {
@@ -777,7 +794,7 @@ func cmdBaseline(repo string, args []string) int {
 	// шёл». Передать путь к нему было НЕЧЕМ: флага не существовало, а `flag.ExitOnError` на неизвестном
 	// флаге убивает процесс кодом 2. Бюджеты и блок `auth` доезжают до мозга ТОЛЬКО этим файлом.
 	runConfig := fs.String("run-config", "", "path to RunConfig YAML (budgets and the auth block reach the brain only through it)")
-	observe := fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: the deployment setting)")
+	observe := fs.String("observe", "", "what this run observes: off|frames|stream|human|record (default: frames; a deployment layer exists only through control-api's saved run.observe — this binary reads no config document)")
 	_ = fs.Parse(args[1:])
 	if *planFile == "" {
 		fmt.Fprintln(os.Stderr, "error: --plan is required")

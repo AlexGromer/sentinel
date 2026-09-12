@@ -201,8 +201,8 @@
       "severity": "high",
       "title_ru": "Авторинг теста диалогом",
       "title_en": "Author a test by conversation",
-      "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом. Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048); в браузере это вкладка «Чат», по HTTP — POST /v1/runs с mode=chat.",
-      "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation. Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048); in the browser it is the Chat view, over HTTP it is POST /v1/runs with mode=chat.",
+      "how_ru": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — авторинг сценария диалогом. Опишите поток словами и уточняйте его репликами — многоходовой авторинг с сохранением состояния (ADR-048); в браузере это вкладка «Чат», по HTTP — POST /v1/runs с `conversation_id` (именно он включает режим: сервер дописывает `--mode chat` по его наличию, а не по полю `mode`).",
+      "how_en": "RUN_MODE=chat (agentctl run --mode chat --conversation-id <id>) — author a scenario by conversation. Describe a flow in words and refine it turn by turn — stateful multi-turn authoring (ADR-048); in the browser it is the Chat view, over HTTP it is POST /v1/runs with a `conversation_id` (that is what turns the mode on: the server appends `--mode chat` on its presence, not on the `mode` field).",
       "access": [
         {
           "kind": "mode",

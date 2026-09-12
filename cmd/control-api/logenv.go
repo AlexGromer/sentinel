@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,6 +237,31 @@ func (s *server) getPersistedSettings() map[string]string {
 // mergedPersistedEnv is the single lowest-precedence layer handed to resolveRunEnv: the LLM connection
 // (ADR-063), the logging levels, and the operator settings (ADR-107). All are plain env vars with
 // identical precedence, so they share one map and resolveRunEnv needs no knowledge of any of them.
+// shadowedPersistedEnv — имена, которые СОХРАНЁННАЯ конфигурация задаёт и которые процесс уже несёт
+// непустыми, то есть ровно те, что `resolveRunEnv` откажется применить.
+//
+// [ENV-SHADOWS-SAVED-SETTING-UNANNOUNCED]. Приоритет «окружение процесса выше сохранённого»
+// НАМЕРЕННЫЙ и записан у самого `set`: развёртывание, пробрасывающее переменную с хоста, обязано
+// продолжать пользоваться ею, и сохранённый через интерфейс ключ не может это молча изменить.
+// Дефект был не в приоритете, а в МОЛЧАНИИ: человек сохранял модель, интерфейс отвечал «сохранено»,
+// прогон шёл на другой — и ни одна поверхность не говорила почему. Продукт уже признал эту опасность
+// и решил её для ключей провайдера (`sources` рядом с документом); здесь та же болезнь лечится тем
+// же лекарством.
+//
+// Считается ИЗ ТЕХ ЖЕ величин, из которых решает `resolveRunEnv` (`mergedPersistedEnv` против
+// `os.Getenv`), а не из второго списка имён: второй список разошёлся бы с первым ровно там, где
+// никто не смотрит.
+func (s *server) shadowedPersistedEnv() []string {
+	out := []string{}
+	for k := range s.mergedPersistedEnv() {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *server) mergedPersistedEnv() map[string]string {
 	layers := []map[string]string{s.getPersistedLLM(), s.getPersistedLogging(), s.getPersistedSettings()}
 	out := map[string]string{}

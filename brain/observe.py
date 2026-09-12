@@ -12,8 +12,13 @@ A person could not answer "what will I see, and what does it cost", because no s
 Worse, ONE picture — the per-step frame — is gated by TWO of them in TWO languages, so switching one
 off produced a half-observed run that said nothing about the missing half.
 
-WHO CHOOSES (decision, Alex 2026-08-10). The PERSON does, and in the interface: a deployment default
-in settings, overridden per run in the form, and the same name as a CLI flag. The inherited default
+WHO CHOOSES (decision, Alex 2026-08-10). The PERSON does, and in the interface: a deployment default,
+overridden per run in the form, and the same name as a CLI flag. ⚠ THAT DEPLOYMENT DEFAULT LIVED
+NOWHERE UNTIL W17, and this docstring named the wrong home for it: `settings` never carried an
+`observe` key (44 names, measured), so for a year five surfaces called a product constant «the
+deployment default». The layer now exists as a SAVED RUN DEFAULT (`run.observe`), from which
+control-api passes `--observe` on argv — not as an env key, which would have been dead by
+construction: agentctl appends the run-var unconditionally AFTER the inherited environment. The inherited default
 is SHOWN rather than implied — an invisible default makes "I did not choose" and "I chose exactly
 this" the same act, and then nobody can say what a run will produce.
 

@@ -129,12 +129,14 @@ The env block is defined in `docker-compose.yml` or passed via a `.env` file:
 # Cloud (Anthropic) — no key → offline heuristic + L1–L6 heal
 ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
-# Local model (activate by uncommenting):
-# LLM_BACKEND: openai
-# LLM_BASE_URL: http://ollama:11434/v1
-# LLM_MODEL: qwen2.5:7b           # from the docs/LOCAL_MODELS.md §3 catalog
-# LLM_API_KEY: noauth             # Ollama ignores the key; SDK requires a non-empty value
-# LLM_VISION: 0                   # 1 only for a vision-capable heal model
+# Local model — the names are LIVE; set them in `.env`, do not uncomment anything.
+# ⚠ Until W17 this block was commented out with "activate by uncommenting", and that did not work
+# for `control-api`: a service declaring its own `environment:` replaces the merged anchor wholesale.
+LLM_BACKEND: ${LLM_BACKEND:-}     # openai
+LLM_BASE_URL: ${LLM_BASE_URL:-}   # http://ollama:11434/v1
+LLM_MODEL: ${LLM_MODEL:-}         # from the docs/LOCAL_MODELS.md §3 catalog
+LLM_API_KEY: ${LLM_API_KEY:-}     # Ollama ignores the key; the SDK requires a non-empty value
+LLM_VISION: ${LLM_VISION:-}       # 1 only for a vision-capable heal model
 ```
 
 The derived list of every env variable — [`docs/PARAMETERS.md`](PARAMETERS.en.md); the recipe for wiring a local model (role suffixes, priority) — see `docs/LOCAL_MODELS.md`.
