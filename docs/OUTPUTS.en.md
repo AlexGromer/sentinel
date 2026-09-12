@@ -308,13 +308,19 @@ rendered string. Collapsing repeats (`×N`) and nesting stack frames happen on t
 
 **As-built — important limits:**
 - **`logs/*` are NOT in the artifact whitelist** (`cmd/control-api/main.go`, `artifactWhitelist`). They
-  cannot be fetched through `GET /v1/runs/{id}/artifacts/{name}` — only through
+  cannot be fetched through `GET /v1/runs/{id}/artifact?name=…` — only through
   `GET /v1/runs/{id}/logs` (token-gated, with level/source/step filters and the ADR-068 expression
   parser).
 - **The application channel is capped at 500 records**; on truncation `app.log_capped` is printed, so a
   truncated capture cannot be mistaken for a complete one.
-- **`app.*` events never reach the verdict** — a run reports `exit 0` while the application throws
-  exceptions (`GAP-PROD-001`, analysed in [`REGRESSION_MAP.en.md`](REGRESSION_MAP.en.md) §6).
+- **`app.*` events DO reach the verdict, and the exit-code gate is opt-in** (`GAP-PROD-001` closed by
+  ADR-072, like the redaction bullet next to it). The EMITTER tallies the faults (`browser.appFaults`),
+  they sit in `heal-report.json` as `app_faults` and they NAME the verdict — `pass_with_app_faults` or
+  `problem_app_faults`. ⚠ But `exit 0` beside a throwing application is true AT DEFAULTS:
+  `SENTINEL_FAIL_ON_APP_ERRORS` defaults to `0` = report, do not gate (`brain/replay.py`); a non-zero
+  threshold reddens the build with `problem_app_faults` as the cause. ⚠ And only on the **replay**
+  path: no other run produces `app_faults`. Analysed in
+  [`REGRESSION_MAP.en.md`](REGRESSION_MAP.en.md) §6.
 - **Write-side redaction EXISTS** (`GAP-SEC-005` closed by ADR-081, see
   [`THREAT_MODEL.en.md`](THREAT_MODEL.en.md) §4.12): `logSink.write` is the single choke point all
   three files descend from, and it passes EVERY line through `redact.Line`

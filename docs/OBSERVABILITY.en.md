@@ -343,10 +343,15 @@ The gate `tests/test_event_catalog_offline.py` holds this in both directions: ev
 exists in the catalogue and names that module; every catalogue entry names modules that really emit it.
 Anchoring is **per module, not per line** — line anchoring went stale all at once on the first conversion.
 
-**What is missing here.** Application events (`app.*`, seven codes) reach `run.jsonl` and do not reach the
-verdict — a run can report `exit 0` while the application throws exceptions. That is `GAP-PROD-001`, analysed
-in `docs/REGRESSION_MAP.en.md` §6. There is also no write-side redaction for foreign output —
-`GAP-SEC-005`, `docs/THREAT_MODEL.en.md` §4.12.
+**What is missing here.** ⚠ TWO CLOSED GAPS STOOD HERE DECLARED AS LIVE, and they stood for over a
+month: `GAP-PROD-001` was closed by ADR-072 (2026-07-26) and `GAP-SEC-005` by ADR-081, while the
+neighbouring document (`docs/OUTPUTS.en.md`) answered the same question the opposite way. Application
+events (`app.*`, seven codes) reach both `run.jsonl` AND the verdict: it is named
+`pass_with_app_faults` or `problem_app_faults`. ⚠ A run CAN still report `exit 0` — not because the
+faults are invisible, but because the exit-code gate is opt-in: `SENTINEL_FAIL_ON_APP_ERRORS` defaults
+to `0` = report, do not gate; and only on the **replay** path. Write-side redaction EXISTS —
+`logSink.write` passes every line through `redact.Line` (`docs/THREAT_MODEL.en.md` §4.12). Analysed in
+`docs/REGRESSION_MAP.en.md` §6.
 
 ## 8. Three journal streams, and what is not in them (HEALTH-005 · ADR-116)
 

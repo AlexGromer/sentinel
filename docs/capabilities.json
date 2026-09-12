@@ -491,8 +491,8 @@
       "severity": "medium",
       "title_ru": "Библиотека сценариев и тестов",
       "title_en": "Scenario and test library",
-      "how_ru": "GET/DELETE /v1/scenarios — сохранённые сценарии как переиспользуемые активы. В браузере — тот же список плюс продвижение сценария в именованный тест.",
-      "how_en": "GET/DELETE /v1/scenarios — saved scenarios as reusable assets. In the browser it is the same list, plus promoting a scenario into a named test.",
+      "how_ru": "GET /v1/scenarios и DELETE /v1/scenarios/{id} — сохранённые сценарии как переиспользуемые активы. В браузере — тот же список плюс продвижение сценария в именованный тест.",
+      "how_en": "GET /v1/scenarios and DELETE /v1/scenarios/{id} — saved scenarios as reusable assets. In the browser it is the same list, plus promoting a scenario into a named test.",
       "access": [
         {
           "kind": "http",

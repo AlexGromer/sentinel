@@ -307,12 +307,17 @@ Code Scanning — предложенная, но не реализованная
 
 **As-built — важные ограничения:**
 - **`logs/*` НЕ в whitelist артефактов** (`cmd/control-api/main.go`, `artifactWhitelist`). Скачать их
-  через `GET /v1/runs/{id}/artifacts/{name}` нельзя — только через `GET /v1/runs/{id}/logs`
+  через `GET /v1/runs/{id}/artifact?name=…` нельзя — только через `GET /v1/runs/{id}/logs`
   (token-gated, с фильтрами по уровню/источнику/шагу и разбором выражения ADR-068).
 - **Приложенческий канал ограничен 500 записями**; при усечении печатается `app.log_capped`, поэтому
   обрезанный сбор нельзя принять за полный.
-- **События `app.*` не доходят до вердикта** — прогон отдаёт `exit 0` при сыплющем исключениями
-  приложении (`GAP-PROD-001`, разбор в [`REGRESSION_MAP.md`](REGRESSION_MAP.md) §6).
+- **События `app.*` ДОХОДЯТ до вердикта, а гейт кода выхода — opt-in** (`GAP-PROD-001` закрыт
+  ADR-072, как и соседняя булька про редакцию). Сбои считает ЭМИТЕНТ (`browser.appFaults`), они лежат
+  в `heal-report.json` как `app_faults` и ИМЕНУЮТ вердикт — `pass_with_app_faults` либо
+  `problem_app_faults`. ⚠ Но `exit 0` при сыплющем исключениями приложении — правда НА УМОЛЧАНИЯХ:
+  `SENTINEL_FAIL_ON_APP_ERRORS` по умолчанию `0` = «докладывать, не гейтить» (`brain/replay.py`);
+  ненулевой порог красит сборку с причиной `problem_app_faults`. ⚠ И только на пути **replay**:
+  `app_faults` не производит ни один другой прогон. Разбор — [`REGRESSION_MAP.md`](REGRESSION_MAP.md) §6.
 - **Редакция на стороне записи ЕСТЬ** (`GAP-SEC-005` закрыт ADR-081, см.
   [`THREAT_MODEL.md`](THREAT_MODEL.md) §4.12): `logSink.write` — единственная точка врезки, из
   которой происходят все три файла, — прогоняет КАЖДУЮ строку через `redact.Line`
