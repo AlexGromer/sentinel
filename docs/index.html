@@ -2715,7 +2715,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var spec=RUN_FLAG[name], el=ge(cfgFieldIds[name]);
       if (!el) return;
       if (el.type==='checkbox'){
-        if (el.checked) flags += ' '+spec.flag+(spec.bool?'=true':'');
+        /* ⚠ ЗЕРКАЛО bBody, И ПРАВИЛО ВЗЯТО ОТТУДА, А НЕ ПЕРЕПИСАНО. Первая редакция этой правки
+           несла СВОЁ решение («галочка шлётся только включённой») и была ЛОЖНА: `heal_llm` лежит в
+           SEND_UNCHECKED, то есть тело несёт булев ВСЕГДА, и сервер всегда шлёт `--heal-llm=%t`.
+           Экспорт без явного `false` воспроизводил прогон с ВКЛЮЧЁННОЙ самопочинкой, потому что
+           сохранённое HEAL_LLM=1 доезжает до мозга при молчании — ровно тот дефект, который эта
+           правка чинит, внесённый заново её собственным комментарием. Третий перечень к двум,
+           обязанным совпадать, здесь не заводится: решение читается у того, кто его принимает. */
+        if (SEND_UNCHECKED[name]) { flags += ' '+spec.flag+'='+(el.checked?'true':'false'); return; }
+        if (el.checked) flags += ' '+spec.flag;
         return;
       }
       var v=(el.value||'').trim();
@@ -3599,11 +3607,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     aut_version:  { flag: '--aut-version' },
     ci:           { flag: '--ci' },
     force_replay: { flag: '--force-replay' },
-    /* Значение, а не голый флаг: у heal_llm есть сохранённый слой, и `--heal-llm=true` отличается
-       от его отсутствия — отсутствие означает «наследовать». Форма шлёт галочку только включённой
-       (bBody ниже), поэтому и флаг пишется только тогда: экспорт повторяет ТО ЖЕ тело. */
-    heal_llm:     { flag: '--heal-llm', bool: true }
+    heal_llm:     { flag: '--heal-llm' }
   };
+  window.RUN_FLAG = RUN_FLAG;   // named so the DOM gate can walk it, like cfgFieldIds above
 
   /* LIVE-MATRIX (ADR-120). The observation selector is FILLED FROM THE SCHEMA, never hard-coded:
      the server already publishes the set, the deployment default and the cost of each mode, and a
@@ -3684,6 +3690,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       'доезжает до мозга, поэтому выключить самопочинку на ОДИН прогон можно только явным «нет»: ' +
       'молчащая галочка означала бы «не выбирал», и сохранённое победило бы'
   };
+
+  window.SEND_UNCHECKED = SEND_UNCHECKED;   // walked by the DOM gate: both positions must reach the export
 
   /* Builds the POST /v1/runs body by WALKING cfgFieldIds rather than restating the fields. */
   function bBody(){

@@ -1127,6 +1127,53 @@ try {
        `поле формы не доезжает до экспорта — «повторить тот же прогон» повторит ДРУГОЙ: ${res.missing.join(', ')}`);
   });
 
+  // Половина, которой РАЗНОСТНОЕ наблюдение выше не видит, и это замерено, а не предположено.
+  // Разностный гейт спрашивает «сдвинулся ли экспорт», и для галочки он зелен в обе стороны: флаг,
+  // который пишется ТОЛЬКО включённым, двигает экспорт ничуть не хуже флага, который пишется всегда.
+  // А разница между ними — это разница между двумя РАЗНЫМИ прогонами: у полей из SEND_UNCHECKED есть
+  // сохранённый слой, поэтому снятая галочка обязана уехать явным «нет». Молчание там означает «не
+  // выбирал», и сохранённое HEAL_LLM=1 доезжает до мозга — повтор идёт с ВКЛЮЧЁННОЙ самопочинкой.
+  //
+  // Поймано скептиком на первой редакции правки W17: экспорт писал `--heal-llm=true` только при
+  // отмеченной галочке, а комментарий рядом оправдывал это словами «форма шлёт галочку только
+  // включённой» — ложными, потому что тот же файл восемьюдесятью строками ниже кладёт heal_llm в
+  // SEND_UNCHECKED. Комментарий рядом с кодом — такой же кандидат на замер, как запись реестра.
+  //
+  // Перечень ВЫВОДИТСЯ из пересечения двух карт самой страницы; пол — на то, что пересечение непусто,
+  // иначе обход по пустому множеству напечатает то же, что обход, который что-то искал.
+  await check('поле с сохранённым слоем уезжает в экспорт ОБОИМИ положениями, а не только включённым', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForTimeout(200);
+    const res = await page.evaluate(() => {
+      const map = window.cfgFieldIds || {}, flags = window.RUN_FLAG || {}, both = window.SEND_UNCHECKED || {};
+      const names = Object.keys(both).filter((n) => flags[n] && typeof map[n] === 'string');
+      const cmd = () => (document.getElementById('b-cmd') || {}).textContent || '';
+      const fire = (el) => {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const bad = [];
+      names.forEach((n) => {
+        const el = document.getElementById(map[n]);
+        if (!el) { bad.push(`${n} (no control)`); return; }
+        const was = el.checked;
+        [true, false].forEach((position) => {
+          el.checked = position;
+          fire(el);
+          const want = flags[n].flag + '=' + String(position);
+          if (cmd().indexOf(want) < 0) bad.push(`${n} @${position} (no ${want})`);
+        });
+        el.checked = was;
+        fire(el);   // restored: a check that mutates shared tab state answers for its neighbours too
+      });
+      return { considered: names.length, bad };
+    });
+    ok(res.considered >= 1,
+       'ни одно поле не попало в пересечение SEND_UNCHECKED и RUN_FLAG — обход идёт по пустому множеству');
+    eq(res.bad.length, 0,
+       `снятая галочка не уезжает явным «нет», и сохранённый слой победит: ${res.bad.join(', ')}`);
+  });
+
   // LIVE-HUMAN (ADR-120). Two halves of one claim, and each is invisible to the other side's gate.
   //
   // FIRST: the mode has to be OFFERED. `human` spent months declared-and-refused, and the schema's
