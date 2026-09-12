@@ -249,18 +249,31 @@
       "severity": "high",
       "title_ru": "Вход один раз (login-as-test)",
       "title_en": "Log in once (login-as-test)",
-      "how_ru": "STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef.",
-      "how_en": "STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef.",
+      "how_ru": "STORAGE_STATE / STORAGE_STATE_SAVE — войти один раз, дальше прогоны стартуют авторизованными; пароль через secretRef. С W17 вход можно не оркестрировать руками: `auth.login_plan` исполняет план входа ПЕРЕД прогоном, в своей сессии, и отдаёт полученное состояние прогону (M9.1_CONTRACT §4.1). Отказ входа останавливает прогон.",
+      "how_en": "STORAGE_STATE / STORAGE_STATE_SAVE — log in once, later runs start authenticated; password via secretRef. Since W17 the login need not be orchestrated by hand: `auth.login_plan` runs the login plan BEFORE the run, in its own session, and hands the resulting state to the run (M9.1_CONTRACT §4.1). A failed login stops the run.",
       "access": [
         {
           "kind": "env",
           "ref": "STORAGE_STATE"
+        },
+        {
+          "kind": "runconfig",
+          "ref": "auth.login_plan"
+        },
+        {
+          "kind": "http",
+          "ref": "POST /v1/runs"
+        },
+        {
+          "kind": "ui",
+          "ref": "run"
+        },
+        {
+          "kind": "cli",
+          "ref": "run"
         }
       ],
-      "reach": "artifact",
-      "missing": {
-        "_": "артефакт развёртывания или настройка, а не способность продукта: вопрос «доступно ли тремя способами» к нему не применяется"
-      }
+      "reach": "capability"
     },
     {
       "id": "run-supervision",

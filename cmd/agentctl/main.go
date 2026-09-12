@@ -401,7 +401,12 @@ func filteredEnv() []string {
 		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "PWD": true,
 		"LANG": true, "LC_ALL": true, "TERM": true, "TMPDIR": true, "TZ": true,
 		"ANTHROPIC_API_KEY": true, "OPENAI_API_KEY": true, "CHECKPOINT_DSN": true,
-		"STORAGE_STATE": true, "STORAGE_STATE_SAVE": true, "MCP_TRANSPORT": true,
+		// ⚠ `LOGIN_PLAN` СТОИТ РЯДОМ С СОСЕДЯМИ ПО СЕКЦИИ `auth` НАМЕРЕННО (W17, M9.1_CONTRACT §4.1).
+		// Без этой записи схема опубликовала бы `env: LOGIN_PLAN`, а окружение срезалось бы здесь —
+		// то есть обещала бы путь доставки, которого нет. Ровно этот дефект волна чинила у
+		// наблюдения, и заводить его заново нельзя. Замерено перед правкой: имени в аллоулисте не
+		// было, под префиксы (LLM_/OTEL_/PW_/PLAYWRIGHT_/SENTINEL_) оно не подходит.
+		"STORAGE_STATE": true, "STORAGE_STATE_SAVE": true, "LOGIN_PLAN": true, "MCP_TRANSPORT": true,
 		"ORCH_ADDR": true, "STORE_ADDR": true, "BRAIN_PYTHON": true, "PYTHONPATH": true,
 		// M11.3 (ADR-035): metrics push, visual-heal toggle, corporate TLS trust + proxy.
 		// ⚠ `HEAL_LLM` СТОИТ РЯДОМ С `HEAL_VISUAL` С W15, и до этого его отсутствие было не решением,

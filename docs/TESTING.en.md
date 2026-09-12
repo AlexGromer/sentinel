@@ -275,7 +275,7 @@ Example `run.yaml`:
 auth:
   storage_state: state/auth.json  # skips login if the file exists
   pw_no_trace: true               # required when secretRef is present
-  login_plan: runs/login/plan.json
+  login_plan: runs/login/plan.json   # runs BEFORE the run; the session goes to it (M9.1 §4.1)
 
 scenarios:
   - name: checkout

@@ -123,6 +123,7 @@
 | `LLM_VISION_CHAT` | — только для роли `chat` | — | перекрывает `LLM_VISION` для роли `chat` |
 | `LLM_VISION_HEAL` | — только для роли `heal` | — | перекрывает `LLM_VISION` для роли `heal` |
 | `LLM_VISION_PLANNER` | — только для роли `planner` | — | перекрывает `LLM_VISION` для роли `planner` |
+| `LOGIN_PLAN` | поле прогона `login_plan` | — | поле прогона `login_plan`; `runconfig:auth.login_plan`, `env:LOGIN_PLAN` |
 | `MAX_STEPS` | ЭТО ПЕРЕМЕННАЯ СУЩЕСТВУЮЩЕГО ПОЛЯ `fields.max_steps` (cmd/control-api/main.go:379) — нужно не новое поле, а имя переменной у существующего | — | **не настройка** — см. причину |
 | `MCP_TRANSPORT` | Выбирает ПРОВОД между brain и pw-executor (JSON-RPC против MCP SDK) — внутренняя связь двух наших процессов, а не поведение прогона. Задаётся развёртыванием: Helm подставляет его из values (deploy/sentinel/templates/cronjob.yaml:45-47 `- name: MCP_TRANSPORT / value: {{ .Values.transport \| quote }}`), а brain при MCP-пути ЖЁСТКО навязывает его ребёнку (brain/executor.py:120 `env={**os.environ, "MCP_TRANSPORT": "mcp… | — | **не настройка** — см. причину |
 | `MESSAGE` | поверхность ОПУБЛИКОВАНА полем `fields.message`, а путь через окружение — не тот: `agentctl` дописывает `MESSAGE=` безусловно ПОСЛЕ унаследованного окружения, и os/exec берёт последнее значение. Задаётся флагом `--message`, как и записано в `set_by` поля. | — | **не настройка** — см. причину |

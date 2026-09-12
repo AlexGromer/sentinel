@@ -2465,6 +2465,43 @@
       ],
       "ru_verdict": "прогон не запускался: запрошенный режим наблюдения противоречит тому, что делает прогон, и продукт отказался вместо того, чтобы молча дать другое",
       "en_verdict": "the run never started: the requested observation mode contradicts what the run does, and the product declined rather than quietly doing something else"
+    },
+    "run.login_plan_start": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "План входа исполняется перед прогоном: {plan} → сессия ляжет в {state}",
+      "en": "Running the login plan before the run: {plan} → the session will land in {state}",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.login_plan_done": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "Вход выполнен, сессия сохранена: {state} (план {plan})",
+      "en": "Login succeeded, session saved: {state} (plan {plan})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "run.login_plan_skipped": {
+      "lvl": "info",
+      "cat": "run",
+      "ru": "План входа {plan} не исполнялся: сессия уже задана ({state})",
+      "en": "The login plan {plan} was not run: a session is already set ({state})",
+      "modules": [
+        "__main__"
+      ]
+    },
+    "fatal.login_plan_failed": {
+      "lvl": "error",
+      "cat": "run",
+      "fault": "app",
+      "ru": "План входа {plan} не прошёл (код {exit_code}) — прогон остановлен, чтобы не выдать неаутентифицированный вердикт за ответ",
+      "en": "The login plan {plan} did not pass (code {exit_code}) — the run stopped rather than present an unauthenticated verdict as the answer",
+      "modules": [
+        "__main__"
+      ]
     }
   },
   "$comment_foreign": "Stream B, boundary classification. Output from Playwright/Node/Chromium is not ours to instrument, so control-api (cmd/control-api/logclass.go) classifies it by shape. Patterns are ordered — first match wins. `system.console_table` catches the compact tables brain prints FOR A TERMINAL — the same facts also arrive as catalogued test.* events, so in the structured log they are duplicates. Classified debug rather than dropped: hidden by default, still there when someone wants the raw shape.",
