@@ -740,7 +740,11 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		merged, sources := mergeConfigDocs(globalDoc, personalDoc)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"key": doc.Key, "updated_at": doc.UpdatedAt, "config": merged, "sources": sources,
-			"tier": tierFile, "path": s.configFilePath(), "may_write_global": mayWriteGlobal(cf)})
+			"tier": tierFile, "path": s.configFilePath(), "may_write_global": mayWriteGlobal(cf),
+			// [ENV-SHADOWS-SAVED-SETTING-UNANNOUNCED]: имена, которые сохранённое задаёт, а окружение
+			// процесса уже несёт — то есть те, чьё сохранённое значение до прогона НЕ доедет. Приоритет
+			// намеренный; молчание о нём — нет.
+			"shadowed_by_env": s.shadowedPersistedEnv()})
 		return
 	}
 	// ADR-109 / Alex's directive: what a caller reads is the EFFECTIVE document — the tool's global
@@ -787,6 +791,9 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"key": setupConfigKey, "updated_at": updatedAt, "config": merged, "sources": sources,
 		"tier": tierStore, "may_write_global": mayWriteGlobal(c),
+		// Та же величина, что на файловом ярусе выше: ярус — это развёртывание, а не другой продукт,
+		// и отличаться ему разрешено носителем глобальной половины, а не составом ответа.
+		"shadowed_by_env": s.shadowedPersistedEnv(),
 	})
 }
 

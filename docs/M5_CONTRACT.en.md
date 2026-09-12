@@ -36,7 +36,7 @@ heal** (Tier-7) behind a measured PoC gate. Split into three; M5-1 is the value-
 - HealingEngine **Tier-7** (after L1–L6 + LLM-a11y fail AND `completeness_ratio < 0.30`): Sonnet vision
   is given the screenshot + marks, returns a `mark` number; we extract that element's **real** locator
   (NOT a coordinate click). Discount ×0.85 (ADR-005). Behind `--heal-visual` (off by default).
-- **PoC gate** (`agentctl heal-poc --scenarios <dir>`): runs Tier-7 over ≥20 labeled broken-selector
+- **PoC gate** (harness heal-poc, an invocation of the form «agentctl heal-poc --scenarios <dir>»): runs Tier-7 over ≥20 labeled broken-selector
   scenarios, reports precision/recall; **Tier-7 ships enabled only if ≥70%** (else stays scaffolded/off).
 - ANTI-HALLUCINATION: do not assume a specific vision API shape — reuse the existing Sonnet path in
   `healing.py._llm_reground`; extend it with image content; VERIFY the Anthropic image-block API.
@@ -48,6 +48,25 @@ SqliteSaver (current). One-constructor swap; VERIFY `langgraph-checkpoint-postgr
 ## Acceptance gate (Given/When/Then)
 - **M5-1:** `helm template deploy/sentinel` renders valid manifests (offline); `docker build` produces an
   image whose `agentctl run --replay --ci` works (user runs on cluster / locally); ArgoCD app lints.
+> ⚠ **AS-BUILT (2026-09-12, W17).** Three names in this section did not match the product, and none of
+> them was checked by anything — the contract is frozen while the product moved beneath it.
+> · `--heal-visual` — the flag DID NOT EXIST; its neighbour `--heal-llm` was real, so the pair read as
+>   two equally existing knobs and a person got exit 2, concluding the build was broken rather than the
+>   document. **Added in W17** (Alex's decision: close principle 6 with a path, not an excuse), so the
+>   sentence is now true as written; the deployment setting `HEAL_VISUAL` still decides when the flag
+>   is absent.
+> · the invocation «agentctl heal-poc --scenarios <dir>» — the subcommand exists neither among the local ones nor among
+>   the remote verbs. The harness was never built; the ≥70 % requirement stays user-run
+>   (ARCHITECTURE.md «gated/user-run»). The backticks are removed DELIBERATELY: a code span promises
+>   something you can type.
+> · `completeness_ratio < 0.30` — zero occurrences in the whole tree; the tier is gated by four
+>   conditions in `brain/healing.py`, not by completeness. ARCHITECTURE.md had already cleaned this up on
+>   its own side; the document carrying the promise had not.
+>
+> Flag and subcommand names are now checked by `TestMilestoneContractsNameOnlyThingsTheProgramAccepts`
+> (`cmd/agentctl`): it walks every milestone contract and asks the REAL flag set what the program
+> accepts. The next such drift reddens by itself.
+
 - **M5-2:** `browser.setOfMarks` returns a marks[] map; Tier-7 is wired + gated off; `heal-poc` harness
   runs and prints an accuracy figure (user supplies a key + scenarios).
 - **M5-3:** with `CHECKPOINT_DSN` set the explore run checkpoints to Postgres (user-run); unset → SQLite (unchanged).

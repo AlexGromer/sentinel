@@ -533,6 +533,10 @@ var FALLBACK_SCHEMA = {
       ],
       "group": "run",
       "set_by": [
+        "body:mode",
+        "flag:--goal",
+        "flag:--describe",
+        "flag:--replay",
         "flag:--mode"
       ],
       "type": "enum"
@@ -761,7 +765,7 @@ var FALLBACK_SCHEMA = {
     "REV_OP": "Имя операции подкоманды (list|show|diff|rollback), которое продукт переносит из позиционного аргумента в переменную; проверка перечня уже сделана в agentctl, человек переменную не задаёт. Унаследованное значение перезаписывается безусловно.",
     "RUN_CONFIG": "Это не ручка, а КАНАЛ доставки других ручек: путь к файлу RunConfig, который control-api создаёт сам внутри каталога артефактов прогона (cmd/control-api/main.go:695-707). Человек задаёт значения ВНУТРИ файла (plan_budget/heal_budget/total_budget, auth.*), а не эту переменную; унаследованное значение мертво — agentctl безусловно дописывает `RUN_CONFIG=` (пустую строку, если флага не было).",
     "RUN_ID": "agentctl генерирует идентификатор сам и дописывает его БЕЗУСЛОВНО: cmd/agentctl/main.go:457-458 «cmd.Env = append(filteredEnv(), append([]string{ \"RUN_ID=\" + runID,». runID берётся из newRunID() либо из ОТДЕЛЬНОГО имени SENTINEL_RUN_ID (main.go:688-691) — и причина названа в коде (main.go:686-687): «RUN_ID is a common shell variable, and inheriting it by accident would make two unrelated runs claim one identity». …",
-    "RUN_MODE": "agentctl пишет его безусловно во ВСЕХ путях: cmd/agentctl/main.go:696 «\"RUN_MODE=\" + runMode» плюс литералы 760 (baseline), 775 (clear-quarantine), 793 (export-spec), 830 (revisions), 992 (explore), 1006 (import), 1024 (report), 1066 (calibrate). Унаследованное значение всегда затирается (append после filteredEnv, побеждает последнее). Режим уже опубликован схемой как перечень верхнего уровня «modes» (cmd/control-…",
+    "RUN_MODE": "поверхность ОПУБЛИКОВАНА перечнем `modes` верхнего уровня и полем `fields.mode`; переменная — безусловный run-var: `agentctl` пишет `RUN_MODE=` на КАЖДОМ пути (общий `run` плюс восемь подкоманд), append идёт ПОСЛЕ filteredEnv, и побеждает последнее значение — значит унаследованное до мозга не доезжает никогда. Тот же класс, что MESSAGE, PLANNER и SCENARIO. ⚠ ПРЕЖНЯЯ ПРИЧИНА ЗДЕСЬ ОБРЫВАЛАСЬ МНОГОТОЧИЕМ НА ПОЛУСЛОВЕ и держала девять номеров строк — число в прозе есть обещание, которое никто не перезамеряет; счёт путей проверяется гейтом, а не переписыванием номеров.",
     "SCENARIO": "поверхность ОПУБЛИКОВАНА полем `fields.scenario` (main.go:410, `set_by: flag:--scenario`); переменная — безусловный run-var из флага (cmd/agentctl/main.go, литерал `extra`), поэтому унаследованное значение до мозга не доезжает. Тот же случай, что MESSAGE и PLANNER: опубликовано не имя переменной, а способ, которым поле реально задаётся. ⚠ Имя было НЕВИДИМО обходу до W16: `brain/runconfig.py` читает его как `env.get(\"SCENARIO\")`, а форма «отображение» ловила только ОДНОБУКВЕННОГО получателя.",
     "SENTINEL_AGENTCTL": "Имя/путь БИНАРЯ — ровно то, что определение относит к проводке развёртывания. Продукт резолвит его сам двумя запасными способами (PATH, затем bin/agentctl), так что человеку задавать нечего; переменная существует для нестандартной раскладки файлов и для стенда (tests/test_trace_redaction_offline.py:56-59 «Call the real `_redact_trace` with SENTINEL_AGENTCTL pointed wherever the case needs»).",
     "SENTINEL_CONVERSATIONS_DB": "Путь к файлу SQLite — каталог/файл, то есть проводка развёртывания. Docstring читателя сам называет назначение (__main__.py:646): «SENTINEL_CONVERSATIONS_DB (an override for tests / relocation) or the air-gapped default state/conversations.db». Плюс выбор хранилища перекрывается совсем другим именем: :645 «CHECKPOINT_DSN (Postgres) overrides this in `_checkpointer`» — операторский выбор «где живут треды» делается …",
@@ -773,7 +777,7 @@ var FALLBACK_SCHEMA = {
     "SENTINEL_LLM_BUDGET_FILE": "Путь к файлу состояния (выученный потолок токенов), умолчание — state/llm-budget.json. Операторская ручка здесь НЕ путь, а флаг, из которого продукт этот путь ставит сам: cmd/agentctl/main.go:721 «extra = appendBudgetIsolation(extra, dir, *rf.isolateBudget)» → appendBudgetIsolation «return append(extra, \"SENTINEL_LLM_BUDGET_FILE=\"+filepath.Join(dir, \"llm-budget.json\"))», флаг объявлен в main.go:606 «fs.Bool(\"isola…",
     "SENTINEL_LOG_LEVEL": "уже настраивается разделом `logging` конфигурационного документа (persistedLoggingEnv, cmd/control-api/logenv.go:53) — второй дескриптор писал бы ту же переменную из второго места, а в mergedPersistedEnv (logenv.go:236-243) слой `settings` накладывается ПОСЛЕ `logging` и молча победил бы его",
     "SENTINEL_LOG_LEVELS": "уже настраивается разделом `logging` конфигурационного документа, и только он умеет выразить поКАТЕГОРИЙНЫЕ уровни (`heal=info,llm=debug`), которых плоский дескриптор не описывает; дескриптор в `settings` завёл бы второго автора той же переменной, побеждающего первого в mergedPersistedEnv",
-    "SENTINEL_OBSERVE": "⚠ Это переменная СУЩЕСТВУЮЩЕГО поля блока `fields` — `observe`. Ей нужен не новый дескриптор, а ключ `env` у имеющегося поля. Отдельно: brain/runconfig.py:45 «\"observe\": \"SENTINEL_OBSERVE\"» — имя УЖЕ объявлено в таблице RunConfig→env, так что источник для ключа брать неоткуда, кроме этой строки; а runconfig.py:61-65 фиксирует, что в _AGENTCTL_DEFAULTS его намеренно нет («мутация её выживания ничего не покрасила»).",
+    "SENTINEL_OBSERVE": "поверхность ОПУБЛИКОВАНА полем `fields.observe`; переменная — безусловный run-var из флага `--observe`, поэтому унаследованное значение до мозга НЕ ДОЕЗЖАЕТ. Тот же класс, что MESSAGE, PLANNER и SCENARIO. ⚠ ПРЕЖНЯЯ ПРИЧИНА ЗДЕСЬ БЫЛА ЛОЖНА И ПРЕДПИСЫВАЛА ДЕФЕКТ: она гласила «ей нужен ключ `env` у имеющегося поля», то есть предлагала опубликовать доставку, которой нет по контракту — схема пообещала бы слой, мёртвый по построению, и гейт каталога был бы зелен над ним. Слой у наблюдения теперь ЕСТЬ и он другой: сохранённые умолчания прогона (`personalRunDefaults`, ключ `run.observe`), откуда значение уезжает ФЛАГОМ и называется в `inherited_defaults` (решение Alex, W17). Отдельно: brain/runconfig.py:45 «\"observe\": \"SENTINEL_OBSERVE\"» — имя УЖЕ объявлено в таблице RunConfig→env, так что источник для ключа брать неоткуда, кроме этой строки; а runconfig.py:61-65 фиксирует, что в _AGENTCTL_DEFAULTS его намеренно нет («мутация её выживания ничего не покрасила»).",
     "SENTINEL_OWNER": "Продукт ставит это сам из состояния запроса, а не человек: control-api резолвит владельца из предъявленного удостоверения и передаёт флагом — cmd/control-api/main.go:658-659 «if req.owner != \"\" { args = append(args, \"--owner\", req.owner) }», причём поле НЕэкспортируемое именно чтобы клиент не мог назвать себя чужим именем (main.go:634-637 «a client that could name its own owner could write into somebody else's set…",
     "SENTINEL_RECORD": "Пер-прогонное расширение режима `observe=record` с одним автором (`brain/observe.py::apply`) и одним читателем (`pw-executor/src/record.ts`). Сохранённая в развёртывании, она обходит отказ, который `brain/observe.py` выносит У ДВЕРИ для пары «запись + подключение по CDP»: в развёртывании по умолчанию прогон подключается к браузеру-службе (docker-compose.yml:225 `PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT-http://browser:92…",
     "SENTINEL_REVISIONS_DIR": "Путь КАТАЛОГА хранилища ревизий — проводка развёртывания (умолчание state/revisions, файловый стор без сетевого сервиса, brain/__main__.py:219 «file-based under state/revisions»). В дереве его задают только тесты (tests/test_revisions_offline.py:122, tests/test_revisions_surface_offline.py:39); в compose/entrypoint не встречается. ⚠ один и тот же литерал умолчания продублирован в двух читателях.",
@@ -797,9 +801,7 @@ var FALLBACK_SCHEMA = {
     "llm",
     "goal"
   ],
-  "planner_contexts": {
-    "chat": "goal"
-  },
+  "planner_contexts": {},
   "planner_default": "heuristic",
   "roles": [
     "planner",

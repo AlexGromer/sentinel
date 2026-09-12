@@ -3628,7 +3628,18 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     sel.innerHTML = '';
     var o0 = document.createElement('option');
     o0.value = '';
-    o0.textContent = (en ? 'deployment default' : 'по умолчанию в развёртывании') + (def ? ' — ' + def : '');
+    /* [OBSERVE-DEPLOYMENT-DEFAULT-DOES-NOT-EXIST]. Пункт НАЗЫВАЛ продуктовую константу «умолчанием
+       в развёртывании», хотя слоя, которым развёртывание могло бы её изменить, не существовало ни
+       одного. W17 слой завёл (`run.observe` в сохранённых умолчаниях прогона), и подпись теперь
+       различает два РАЗНЫХ факта: если развёртывание что-то сохранило — это его умолчание и оно
+       названо; если нет — это умолчание ПРОДУКТА, и врать про развёртывание больше не нужно.
+       Сохранённый документ приезжает позже схемы, поэтому заполнение зовётся повторно, когда он
+       приедет: иначе пункт навсегда остался бы с продуктовым значением. */
+    var saved = ((typeof cfgDoc !== 'undefined' && cfgDoc && cfgDoc.run) || {}).observe || '';
+    var shown = saved || def;
+    o0.textContent = (saved ? (en ? 'deployment default' : 'по умолчанию в развёртывании')
+                            : (en ? 'product default' : 'умолчание продукта'))
+                   + (shown ? ' — ' + shown : '');
     sel.appendChild(o0);
     (f.enum||[]).forEach(function(m){
       var o = document.createElement('option');
@@ -6608,6 +6619,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
                           'showing defaults — the saved config could not be read (HTTP '+rc.status+')'));
         }
       } catch(e2){ /* offline / CORS — defaults are still worth showing */ }
+      /* Повторное заполнение селектора наблюдения: до этой строки он знал только СХЕМУ, то есть
+         продуктовое умолчание, и не мог назвать сохранённое развёртыванием (W17). */
+      if (cfgSchema) lvFillObserve(cfgSchema);
     } else {
       cfgSetStatus(bi('значения по умолчанию · впишите токен выше и нажмите «Проверить», чтобы увидеть сохранённые',
                       'defaults · enter a token above and press Check to see the saved values'));

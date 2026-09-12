@@ -252,6 +252,21 @@ var personalRunDefaults = []struct {
 	{"run", "plan_budget", func(r *runRequest) string { return r.PlanBudget }, func(r *runRequest, v string) { r.PlanBudget = v }, nil},
 	{"run", "heal_budget", func(r *runRequest) string { return r.HealBudget }, func(r *runRequest, v string) { r.HealBudget = v }, nil},
 	{"run", "total_budget", func(r *runRequest) string { return r.TotalBudget }, func(r *runRequest, v string) { r.TotalBudget = v }, nil},
+	// [OBSERVE-DEPLOYMENT-DEFAULT-DOES-NOT-EXIST]. ⚠ ЗАГОЛОВОК ЗАПИСИ БЫЛ ЛОЖЕН, и это замер: умолчание
+	// наблюдения СУЩЕСТВУЕТ, опубликовано (`fields.observe.default = "frames"`) и применяется
+	// (brain/observe.py). Не существовало СЛОЯ, которым его можно изменить, — а пять поверхностей
+	// подписывали продуктовую константу словом «развёртывание». Проверено по всем трём слоям:
+	// в `settingsSchema` ключа нет (44 имени), в этой таблице не было, а окружение мертво ПО
+	// КОНТРАКТУ — `agentctl` дописывает run-var `SENTINEL_OBSERVE=` безусловно ПОСЛЕ унаследованного,
+	// и os/exec берёт последнее значение.
+	//
+	// Поэтому слой заводится ЗДЕСЬ, через argv (решение Alex, W17), а не ключом `env` у дескриптора:
+	// ключ `env` дал бы МЁРТВЫЙ слой под зелёным гейтом — схема обещала бы доставку, которой нет.
+	// Отсюда значение уезжает флагом `--observe` (appendRunFlags) и называется поимённо в
+	// `inherited_defaults`, то есть «не выбирал» и «выбрал ровно это» остаются разными фактами.
+	// Развёртывание без аккаунтов имеет владельца "" и пишет ГЛОБАЛЬНЫЙ документ, значит для него
+	// `run.observe` — буквально умолчание развёртывания, каким его всё это время и называли.
+	{"run", "observe", func(r *runRequest) string { return r.Observe }, func(r *runRequest, v string) { r.Observe = v }, nil},
 	{"auth", "storage_state", func(r *runRequest) string { return r.StorageState }, func(r *runRequest, v string) { r.StorageState = v }, nil},
 	{"auth", "storage_state_save", func(r *runRequest) string { return r.StorageStateSave }, func(r *runRequest, v string) { r.StorageStateSave = v }, nil},
 	// ⚠ И ПЛАН ВХОДА ТОЖЕ НЕ НАСЛЕДУЕТСЯ ПРИ ВОСПРОИЗВЕДЕНИИ. Он доезжает переменной `PLAN_FILE`, и

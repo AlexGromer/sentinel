@@ -75,17 +75,24 @@ x-sentinel-base: &sentinel-base
     # container. Empty (default) = each run launches its own, unchanged. Set it to use the service:
     #   PW_CDP_ENDPOINT=http://browser:9223 docker compose --profile browser up -d browser
     PW_CDP_ENDPOINT: ${PW_CDP_ENDPOINT:-}
-    # --- Local model via the optional `ollama` service (uncomment to enable) -------------------
-    # LLM_BACKEND: openai
-    # LLM_BASE_URL: http://ollama:11434/v1
-    # LLM_MODEL: ${LLM_MODEL:-}          # pick one from docs/LOCAL_MODELS.md §3
-    # LLM_API_KEY: noauth                # Ollama ignores the key; the SDK requires a non-empty value
-    # LLM_VISION: ${LLM_VISION:-0}       # set 1 only for a vision-capable heal model
-    # --- or via the optional `litellm` multi-provider router (ADR-045; see docs/ADAPTERS.md) ----
-    # LLM_BACKEND: openai
-    # LLM_BASE_URL: http://litellm:4000/v1
-    # LLM_MODEL: deepseek-chat           # a model_name from deploy/litellm/config.yaml
-    # LLM_API_KEY: ${LITELLM_MASTER_KEY:-}  # the proxy's master_key
+    # --- Local model: set these in `.env`, do NOT uncomment anything -----------------------------
+    # ⚠ ЭТОТ БЛОК БЫЛ ЗАКОММЕНТИРОВАН С ИНСТРУКЦИЕЙ «uncomment to enable», И ИНСТРУКЦИЯ БЫЛА МЁРТВОЙ.
+    # Замерено `docker compose config` (W17): раскомментированные имена доезжают до `browser`, у
+    # которого своего блока `environment:` нет, и НЕ доезжают до `control-api`, у которого он есть —
+    # мерж-ключ YAML замещает отображение целиком (тот же дефект файл уже фиксирует у PW_CDP_ENDPOINT).
+    # То есть ручка локальной модели была мертва ровно для сервиса, который запускает КАЖДЫЙ прогон
+    # из интерфейса: такой прогон молча уходил на дефолт `anthropic` и офлайн-эвристику.
+    #
+    # Поэтому имена живые и интерполируются из окружения/`.env`, а ТЕ ЖЕ имена продублированы в
+    # собственном блоке `control-api` ниже. Один канал, работающий для обоих ярусов — CLI-сервиса и
+    # control-api; «раскомментируй» не работает ни для одного из них по построению.
+    #   ollama:  LLM_BACKEND=openai LLM_BASE_URL=http://ollama:11434/v1 LLM_MODEL=<см. docs/LOCAL_MODELS.md §3> LLM_API_KEY=noauth
+    #   litellm: LLM_BACKEND=openai LLM_BASE_URL=http://litellm:4000/v1 LLM_MODEL=<model_name из deploy/litellm/config.yaml> LLM_API_KEY=$LITELLM_MASTER_KEY
+    LLM_BACKEND: ${LLM_BACKEND:-}
+    LLM_BASE_URL: ${LLM_BASE_URL:-}
+    LLM_MODEL: ${LLM_MODEL:-}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    LLM_VISION: ${LLM_VISION:-}
 
 services:
   # Primary entrypoint. ENTRYPOINT is /app/bin/agentctl — append subcommands after the name:
@@ -198,6 +205,15 @@ services:
       CONTROL_API_TOKEN: ${CONTROL_API_TOKEN:-}
       CONTROL_API_CORS_ORIGINS: ${CONTROL_API_CORS_ORIGINS-http://localhost:8088,https://alexgromer.github.io}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # ⚠ ДУБЛЬ ИМЁН ИЗ ЯКОРЯ, И ОН ОБЯЗАТЕЛЕН, А НЕ ИЗБЫТОЧЕН. Собственный блок `environment:`
+      # ЗАМЕЩАЕТ пришедшее по мерж-ключу целиком, поэтому без этих строк ручка локальной модели
+      # мертва ровно для сервиса, который запускает КАЖДЫЙ прогон из интерфейса (замерено
+      # `docker compose config`, W17). Тот же довод, что записан рядом у PW_CDP_ENDPOINT.
+      LLM_BACKEND: ${LLM_BACKEND:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_VISION: ${LLM_VISION:-}
       # ADR-064 mode 3: serve the embedded UI from this port. Empty/unset = modes 1-2 (unchanged).
       CONTROL_API_SERVE_UI: ${CONTROL_API_SERVE_UI:-}
       # ADR-062/063 service tier: the `store-gateway` service below. Defaulted rather than left to

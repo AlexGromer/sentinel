@@ -2335,6 +2335,48 @@ try {
     await page.unroute('**/v1/runs');
   });
 
+  /* [PLANNER-CONTEXTS-CHAT-HAS-NO-READER]. Соседняя проверка выше сверяет ПРЕСЕЛЕКТЫ — то, что
+     человек видит открытым. Эта сверяет ОТПРАВЛЕННОЕ — то, что уедет в прогон, если ничего не
+     трогать. Две разные величины, и расхождение между ними жило год: схема объявляла
+     `planner_contexts.chat = "goal"`, а чат в своём умолчательном режиме отправлял `heuristic`.
+     Ни один гейт этого не видел, потому что ни один не смотрел на ТЕЛО.
+
+     Наблюдение независимое: ожидание берётся из схемы по HTTP, наблюдаемое — из перехваченного
+     запроса браузера. Гейт не повторяет тернарник страницы и не знает о нём. */
+  await check('чат: планировщик, который УЕЗЖАЕТ в прогон, совпадает с объявленным для его контекста', async () => {
+    await page.goto('about:blank');
+    await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+    await page.click('.rail a[data-nav="chat"]');
+    await page.waitForSelector('#ch-mode', { timeout: 10000 });
+
+    const want = await page.evaluate(async () => {
+      const sc = await (await fetch('/v1/config-schema')).json();
+      const pctx = sc.planner_contexts || {};
+      return { chat: pctx.chat, fallback: sc.planner_default };
+    });
+
+    let body = null;
+    await page.route('**/v1/runs', async (route) => {
+      body = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"run_id":"gate","state":"running"}' });
+    });
+    // Режим НЕ трогаем: проверяется именно «ничего не выбирал и отправил».
+    await page.fill('#ch-target', 'https://app.example');
+    await page.fill('#ch-text', 'open the signup form');
+    await page.click('#ch-send');
+    await page.waitForFunction(() => document.getElementById('ch-mode').disabled, null, { timeout: 8000 });
+    await page.unroute('**/v1/runs');
+
+    // Полы: сравнение двух отсутствий сходится идеально.
+    ok(body, 'чат не отправил POST /v1/runs — сравнивать нечего');
+    ok(want.fallback, 'схема не публикует умолчание планировщика — ожидание брать неоткуда');
+    ok(typeof body.planner === 'string' && body.planner, `в теле чата нет планировщика: ${JSON.stringify(body)}`);
+
+    const expected = want.chat || want.fallback;
+    eq(body.planner, expected,
+      `чат отправляет planner=${body.planner}, а схема объявляет для его контекста ${expected}`);
+  });
+
   /* ------------------------------------------- ADR-107c: the UI as a projection of the schema */
 
   /* Re-establish the connection fields rather than inheriting them. Several checks above reload the
@@ -2579,6 +2621,14 @@ try {
     ok(!schema.pctx.run, 'у формы прогона появился преселект планировщика — запишите причину или снимите его');
     ok(!dom.runPlanner || dom.runPlanner === '' || dom.runPlanner === 'heuristic',
       `форма прогона молча преселектит планировщик ${dom.runPlanner}`);
+    // ⚠ ЧЕТВЁРТАЯ СОБРАННАЯ ВЕЛИЧИНА ДО W17 НЕ СРАВНИВАЛАСЬ НИ С ЧЕМ. `dom.chatPlanner` собирался
+    // в объекте выше и не входил ни в одно утверждение: гейт, чей заголовок обещает «КАЖДЫЙ
+    // преселект», знал о трёх величинах из четырёх. Тот же класс, что вакуумный гейт экспорта
+    // (ADR-175) — проверка читается шире, чем проверяет, и разница видна только тому, кто считает.
+    ok(!schema.pctx.chat,
+      'у чата появился преселект планировщика — заведите ему ЧИТАТЕЛЯ или снимите запись: `_run_chat` прибивает HeuristicPlanner() и PLANNER на этом маршруте не читает');
+    ok(dom.chatPlanner === null,
+      `в чате появился контрол планировщика (#ch-planner = ${dom.chatPlanner}) — ADR-147 запрещает второй выбор на сообщение`);
   }, { allowConsole: freshConfig404 });
 
   await check('the Run button SENDS the budgets and the auth block, not just renders them', async () => {

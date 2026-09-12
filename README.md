@@ -98,7 +98,7 @@ CONTROL_API_SERVE_UI=1 CONTROL_API_CORS_ORIGINS= docker compose up control-api
 **Setup-WebUI (статика, air-gapped, в составе бандла)** входит в этот же `up` →
 открой `http://localhost:8088/setup/` (и `/calculators/`) — генератор конфигурации и калькуляторы в браузере, без сети.
 
-**Локальная модель** (без облака): раскомментируйте блок `LLM_*` в [`docker-compose.yml`](docker-compose.yml) и
+**Локальная модель** (без облака): задайте `LLM_*` в `.env` рядом с [`docker-compose.yml`](docker-compose.yml) (⚠ НЕ «раскомментируйте блок» — так было написано до W17, и это не работало для `control-api`: собственный блок `environment:` замещает якорь целиком, поэтому каждый прогон из интерфейса молча уходил на облачный дефолт) и
 поднимите endpoint — `docker compose --profile ollama up -d ollama` (или мульти-провайдер роутер LiteLLM — `docker compose --profile litellm up -d litellm`, см. [`docs/ADAPTERS.md`](docs/ADAPTERS.md)). Подбор модели/железа — в
 [`docs/LOCAL_MODELS.md`](docs/LOCAL_MODELS.md) и интерактивных калькуляторах на
 [GitHub Pages](https://alexgromer.github.io/sentinel/). Полное руководство по запуску и проверке —

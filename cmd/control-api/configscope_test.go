@@ -538,3 +538,79 @@ func TestReplayDoesNotInheritTheSavedTarget(t *testing.T) {
 		t.Errorf("explore перестал наследовать адрес: %q — исключение расползлось за свои режимы", req.Target)
 	}
 }
+
+// flagPairAt reports whether argv carries `flag` IMMEDIATELY followed by `value`.
+//
+// Adjacency is the point, not a nicety: `strings.Contains(argv, "--observe")` passes on an argv where
+// the flag was placed by the request's own field and the defaults path never ran at all — the exact
+// vacuum this file exists to avoid.
+func flagPairAt(argv []string, flag, value string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+// TestASavedObservationModeReachesTheRunArgv — [OBSERVE-DEPLOYMENT-DEFAULT-DOES-NOT-EXIST].
+//
+// ⚠ ЗАГОЛОВОК ЗАПИСИ БЫЛ ЛОЖЕН, и это измерено: умолчание наблюдения существует, опубликовано
+// (`fields.observe.default`) и применяется (brain/observe.py). Не существовало СЛОЯ, которым его
+// можно изменить: ключа не было ни в `settingsSchema` (44 имени), ни в `personalRunDefaults`, а
+// окружение мертво ПО КОНТРАКТУ — `agentctl` дописывает run-var `SENTINEL_OBSERVE=` безусловно
+// ПОСЛЕ унаследованного. При этом ПЯТЬ поверхностей подписывали продуктовую константу словом
+// «развёртывание», и человек, задавший `SENTINEL_OBSERVE=stream` в compose по подсказке справки,
+// получал `frames` И запись «nothing was asked for» — продукт сообщал, что он не выбирал, ровно
+// там, где он выбрал единственным предложенным способом.
+//
+// НАБЛЮДЕНИЕ ЗДЕСЬ НЕЗАВИСИМОЕ: утверждение на ARGV — артефакте, который читает ДРУГОЙ процесс, — а
+// не на таблице `personalRunDefaults`, которую правит починка. Утверждение о форме исходника («в
+// таблице появилась строка observe») было бы суррогатом: W16 замерил, что мутации проходят сквозь
+// такие насквозь (ADR-170).
+func TestASavedObservationModeReachesTheRunArgv(t *testing.T) {
+	s, _, bob, _ := storeBackedServer(t)
+	if rec, _ := doJSON(t, s, http.MethodPut, "/v1/config",
+		[]byte(`{"run":{"observe":"stream"}}`), bob); rec.Code != http.StatusOK {
+		t.Fatalf("сохранение наблюдения в личной секции: %d", rec.Code)
+	}
+
+	owner := ownerOfToken(t, s, bob)
+	// applyPersonalRunDefaults молча возвращает nil при пустом владельце, и тест, забывший владельца,
+	// утверждал бы на нетронутом запросе — скип, неотличимый от исправности.
+	if owner == "" {
+		t.Fatal("владелец пуст — путь умолчаний не исполнялся бы вовсе, и проверка ниже вакуумна")
+	}
+
+	// 1. НЕ ВЫБИРАЛ — сохранённое доезжает ФЛАГОМ и называется ПОИМЕННО.
+	req := runRequest{owner: owner}
+	used := s.applyPersonalRunDefaults(&req)
+	argv := appendRunFlags([]string{"run"}, &req, "")
+	if !flagPairAt(argv, "--observe", "stream") {
+		t.Fatalf("сохранённое наблюдение не доехало до argv — слоя снова нет: %v", argv)
+	}
+	named := false
+	for _, u := range used {
+		if u == "run.observe" {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("argv несёт унаследованное наблюдение, а ответ его не называет: %v — "+
+			"ADR-166 требует поимённо, иначе человек не узнает, ПОЧЕМУ прогон снимал не то", used)
+	}
+
+	// 2. ВЫБРАЛ САМ — явное побеждает и унаследованным НЕ называется. Без этой ноги «не выбирал» и
+	// «выбрал ровно это» снова стали бы одним актом, только с другой стороны.
+	req2 := runRequest{owner: owner, Observe: "off"}
+	used2 := s.applyPersonalRunDefaults(&req2)
+	argv2 := appendRunFlags([]string{"run"}, &req2, "")
+	if !flagPairAt(argv2, "--observe", "off") {
+		t.Fatalf("явный выбор наблюдения не доехал до argv: %v", argv2)
+	}
+	for _, u := range used2 {
+		if u == "run.observe" {
+			t.Errorf("ответ называет унаследованным поле, которое человек задал сам: %v", used2)
+		}
+	}
+}
