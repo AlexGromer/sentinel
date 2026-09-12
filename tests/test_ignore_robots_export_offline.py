@@ -161,15 +161,19 @@ def test_a_file_without_the_key_does_not_invent_a_choice():
         os.unlink(path)
 
 
-def test_the_hub_exports_the_choice_it_offers():
-    """Вторая половина дефекта жила на странице, и она была ИСПРАВНА: хаб ключ писал, а загрузчик его
-    выбрасывал. Утверждение здесь — про ПАРУ: контрол существует И его значение попадает в файл,
-    который страница предлагает унести. Пропадёт любая половина — экспорт снова начнёт лгать."""
-    hub = io.open(os.path.join(ROOT, "docs", "index.html"), encoding="utf-8").read()
-    check("контрол наблюдения за robots.txt в форме есть", "b-ignorerobots" in hub,
-          "без контрола экспортировать нечего")
-    check("и его значение попадает в экспортируемый run.yaml", "ignore_robots: " in hub,
-          "в сборке YAML нет строки ignore_robots — экспорт снова теряет выбор")
+# [EXPORT-GATE-SATISFIED-BY-AN-UNRELATED-LINE] — здесь СТОЯЛА проверка
+# `test_the_hub_exports_the_choice_it_offers`, и она была ВАКУУМНОЙ. Она искала две подстроки —
+# "b-ignorerobots" и "ignore_robots: " — по ВСЕМУ тексту docs/index.html, а обе давала ОДНА строка
+# карты `cfgFieldIds`, лежащая за девятьсот строк от экспорта. Замерено: удалить и чекбокс, и весь
+# сборщик экспорта — проверка оставалась зелёной. Её докстринг обещал «пропадёт любая половина —
+# экспорт снова начнёт лгать»; ни одна половина пропасть не могла.
+#
+# Утверждение не ослаблено, а ПЕРЕЕХАЛО туда, где его можно сделать честно:
+# scripts/hub-dom-check.mjs, «каждое поле формы прогона доезжает до экспорта». Там страница
+# настоящая, контрол действительно трогают и смотрят, изменился ли экспортируемый документ —
+# наблюдение РАЗНОСТНОЕ и посторонней строкой неудовлетворимое. Здесь эквивалента нет и быть не
+# может: без браузера доступна только форма исходника, а утверждение о форме исходника — суррогат,
+# сквозь который мутации проходят насквозь. Именно так этот файл и ошибся.
 
 
 def test_the_two_tables_that_must_agree_still_agree():
@@ -192,7 +196,6 @@ def main():
         test_yaml_on_off_arrive_as_the_reader_expects,
         test_an_explicit_flag_beats_the_file,
         test_a_file_without_the_key_does_not_invent_a_choice,
-        test_the_hub_exports_the_choice_it_offers,
         test_the_two_tables_that_must_agree_still_agree,
     ):
         fn()

@@ -1259,19 +1259,15 @@ func TestAFailedSpawnReportsExitMinusOneRatherThanACleanZero(t *testing.T) {
 func TestASpawnThatNeverHappenedIsRecordedInTheServiceJournalAtWarn(t *testing.T) {
 	s := brokenSpawnServer(t)
 	id := postRunAndWait(t, s, `{"target":"file:///x.html"}`)
-	var found *svclog.Record
-	records := readJournal(t, s.repo)
-	for i := range records {
-		if records[i].Code == codeRunSpawnFailed {
-			found = &records[i]
-			break
-		}
-	}
-	if found == nil {
+	// Waits for the RECORD, not for the run state — see waitForJournalRecord. postRunAndWait returns
+	// on the state flip, which spawnRun performs BEFORE it writes this line, so reading the file here
+	// was reading it too early: measured 1 failure in 30 on an unmodified tree.
+	found, ok := waitForJournalRecord(t, s.repo, codeRunSpawnFailed)
+	if !ok {
 		// Measured before this existed: the journal held exactly ONE line about this run —
 		// `service.api_call POST /v1/runs → 202`, the line that makes the deployment look like it worked.
-		t.Fatal("nothing in the service journal says the spawn failed; the only record of this run is the " +
-			"202 that made it look accepted")
+		t.Fatalf("nothing in the service journal says the spawn failed after %s; the only record of this "+
+			"run is the 202 that made it look accepted", journalWaitCeiling)
 	}
 	if found.Lvl != "warn" {
 		t.Fatalf("a spawn that never happened is a record somebody comes looking for: lvl=%q", found.Lvl)
