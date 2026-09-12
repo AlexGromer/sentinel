@@ -504,6 +504,21 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 		// new setting arrives with sane input constraints rather than inheriting `step=1000` from an
 		// `else` written for token budgets.
 		"settings": settingsSchema,
+		// [CFG-GROUP-LABELS-STOPPED-COVERING]. ИМЯ ГРУППЫ ПЕРЕЕХАЛО СЮДА, потому что до W17 его не было
+		// нигде: `settingsSchema` объявляет у каждой записи ГРУППУ, но не то, как она называется
+		// по-человечески, — и обе страницы держали свои рукописные копии (`CFG_GROUP_LABELS` в хабе,
+		// `SETTING_GROUPS` в мастере). ADR-165 вырастил схему с 16 записей и 4 групп до 44 и 13, обе
+		// копии остались на четырёх, и ни одна проверка этого не заметила.
+		//
+		// ⚠ ЦЕНА ОКАЗАЛАСЬ НЕ КОСМЕТИЧЕСКОЙ, И ЭТО ЗАМЕРЕНО. Мастер рисовал контролы ТОЛЬКО для групп из
+		// своей копии — 23 настройки из 44, — `buildConfigDoc` собирает лишь отрисованное (`if (!el)
+		// return`), а PUT ЗАМЕЩАЕТ секцию целиком (замерено: PUT {log_keep,heal_auto} затем PUT {log_keep}
+		// оставляет в документе только `log_keep`). То есть одно сохранение из мастера УНИЧТОЖАЛО 21
+		// сохранённое значение молча.
+		//
+		// `order` задан явным полем, а не позицией: map в Go неупорядочен, и порядок разделов не может
+		// зависеть от того, как его сегодня обошли.
+		"setting_groups": settingGroups,
 		// ADR-109 / Alex's directive: which sections of the stored document configure the TOOL (admin
 		// only) and which belong to the person using it. Published verbatim from the one map that
 		// enforces it (configscope.go), so an interface disables what a caller may not change instead of
@@ -522,6 +537,26 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 // Grouping is by the question the operator is answering, not by which binary happens to read the
 // variable: "how long do artifacts live" is one decision even though logs are pruned by agentctl and
 // traces by the brain.
+// settingGroups — человеческое имя каждой группы `settingsSchema`, на обоих языках, с явным порядком.
+// ЕДИНСТВЕННЫЙ источник: обе страницы раньше держали свои копии, расходившиеся молча. Полноту сверяет
+// TestEverySettingGroupHasBilingualLabel — В ОБЕ СТОРОНЫ, поэтому ни группа без метки, ни метка без
+// группы (как мёртвая `logging` в хабе) больше не проходят.
+var settingGroups = map[string]map[string]any{
+	"gates":     {"ru": "Гейты — что считать провалом", "en": "Gates — what counts as a failure", "order": 1},
+	"healing":   {"ru": "Самопочинка", "en": "Self-healing", "order": 2},
+	"hitl":      {"ru": "Участие человека", "en": "Human involvement", "order": 3},
+	"retention": {"ru": "Сроки хранения", "en": "Retention", "order": 4},
+	"llm":       {"ru": "Модели и подключение", "en": "Models and connection", "order": 5},
+	"chat":      {"ru": "Чат", "en": "Chat", "order": 6},
+	"explore":   {"ru": "Обход приложения", "en": "Exploring the application", "order": 7},
+	"browser":   {"ru": "Браузер", "en": "Browser", "order": 8},
+	"adapters":  {"ru": "Адаптеры", "en": "Adapters", "order": 9},
+	"security":  {"ru": "Безопасность", "en": "Security", "order": 10},
+	"telemetry": {"ru": "Телеметрия", "en": "Telemetry", "order": 11},
+	"health":    {"ru": "Здоровье сервисов", "en": "Service health", "order": 12},
+	"app":       {"ru": "Приложение под тестом", "en": "Application under test", "order": 13},
+}
+
 var settingsSchema = map[string]any{
 	// --- retention: how long artifacts of past runs stay on disk ------------------------------------
 	"log_keep": map[string]any{

@@ -516,7 +516,21 @@ try {
     await page.click('button[data-next="params"]');
 
     const rows = await page.$$eval('#settings input', (els) => els.map((e) => e.id));
-    ok(rows.length >= 10, `settings rendered (${rows.length} controls)`);
+    // ⚠ ПОЛ `rows.length >= 10` БЫЛ СЛЕП, И ЭТО ЗАМЕРЕНО, А НЕ ПРЕДПОЛОЖЕНО. Мастер держал
+    // рукописный перечень групп (четыре из тринадцати) и рисовал 23 контрола из 44 — пол в десять
+    // проходил идеально над спрятанной половиной. Цена была не косметической: `buildConfigDoc`
+    // собирает ТОЛЬКО отрисованное, а PUT замещает секцию `settings` целиком, поэтому одно
+    // сохранение из мастера молча уничтожало 21 сохранённое значение.
+    //
+    // Число теперь СРАВНИВАЕТСЯ с независимым наблюдением — составом `settings` в ответе сервера, —
+    // а не с константой, которую пришлось бы поднимать руками при каждой новой настройке. Пол
+    // остаётся спутником вывода: сравнение двух нулей сходится идеально.
+    const declared = await page.evaluate(() => Object.keys((window.SCHEMA || {}).settings || {}).length);
+    ok(declared >= 30, `schema declares only ${declared} settings — the comparison below is vacuous`);
+    eq(rows.length, declared,
+      `the wizard renders ${rows.length} controls for ${declared} settings — the hidden ones are not ` +
+      'merely invisible: buildConfigDoc collects only what is rendered, and a PUT replaces the whole ' +
+      'section, so saving from here destroys every value it never drew');
     ok(rows.includes('s-log_ttl_hours'), 'the TTL knob this was asked for is present');
 
     // The hint is the WHOLE POINT: a number with no explanation is what the env var already was.
