@@ -25,7 +25,7 @@ A catalogue of features that work but are hard to reach because nothing named th
 
 | Capability | How to reach it |
 |---|---|
-| **Scenario library** | GET/DELETE /v1/scenarios — saved scenarios as reusable assets. |
+| **Scenario library** | GET /v1/scenarios and DELETE /v1/scenarios/{id} — saved scenarios as reusable assets. |
 | **Promote a scenario to a test** | POST /v1/tests/promote — turn a scenario into a named test. |
 | **Metrics and trends** | GET /v1/results, GET /v1/trends — run outcomes and their trend, natively in the UI (ADR-051). |
 | **Server-side log filtering** | GET /v1/runs/{id}/logs — filter by level/source/category/module/code. |
