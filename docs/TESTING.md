@@ -275,7 +275,7 @@ DESCRIBE="fill the username field with 'alice', then click the Pay button" \
 auth:
   storage_state: state/auth.json  # пропускает логин, если файл есть
   pw_no_trace: true               # обязателен при наличии secretRef
-  login_plan: runs/login/plan.json
+  login_plan: runs/login/plan.json   # исполняется ПЕРЕД прогоном, сессия уходит прогону (M9.1 §4.1)
 
 scenarios:
   - name: checkout

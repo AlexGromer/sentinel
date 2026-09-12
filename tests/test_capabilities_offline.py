@@ -111,10 +111,20 @@ def _resolve(cid, kind, ref, agentctl, control_api, brain_main, compose, product
         # проверял первое, выдавая за второе. Ключ RunConfig обязан: (1) существовать в таблице
         # соответствий brain/runconfig.py и (2) МАТЕРИАЛИЗОВЫВАТЬСЯ сервером в run.yaml — иначе это
         # снова обещание пути, которым никто не ходит.
-        runcfg = _read(os.path.join("brain", "runconfig.py"))
-        assert f'"{ref}"' in runcfg, (
-            f"{cid}: RunConfig key {ref!r} is not in brain/runconfig.py's mapping table")
-        assert f'"{ref}"' in control_api, (
+        #
+        # ⚠ КЛЮЧ МОЖЕТ ЖИТЬ НЕ В `runconfig.py`, И ЭТО НЕ ИСКЛЮЧЕНИЕ, А УСТРОЙСТВО. С ADR-123 блоки
+        # `auth:` и `deploy:` — АДАПТЕРНЫЕ: их подключи объявляет выбранный адаптер (`brain/adapters.py`),
+        # а не литерал в загрузчике; ровно затем, чтобы внеплановый механизм аутентификации мог быть
+        # настроен, а не лишён своих ключей на пороге. Правило прежнее — ключ обязан существовать там,
+        # где он ОБЪЯВЛЕН, — но мест объявления два, и обход идёт по обоим. Ссылка вида `auth.login_plan`
+        # проверяется по подключу.
+        runcfg = _read(os.path.join("brain", "runconfig.py")) + _read(os.path.join("brain", "adapters.py"))
+        needle = ref.split(".")[-1]
+        assert f'"{needle}"' in runcfg, (
+            f"{cid}: RunConfig key {ref!r} is declared neither in brain/runconfig.py nor in "
+            f"brain/adapters.py — a path nobody walks")
+        # Тем же подключом: сервер материализует секцию `auth`, а внутри неё — именно подключ.
+        assert f'"{needle}"' in control_api, (
             f"{cid}: RunConfig key {ref!r} is never materialised by control-api into run.yaml, so the "
             f"catalogue offers a path nothing writes")
     elif kind == "env":
@@ -192,7 +202,7 @@ def main() -> int:
     # run and may not fall. Raising the floor is a deliberate edit that says "this many are now
     # genuinely reachable three ways", which is the only claim worth trusting.
     THREE = {"ui", "cli", "http"}
-    MIN_THREE_WAY = 14         # ⚠ may only ever go UP; today's honest number. 13 -> 14: ADR-160.
+    MIN_THREE_WAY = 15         # ⚠ may only ever go UP; today's honest number. 13 -> 14: ADR-160.
     #                            12 -> 13 at ADR-152: `goal-reached` ships with all three surfaces
     #                            from the start (terminal run line · artifact over HTTP · the hub's
     #                            Results view), so the floor rises WITH the feature rather than
@@ -272,7 +282,12 @@ def main() -> int:
     # 13 -> 14: ADR-160 добавил `machine-tokens` СРАЗУ тремя путями — карточка в «Настройках»,
     # три глагола `agentctl` и три маршрута. Ратчет РАСТЁТ, то есть это тот случай, ради
     # которого он и заведён; понижение обратно теперь красное.
-    THREE_WAY_TODAY = 14       # ⚠ равенство, не порог: менять ТОЛЬКО вместе с каталогом и с причиной
+    # 14 -> 15: W17 дал `login-as-test` ПОТРЕБИТЕЛЯ. До этого `auth.login_plan` принимался схемой,
+    # показывался формой и писался в `run.yaml`, а читать его было некому — возможность числилась
+    # артефактом развёртывания («вопрос о трёх путях к нему не применяется»). Теперь план входа
+    # исполняется перед прогоном (M9.1_CONTRACT §4.1), и путей стало три: `run.yaml`, `POST /v1/runs`
+    # и форма прогона. Ратчет РАСТЁТ; понижение обратно теперь красное.
+    THREE_WAY_TODAY = 15       # ⚠ равенство, не порог: менять ТОЛЬКО вместе с каталогом и с причиной
     # 26 -> 27: ADR-159 добавил `own-password` (смена своего пароля) с ДВУМЯ путями, ui и http.
     # Третьего быть не может, и это замер, а не недоделка: маршрут принимает только сессию (машинному
     # токену — 403, у машины нет аккаунта), а сессии у CLI нет и заводить её отказались отдельным

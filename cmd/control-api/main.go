@@ -434,7 +434,7 @@ func (s *server) handleConfigSchema(w http.ResponseWriter, _ *http.Request) {
 			// allowlist to carry a convenience would spend a security boundary.
 			"storage_state":      map[string]any{"type": "string", "group": "auth", "set_by": []string{"env:STORAGE_STATE", "runconfig:auth.storage_state"}},
 			"storage_state_save": map[string]any{"type": "string", "group": "auth", "set_by": []string{"env:STORAGE_STATE_SAVE", "runconfig:auth.storage_state_save"}},
-			"login_plan":         map[string]any{"type": "string", "group": "auth", "set_by": []string{"runconfig:auth.login_plan"}},
+			"login_plan":         map[string]any{"env": "LOGIN_PLAN", "type": "string", "group": "auth", "set_by": []string{"runconfig:auth.login_plan", "env:LOGIN_PLAN"}},
 			"pw_no_trace":        map[string]any{"type": "bool", "default": false, "group": "auth", "set_by": []string{"env:PW_NO_TRACE", "runconfig:auth.pw_no_trace"}},
 			// Determinism guards. `ci` forbids `force_replay`; the rule lives in agentctl and the API
 			// rejects the pair early so a person gets a 400 instead of a run that dies at startup.

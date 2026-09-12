@@ -500,9 +500,11 @@ var FALLBACK_SCHEMA = {
       "type": "bool"
     },
     "login_plan": {
+      "env": "LOGIN_PLAN",
       "group": "auth",
       "set_by": [
-        "runconfig:auth.login_plan"
+        "runconfig:auth.login_plan",
+        "env:LOGIN_PLAN"
       ],
       "type": "string"
     },

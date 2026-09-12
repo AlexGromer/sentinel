@@ -1,6 +1,6 @@
 {
- "count": 172,
- "derived_total": 172,
+ "count": 173,
+ "derived_total": 173,
  "generated_from": "scripts/env_inventory.py + офлайновый снимок схемы",
  "parameters": [
   {
@@ -722,6 +722,15 @@
    "how_ru": "перекрывает `LLM_VISION` для роли `planner`",
    "name": "LLM_VISION_PLANNER",
    "ru": "— только для роли `planner`"
+  },
+  {
+   "default": null,
+   "en": "run field `login_plan`",
+   "group": "auth",
+   "how_en": "run field `login_plan`; `runconfig:auth.login_plan`, `env:LOGIN_PLAN`",
+   "how_ru": "поле прогона `login_plan`; `runconfig:auth.login_plan`, `env:LOGIN_PLAN`",
+   "name": "LOGIN_PLAN",
+   "ru": "поле прогона `login_plan`"
   },
   {
    "default": null,

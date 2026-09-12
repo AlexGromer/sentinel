@@ -1165,6 +1165,65 @@ def _keep_trace(outcome: "Outcome") -> bool:
     return os.environ.get("SENTINEL_TRACE_ALWAYS") == "1"
 
 
+def _run_login_plan(pw_cmd: str, run_id: str, out: pathlib.Path):
+    """M9.1_CONTRACT §4.1 — исполнить план входа ПЕРЕД основным прогоном и отдать ему сессию.
+
+    Возвращает None, если проход не требовался (ключ не задан либо сессия уже есть), иначе код
+    выхода прохода: 0 — сессия получена и подставлена, ненулевое — прогон обязан остановиться.
+
+    ⚠ ДО W17 `auth.login_plan` БЫЛ ОБЕЩАНИЕМ БЕЗ ПОТРЕБИТЕЛЯ: схема принимала, форма показывала,
+    control-api писал в `run.yaml` — и читать было некому. Человек заполнял поле, получал
+    подтверждение и обычный прогон БЕЗ сессии.
+
+    СВОЙ ИСПОЛНИТЕЛЬ, А НЕ ОБЩИЙ С ОСНОВНЫМ ПРОГОНОМ, и это не расточительство: `_run_replay`
+    завершает работу вызовом `shutdown`, то есть переиспользовать сессию после него нельзя по
+    устройству. Разделение к тому же ВЕРНО по смыслу — вход и прогон суть два разных прогона, и
+    результат входа передаётся не общим состоянием браузера, а файлом сессии, как и в ручном
+    двухпрогонном порядке из §4.
+    """
+    plan = os.environ.get("LOGIN_PLAN", "").strip()
+    if not plan:
+        return None
+    # «У меня уже есть сессия» и «сделай мне её» — разные акты. Переписать первое вторым молча
+    # значило бы отнять у человека готовое состояние, которое он передал намеренно.
+    already = os.environ.get("STORAGE_STATE", "").strip()
+    if already:
+        log("run.login_plan_skipped", plan=plan, state=already)
+        return None
+    # Второго имени для адреса сессии не заводится: если человек уже сказал, куда её класть, туда она
+    # и ляжет. Иначе — рядом с артефактами этого прогона, а не в общем месте, где два прогона стали бы
+    # спорить об одном файле.
+    save_to = os.environ.get("STORAGE_STATE_SAVE", "").strip() or str((out / "login-state.json").resolve())
+    login_out = out / "login"
+    login_out.mkdir(parents=True, exist_ok=True)
+    log("run.login_plan_start", plan=plan, state=save_to)
+
+    prev = os.environ.get("STORAGE_STATE_SAVE")
+    os.environ["STORAGE_STATE_SAVE"] = save_to
+    try:
+        ex = make_executor(pw_cmd)
+        # Тот же `_run_replay`, что исполняет любой замороженный план, — включая запрет утечки:
+        # план со `secretRef` при `PW_NO_TRACE != "1"` отказывается там же и тем же кодом 3, до
+        # исполнения первого шага. Второй копии этого правила здесь нет намеренно.
+        rc = _run_replay(ex, run_id + "-login", login_out, "", plan, False,
+                         baseline=False, aut_version="", ci=False, force=False)
+    finally:
+        if prev is None:
+            os.environ.pop("STORAGE_STATE_SAVE", None)
+        else:
+            os.environ["STORAGE_STATE_SAVE"] = prev
+
+    if rc != 0:
+        # Не продолжаем. Основной план, исполненный неаутентифицированным, дал бы вердикт, который
+        # читается как ответ на заданный вопрос и им не является. Код не изобретается заново: план
+        # входа — это тест, и его собственный исход и есть исход попытки войти.
+        log("fatal.login_plan_failed", plan=plan, exit_code=rc)
+        return rc
+    os.environ["STORAGE_STATE"] = save_to
+    log("run.login_plan_done", plan=plan, state=save_to)
+    return 0
+
+
 def _run_replay(ex, run_id, out, target, plan_file, use_llm, *, baseline, aut_version, ci, force) -> int:
     """M2/M3 replay or baseline-capture. Returns the structured exit code from the trust layer."""
     from .store import make_store
@@ -1606,6 +1665,12 @@ def main() -> int:
                                   if _obs_manual else ""))
 
     log("run.config", run_id=run_id, mode=run_mode)
+    # M9.1_CONTRACT §4.1: вход исполняется ПЕРЕД основным прогоном и в СВОЕЙ сессии; сюда он отдаёт
+    # только файл состояния. Стоит до `make_executor`, потому что основному прогону нужен исполнитель
+    # УЖЕ со подставленным `STORAGE_STATE`.
+    _login_rc = _run_login_plan(pw_cmd, run_id, out)
+    if _login_rc:
+        return _login_rc
     ex = make_executor(pw_cmd)
     rc = 1
     _run_span = span("sentinel.run", run_id=run_id, mode=run_mode,
