@@ -1078,10 +1078,15 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
               <span data-lang="en">Services this <span class="mono">docker-compose</span> really ships: <span class="mono">ollama</span> (<span class="mono">--profile ollama</span>) and <span class="mono">litellm</span>, a router over many providers (<span class="mono">--profile litellm</span>, keys in <span class="mono">deploy/litellm/config.yaml</span>). Any other OpenAI-compatible address works too — that one is yours to run. Step by step in the <a href="./setup/">setup wizard</a>.</span>
             </div>
           </div>
-          <label for="b-modelp" style="margin-top:.4rem">LLM_MODEL_PLANNER</label>
-          <input id="b-modelp" placeholder="qwen3:14b  /  claude-opus-4-8  /  o3">
-          <label for="b-modelh" style="margin-top:.4rem">LLM_MODEL_HEAL (<span data-lang="ru">опц.</span><span data-lang="en">opt.</span>)</label>
-          <input id="b-modelh" placeholder="qwen2.5vl:7b  /  claude-sonnet-4-6">
+          <!-- [HUB-LLM-PANEL-KNOWS-TWO-OF-THREE-ROLES]. ЗДЕСЬ ЛЕЖАЛИ ДВА ПОЛЯ, ВПИСАННЫЕ РУКАМИ, и это
+               была ЕДИНСТВЕННАЯ рукописная копия перечня ролей во всём продукте — и единственная, над
+               которой не было гейта. Все остальные держатели выведены из одного источника `llmRoles`:
+               схема, обе серверные проекции, поля мастера, выведенная справка; серверный обход даже
+               утверждён полом. Копия уже разошлась на роль `chat` — опубликованную схемой, принимаемую
+               сервером и читаемую мозгом, но недосягаемую из главного интерфейса. Четвёртая роль
+               разошлась бы так же и так же молча.
+               Поля теперь ВЫВОДЯТСЯ из `roles` схемы (принцип 5). -->
+          <div id="b-rolemodels"></div>
           <!-- ⚠ ТРИ ПОЛОЖЕНИЯ, А НЕ ГАЛОЧКА, и это не украшение. Галочка шлёт значение ТОЛЬКО во
                включённом состоянии, поэтому снятая не отправляла ничего — и сохранённое глобально
                `vision: true` нельзя было выключить на один прогон, хотя сервер явный `false`
@@ -1157,8 +1162,8 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
   <section class="card" id="import" data-view="run">
     <h2><span class="ric">⇪</span><span data-lang="ru">Импорт существующих тестов</span><span data-lang="en">Import existing tests</span></h2>
     <p class="sub">
-      <span data-lang="ru">Загрузите файлы <code>*.spec.ts</code> — получите отчёт о переписывании: что связалось, что по слабому локатору, какая конструкция не имеет эквивалента. Ничего не выполняется, только транспиляция и диагноз.</span>
-      <span data-lang="en">Upload <code>*.spec.ts</code> files — get the rewrite report: what bound, what by a weak locator, which construct has no equivalent. Nothing runs; it transpiles and diagnoses.</span>
+      <span data-lang="ru">Загрузите файлы тестов Playwright или Cypress (<code>*.spec.ts</code>, <code>*.spec.js</code>, <code>*.cy.ts</code>, <code>*.cy.js</code>) — получите отчёт о переписывании: что связалось, что по слабому локатору, какая конструкция не имеет эквивалента. Ничего не выполняется, только транспиляция и диагноз.</span>
+      <span data-lang="en">Upload Playwright or Cypress test files (<code>*.spec.ts</code>, <code>*.spec.js</code>, <code>*.cy.ts</code>, <code>*.cy.js</code>) — get the rewrite report: what bound, what by a weak locator, which construct has no equivalent. Nothing runs; it transpiles and diagnoses.</span>
     </p>
     <div class="ctl-row">
       <!-- aria-label, not a <label>: an <input type=file> has NO text content, so without one its
@@ -1166,8 +1171,9 @@ textarea:focus{outline:none;border-color:var(--acc);box-shadow:var(--glow)}
            one. Found by the per-control sweep in scripts/ui-smoke.mjs, which is the only check that
            walks every field; the `ru / en` form is the hub's own idiom for attributes, which cannot
            carry the <span data-lang> markup the visible text uses (biPlain, docs/index.html:1479). -->
-      <input type="file" id="imp-files" accept=".ts" multiple style="font-size:.82rem"
-             aria-label="Файлы *.spec.ts для импорта / *.spec.ts files to import">
+      <!-- accept и aria-label СТАВЯТСЯ СКРИПТОМ из IMPORT_SUFFIXES: см. довод там. В разметке их
+           держать нельзя — это была бы шестая рукописная копия одного перечня. -->
+      <input type="file" id="imp-files" multiple style="font-size:.82rem">
       <button type="button" class="btn" id="imp-go" disabled><span data-lang="ru">Импортировать</span><span data-lang="en">Import</span></button>
     </div>
     <div id="imp-out" style="display:none;margin-top:.5rem;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:.7rem;font-size:.85rem"></div>
@@ -2677,14 +2683,17 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
     /* env */
     var be=bVal('b-backend'), bu=bVal('b-baseurl').trim(),
-        mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim(),
         vis=bVal('b-vision'), str=bVal('b-structured');
     var env=[];
     if (be){
       env.push('export LLM_BACKEND='+be);
       if (be==='openai'&&bu) env.push('export LLM_BASE_URL='+bu);
-      if (mp) env.push('export LLM_MODEL_PLANNER='+mp);
-      if (mh) env.push('export LLM_MODEL_HEAL='+mh);
+      /* Обход тех же ролей, что и в теле запроса: экспорт обязан воспроизводить ТОТ ЖЕ прогон, а
+         рукописная пара имён снова разошлась бы с перечнем — ровно тот дефект, который здесь чинится. */
+      bRoleList().forEach(function(role){
+        var mv = bModelFor(role);
+        if (mv) env.push('export LLM_MODEL_' + role.toUpperCase() + '=' + mv);
+      });
       /* Экспорт обязан ВОСПРОИЗВОДИТЬ прогон, поэтому положение «выкл» пишется явным нулём, а не
          пропуском: пропуск в терминале означал бы «как в окружении», то есть другой прогон. */
       if (vis!=='') env.push('export LLM_VISION='+(vis==='on'?'1':'0'));
@@ -3323,7 +3332,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     // phase 2 exists only for goal/describe (scenario_head wired -> scenario.json with run_mode "scenario")
     if (sc && (sc.run_mode==='scenario' || (sc.steps&&sc.steps.length) || sc.unmatched!=null)){
       var g=(sc.steps&&sc.steps.length)||0, unm=sc.unmatched;
-      var model=bVal('b-modelp').trim();
+      var model=bModelFor('planner');
       var ok = g>0 ? (unm>0?'warn':true) : 'warn';
       var d=[ (model?bi('модель ','model ')+'<code style="font-size:.85em">'+esc(model)+'</code>':bi('LLM','LLM')),
               bi('сценарий: ','scenario: ')+'<b>'+g+'</b> '+bi('шагов','steps'),
@@ -3547,9 +3556,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var o={};
     var be=bVal('b-backend');
     if (be){ o.backend=be; var bu=bVal('b-baseurl').trim(); if (be==='openai' && bu) o.base_url=bu; }
-    var mp=bVal('b-modelp').trim(), mh=bVal('b-modelh').trim();
-    if (mp) o.model_planner=mp;   // models/vision apply even at the default backend (server accepts backend:"")
-    if (mh) o.model_heal=mh;
+    /* Карта ролей, а не два поля: сервер её принимает и отдаёт ей старшинство (llmRunConfig.modelFor),
+       и только она покрывает ВСЕ роли, включая `chat`. Старые `model_planner`/`model_heal` сервер
+       по-прежнему понимает — ломать чужие вызовы ради формы нельзя, — но хаб шлёт новую. */
+    var models={};
+    bRoleList().forEach(function(role){ var v=bModelFor(role); if (v) models[role]=v; });
+    if (Object.keys(models).length) o.model=models;
     /* Пустая строка = «наследовать», и тогда ключ НЕ отправляется вовсе: отсутствие ключа — это то,
        что сервер читает как «человек не выбирал», и только оно оставляет действовать сохранённый
        слой. Явный выбор уезжает в ОБЕ стороны, потому что `false` здесь — отмена сохранённого
@@ -3558,6 +3570,12 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     var str=bVal('b-structured'); if (str!=='') o.structured = (str==='on');
     return Object.keys(o).length ? o : null;   // nothing set -> null (no per-run override)
   }
+  /* Назван наружу по той же причине, что `cfgFieldIds` ниже: гейт обязан спрашивать у ТЕЛА, которое
+     реально уедет, а не пересказывать формулу сборки. Поле, нарисованное и не читаемое обработчиком,
+     — это ровно тот дефект, который чинит [HUB-LLM-PANEL-KNOWS-TWO-OF-THREE-ROLES], и увидеть его
+     можно только отсюда. */
+  window.bLLM = bLLM;
+
   /* ADR-107c: schema field name -> the control that carries it. THE one place the correspondence
      lives, and the hub DOM gate walks GET /v1/config-schema against it, so a field added to the schema
      with no control here fails a test instead of quietly appearing in no interface.
@@ -3689,6 +3707,44 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 
   /* Открыт как seam по той же причине, что window.lvOnEvent: проверять цену режима надо на
      ОТГРУЖЕННОМ заполнителе формы, с настоящей схемой на входе, а не на его копии в тесте. */
+  /* Поля моделей по ролям — ВЫВОДЯТСЯ из схемы, как наблюдение выше. Запасной литерал нужен ровно
+     затем же, зачем он есть у мастера: без control-API страница всё равно должна быть пригодной, а
+     роли продукта — не тайна. Расхождение запасного литерала со схемой ловит гейт хаба. */
+  var BROLE_FALLBACK = ['planner', 'heal', 'chat'];
+  var BROLE_PLACEHOLDER = {
+    planner: 'qwen3:14b  /  claude-opus-4-8  /  o3',
+    heal: 'qwen2.5vl:7b  /  claude-sonnet-4-6',
+    chat: 'qwen3:8b  /  claude-sonnet-4-6'
+  };
+  function bRoleList(schema){
+    var r = ((schema || cfgSchema || {}).roles) || [];
+    return r.length ? r : BROLE_FALLBACK;
+  }
+  function bModelId(role){ return 'b-model-' + role; }
+  function bModelFor(role){ var el = ge(bModelId(role)); return el ? (el.value || '').trim() : ''; }
+  function bFillRoleModels(schema){
+    var box = ge('b-rolemodels'); if (!box) return;
+    var roles = bRoleList(schema);
+    if (box.getAttribute('data-roles') === roles.join(',')) return;   // идемпотентно: перерисовка стёрла бы ввод
+    box.setAttribute('data-roles', roles.join(','));
+    box.innerHTML = '';
+    roles.forEach(function(role){
+      var lab = document.createElement('label');
+      lab.setAttribute('for', bModelId(role));
+      lab.style.marginTop = '.4rem';
+      lab.textContent = 'LLM_MODEL_' + role.toUpperCase();
+      var inp = document.createElement('input');
+      inp.id = bModelId(role);
+      inp.placeholder = BROLE_PLACEHOLDER[role] || '';
+      box.appendChild(lab);
+      box.appendChild(inp);
+      inp.addEventListener('change', bLlmGuard);
+      inp.addEventListener('input', bLlmGuard);
+      inp.addEventListener('input', renderBuild);
+      inp.addEventListener('change', renderBuild);
+    });
+  }
+  window.bFillRoleModels = bFillRoleModels;
   window.lvFillObserve = lvFillObserve;
 
   /* Поля-чекбоксы, у которых СНЯТОЕ состояние — это выбор, а не молчание. Держится словарём с
@@ -4027,7 +4083,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function bLlmGuard(){
     var box = ge('b-llmwarn'); if (!box) return;
     var be = bVal('b-backend'),
-        mp = bVal('b-modelp').trim(), bu = bVal('b-baseurl').trim();
+        mp = bModelFor('planner'), bu = bVal('b-baseurl').trim();
     /* ADR-147: the EFFECTIVE grounding, not the override field. Once the field defaults to «derived»
        an empty value stopped meaning "heuristic" and started meaning "whatever the intent implies" —
        and reading the raw field here would have silently switched this warning off for exactly the
@@ -4078,7 +4134,8 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     }
     box.style.display = 'none';
   }
-  ['b-planner','b-backend','b-baseurl','b-modelp'].forEach(function(id){
+  /* Поля моделей подписываются в bFillRoleModels — они рисуются позже этой строки. */
+  ['b-planner','b-backend','b-baseurl'].forEach(function(id){
     var el = ge(id); if (el){ el.addEventListener('change', bLlmGuard); el.addEventListener('input', bLlmGuard); }
   });
   /* ADR-078: both target fields, because there are two run paths and only fixing one would have left
@@ -4102,6 +4159,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     el.addEventListener('input',renderBuild);
     el.addEventListener('change',renderBuild);
   });
+  /* Рисуем роли СРАЗУ запасным литералом: без control-API панель всё равно должна быть пригодной, и
+     без этого вызова поля не появились бы вовсе до подключения. Повторный вызов со схемой идемпотентен. */
+  bFillRoleModels(null);
   bSyncMode();   /* initial render */
 
   /* ================================================================
@@ -6492,16 +6552,20 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   function cfgId(k){ return 'cfg-s-' + k.replace(/_/g, '-'); }
   function cfgSetStatus(html){ var el = ge('cfg-status'); if (el) el.innerHTML = html; }
 
-  /* Group headings are the QUESTION each group answers, not the name of the code that reads it —
-     "how long do artifacts live" is one decision even though logs are pruned by agentctl and traces by
-     the brain. An unknown group falls back to its own key rather than being hidden. */
-  var CFG_GROUP_LABELS = {
-    gates:     ['Гейты — что считать провалом',        'Gates — what counts as a failure'],
-    healing:   ['Самопочинка',                          'Self-healing'],
-    hitl:      ['Участие человека',                     'Human involvement'],
-    retention: ['Сроки хранения',                       'Retention'],
-    logging:   ['Логирование',                          'Logging']
-  };
+  /* [CFG-GROUP-LABELS-STOPPED-COVERING]. ЗДЕСЬ ЛЕЖАЛА РУКОПИСНАЯ КОПИЯ ИМЁН ГРУПП, и она протухла
+     молча: ADR-165 вырастил схему с 16 записей и 4 групп до 44 и 13, а карта осталась на пяти — из
+     которых одна (`logging`) не принадлежала НИ ОДНОЙ группе. Девять заголовков из тринадцати
+     приезжали сырым латинским ключом ОДИНАКОВО в обе языковые колонки, что прямо нарушает ADR-085:
+     настройка, чей смысл в том, чтобы её поняли, не может приезжать на одном языке.
+
+     Имя группы теперь ЖИВЁТ В СХЕМЕ (`setting_groups`) — там же, где объявлена сама группа, — и
+     страница его читает, а не хранит. Вторая копия (`SETTING_GROUPS` в мастере) умерла тем же
+     решением, и вместе с ней умерла её цена: мастер рисовал 23 контрола из 44 и одним сохранением
+     уничтожал 21 сохранённое значение.
+
+     Заголовок — это ВОПРОС, на который отвечает группа, а не имя читающего её кода: «сколько живут
+     артефакты» — одно решение, хотя логи чистит agentctl, а трейсы — брейн. Откат на собственный
+     ключ ОСТАВЛЕН: он верен как решение, просто перестал быть основным путём. */
 
   /* cfgMayWriteGlobal comes from the SERVER (GET /v1/config → may_write_global), not from what the page
      thinks of the token it holds. Null means "not asked yet", which is treated as allowed so a page
@@ -6529,12 +6593,23 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       var g = settings[k].group || 'other';
       (groups[g] = groups[g] || []).push(k);
     });
-    var names = Object.keys(groups).sort();
+    /* Порядок разделов задаёт СХЕМА явным полем `order`, а не алфавит: разделы читаются сверху вниз
+       как последовательность решений, и алфавит ставил «Безопасность» перед «Гейтами» без причины.
+       Группа без порядка уезжает в конец, а не теряется. */
+    var gmeta = (cfgSchema || {}).setting_groups || {};
+    var names = Object.keys(groups).sort(function(a,b){
+      var oa = (gmeta[a] || {}).order, ob = (gmeta[b] || {}).order;
+      if (oa == null && ob == null) return a < b ? -1 : a > b ? 1 : 0;
+      if (oa == null) return 1;
+      if (ob == null) return -1;
+      return oa - ob;
+    });
     if (!names.length){ box.innerHTML = '<p class="hint">'+bi('схема не вернула настроек','the schema returned no settings')+'</p>'; return; }
 
     var html = '';
     names.forEach(function(g){
-      var lab = CFG_GROUP_LABELS[g] || [g, g];
+      var gl = ((cfgSchema || {}).setting_groups || {})[g] || {};
+      var lab = [gl.ru || g, gl.en || g];
       html += '<div style="margin-top:.8rem"><h3 style="font-size:.92rem;margin:.2rem 0 .45rem">'
             + '<span data-lang="ru">'+esc(lab[0])+'</span><span data-lang="en">'+esc(lab[1])+'</span></h3>';
       groups[g].forEach(function(k){
@@ -6595,6 +6670,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       if (!rs.ok) throw new Error('HTTP ' + rs.status);
       cfgSchema = await rs.json();
       lvFillObserve(cfgSchema);   /* LIVE-MATRIX: the run form's modes come from the same schema */
+      bFillRoleModels(cfgSchema);  /* поля моделей по ролям — из того же ответа */
       bFillLLMTristate(cfgSchema);  /* ADR-168: vision/structured — три положения, умолчание из схемы */
     } catch(e){ cfgSetStatus('<span class="fail">✗ '+esc(e.message)+'</span>'); return; }
     /* The saved document is token-gated, so with no token this request cannot succeed — and asking
@@ -7043,6 +7119,29 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
   /* Precedence: an ADDRESS the user typed or was sent always beats a view this browser happened to
      remember. Getting that backwards made #connect and #v=logs both land on whatever was open last —
      which is exactly the kind of link that gets pasted into a bug report. */
+  /* [IMPORT-PICKER-OFFERS-ONE-OF-FOUR] — ⚠ ЗАГОЛОВОК ЗАПИСИ НЕВЕРЕН АРИФМЕТИЧЕСКИ, и это замер:
+     `accept=".ts"` сопоставляется по СУФФИКСУ имени, поэтому диалог показывал ДВА из четырёх
+     (`*.spec.ts` и `*.cy.ts`), а прятал два (`*.spec.js`, `*.cy.js`). Опровергнута и вторая половина
+     записи: панель НЕ отвечает «Нет файлов теста» на `.cy.js` — её фильтр этот суффикс принимал,
+     сервер тоже. Настоящий отказ ровно один — дефолтный фильтр диалога.
+
+     Дефект же шире симптома: принимаемый набор вёлся ВРУЧНУЮ шестью местами одного файла (проза ru,
+     проза en, `accept`, `aria-label`, регексп фильтра, текст сообщения) плюс копии вне страницы.
+     Отказ пришёл ровно тем способом, который описывает принцип 5: расширение перечня на сервере
+     обновило копии, до которых дотянулся автор, и не обновило разметку — пропущенное не имеет
+     представления, на которое можно посмотреть.
+
+     ⚠ ПОЧЕМУ КОНСТАНТА, А НЕ ЧТЕНИЕ С СЕРВЕРА В РАНТАЙМЕ: перечень не публикует ни один маршрут, а
+     заводить ради него открытый маршрут дороже, чем сверять копию гейтом. Гейт берёт истину у
+     ЖИВОГО сервера (он сам печатает свой перечень в отказе 400), поэтому расхождение краснеет. */
+  var IMPORT_SUFFIXES = ['.spec.ts', '.spec.js', '.cy.ts', '.cy.js'];
+  (function(){
+    var el = ge('imp-files'); if (!el) return;
+    var masks = IMPORT_SUFFIXES.map(function(x){ return '*'+x; }).join('/');
+    el.setAttribute('accept', IMPORT_SUFFIXES.join(','));
+    el.setAttribute('aria-label', 'Файлы '+masks+' для импорта / '+masks+' files to import');
+  })();
+
   function viewFromLocation(){
     var m = /[#&]v=([a-z]+)/.exec(location.hash || '');
     if (m && VIEWS.indexOf(m[1]) >= 0) return m[1];
@@ -7105,9 +7204,11 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
       // The suffixes the server accepts (control-api importSuffixes). It is NOT a list of engines —
       // a Cypress <=9 suite is named *.spec.ts, and the engine is decided by content server-side.
       // Anything else is NAMED as not sent rather than silently dropped.
-      var specs = files.filter(function(f){ return /\.(spec|cy)\.(ts|js)$/.test(f.name); });
+      var specs = files.filter(function(f){ return IMPORT_SUFFIXES.some(function(x){ return f.name.slice(-x.length) === x; }); });
       var skipped = files.length - specs.length;
-      if (!specs.length){ out.style.display=''; out.innerHTML = bi('Нет файлов теста (*.spec.ts/.spec.js/.cy.ts/.cy.js).','No test files (*.spec.ts/.spec.js/.cy.ts/.cy.js).'); return; }
+      if (!specs.length){ out.style.display='';
+        var masks = IMPORT_SUFFIXES.map(function(x){ return '*'+x; }).join('/');
+        out.innerHTML = bi('Нет файлов теста ('+masks+').','No test files ('+masks+').'); return; }
       out.style.display=''; out.innerHTML = bi('Импорт…','Importing…');
       try {
         var payload = { files: await Promise.all(specs.map(async function(f){
@@ -7250,12 +7351,15 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     'b-loginplan': [
       'План отдельного прогона «вход как тест»: он вводит логин и пароль, а сессию сохраняет в файл выше — после чего боевые прогоны пароля больше не вводят. Пароль в таком плане задаётся ссылкой secretRef на имя переменной окружения, а не значением.',
       'The plan of a separate "login as a test" run: it types the credentials and saves the session to the file above, after which production runs never type the password again. The password in such a plan is a secretRef naming an environment variable, never a value.'],
-    'b-modelp': [
+    'b-model-planner': [
       'Модель, которая строит план. Пустое поле — умолчание сборки; для локального бэкенда сюда идёт имя модели вашего сервера, а не название вендора.',
       'The model that builds the plan. Empty means the build default; for a local backend this takes your server\'s model name, not a vendor brand.'],
-    'b-modelh': [
+    'b-model-heal': [
       'Отдельная модель для самопочинки. Пусто — используется та же, что и для плана. Смысл разделения в том, что переоснова локатора дешевле планирования и не требует такой же сильной модели.',
       'A separate model for healing. Empty reuses the planning one. The point of splitting them is that re-grounding a locator is cheaper than planning and does not need an equally strong model.'],
+    'b-model-chat': [
+      'Модель, которая ведёт разговор в разделе «Чат». Пусто — та же, что у плана. Роль заведена именно затем, чтобы разговор можно было увести на дешёвую модель, оставив планирование на сильной.',
+      'The model that carries the conversation in the Chat view. Empty reuses the planning one. The role exists precisely so talking can go to a cheap model while planning stays on a strong one.'],
     'b-temp': [
       'Разброс ответов модели. Выше — план от прогона к прогону перестаёт совпадать, а вместе с ним и plan_hash, на котором держится воспроизводимость повтора.',
       'How much the model varies. Higher, and the plan stops matching between runs — and so does the plan_hash that replay reproducibility rests on.']

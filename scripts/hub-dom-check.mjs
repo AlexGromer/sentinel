@@ -2405,11 +2405,140 @@ try {
     ok(declared > 0, 'the schema declares no settings — this check would pass vacuously');
     eq(await page.locator('#cfg-groups input').count(), declared,
       'the settings view does not render one control per schema setting');
-    ok(await page.locator('#cfg-groups h3').count() > 1,
-      'every setting landed in one group — the schema\'s `group` is not being read');
+    // ⚠ `count() > 1` БЫЛО СЛИШКОМ СЛАБО, И ЭТО ЗАМЕРЕНО: карта имён в странице держала ПЯТЬ записей
+    // при ТРИНАДЦАТИ группах схемы, девять заголовков приезжали сырым латинским ключом, и эта
+    // проверка оставалась зелёной — двух заголовков ей хватало. Знаменатель берётся из ОТВЕТА
+    // СЕРВЕРА, а не из числа в гейте.
+    const groupCount = await page.evaluate(async () => {
+      const sc = await (await fetch('/v1/config-schema')).json();
+      return new Set(Object.values(sc.settings || {}).map((d) => d.group)).size;
+    });
+    ok(groupCount >= 5, `the schema declares ${groupCount} groups — the comparison below is vacuous`);
+    eq(await page.locator('#cfg-groups h3').count(), groupCount,
+      'the settings view does not render one heading per schema group');
+    // И НЕЗАВИСИМОЕ НАБЛЮДЕНИЕ ЗА ТЕМ, ЧТО ЗАГОЛОВОК — ПЕРЕВОД, А НЕ КЛЮЧ. Равенство числа заголовков
+    // удовлетворяется и сырыми ключами: до W17 ровно так и было, одинаково в обе языковые колонки,
+    // что прямо нарушает ADR-085. Русская колонка обязана нести кириллицу.
+    const rawKeys = await page.evaluate(async () => {
+      const sc = await (await fetch('/v1/config-schema')).json();
+      const groups = new Set(Object.values(sc.settings || {}).map((d) => d.group));
+      const bad = [];
+      document.querySelectorAll('#cfg-groups h3 [data-lang="ru"]').forEach((el) => {
+        const t = (el.textContent || '').trim();
+        if (groups.has(t) || !/[\u0400-\u04FF]/.test(t)) bad.push(t);
+      });
+      return bad;
+    });
+    eq(rawKeys.length, 0,
+      `заголовок приезжает сырым ключом вместо перевода: ${rawKeys.join(', ')} — ADR-085`);
     // The env name has to be visible: it is the SAME setting by file, by environment and by
     // `agentctl config set`, and a person who cannot see the name cannot use the other two ways.
     eq(await page.locator('#cfg-groups code').count(), declared, 'not every setting shows its env var name');
+  }, { allowConsole: freshConfig404 });
+
+  /* [HUB-LLM-PANEL-KNOWS-TWO-OF-THREE-ROLES] — каждая объявленная схемой роль имеет поле в форме
+     прогона И доезжает в теле прогона.
+
+     Дефект был не в отсутствующем третьем поле — это симптом. Перечень ролей в хабе был ЕДИНСТВЕННОЙ
+     рукописной его копией во всём продукте и единственной, над которой не было гейта: схема, обе
+     серверные проекции, поля мастера и выведенная справка растут из одного `llmRoles`, а серверный
+     обход утверждён ещё и полом. Копия разошлась на роль `chat` — публикуемую схемой, принимаемую
+     сервером и читаемую мозгом.
+
+     ДВЕ ПОЛОВИНЫ, И ОНИ ЛОВЯТ РАЗНОЕ (замерено мутацией): A — обещание видно человеку, B — выбор
+     доезжает. Поле, которое нарисовано и не читается обработчиком, — это ровно вчерашний дефект, и
+     половина A на нём зелёная. Роль в A выводится из ТЕКСТА ПОДПИСИ, который читает человек, а не из
+     формулы id, которую гейт вычислил бы сам. */
+  await check('llm: у каждой роли схемы есть поле, и выбор роли доезжает в тело прогона', async () => {
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForSelector('#b-rolemodels input', { timeout: 15000 });
+    const res = await page.evaluate(async () => {
+      const r = await fetch('/v1/config-schema');
+      const doc = await r.json();
+      const declared = doc.roles || [];
+      // Роль читается ИЗ ПОДПИСИ: `LLM_MODEL_PLANNER` -> planner. Это то, что видит человек.
+      // ⚠ ТОЛЬКО ИМЯ, А НЕ ВЕСЬ ТЕКСТ ПОДПИСИ: механизм подсказок вклеивает элемент «?» ВНУТРЬ
+      // <label>, поэтому `textContent` втягивает и всю подсказку на двух языках. Замерено на первом
+      // прогоне этой проверки: множество подписей не совпало ни с чем, и гейт обвинял продукт в
+      // отсутствии полей, которые на экране есть.
+      const shown = [...document.querySelectorAll('#b-rolemodels label')]
+        .map((l) => /^LLM_MODEL_([A-Z]+)/.exec((l.textContent || '').trim()))
+        .filter(Boolean)
+        .map((m) => m[1].toLowerCase());
+      const sent = {};
+      declared.forEach((role) => {
+        const el = document.getElementById('b-model-' + role);
+        if (el) { el.value = 'sent-' + role; el.dispatchEvent(new Event('input', { bubbles: true })); }
+      });
+      const body = (window.bLLM && window.bLLM()) || {};
+      declared.forEach((role) => {
+        const m = (body.model || {})[role] || body['model_' + role] || '';
+        sent[role] = m === 'sent-' + role;
+      });
+      declared.forEach((role) => {                       // вернуть форму в исходное положение
+        const el = document.getElementById('b-model-' + role);
+        if (el) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+      });
+      return { status: r.status, hasRoles: Object.prototype.hasOwnProperty.call(doc, 'roles'),
+               declared, shown, missing: declared.filter((x) => shown.indexOf(x) < 0),
+               extra: shown.filter((x) => declared.indexOf(x) < 0),
+               undelivered: declared.filter((x) => !sent[x]) };
+    });
+    // Полы: без них обход по пустому перечню «подтверждает» что угодно.
+    ok(res.status === 200, `/v1/config-schema ответила ${res.status} — сравнивать нечего`);
+    ok(res.hasRoles, 'схема не публикует `roles` — перечень взять неоткуда');
+    ok(res.declared.length >= 3, `схема объявляет ${res.declared.length} рол(и/ей) — обход сузился`);
+    ok(res.shown.length >= 3, `в форме ${res.shown.length} подпис(ь/и) моделей — рендер прошёл по пустому множеству`);
+    // A: равенство множеств, не вложение — иначе лишнее поле «роли», которой нет, тоже пройдёт.
+    eq(res.missing.length, 0, `роль объявлена схемой и не имеет поля в форме: ${res.missing.join(', ')}`);
+    eq(res.extra.length, 0, `в форме есть поле роли, которой схема не объявляет: ${res.extra.join(', ')}`);
+    // B: доставка. Поле, которое нарисовано и не читается, — вчерашний дефект под новым видом.
+    eq(res.undelivered.length, 0,
+      `значение роли не доезжает в тело прогона: ${res.undelivered.join(', ')} — поле нарисовано, а обработчик его не читает`);
+  }, { allowConsole: freshConfig404 });
+
+  /* [IMPORT-PICKER-OFFERS-ONE-OF-FOUR] — диалог выбора файлов обязан предлагать РОВНО то, что канал
+     принимает.
+
+     ⚠ ЗАГОЛОВОК ЗАПИСИ НЕВЕРЕН АРИФМЕТИЧЕСКИ, и это замер: `accept=".ts"` сопоставляется по суффиксу
+     ИМЕНИ, поэтому диалог показывал ДВА из четырёх, а не один; и «панель отвечает „Нет файлов теста"»
+     опровергнуто — её фильтр `.cy.js` принимал. Настоящий отказ ровно один: дефолтный фильтр диалога.
+
+     ИСТИНА БЕРЁТСЯ У ЖИВОГО СЕРВЕРА, а не переписывается в гейт и не читается из Go-исходника:
+     сервер сам печатает свой перечень в отказе 400. Поэтому расхождение краснеет, даже если перечень
+     на сервере расширят, а страницу забудут. */
+  await check('импорт: диалог предлагает ровно те суффиксы, которые принимает канал', async () => {
+    const r = await fetch(`http://127.0.0.1:${PORT}/v1/import`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files: [{ name: 'probe.unknown', content: '' }] }),
+    });
+    eq(r.status, 400, 'сервер не отказал файлу с неизвестным суффиксом — перечень взять неоткуда');
+    const msg = ((await r.json()) || {}).error || '';
+    const m = /plain spec file ([^(]+)\(got/.exec(msg);
+    ok(m, `отказ сервера не называет перечень: ${msg}`);
+    const serverSet = m[1].trim().split('/').map((x) => x.trim()).filter(Boolean);
+    // Полы — обязательный спутник вывода: разбор, переставший что-либо находить, прошёл бы идеально.
+    ok(serverSet.length >= 4, `сервер назвал ${serverSet.length} суффикс(ов) — разбор отстал от формы отказа`);
+    ok(serverSet.every((x) => x.startsWith('.')), `разобранное не похоже на суффиксы: ${serverSet.join(' ')}`);
+
+    await page.click('.rail a[data-nav="run"]');
+    await page.waitForSelector('#imp-files', { timeout: 10000 });
+    const accept = await page.getAttribute('#imp-files', 'accept');
+    ok(accept, 'у контрола выбора файлов нет accept — диалог покажет всё подряд');
+    // Сопоставление ПО СУФФИКСУ, как это делает сам диалог: `.ts` допускает и `.cy.ts`. Именно это
+    // и сделало арифметику записи неверной, поэтому гейт повторяет правило диалога, а не «равенство
+    // строк», иначе он краснел бы на законном сокращении.
+    const tokens = accept.split(',').map((x) => x.trim()).filter(Boolean);
+    const missing = serverSet.filter((suf) => !tokens.some((t) => suf.endsWith(t)));
+    eq(missing.length, 0,
+      `канал принимает ${missing.join(', ')}, а диалог их не предлагает — человек своих файлов не увидит`);
+
+    // И подпись контрола, и текст отказа панели обязаны называть ТЕ ЖЕ суффиксы: до W17 перечень жил
+    // в шести местах одного файла, и разошлись именно те, до которых не дотянулся автор.
+    const aria = (await page.getAttribute('#imp-files', 'aria-label')) || '';
+    const unnamed = serverSet.filter((suf) => aria.indexOf(suf) < 0);
+    eq(unnamed.length, 0, `подпись контрола не называет ${unnamed.join(', ')}: ${aria}`);
   }, { allowConsole: freshConfig404 });
 
   await check('run: унаследованные умолчания НАЗЫВАЮТСЯ человеку, а не молчат', async () => {

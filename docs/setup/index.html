@@ -996,6 +996,73 @@ var FALLBACK_SCHEMA = {
       "type": "string"
     }
   },
+  "setting_groups": {
+    "adapters": {
+      "en": "Adapters",
+      "order": 9,
+      "ru": "Адаптеры"
+    },
+    "app": {
+      "en": "Application under test",
+      "order": 13,
+      "ru": "Приложение под тестом"
+    },
+    "browser": {
+      "en": "Browser",
+      "order": 8,
+      "ru": "Браузер"
+    },
+    "chat": {
+      "en": "Chat",
+      "order": 6,
+      "ru": "Чат"
+    },
+    "explore": {
+      "en": "Exploring the application",
+      "order": 7,
+      "ru": "Обход приложения"
+    },
+    "gates": {
+      "en": "Gates — what counts as a failure",
+      "order": 1,
+      "ru": "Гейты — что считать провалом"
+    },
+    "healing": {
+      "en": "Self-healing",
+      "order": 2,
+      "ru": "Самопочинка"
+    },
+    "health": {
+      "en": "Service health",
+      "order": 12,
+      "ru": "Здоровье сервисов"
+    },
+    "hitl": {
+      "en": "Human involvement",
+      "order": 3,
+      "ru": "Участие человека"
+    },
+    "llm": {
+      "en": "Models and connection",
+      "order": 5,
+      "ru": "Модели и подключение"
+    },
+    "retention": {
+      "en": "Retention",
+      "order": 4,
+      "ru": "Сроки хранения"
+    },
+    "security": {
+      "en": "Security",
+      "order": 10,
+      "ru": "Безопасность"
+    },
+    "telemetry": {
+      "en": "Telemetry",
+      "order": 11,
+      "ru": "Телеметрия"
+    }
+  },
   "settings": {
     "adapters": {
       "default": "",
@@ -1745,12 +1812,28 @@ function renderFieldHelp() {
    The hint is `hint[lang]`, never the descriptor's `note` — `note` is English provenance for the
    JSON/docs, and rendering it here would code-switch the RU interface (the rule the preset code
    already states). A setting whose whole purpose is to be understood cannot arrive in one language. */
-var SETTING_GROUPS = [
-  ['retention', 'Хранение артефактов', 'Artifact retention'],
-  ['healing',   'Самопочинка',         'Self-healing'],
-  ['gates',     'Когда сборка краснеет', 'What turns the build red'],
-  ['hitl',      'Участие человека',    'Human in the loop']
-];
+/* [CFG-GROUP-LABELS-STOPPED-COVERING]. ЗДЕСЬ ЛЕЖАЛ РУКОПИСНЫЙ ПЕРЕЧЕНЬ ГРУПП, и он не просто
+   протух — он ПРЯТАЛ настройки и уничтожал их. Замерено: групп в схеме 13, здесь их было 4, то есть
+   рисовалось 23 контрола из 44. `buildConfigDoc` собирает ТОЛЬКО отрисованное (`if (!el) return`), а
+   PUT замещает секцию `settings` целиком — проверено прямым замером: PUT {log_keep, heal_auto},
+   затем PUT {log_keep} оставляет в документе один `log_keep`. Значит одно сохранение из мастера
+   молча уничтожало 21 сохранённое значение, и запись реестра, оценившая это как косметику (P3),
+   недооценивала предмет.
+
+   Перечень теперь ВЫВОДИТСЯ из схемы (принцип 5): группы берутся из самих настроек, имена — из
+   `setting_groups`, порядок — из объявленного `order`. Запасной литерал не нужен: без схемы рисовать
+   всё равно нечего. */
+function settingGroupList() {
+  var st = SCHEMA.settings || {}, meta = SCHEMA.setting_groups || {}, seen = {};
+  Object.keys(st).forEach(function (k) { if (st[k] && st[k].group) seen[st[k].group] = true; });
+  return Object.keys(seen).sort(function (a, b) {
+    var oa = (meta[a] || {}).order, ob = (meta[b] || {}).order;
+    if (oa == null && ob == null) return a < b ? -1 : a > b ? 1 : 0;
+    if (oa == null) return 1;
+    if (ob == null) return -1;
+    return oa - ob;
+  });
+}
 function settingsOf(group) {
   var st = SCHEMA.settings || {};
   return Object.keys(st).sort().filter(function (k) { return st[k].group === group; });
@@ -1765,12 +1848,13 @@ function renderSettings() {
     if (el) keep[k] = (el.type === 'checkbox') ? el.checked : el.value;
   });
   host.innerHTML = '';
-  SETTING_GROUPS.forEach(function (g) {
-    var keys = settingsOf(g[0]);
+  settingGroupList().forEach(function (g) {
+    var keys = settingsOf(g);
     if (!keys.length) return;
     var fs = document.createElement('fieldset');
     var lg = document.createElement('legend');
-    lg.textContent = tr(g[1], g[2]);
+    var meta = (SCHEMA.setting_groups || {})[g] || {};
+    lg.textContent = tr(meta.ru || g, meta.en || g);
     fs.appendChild(lg);
     keys.forEach(function (k) {
       var d = SCHEMA.settings[k];
