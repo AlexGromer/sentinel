@@ -17,7 +17,7 @@
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.221.0",
     "@opentelemetry/sdk-node": "^0.221.0",
     "playwright": "^1.61.0",
-    "zod": "^4.4.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
